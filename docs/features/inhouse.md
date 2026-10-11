@@ -230,7 +230,9 @@ own inhouse choice).
   the order is kept, junk is refused, never dropped) or with `join` (the
   picker's unsaved choice, saved before the join). Auto-join, "Run it back" and API joins
   send none and keep the stored choice.
-- **The picker** (`RolePicker` in `QueueControls`): five toggles named "Pos N ·
+- **The picker** (`RolePicker` in the queue's join controls; below md and
+  from lg the filled queue card's `queueCard` puts a short "Positions" label
+  beside the toggles, the full one kept for screen readers): five toggles named "Pos N ·
   Role" ("…, choice 2" once ranked); the order tapped is the order of
   preference, each pressed toggle shows its rank, and taking one out keeps the
   others' order. A line spells it out ("Mid first, then Offlane"), "from your
@@ -238,7 +240,9 @@ own inhouse choice).
   positions" while edited. It lives only in the
   queue view, never in a timed stage, since every save takes the room's
   action lock.
-- **Shown** on queue slots, a "Positions queued" count line, vote candidates,
+- **Shown** on queue slots, a "Positions queued" count line (on a phone the
+  count sits in the "Who's playing" row, to keep the queue on the first
+  screen), vote candidates,
   draft pool and roster rows, and the matchup grid, in the player's order with
   the first choice ringed (`RoleBadges ranked`, spoken "Pos 2 Mid first, then
   Pos 3 Offlane"). Each side gets
@@ -683,8 +687,9 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   (pure, tested) says: "I'm in" once for a signed-in player not yet on the
   list (`InhouseNightInviteRsvp`, which scrubs `imin` first so a refresh never
   repeats it, and treats a lost answer as unknown), "already in" for one who
-  is, a note for one without a linked Discord to press the card's "Link
-  Discord to say you're in" (a button they press, never a bounce to Discord
+  is, a note for one without a linked Discord to press Link Discord (the
+  bar's chip, first on screen, says "Link Discord" and the card "Link
+  Discord to say you're in": a button they press, never a bounce to Discord
   on load, which jars and repeats on a reload; it comes back to the invite,
   which then says it), the card's sign-in for a signed-out visitor, and once the night is on,
   `/inhouse?join=1` (a server redirect). Every signed-out "I'm in" signs in
@@ -710,10 +715,23 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   (a sign-in link back to Home when signed out), or, once the night is on,
   the queue count and "Join the queue" (`/inhouse?join=1`). Home's inhouse
   strip no longer repeats the night; it says "Jump in" while it's on.
-  /inhouse puts a card above the room with the note, "I'm in", the headcount
-  with its sources, who said they're in on the site, the Discord event link,
-  Google Calendar and an `.ics` download (`/api/calendar/inhouse-night`, one
-  event whose UID and SEQUENCE are the night's id and revision). The Discord
+  Its title links to the night's card on /inhouse (`/inhouse#inhouse-night`).
+  /inhouse puts the night in its one top bar above the room, as a chip
+  (`InhouseNightChip`, region "Inhouse night"; Tim, 2026-10-10: the whole
+  queue on the first screen): a link down to the card, the start on the
+  viewer's clock ("Today, 8:00 PM", "Tomorrow, …", else with its date, "Fri,
+  Oct 23, 8:00 PM": `inhouseChipWhenText` `dated`, since a night can be
+  weeks off and a weekday alone read as this week's), the headcount and
+  "I'm in" (a refusal stays in its toast; "Link Discord" for a player who
+  must link first, the words the invite link's note tells them to press),
+  or once it's on "Join ↓" to the room; no countdown, no faces, no note. The
+  card (region "Inhouse night details", `#inhouse-night`) sits under the
+  Play later card with the note, "I'm in", the headcount with its sources,
+  who said they're in on the site, the Discord event link, Google Calendar
+  and an `.ics` download (`/api/calendar/inhouse-night`, one event whose UID
+  and SEQUENCE are the night's id and revision), and answers the invite
+  link. The chip and the card share one request-cached read
+  (`loadInhouseNightView`). The Discord
   half of the headcount streams, so a slow Discord never holds a page; the
   bar itself renders inline, so it never drops in above a painted hero.
 
@@ -750,7 +768,8 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   Serializable transaction with `retrySerializable` (six tries: three ran out
   inside one slow commit); the raced tests in the itest fail without either.
 - **The night comes first.** A new time inside a planned inhouse night's
-  window is refused with a pointer to the night's card; a time posted before
+  window is refused with a pointer to the night (its card below the form,
+  its chip in the bar at the top: `INHOUSE_TIME_DURING_NIGHT`); a time posted before
   the night was planned stays and can still be joined. The night is read
   before the transaction, so a night planned in that gap leaves at worst the
   same thing as one planned just after.
@@ -782,24 +801,33 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
 - **Open times lead the page as a thin banner; the card stays under the
   room** (Tim, 2026-10-10: a sliver with the time and "I'm in", so nobody
   scrolls past the queue to find a time, and posting stays below as it is).
-  While any time is on or ahead, the banner (`InhouseTimesStrip`, region
-  "Play later times") sits between the inhouse night's card and the live
-  room: one row, one button high (64px at most; the e2e measures it at 390
-  and 1280), a 🕗 and "Play later" (the clock alone on a phone), then each of
-  the soonest `INHOUSE_TIMES_STRIP_SHOWN` (3) as a chip: its start ("Today,
-  8:00 PM" on the viewer's clock, `inhouseTimeDayWord`; the server writes the
-  same words on the league's clock, zone named), "6 in", and the same
+  While any time is on or ahead, the times (region "Play later times") ride
+  /inhouse's one top bar (`InhouseTimesStrip`), between the title row and
+  the live room, beside the inhouse night's chip when one is planned (the
+  bar shows for the night alone too): the earliest leads, a time's link
+  leads with its time and the night's invite with the night
+  (`inhousePlansNightFirst`), a hairline between them. One row, one button
+  high (64px at most: 60 on a phone, 52 from 640; the e2e measures the whole
+  bar, `#inhouse-plans`), a 🕗 and "Play later" (the clock alone on a
+  phone), then each of the soonest `INHOUSE_TIMES_STRIP_SHOWN` (3) as a
+  chip, or `INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT` (2, a link's own
+  included) beside the night's chip, which is wide: behind three times its
+  "I'm in" was cut off at a laptop's right edge. A chip says its start
+  ("Today, 8:00 PM" on the viewer's clock, `inhouseChipWhenText`; the server
+  writes the same words on the league's clock, zone named), "6 in", and the same
   controls as its row in the card by the same rule (`viewOf`): "I'm in", a
   sign-in back to the time's link when signed out, and once it's on "Join ↓"
   (named "Join the queue", a jump to the room) beside the pressed toggle of a
   player in on it. No faces, no countdown, no subtitle: those are the
   card's. The chips swipe in one row inside the banner's `overflow-hidden`
   card when they don't fit (a phone shows about one), so it never grows a
-  second row; a link down to the card ends the row: "N more", else "Post a
+  second row, and a fade marks each side with more off screen (`PlansRow`,
+  SectionNav's `chipBarEdges`/`chipBarMask`); a link down to the card ends the row: "N more", else "Post a
   time", else "All times" at the cap (`inhouseTimesStripLinkText`).
-  `inhouseTimesStrip` alone decides what shows, a time's link included
-  (`inhouseTimeLinked` reads `?at=`): nothing while no time is open and no
-  link needs answering (no empty box). Both read through one request-cached
+  `inhouseTimesStrip` alone decides which times show, a time's link
+  included (`inhouseTimeLinked` reads `?at=`): none while no time is open
+  and no link needs answering, and the bar is nothing at all while there's
+  neither that nor a night (no empty box). Both read through one request-cached
   `loadPlayLater`, so they show the same times from one query; the banner
   streams in its own `<Suspense fallback={null}>`, never holding up the room.
   Each chip's button is described by the chip's own time id
@@ -818,6 +846,23 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
   admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+  `e2e/zz4-inhouse.spec.ts` also checks the room's one header row in every
+  stage at 375 and 1280 (one stage strip on the right step, Sound on its
+  line, no sideways scroll).
+- **The first screen:** `e2e-mid/zz-inhouse-queue-fit.spec.ts` loads
+  /inhouse fresh at every required size (390x844 to 1920x1080, 1366x768, the
+  laptop windows 1280x690 and 1366x657, and 375x667 signed out) signed out,
+  signed in with and without a signup's MMR, and queued, with 0, 1, 6 and 9
+  present, with and without a Play later time and a planned night (and
+  three times beside a night), and fails if the queue card leaves the
+  visible viewport (under the header, above the phone tab bar), the bar is
+  taller than 64px or off screen, the leading chip's "I'm in" isn't whole on
+  screen, more than two times sit beside the night or a laptop cuts the
+  night's chip off, the bar's row is cut off with no fade, the "Who's
+  playing" row wraps or spills, a slot row spills, or the page scrolls
+  sideways. It prints the measured table, with 390x664 and 1440x790 as
+  report-only rows. `FIT_FONT=Verdana` forces the body font to a DejaVu
+  stand-in, so a Mac run sees CI's wider type.
 - **Game over and positions:** `test/integration/inhouse-game-over.itest.ts`
   (the claim and its seams, the result window, the Elo stamp with
   overlapping players, the give-up paths, pending results, positions).

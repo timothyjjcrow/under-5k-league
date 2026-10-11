@@ -4,8 +4,8 @@ import { MID_DB_URL } from "../playwright.midseason.config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // The inhouse night end to end: an admin plans one on /admin (the start box
-// suggests the coming Friday at 8 PM on the league's clock), Home's bar and
-// /inhouse's card show it with calendar links, a player says "I'm in" from
+// suggests the coming Friday at 8 PM on the league's clock), Home's bar,
+// /inhouse's top bar and its card under the room show it with calendar links, a player says "I'm in" from
 // the bar, takes it back on /inhouse and says it again, a second player
 // arrives through the invite link, and the admin cancels it. "I'm in" needs
 // a linked Discord account (the suite switches linking on), so each player is
@@ -90,9 +90,10 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
     "href",
     "/login?next=%2Finhouse%3Fimin%3D1",
   );
+  // The title goes to the night's card, under the room on /inhouse.
   await expect(bar.getByRole("link", { name: "Inhouse night" })).toHaveAttribute(
     "href",
-    "/inhouse",
+    "/inhouse#inhouse-night",
   );
   // The inhouse strip lower down no longer repeats the night.
   await expect(page.getByText("Inhouse night:")).toHaveCount(0);
@@ -125,10 +126,40 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   await expectNoHorizontalOverflow(page, "Home with the inhouse night bar");
   await page.setViewportSize({ width: 1280, height: 900 });
 
-  // 4. /inhouse's card: the note, who's in, both ways into a calendar, and
-  //    taking it back (then saying it again).
+  // 4. /inhouse: Home's link lands on the night's card, under the room. The
+  //    night rides the one
+  //    bar above the room (its time, a date past tomorrow, the headcount and
+  //    the same "I'm in"), and the card under Play later has the note, who's
+  //    in, both ways into a calendar, and taking it back (then saying it
+  //    again).
+  await bar.getByRole("link", { name: "Inhouse night" }).click();
+  await expect(page).toHaveURL(/\/inhouse#inhouse-night$/);
+  await expect(page.getByRole("region", { name: "Inhouse night details" })).toBeInViewport({
+    ratio: 0.5,
+  });
   await page.goto("/inhouse");
-  await expect(page.getByRole("heading", { name: "Inhouse night", level: 2 })).toBeVisible();
+  const chip = page.getByRole("region", { name: "Inhouse night", exact: true });
+  await expect(chip).toBeVisible();
+  expect((await chip.boundingBox())!.y).toBeLessThan(
+    (await page.locator("#live-room").boundingBox())!.y,
+  );
+  await expect(chip.getByRole("button", { name: "I'm in" })).toHaveAttribute("aria-pressed", "true");
+  await expect(chip.getByText("1 coming")).toBeVisible();
+  await expect(chip.getByRole("timer")).toHaveCount(0);
+  // The planned Friday can be days off: "Today"/"Tomorrow", else its date,
+  // never a weekday alone that reads as this week's.
+  await expect(chip.locator("time")).toHaveText(
+    /^(Today|Tomorrow), \d{1,2}:\d{2}|^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2}/,
+  );
+  await expect(chip.getByRole("link", { name: "Inhouse night" })).toHaveAttribute(
+    "href",
+    "#inhouse-night",
+  );
+  const details = page.getByRole("region", { name: "Inhouse night details" });
+  expect((await details.boundingBox())!.y).toBeGreaterThan(
+    (await page.locator("#live-room").boundingBox())!.y,
+  );
+  await expect(details.getByRole("heading", { name: "Inhouse night", level: 2 })).toBeVisible();
   await expect(page.getByText(NOTE)).toBeVisible();
   await expect(page.getByRole("link", { name: "Add to Google Calendar" })).toHaveAttribute(
     "href",
@@ -149,7 +180,7 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   await page.setViewportSize({ width: 390, height: 844 });
   await expectNoHorizontalOverflow(page, "/inhouse with an inhouse night");
   await page.setViewportSize({ width: 1280, height: 900 });
-  const cardToggle = page.getByRole("button", { name: "I'm in" });
+  const cardToggle = details.getByRole("button", { name: "I'm in" });
   await expect(cardToggle).toHaveAttribute("aria-pressed", "true");
   await cardToggle.click();
   await expect(
@@ -204,6 +235,14 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   ).toBeVisible();
   await expect(page).toHaveURL(/\/inhouse$/);
   expect(consent).toBeNull();
+  // The note names a control on the first screen: the bar's night chip says
+  // "Link Discord", as the card further down does.
+  const inviteChip = page.getByRole("region", { name: "Inhouse night", exact: true });
+  await expect(inviteChip.getByRole("link", { name: "Link Discord", exact: true })).toHaveAttribute(
+    "href",
+    LINK_DISCORD,
+  );
+  await expect(inviteChip.getByRole("link", { name: "Link Discord", exact: true })).toBeInViewport();
   await page.getByRole("link", { name: "Link Discord to say you're in" }).click();
   await expect(page).toHaveURL(new URL(LINK_DISCORD, baseURL).href);
   expect(consent).not.toBeNull();
@@ -217,10 +256,9 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   await expect(
     page.getByRole("status").filter({ hasText: /^You're in for / }),
   ).toBeVisible();
-  await expect(page.getByRole("button", { name: "I'm in" })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByRole("region", { name: "Inhouse night details" }).getByRole("button", { name: "I'm in" }),
+  ).toHaveAttribute("aria-pressed", "true");
   await expect(page).toHaveURL(/\/inhouse$/);
   await expect(page.getByRole("link", { name: "Invited Player" })).toBeVisible();
 

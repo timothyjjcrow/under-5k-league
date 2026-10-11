@@ -17,15 +17,29 @@ export function roomStageLabel(status: string): string {
   return ROOM_STAGES.find((stage) => stage.status === status)?.label ?? status;
 }
 
-/** A shared orientation strip, with no new state machine or extra polling. */
-export function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
+/**
+ * A shared orientation strip, with no new state machine or extra polling. It
+ * shares one row with the room's connection dot and Sound button (the room
+ * header), so each stage is at least its label's width: a row too narrow
+ * wraps the strip onto a line of its own instead of crushing a label.
+ */
+export function RoomStages({
+  lobby,
+  className,
+}: {
+  lobby: InhouseState["lobby"];
+  className?: string;
+}) {
   const current = ROOM_STAGES.findIndex(
     (stage) => stage.status === (lobby?.status ?? null),
   );
   return (
     <ol
       aria-label="Inhouse progress"
-      className="grid grid-cols-6 gap-1 sm:gap-2"
+      className={cn(
+        "grid grid-cols-[repeat(6,minmax(max-content,1fr))] gap-1 sm:gap-2",
+        className,
+      )}
     >
       {ROOM_STAGES.map((stage, i) => (
         <li
@@ -40,7 +54,7 @@ export function RoomStages({ lobby }: { lobby: InhouseState["lobby"] }) {
                 : "border-line text-muted",
           )}
         >
-          <span className="mr-1 hidden tabular-nums sm:inline" aria-hidden>
+          <span className="mr-1 hidden tabular-nums lg:inline" aria-hidden>
             {i < current ? "✓" : String(i + 1).padStart(2, "0")}
           </span>
           {stage.label}

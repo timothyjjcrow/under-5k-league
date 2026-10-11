@@ -28,13 +28,13 @@ import { currentInhouseNight } from "./inhouse-night";
 import { readInhouseNight } from "./inhouse-night-service";
 import {
   INHOUSE_TIME_AT_CAP,
-  INHOUSE_TIME_DURING_NIGHT,
   INHOUSE_TIME_MAX_PER_PLAYER,
   INHOUSE_TIME_ON_MS,
   groupInhouseTimes,
   inhouseTimePhase,
   inhouseTimeProblem,
   inhouseTimeDuringNight,
+  inhouseTimeDuringNightRefusal,
   inhouseTimesWindow,
   type InhouseTime,
 } from "./inhouse-times";
@@ -139,8 +139,8 @@ export async function setInhouseTimeRsvp(input: {
         });
         if (mine) return "already-in" as const;
         const others = await tx.inhouseTimeRsvp.count({ where: { startsAt } });
-        if (others === 0 && inhouseTimeDuringNight(input.startsAtMs, night)) {
-          throw new UserFacingError(INHOUSE_TIME_DURING_NIGHT);
+        if (others === 0 && night && inhouseTimeDuringNight(input.startsAtMs, night)) {
+          throw new UserFacingError(inhouseTimeDuringNightRefusal(night.startsAtMs, nowMs));
         }
         const upcoming = await tx.inhouseTimeRsvp.count({
           where: { userId: input.userId, startsAt: { gt: new Date(nowMs) } },

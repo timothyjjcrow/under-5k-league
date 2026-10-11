@@ -750,6 +750,12 @@ export function InhouseRoom({
   // their first game was marked over: they have just played one.
   const firstGameFold =
     firstGame && !state.pendingResults.some((p) => p.mine);
+  // The header's lobby code: the viewer's own game, or the one they watch.
+  const roomCode = lobby
+    ? inhouseLobbyCode(lobby.id)
+    : soleWatched
+      ? inhouseLobbyCode(otherLobbies[0].id)
+      : null;
 
   // One game's stage view. Its actions name the game, so a click is judged
   // against the lobby it was made on even with two live.
@@ -893,9 +899,17 @@ export function InhouseRoom({
   };
 
   return (
-    <div className="space-y-5">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-2 text-xs text-muted">
+    // Blocks sit 12px apart on a phone and 16 from md (it was 20): part of
+    // keeping the whole queue on the first screen.
+    <div className="space-y-3 md:space-y-4">
+      {/* The room's header and its stage strip are one row (Tim, 2026-10-10:
+          the whole queue on the first screen): the connection dot, the
+          lobby's code and badge, the stages, then Sound. On a phone the
+          badge takes a line of its own under them and the words beside the
+          dot and the bell are for screen readers ("Reconnecting" always
+          shows). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
           <span
             aria-hidden
             className={cn(
@@ -905,30 +919,32 @@ export function InhouseRoom({
                 : "bg-success",
             )}
           />
-          <span>
-            {disconnected || connectionUnavailable
-              ? "Reconnecting"
-              : "Live room"}
+          {disconnected || connectionUnavailable ? (
+            <span>Reconnecting</span>
+          ) : (
+            <span className="sr-only sm:not-sr-only">Live room</span>
+          )}
+        </span>
+        {roomCode || me.inLobby || me.inQueue ? (
+          <span className="order-last flex basis-full items-center gap-2 text-xs text-muted md:order-none md:basis-auto">
+            {roomCode ? (
+              <span className="font-mono text-[11px]">#{roomCode}</span>
+            ) : null}
+            {me.inLobby ? (
+              <Badge tone="accent">
+                {lobby && gameLabel(lobby)
+                  ? `Your lobby · ${gameLabel(lobby)}`
+                  : "Your lobby"}
+              </Badge>
+            ) : me.inQueue ? (
+              <Badge tone="success">You’re queued</Badge>
+            ) : null}
           </span>
-          {lobby ? (
-            <span className="font-mono text-[11px]">
-              #{inhouseLobbyCode(lobby.id)}
-            </span>
-          ) : soleWatched ? (
-            <span className="font-mono text-[11px]">
-              #{inhouseLobbyCode(otherLobbies[0].id)}
-            </span>
-          ) : null}
-          {me.inLobby ? (
-            <Badge tone="accent">
-              {lobby && gameLabel(lobby)
-                ? `Your lobby · ${gameLabel(lobby)}`
-                : "Your lobby"}
-            </Badge>
-          ) : me.inQueue ? (
-            <Badge tone="success">You’re queued</Badge>
-          ) : null}
-        </div>
+        ) : null}
+        <RoomStages
+          lobby={lobby ?? (soleWatched ? otherLobbies[0] : null)}
+          className="flex-1"
+        />
         <button
           type="button"
           onClick={toggleSound}
@@ -938,14 +954,18 @@ export function InhouseRoom({
               ? "Notification sound on — click to mute"
               : "Notifications muted — click to enable a bell"
           }
-          className="inline-flex min-h-11 items-center gap-1.5 rounded-full border border-line bg-surface-2/40 px-3 py-1 text-xs text-muted transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+          className={buttonClasses(
+            "secondary",
+            "sm",
+            "shrink-0 rounded-full bg-surface-2/40 px-3 text-xs text-muted hover:text-fg",
+          )}
         >
           <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
-          {soundOn ? "Sound on" : "Muted"}
+          <span className="sr-only sm:not-sr-only">
+            {soundOn ? "Sound on" : "Muted"}
+          </span>
         </button>
       </div>
-
-      <RoomStages lobby={lobby ?? (soleWatched ? otherLobbies[0] : null)} />
 
       {/* ONE status line, chosen by priority — the draft room's too. */}
       <RoomStatusLine

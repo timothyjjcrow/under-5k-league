@@ -33,6 +33,9 @@ describe("the signed-out form error", () => {
       join(__dirname, "../components/action-form.tsx"),
       "utf8",
     );
+    // The error the form shows inline (`inlineError`; a compact form keeps
+    // it in the toast).
+    expect(form).toContain("const shownError = inlineError ? state?.error : undefined;");
     expect(form).toContain("shownError === SIGN_IN_REQUIRED ? (");
     expect(form).toContain("<SignInRequired />");
   });
