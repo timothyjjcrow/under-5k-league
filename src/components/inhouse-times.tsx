@@ -31,10 +31,9 @@ import {
   inhouseTimeParam,
   inhouseTimesStrip,
   inhouseTimesStripLinkText,
-  inhouseTimeWhoText,
-  parseInhouseTimeParam,
   upcomingInhouseTimesFor,
   type InhouseTime,
+  type InhouseTimeLinked,
   type InhouseTimePlayer,
 } from "@/lib/inhouse-times";
 import { readInhouseTimes } from "@/lib/inhouse-times-service";
@@ -44,24 +43,22 @@ import { signInHref } from "@/lib/sign-in";
 import { resolveSiteUrl } from "@/lib/site-url";
 import { cn } from "@/lib/utils";
 
-// Play later on /inhouse (rules: src/lib/inhouse-times.ts): the card with
-// the times players posted, who's in on each, "I'm in", and "Post a time",
-// and the strip above the live room with the soonest few. Nothing here posts
-// to Discord or pings anyone; a time's link is the one way to share it.
+// Play later on /inhouse (rules: src/lib/inhouse-times.ts): the card under
+// the live room with the times players posted, who's in on each, "I'm in",
+// and "Post a time", and the thin banner above the room with the soonest few
+// and their "I'm in". Nothing here posts to Discord or pings anyone; a time's
+// link is the one way to share it.
 
 /** Profile chips on a time before "and N more": a full lobby's worth. */
 const PLAYERS_SHOWN = 10;
 
-/** Faces in a strip tile's avatar stack before "+N". */
-const STRIP_FACES_SHOWN = 5;
-
-/** The anchor the card sits under, and the one its sign-in comes back to. */
+/** The anchor the card sits under, the one its sign-in comes back to, and the banner's link down. */
 export const PLAY_LATER_ANCHOR = "play-later";
 
 /**
  * The page's one read of Play later: the clock it judged the times by, the
  * viewer, the times, and whether the viewer is at the cap. Request-cached,
- * so the strip at the top and the card under the room show the same times
+ * so the banner at the top and the card under the room show the same times
  * from one query and never disagree.
  */
 const loadPlayLater = cache(async () => {
@@ -72,7 +69,7 @@ const loadPlayLater = cache(async () => {
   return { nowMs, user, times, atCap };
 });
 
-/** What one time offers the viewer, by the one rule both the card and the strip use. */
+/** What one time offers the viewer, by the one rule both the card and the banner use. */
 function viewOf(time: InhouseTime, user: SessionUser | null, atCap: boolean) {
   const mine = !!user && time.players.some((player) => player.id === user.id);
   const controls = inhouseTimeControls({ phase: time.phase, signedIn: !!user, mine, atCap });
@@ -115,11 +112,14 @@ function RsvpControl({
   time,
   mine,
   describedBy,
+  compact = false,
 }: {
   kind: "sign-in" | "toggle";
   time: InhouseTime;
   mine: boolean;
   describedBy: string;
+  /** The banner: a refusal stays in its toast, so the row never grows. */
+  compact?: boolean;
 }) {
   if (kind === "sign-in") {
     return (
@@ -136,6 +136,7 @@ function RsvpControl({
     <ActionForm
       action={setInhouseTimeAction}
       hidden={{ at: inhouseTimeParam(time.startsAtMs), going: mine ? "0" : "1" }}
+      inlineError={!compact}
     >
       <SubmitButton
         size="sm"
@@ -154,28 +155,44 @@ function RsvpControl({
 /**
  * A time's buttons, wherever it shows: "Join the queue" once it's on (the
  * room is on this page, so a jump, not a reload; the inhouse night's ?join=1
- * is for links from elsewhere), and "I'm in" as the rule says.
+ * is for links from elsewhere), and "I'm in" as the rule says. `compact`
+ * (the banner, where the room is just below) makes the jump a short link,
+ * "Join ↓", still named "Join the queue".
  */
 function TimeActions({
   time,
   mine,
   controls,
   describedBy,
+  compact = false,
 }: {
   time: InhouseTime;
   mine: boolean;
   controls: ReturnType<typeof viewOf>["controls"];
   describedBy: string;
+  compact?: boolean;
 }) {
   return (
     <>
       {controls.queue ? (
-        <a href="#live-room" className={buttonClasses("primary", "sm")}>
-          Join the queue <LinkArrow />
-        </a>
+        compact ? (
+          <a href="#live-room" className={textLink("whitespace-nowrap px-1 text-sm font-medium")}>
+            Join<span className="sr-only"> the queue</span> <span aria-hidden>↓</span>
+          </a>
+        ) : (
+          <a href="#live-room" className={buttonClasses("primary", "sm")}>
+            Join the queue <LinkArrow />
+          </a>
+        )
       ) : null}
       {controls.rsvp === "none" ? null : (
-        <RsvpControl kind={controls.rsvp} time={time} mine={mine} describedBy={describedBy} />
+        <RsvpControl
+          kind={controls.rsvp}
+          time={time}
+          mine={mine}
+          describedBy={describedBy}
+          compact={compact}
+        />
       )}
     </>
   );
@@ -269,17 +286,12 @@ function PostTimeForm({ taken, mine }: { taken: string[]; mine: string[] }) {
 }
 
 /**
- * The Play later card. Below the live room normally; the page puts it first
- * when it was opened from a time's link (`linked`, the link's `at`, "" for
- * one that names nothing), with that time picked out, or a line saying it's
- * gone.
+ * The Play later card, always under the live room. Opened from a time's link
+ * (`linked`) it outlines that time's row; the banner above the room says
+ * when the link's time is over, so the card doesn't say it again.
  */
-export async function InhouseTimesCard({ linked }: { linked?: string } = {}) {
+export async function InhouseTimesCard({ linked }: { linked: InhouseTimeLinked }) {
   const { user, times, atCap } = await loadPlayLater();
-  const linkedMs = linked === undefined ? null : parseInhouseTimeParam(linked);
-  const linkedGone =
-    linked !== undefined &&
-    (linkedMs === null || !times.some((time) => time.startsAtMs === linkedMs));
   const site = resolveSiteUrl();
   return (
     <Card>
@@ -289,12 +301,6 @@ export async function InhouseTimesCard({ linked }: { linked?: string } = {}) {
         subtitle="Can't play right now? Post when you can, or say you're in on someone's time, so everyone can see when a lobby will fill. When it comes round, join the queue here."
       />
       <CardBody className="space-y-4">
-        {linkedGone ? (
-          <p className="rounded-lg border border-line bg-surface-2/60 px-3 py-2 text-sm text-muted">
-            The time in that link is over, or everyone on it has dropped out. Post a new one
-            below.
-          </p>
-        ) : null}
         {times.length > 0 ? (
           <ul className="space-y-3">
             {times.map((time) => (
@@ -303,7 +309,7 @@ export async function InhouseTimesCard({ linked }: { linked?: string } = {}) {
                 time={time}
                 user={user}
                 atCap={atCap}
-                linked={time.startsAtMs === linkedMs}
+                linked={time.startsAtMs === linked}
                 site={site}
               />
             ))}
@@ -336,59 +342,26 @@ export async function InhouseTimesCard({ linked }: { linked?: string } = {}) {
 }
 
 /**
- * Who's in on a time as a row of faces, the first STRIP_FACES_SHOWN and a
- * "+N". A picture, so it carries the names as its label (and a tooltip);
- * the card under the room has everyone's profile links.
+ * One time in the banner, as a chip one button high: when (on the viewer's
+ * clock), how many are in, and the same buttons as its row in the card,
+ * compact. The time a link opened the page for is picked out.
  */
-function FaceStack({ players }: { players: InhouseTimePlayer[] }) {
-  const shown = players.slice(0, STRIP_FACES_SHOWN);
-  const rest = players.length - shown.length;
-  const label = inhouseTimeWhoText(
-    players.map((player) => player.name),
-    STRIP_FACES_SHOWN,
-  );
-  return (
-    <span role="img" aria-label={label} title={label} className="flex shrink-0 items-center">
-      {/* bg and size reach only the initials a player without a picture gets. */}
-      {shown.map((player, i) => (
-        <Avatar
-          key={player.id}
-          name={player.name}
-          src={player.avatar}
-          size={24}
-          className={cn("bg-surface-3 text-[10px] ring-2 ring-surface", i > 0 && "-ml-1")}
-        />
-      ))}
-      {rest > 0 ? (
-        <span className="-ml-1 grid h-6 min-w-6 place-items-center rounded-full bg-surface-3 px-1 text-[10px] font-semibold tabular-nums text-muted ring-2 ring-surface">
-          +{rest}
-        </span>
-      ) : null}
-    </span>
-  );
-}
-
-/** One time in the strip: when, who's in, and the same buttons as its row in the card. */
-function StripTile({
+function StripChip({
   time,
   user,
   atCap,
   nowMs,
-  single,
+  linked,
 }: {
   time: InhouseTime;
   user: SessionUser | null;
   atCap: boolean;
   nowMs: number;
-  /** The strip's only tile: a phone's full width, no row to swipe. */
-  single: boolean;
+  /** The time the page was opened for (its link). */
+  linked: boolean;
 }) {
   const { mine, controls } = viewOf(time, user, atCap);
   const acts = controls.queue || controls.rsvp !== "none";
-  // Two buttons ("Join the queue" and the pressed "I'm in" of a player in on
-  // a time that's on) never fit beside the time on a phone: they take the
-  // tile's foot instead, so the time and its countdown keep their width.
-  const twoActions = controls.queue && controls.rsvp !== "none";
   // Not the card row's id: both show the same time, and each button names its own.
   const whenId = `inhouse-time-next-${time.startsAtMs}`;
   const start = new Date(time.startsAtMs);
@@ -398,97 +371,99 @@ function StripTile({
   const initial = day
     ? `${day}, ${leagueMatchTimeParts(start).time}`
     : formatLeagueMatchTime(start, "full");
-  // An @container: a tile wide enough (a phone's tile, or one of three on a
-  // desktop) keeps one button beside the time, so it is two lines high; a
-  // narrow one (three across a tablet), or one with two buttons, puts them at
-  // its foot. On a phone the tiles are a swipeable row (the strip's list).
   return (
     <li
+      aria-current={linked ? "true" : undefined}
       className={cn(
-        "@container flex min-w-0 shrink-0 snap-start flex-col rounded-lg border bg-surface-2/50 px-3 py-2.5 sm:basis-auto",
-        single ? "basis-full" : "basis-[85%]",
-        time.phase === "on" ? "border-success/40" : "border-line",
+        "flex shrink-0 items-center gap-2 rounded-lg border bg-surface-2/50 py-0.5 pl-2.5",
+        acts ? "pr-0.5" : "min-h-8 pr-2.5",
+        linked
+          ? "border-accent ring-1 ring-accent/60"
+          : time.phase === "on"
+            ? "border-success/40"
+            : "border-line",
       )}
     >
-      <div
-        className={cn(
-          "grid flex-1 grid-cols-1 grid-rows-[auto_auto_1fr] gap-2",
-          !twoActions &&
-            "@2xs:grid-cols-[minmax(0,1fr)_auto] @2xs:grid-rows-[auto_auto] @2xs:content-center @2xs:gap-x-3",
-        )}
-      >
-        <p id={whenId} className="min-w-0 text-sm font-semibold text-fg">
-          <InhouseTimeWhen ts={time.startsAtMs} initial={initial} />
-          <Countdown targetMs={time.startsAtMs} eventLabel="Inhouse" />
-        </p>
-        <div className="flex min-w-0 items-center gap-2.5 @2xs:col-span-2">
-          <FaceStack players={time.players} />
-          <span className="min-w-0 text-xs text-muted">
-            {inhouseTimeCountText(time.players.length)}
-          </span>
-        </div>
-        {acts ? (
-          <div
-            className={cn(
-              "flex flex-wrap items-center gap-2 self-end",
-              !twoActions && "@2xs:col-start-2 @2xs:row-start-1 @2xs:self-center @2xs:justify-end",
-            )}
-          >
-            <TimeActions time={time} mine={mine} controls={controls} describedBy={whenId} />
-          </div>
-        ) : null}
-      </div>
+      <span id={whenId} className="whitespace-nowrap text-sm font-semibold text-fg">
+        <InhouseTimeWhen ts={time.startsAtMs} initial={initial} />
+      </span>
+      <span className="whitespace-nowrap text-xs text-muted">{time.players.length} in</span>
+      {acts ? (
+        <TimeActions time={time} mine={mine} controls={controls} describedBy={whenId} compact />
+      ) : null}
     </li>
   );
 }
 
 /**
- * The Play later strip, above the live room (Tim, 2026-10-10): the soonest
- * open times at a glance, each with its "I'm in", so a visitor sees them
- * without scrolling past the queue. Nothing at all while no time is open, or
- * when the page was opened from a time's link (`linked`), which puts the
- * whole card first instead (inhouseTimesStrip decides both). Posting, the
- * links and everyone's names stay on the card under the room.
+ * The Play later banner, above the live room (Tim, 2026-10-10): a thin
+ * sliver, one button high, with the soonest open times and each one's "I'm
+ * in", so a visitor sees them and still has the queue on the first screen.
+ * The chips swipe in one row inside it when they don't fit; it never grows a
+ * second. A time's link changes only what this shows (its time leads,
+ * picked out, or a line saying it's over); the card stays under the room
+ * either way. inhouseTimesStrip decides it all, nothing while no time is
+ * open and no link needs answering. Posting, the links and everyone's names
+ * stay on the card.
  */
-export async function InhouseTimesStrip({ linked }: { linked: boolean }) {
+export async function InhouseTimesStrip({ linked }: { linked: InhouseTimeLinked }) {
   const { nowMs, user, times, atCap } = await loadPlayLater();
   const strip = inhouseTimesStrip(times, { linked });
   if (!strip) return null;
   return (
     <section id="play-later-next" aria-label="Play later times">
-      {/* overflow-hidden: the phone row below scrolls inside the card, never the page. */}
-      <Card className="space-y-3 overflow-hidden p-3 sm:p-4">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      {/* overflow-hidden: the chips' row scrolls inside the banner, never the page. */}
+      <Card className="flex items-center gap-2 overflow-hidden py-1 pl-2 pr-1 sm:pl-3 sm:pr-2">
+        <p className="flex shrink-0 items-center gap-2 text-sm font-semibold text-fg">
           <span
             aria-hidden
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-info/15 text-base"
+            className="grid h-7 w-7 place-items-center rounded-md bg-info/15 text-sm"
           >
             🕗
           </span>
-          <div className="min-w-0 flex-1">
-            <h2 className="text-[0.9375rem] font-semibold leading-snug text-fg">Play later</h2>
-            <p className="text-xs text-muted">Times players posted</p>
-          </div>
-          <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink("shrink-0 text-sm")}>
-            {inhouseTimesStripLinkText({ more: strip.more, atCap })}{" "}
-            <span aria-hidden>↓</span>
-          </a>
+          {/* A phone keeps its width for the times: the clock says it. */}
+          <span className="sr-only sm:not-sr-only">Play later</span>
+        </p>
+        {/* p-0.5 leaves room for the focus rings the scroller clips; it
+            never scrolls up and down (a link's tap padding can poke out). */}
+        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden p-0.5 [scrollbar-width:thin]">
+          {strip.gone ? (
+            <p className="min-w-44 flex-1 text-xs leading-4 text-muted sm:flex-none sm:whitespace-nowrap">
+              The time in that link is over, or everyone on it dropped out.{" "}
+              <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink()}>
+                See Play later below
+              </a>
+              .
+            </p>
+          ) : null}
+          {strip.shown.length > 0 ? (
+            <>
+              <ul className="flex shrink-0 items-center gap-2">
+                {strip.shown.map((time) => (
+                  <StripChip
+                    key={time.startsAtMs}
+                    time={time}
+                    user={user}
+                    atCap={atCap}
+                    nowMs={nowMs}
+                    linked={time.startsAtMs === strip.linkedMs}
+                  />
+                ))}
+              </ul>
+              <a
+                href={`#${PLAY_LATER_ANCHOR}`}
+                className={textLink("ml-auto shrink-0 whitespace-nowrap px-1 text-sm")}
+              >
+                {inhouseTimesStripLinkText({ more: strip.more, atCap })}
+                {/* The short "N more" names what it counts for a screen reader. */}
+                {strip.more > 0 ? (
+                  <span className="sr-only">{strip.more === 1 ? " time" : " times"}</span>
+                ) : null}{" "}
+                <span aria-hidden>↓</span>
+              </a>
+            </>
+          ) : null}
         </div>
-        {/* A phone swipes one row of tiles, the next peeking in, so the strip
-            stays one tile high and the queue stays on the first screen; from
-            sm up they sit side by side. */}
-        <ul className="-mx-3 flex snap-x snap-mandatory gap-2 overflow-x-auto px-3 pb-1 [scrollbar-width:thin] sm:mx-0 sm:grid sm:overflow-visible sm:px-0 sm:pb-0 sm:[grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
-          {strip.shown.map((time) => (
-            <StripTile
-              key={time.startsAtMs}
-              time={time}
-              user={user}
-              atCap={atCap}
-              nowMs={nowMs}
-              single={strip.shown.length === 1}
-            />
-          ))}
-        </ul>
       </Card>
     </section>
   );

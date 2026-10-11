@@ -50,12 +50,19 @@ export function ActionForm({
   className,
   hidden,
   trackChanges = false,
+  inlineError = true,
 }: {
   action: (prev: ActionResult, fd: FormData) => Promise<ActionResult>;
   children: React.ReactNode;
   className?: string;
   hidden?: Record<string, string>;
   trackChanges?: boolean;
+  /**
+   * Show a refusal inside the form as well as in the toast (the default).
+   * False keeps it to the toast, for a control squeezed into a one-row bar
+   * (Play later's banner) that an error box would break open.
+   */
+  inlineError?: boolean;
 }) {
   const safeAction = useCallback(
     async (prev: ActionResult, fd: FormData): Promise<ActionResult> => {
@@ -92,9 +99,10 @@ export function ActionForm({
     if (trackChanges) setDirty(true);
   }, [trackChanges]);
 
+  const shownError = inlineError ? state?.error : undefined;
   useEffect(() => {
-    if (state?.error) errorRef.current?.focus();
-  }, [state]);
+    if (shownError) errorRef.current?.focus();
+  }, [shownError, state]);
 
   useEffect(() => {
     if (!state || state.error) return;
@@ -107,7 +115,7 @@ export function ActionForm({
       ref={formRef}
       // Kept as the no-JS / pre-hydration fallback path.
       action={formAction}
-      aria-describedby={state?.error ? errorId : undefined}
+      aria-describedby={shownError ? errorId : undefined}
       onChange={(event) => {
         if (event.target instanceof HTMLElement && event.target.getAttribute("name")) markDirty();
       }}
@@ -132,17 +140,17 @@ export function ActionForm({
               ))
             : null}
           {children}
-          {state?.error ? (
+          {shownError ? (
             <p
               ref={errorRef}
               id={errorId}
               tabIndex={-1}
               className="basis-full w-full col-span-full scroll-mt-40 rounded-lg border border-danger/40 bg-danger/10 p-3 text-sm text-danger-soft focus:outline-none focus:ring-2 focus:ring-danger/50"
             >
-              {state.error === SIGN_IN_REQUIRED ? (
+              {shownError === SIGN_IN_REQUIRED ? (
                 <SignInRequired />
               ) : (
-                state.error
+                shownError
               )}
             </p>
           ) : null}
