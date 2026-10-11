@@ -276,6 +276,9 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   never `useRef`, or the effect runs once against null and never re-attaches.
 - **Add a page to navigation only through `src/lib/site-nav.ts`,** once it has
   something to show. Hidden pages stay reachable by URL.
+- **Import `Link` from `@/components/app-link`, never `next/link`:** it turns
+  off viewport prefetching, which cost a server render per visible link on
+  every page view (`app-link.test.ts`).
 - **Render a control only where its action would accept, and keep cleanup
   visible.** Drive both from one pure predicate (`seasonPhasePolicy`,
   `standinAssignmentOpen`), but never hide remove or undo for existing rows.
@@ -316,6 +319,12 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 ### Automation and caching
 
+- **Both leagues share one Vercel Hobby plan: four hours of Active CPU a
+  month,** and every poll, prefetch and page view is a function call (past
+  the limit Vercel can pause the projects; its Hobby docs say "wait until 30
+  days have passed"). Poll only as fast as a
+  deadline needs (the rooms' rates live in `src/lib/room-poll.ts`), and count
+  what a new background request costs before adding one.
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
   signed-in room poll runs maintenance only when it wins a `claimThrottle`.
