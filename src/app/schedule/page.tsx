@@ -8,7 +8,7 @@ import {
 } from "@/components/playoff-outlook";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { getActiveSeason } from "@/lib/season";
 import {
   fixturesMatchNightLabel,

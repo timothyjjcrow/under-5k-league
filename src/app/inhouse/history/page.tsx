@@ -1,5 +1,5 @@
 import { shareMetadata } from "@/lib/share-metadata";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { INHOUSE_STATUS } from "@/lib/constants";

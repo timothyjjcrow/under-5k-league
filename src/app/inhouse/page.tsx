@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { shareMetadata } from "@/lib/share-metadata";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { redirect } from "next/navigation";
 import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";

@@ -19,7 +19,7 @@ import { cache, Suspense } from "react";
 import { SectionNav, SectionReady } from "@/components/section-nav";
 import { randomUUID } from "node:crypto";
 import { redirect } from "next/navigation";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { getSessionUser } from "@/lib/auth";
 import { completedSeasonArchiveReadiness, getActiveSeason } from "@/lib/season";
 import { capacityInfo } from "@/lib/capacity";

@@ -2,7 +2,7 @@
 // Props only: SeasonView judges the matches it already loaded (upsets.ts)
 // and hands the verdicts down, so neither adds a query to the hottest page.
 
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LinkArrow, textLink } from "@/components/ui";
 import { upsetDetail, type SeriesUpset } from "@/lib/upsets";
 

@@ -1,7 +1,7 @@
 import { shareMetadata } from "@/lib/share-metadata";
 import { Suspense } from "react";
 import { listPage } from "@/lib/list-page";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { notFound } from "next/navigation";
 import { singleSearchParam } from "@/lib/search-params";
 import { prisma } from "@/lib/prisma";

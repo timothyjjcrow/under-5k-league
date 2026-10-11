@@ -1,7 +1,7 @@
 import { MATCH_LIST_ORDER } from "@/lib/schedule";
 import type { ReactNode } from "react";
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { getPublicLeagueContent } from "@/lib/public-navigation";

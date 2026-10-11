@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { Badge, TeamCrest } from "@/components/ui";
 import type { PowerRankingRow } from "@/lib/power-rankings";

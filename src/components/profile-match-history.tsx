@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LocalTime } from "@/components/local-time";
 import { ShowMore } from "@/components/show-more";
 import {

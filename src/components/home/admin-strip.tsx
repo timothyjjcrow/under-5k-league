@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Badge, LinkArrow } from "@/components/ui";
 import { matchAttention } from "@/lib/admin-attention";
 import { adminHomeLine } from "@/lib/admin-home-line";

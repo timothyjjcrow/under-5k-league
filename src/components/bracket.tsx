@@ -8,7 +8,7 @@
 // hover, or focus a team to light up its path to the final.
 
 import { useId, useRef, useState } from "react";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { TeamCrest } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";
 import { MATCH_STATUS } from "@/lib/constants";

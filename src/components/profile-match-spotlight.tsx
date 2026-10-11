@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LocalTime } from "@/components/local-time";
 import { Badge, LinkArrow, TeamCrest } from "@/components/ui";
 import { formatLeagueMatchTime } from "@/lib/match-time";

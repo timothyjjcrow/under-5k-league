@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { useEffect } from "react";
 import { DiscordButton, buttonClasses } from "@/components/ui";
 import { LEAGUE_CONFIG } from "@/lib/league-config";

@@ -8,7 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import {
   Avatar,
   Badge,

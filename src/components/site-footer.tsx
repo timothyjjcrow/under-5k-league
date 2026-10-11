@@ -1,5 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Badge, DiscordButton } from "@/components/ui";
 import { seasonPhaseLabel, seasonPhaseTone } from "@/lib/season-copy";
 import { footerNav, type NavContent } from "@/lib/site-nav";

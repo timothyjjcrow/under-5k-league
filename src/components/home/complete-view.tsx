@@ -1,5 +1,5 @@
 import type { Match } from "@prisma/client";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { ReactNode } from "react";
 import { Bracket } from "@/components/bracket";
 import { ChampionMoment } from "@/components/champion-moment";

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LEAGUE_GAME_MODE } from "@/lib/constants";
 import {

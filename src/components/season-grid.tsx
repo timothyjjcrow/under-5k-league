@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { TeamCrest } from "@/components/ui";
 import { crossTable, type CrossCell, type CrossMatch } from "@/lib/cross-table";
 import { cn } from "@/lib/utils";

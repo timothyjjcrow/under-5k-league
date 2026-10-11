@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { buttonClasses } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { RoomStatus } from "@/lib/room-status";

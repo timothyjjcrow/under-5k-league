@@ -1,7 +1,7 @@
 import { Suspense } from "react";
 import { InviteLink } from "@/components/invite-link";
 import type { User } from "@prisma/client";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";

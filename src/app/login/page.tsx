@@ -1,5 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { safeReturnPath } from "@/lib/return-path";

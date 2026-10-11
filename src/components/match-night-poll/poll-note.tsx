@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { textLink } from "@/components/ui";
 import { POLL_ANCHOR } from "@/lib/match-night-poll";
 

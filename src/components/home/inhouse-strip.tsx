@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LinkArrow } from "@/components/ui";
 import { loadCurrentInhouseNight } from "@/components/inhouse-night";
 import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "@/lib/constants";

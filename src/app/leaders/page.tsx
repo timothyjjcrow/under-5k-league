@@ -1,6 +1,6 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { SectionNav } from "@/components/section-nav";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { Metadata } from "next";
 import { heroById } from "@/lib/heroes";
 import { notFound } from "next/navigation";

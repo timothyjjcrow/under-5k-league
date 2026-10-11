@@ -21,7 +21,7 @@ import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { matchRoundLabel } from "@/lib/schedule";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { LocalTime } from "@/components/local-time";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { heroById } from "@/lib/heroes";
 import { cn, formatNetWorth } from "@/lib/utils";
 import {

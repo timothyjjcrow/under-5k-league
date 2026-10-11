@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { cache } from "react";
 import { setInhouseTimeAction } from "@/app/actions/inhouse-times";
 import { ActionForm, SubmitButton } from "@/components/action-form";

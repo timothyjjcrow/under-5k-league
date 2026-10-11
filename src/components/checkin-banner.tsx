@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { setAvailability } from "@/app/actions/availability";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Countdown } from "@/components/countdown";

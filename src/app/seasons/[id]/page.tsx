@@ -1,7 +1,7 @@
 import { MATCH_LIST_ORDER } from "@/lib/schedule";
 import { SectionNav } from "@/components/section-nav";
 import { rosterOrder } from "@/lib/team-roster";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Suspense } from "react";
 import type { Metadata } from "next";
 import { ChampionBanner } from "@/components/champion-banner";
