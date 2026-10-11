@@ -246,57 +246,88 @@ export default async function InhousePage({
       </div>
 
       <div className="space-y-8">
-        <PageTitle
-          title="Inhouse"
-          subtitle="Queue together. Draft your sides. Play for the ladder."
-          action={
-            <Link href="/inhouse/history" className={textLink("text-sm")}>
-              Match history <span aria-hidden="true">→</span>
-            </Link>
-          }
-        />
-
-        {hasGames ? (
-          <SectionNav
-            label="Inhouse sections"
-            items={[
-              { id: "live-room", label: "Live room" },
-              { id: PLAY_LATER_ANCHOR, label: "Play later" },
-              { id: "inhouse-ladder", label: "Ladder" },
-              { id: "recent-inhouse", label: "Results" },
-              { id: "opendota-setup", label: "Setup help" },
-            ]}
+        {/* The first screen (Tim, 2026-10-10: "the entire queue on the screen
+            when you go to the in-house page, you shouldn't have to scroll
+            down", with a bar where you can opt into a time): one short title
+            row, the one bar with the inhouse night and the Play later times,
+            then the room, 12px apart. The e2e
+            (e2e-mid/zz-inhouse-queue-fit.spec.ts) measures the whole queue
+            card on screen from 390 to 1920, and in a laptop's browser
+            window (1280x690, 1366x657). */}
+        <div className="space-y-3">
+          <PageTitle
+            compact
+            title="Inhouse"
+            action={
+              <Link href="/inhouse/history" className={textLink("text-sm")}>
+                Match history <span aria-hidden="true">→</span>
+              </Link>
+            }
+            nav={
+              // From md, inside the title row. The room sits right below it,
+              // so the bar doesn't point at it.
+              hasGames ? (
+                <SectionNav
+                  bare
+                  label="Inhouse sections"
+                  items={[
+                    { id: PLAY_LATER_ANCHOR, label: "Play later" },
+                    { id: "inhouse-ladder", label: "Ladder" },
+                    { id: "recent-inhouse", label: "Results" },
+                    { id: "opendota-setup", label: "Setup help" },
+                  ]}
+                />
+              ) : undefined
+            }
           />
-        ) : null}
-        {/* The planned inhouse night, while one is set: when to come back,
-            and the calendar and Discord links. One Setting read, streamed so
-            it never holds up the room. */}
+          {/* The one bar above the queue, so nobody scrolls to find a time
+              or the night (Tim, 2026-10-10): the planned inhouse night's
+              chip and Play later's soonest open times with their "I'm in",
+              the earliest first (a link leads with its own), or nothing
+              while there's neither. Streamed: it never holds up the room. */}
+          <Suspense fallback={null}>
+            <InhouseTimesStrip linked={linkedTime} invite={invite} />
+          </Suspense>
+          <section
+            id="live-room"
+            className="scroll-mt-28"
+            aria-label="Live inhouse room"
+          >
+            <InhouseRoom
+              signupMmr={signupMmr}
+              mmrHint={mmrHint}
+              firstGame={firstGame}
+            />
+            {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
+          </section>
+        </div>
+        {/* Players' own times in full, always under the room (a time's
+            link too: Tim, 2026-10-10): posting, the links and everyone's
+            names. The bar above shares its one read. */}
+        <PlayLater linked={linkedTime} />
+        {/* The planned inhouse night in full, while one is set: the note,
+            who's in, the calendar and Discord links, and the invite's
+            answer. The bar's chip links down to it; it shares the chip's
+            one read, streamed so it never holds up the room. */}
         <Suspense fallback={null}>
           <InhouseNightCard invite={invite} />
         </Suspense>
-        {/* Play later's open times, above the queue so nobody scrolls to
-            find them (Tim, 2026-10-10): a thin banner with the soonest few
-            and their "I'm in" (a time's link leads with its time), or
-            nothing while none is open. Streamed: it never holds up the room. */}
-        <Suspense fallback={null}>
-          <InhouseTimesStrip linked={linkedTime} />
-        </Suspense>
-        <section
-          id="live-room"
-          className="scroll-mt-28"
-          aria-label="Live inhouse room"
-        >
-          <InhouseRoom
-            signupMmr={signupMmr}
-            mmrHint={mmrHint}
-            firstGame={firstGame}
-          />
-          {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
-        </section>
-        {/* Players' own times in full, always under the room (a time's
-            link too: Tim, 2026-10-10): posting, the links and everyone's
-            names. The banner above shares its one read. */}
-        <PlayLater linked={linkedTime} />
+        {hasGames ? (
+          // A phone's section bar, under the plans: from md it sits in the
+          // title row. One shows at a time; this one leaves the hash to the
+          // title row's, which follows it at every width.
+          <div className="md:hidden">
+            <SectionNav
+              label="Inhouse sections"
+              followHash={false}
+              items={[
+                { id: "inhouse-ladder", label: "Ladder" },
+                { id: "recent-inhouse", label: "Results" },
+                { id: "opendota-setup", label: "Setup help" },
+              ]}
+            />
+          </div>
+        ) : null}
 
         {/* The room above paints immediately; the history-scanning sections
             stream in behind it (CLAUDE.md in-page streaming convention).

@@ -302,9 +302,12 @@ export function RoleBadges({
   className,
   labelled = false,
   ranked = false,
+  pillClassName,
 }: {
   roles: string | null | undefined;
   className?: string;
+  /** Classes for each pill (a smaller pill on a phone). Unset renders exactly what shipped. */
+  pillClassName?: string;
   /**
    * Give the pills one accessible name ("Plays Pos 1 Carry, Pos 3 Offlane")
    * instead of bare digits with a hover-only title. Off by default, which
@@ -345,6 +348,7 @@ export function RoleBadges({
               "inline-flex h-5 min-w-5 items-center justify-center rounded border px-1 text-[11px] font-semibold tabular-nums",
               ROLE_TONE[k],
               first && "ring-1 ring-current",
+              pillClassName,
             )}
           >
             {k}
@@ -980,11 +984,33 @@ export function PageTitle({
   title,
   subtitle,
   action,
+  compact = false,
+  nav,
 }: {
   title: string;
   subtitle?: string;
   action?: React.ReactNode;
+  /**
+   * One short row for a page whose first screen is its point (/inhouse: the
+   * whole queue above the fold): the title, `nav` from md up and the action,
+   * on the title's rule, with no margin of its own (the page spaces it) and
+   * no subtitle. Off by default, which renders exactly what shipped.
+   */
+  compact?: boolean;
+  /** compact only: a bare SectionNav whose tabs sit on the title's rule, from md up. */
+  nav?: React.ReactNode;
 }) {
+  if (compact) {
+    return (
+      <div className="flex flex-wrap items-end gap-x-6 border-b border-line-soft">
+        <h1 className="pb-2 font-display text-[1.75rem] font-semibold leading-tight tracking-tight text-fg [overflow-wrap:anywhere] sm:text-4xl">
+          {title}
+        </h1>
+        {nav ? <div className="hidden min-w-0 flex-1 md:block">{nav}</div> : null}
+        {action ? <div className="ml-auto flex items-center gap-2 pb-2.5">{action}</div> : null}
+      </div>
+    );
+  }
   return (
     <div className="mb-5 flex flex-wrap items-start justify-between gap-x-6 gap-y-3 border-b border-line-soft pb-4">
       <div className="min-w-0 flex-1 basis-64">

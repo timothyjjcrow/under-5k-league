@@ -33,10 +33,14 @@ async function signIn(page: Page, query: string, redirect: string) {
 const top = async (page: Page, selector: string) =>
   (await page.locator(selector).boundingBox())!.y;
 
-/** The banner is a sliver: one button high, never a second row. */
+/**
+ * The banner is a sliver: one button high, never a second row. Measured on
+ * the whole bar (#inhouse-plans), not the times inside it: the bar is what
+ * stands between the title and the queue.
+ */
 const BANNER_MAX_PX = 64;
 const bannerHeight = async (page: Page) =>
-  (await page.locator("#play-later-next").boundingBox())!.height;
+  (await page.locator("#inhouse-plans").boundingBox())!.height;
 
 type Box = { x: number; y: number; width: number; height: number };
 const overlaps = (a: Box, b: Box) =>

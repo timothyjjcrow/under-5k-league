@@ -3,12 +3,17 @@ import { sourceFile, stripLineComments } from "../../test/support/source-files";
 import { INHOUSE_NIGHT_LENGTH_MS } from "./inhouse-night";
 import {
   INHOUSE_TIMES_STRIP_SHOWN,
+  INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT,
+  INHOUSE_TIME_DURING_NIGHT,
+  INHOUSE_TIME_DURING_NIGHT_ON,
+  inhouseTimeDuringNightRefusal,
   INHOUSE_TIME_MAX_LEAD_MS,
   INHOUSE_TIME_MAX_PER_PLAYER,
   INHOUSE_TIME_ON_MS,
   INHOUSE_TIME_STEP_MS,
   defaultInhouseTimeClock,
   groupInhouseTimes,
+  inhouseChipWhenText,
   inhouseTimeCalendarEvent,
   inhouseTimeCanPost,
   inhouseTimeControls,
@@ -20,6 +25,7 @@ import {
   inhouseTimeLinkPath,
   inhouseTimeParam,
   inhouseTimePhase,
+  inhousePlansNightFirst,
   inhouseTimePreviewText,
   inhouseTimeProblem,
   inhouseTimesStrip,
@@ -108,6 +114,17 @@ describe("saying I'm in on a start", () => {
     expect(inhouseTimeDuringNight(START + INHOUSE_NIGHT_LENGTH_MS, night)).toBe(false);
     expect(inhouseTimeDuringNight(START - INHOUSE_TIME_STEP_MS, night)).toBe(false);
     expect(inhouseTimeDuringNight(START, null)).toBe(false);
+  });
+
+  it("points a refused time at the night where the page shows it: its card below, the bar at the top", () => {
+    // The night's card sits under Play later now; only its chip is at the top.
+    expect(INHOUSE_TIME_DURING_NIGHT).toContain("on its card below");
+    expect(INHOUSE_TIME_DURING_NIGHT).toContain("in the bar at the top of the page");
+    expect(INHOUSE_TIME_DURING_NIGHT).not.toMatch(/its card at the top/);
+    // Once the night is on, its "I'm in" is gone: the queue is the way in.
+    expect(inhouseTimeDuringNightRefusal(START, START - 1)).toBe(INHOUSE_TIME_DURING_NIGHT);
+    expect(inhouseTimeDuringNightRefusal(START, START)).toBe(INHOUSE_TIME_DURING_NIGHT_ON);
+    expect(INHOUSE_TIME_DURING_NIGHT_ON).toContain("join the queue");
   });
 });
 
@@ -254,6 +271,37 @@ describe("the banner at the top of /inhouse", () => {
     });
   });
 
+  it("shows two times at most beside the night, a link's own first, and counts the rest", () => {
+    const times = [at(1), at(2), at(3), at(4)];
+    const beside = (linked: Parameters<typeof inhouseTimesStrip>[1]["linked"]) =>
+      inhouseTimesStrip(times, { linked, night: true });
+    expect(INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT).toBe(2);
+    expect(beside(null)).toEqual({
+      shown: [at(1), at(2)],
+      linkedMs: null,
+      gone: false,
+      more: 2,
+    });
+    // A link to a later time leads and takes the second place: still two.
+    expect(beside(at(4).startsAtMs)).toEqual({
+      shown: [at(4), at(1)],
+      linkedMs: at(4).startsAtMs,
+      gone: false,
+      more: 2,
+    });
+    expect(beside(at(2).startsAtMs)).toEqual({
+      shown: [at(2), at(1)],
+      linkedMs: at(2).startsAtMs,
+      gone: false,
+      more: 2,
+    });
+    // A gone link's line takes a time's place, so the night's chip still fits.
+    expect(beside("gone")).toEqual({ shown: [at(1)], linkedMs: null, gone: true, more: 3 });
+    // Without the night, as before: three, and a link adds its own.
+    expect(inhouseTimesStrip(times, { linked: null, night: false })!.shown).toHaveLength(3);
+    expect(inhouseTimesStrip([...times, at(5)], { linked: at(5).startsAtMs })!.shown).toHaveLength(4);
+  });
+
   it("says a link's time is over in its place, with any open times after it", () => {
     // Over, never posted, or a link that names no one time: one line, even alone.
     for (const linked of [at(-2).startsAtMs, at(7).startsAtMs, "gone" as const]) {
@@ -281,6 +329,33 @@ describe("the banner at the top of /inhouse", () => {
     expect(inhouseTimeLinked("tonight")).toBe("gone");
   });
 
+  it("leads with the earliest of the night and the times, a link's own first", () => {
+    const lead = (input: Partial<Parameters<typeof inhousePlansNightFirst>[0]>) =>
+      inhousePlansNightFirst({
+        nightStartsAtMs: START + 2 * HOUR,
+        nightOn: false,
+        firstTimeMs: START,
+        linkedTime: false,
+        invite: false,
+        ...input,
+      });
+    // A time sooner than the night leads; a night sooner than any time leads.
+    expect(lead({})).toBe(false);
+    expect(lead({ firstTimeMs: START + 3 * HOUR })).toBe(true);
+    // A tie goes to the night, and a night with no time shown leads alone.
+    expect(lead({ firstTimeMs: START + 2 * HOUR })).toBe(true);
+    expect(lead({ firstTimeMs: null })).toBe(true);
+    // A night that's on leads any time, even one that's on too.
+    expect(lead({ nightOn: true, nightStartsAtMs: START - HOUR, firstTimeMs: START - 2 * HOUR })).toBe(true);
+    // A time's link leads with its time (or its "over" line), whatever is sooner.
+    expect(lead({ linkedTime: true, firstTimeMs: START + 3 * HOUR })).toBe(false);
+    expect(lead({ linkedTime: true, nightOn: true })).toBe(false);
+    expect(lead({ linkedTime: true, firstTimeMs: null })).toBe(false);
+    // The night's invite leads with the night, a time's link or not.
+    expect(lead({ invite: true })).toBe(true);
+    expect(lead({ invite: true, linkedTime: true })).toBe(true);
+  });
+
   it("names its link by what the card adds", () => {
     expect(inhouseTimesStripLinkText({ more: 2, atCap: false })).toBe("2 more");
     expect(inhouseTimesStripLinkText({ more: 1, atCap: true })).toBe("1 more");
@@ -300,6 +375,35 @@ describe("the banner at the top of /inhouse", () => {
     expect(inhouseTimeDayWord(NOW - 30 * MIN, NOW, "Europe/Berlin")).toBe("Yesterday");
     // Two midnights away (a 25-hour day can do it): the caller writes a full date.
     expect(inhouseTimeDayWord(NOW + 30 * HOUR, NOW, "America/New_York")).toBeNull();
+  });
+
+  it("says a chip's start as today or tomorrow, else by weekday, and the night by its date", () => {
+    /** Intl may put a narrow no-break space before AM/PM; compare on plain ones. */
+    const plain = (text: string) => text.replace(/[\u202f\u00a0]/g, " ");
+    const us = (ms: number, dated = false) =>
+      plain(inhouseChipWhenText(ms, NOW, "America/New_York", { locale: "en-US", dated }));
+    // NOW is Saturday 6 PM in New York.
+    expect(us(NOW + 2 * HOUR)).toBe("Today, 8:00 PM");
+    expect(us(NOW + 7 * HOUR)).toBe("Tomorrow, 1:00 AM");
+    expect(us(NOW + 7 * HOUR, true)).toBe("Tomorrow, 1:00 AM");
+    // A Play later time two midnights off (a 25-hour day): its weekday.
+    expect(us(NOW + 30 * HOUR)).toBe("Mon 12:00 AM");
+    // The night, which can be weeks off, carries its date past tomorrow, so
+    // a night 13 days out never reads as this Friday's.
+    const fortnight = Date.parse("2026-10-24T00:00:00.000Z"); // Fri Oct 23, 8 PM New York
+    expect(us(fortnight, true)).toBe("Fri, Oct 23, 8:00 PM");
+    expect(us(fortnight)).toBe("Fri 8:00 PM");
+    const nextWeek = NOW + 7 * 24 * HOUR + 2 * HOUR; // Sat Oct 17, 8 PM
+    expect(us(nextWeek, true)).toBe("Sat, Oct 17, 8:00 PM");
+    // Europe's clock and words: 24-hour, the day first.
+    const europeNight = Date.parse("2026-10-23T18:00:00.000Z"); // Fri 23 Oct, 20:00 Berlin
+    const berlin = plain(
+      inhouseChipWhenText(europeNight, NOW, "Europe/Berlin", { locale: "en-GB", dated: true }),
+    );
+    expect(berlin).toBe("Fri 23 Oct, 20:00");
+    expect(
+      plain(inhouseChipWhenText(NOW + 20 * HOUR, NOW, "Europe/Berlin", { locale: "en-GB" })),
+    ).toBe("Today, 20:00");
   });
 });
 
@@ -426,22 +530,42 @@ describe("the card follows the rules", () => {
 
   it("draws the banner by its rule, from the one read the card uses", () => {
     const card = stripLineComments(sourceFile("src/components/inhouse-times.tsx").text);
-    expect(card).toContain("const strip = inhouseTimesStrip(times, { linked });");
-    expect(card).toContain("if (!strip) return null;");
+    // Beside the night's chip it shows two times at most.
+    expect(card).toContain("const strip = inhouseTimesStrip(times, { linked, night: !!night });");
+    // The bar is nothing only while there's neither a time to show nor a night.
+    expect(card).toContain("if (!strip && !night) return null;");
     expect(card).toContain("strip.shown.map((time) => (");
     expect(card).toContain("linked={time.startsAtMs === strip.linkedMs}");
     expect(card).toContain("{strip.gone ? (");
     expect(card).toContain("The time in that link is over, or everyone on it dropped out.");
     expect(card).toContain("inhouseTimesStripLinkText({ more: strip.more, atCap })");
-    // One query per request: the banner and the card share a request-cached read.
+    // One query per request: the banner and the card share a request-cached
+    // read, and the bar reads the night through the night card's own.
     expect(card).toMatch(/const loadPlayLater = cache\(async \(\) => \{/);
     expect(card.match(/\breadInhouseTimes\(/g)).toHaveLength(1);
-    expect(card.match(/= await loadPlayLater\(\);/g)).toHaveLength(2);
-    // The chips scroll in one row inside a banner that clips them (CLAUDE.md:
-    // an overflow-x-auto scroller needs overflow-hidden around it).
+    expect(card.match(/= await loadPlayLater\(\);/g)).toHaveLength(1);
     expect(card).toMatch(
-      /<Card className="[^"]*\boverflow-hidden\b[^"]*">[\s\S]*?<div className="[^"]*\boverflow-x-auto\b/,
+      /= await Promise\.all\(\[\s*loadPlayLater\(\),\s*loadInhouseNightView\(\),\s*\]\);/,
     );
+    expect(card).not.toMatch(/\breadInhouseNight(?:Rsvps)?\(|\bloadCurrentInhouseNight\(/);
+    const night = stripLineComments(sourceFile("src/components/inhouse-night.tsx").text);
+    expect(night).toMatch(/export const loadInhouseNightView = cache\(async \(\) => \{/);
+    expect(night.match(/= await loadInhouseNightView\(\);/g)).toHaveLength(1);
+    // Which leads is the pure rule's call: the earliest, a link's own first.
+    expect(card).toContain("inhousePlansNightFirst({");
+    expect(card).toContain("{nightFirst ? nightChip : timesPart}");
+    expect(card).toContain("{nightFirst ? timesPart : nightChip}");
+    // The row scrolls in one line inside a bar that clips it (CLAUDE.md: an
+    // overflow-x-auto scroller needs overflow-hidden around it), and fades
+    // each side with more by SectionNav's rule (PlansRow).
+    expect(card).toMatch(
+      /<Card\b[^>]*className="[^"]*\boverflow-hidden\b[^"]*"[^>]*>[\s\S]*?<PlansRow className="[^"]*\boverflow-x-auto\b/,
+    );
+    const client = sourceFile("src/components/inhouse-times-client.tsx").text;
+    const row = client.slice(client.indexOf("export function PlansRow("));
+    expect(row).toContain("chipBarEdges(row)");
+    expect(row).toContain("chipBarMask(edges)");
+    expect(row).toMatch(/maskImage: mask, WebkitMaskImage: mask/);
   });
 
   it("keeps the banner a sliver: one row, no faces, no countdown", () => {
@@ -458,24 +582,51 @@ describe("the card follows the rules", () => {
     expect(card).not.toContain("everyone on it has dropped out");
   });
 
-  it("puts the banner above the live room, streamed, shown only by its rule", () => {
+  it("keeps the night's chip in the bar a sliver too: one row, no faces, no countdown", () => {
+    const night = stripLineComments(sourceFile("src/components/inhouse-night.tsx").text);
+    const from = night.indexOf("export function InhouseNightChip(");
+    expect(from).toBeGreaterThan(-1);
+    const chip = night.slice(from, night.indexOf("\n}\n", from));
+    // One chip box, one button high, that never wraps or stacks.
+    expect(chip).toContain('aria-label="Inhouse night"');
+    expect(chip).toMatch(/className="flex shrink-0 items-center gap-2 [^"]*\bpy-0\.5\b/);
+    expect(chip).not.toMatch(/\bflex-wrap\b|\bflex-col\b|\bgrid-rows-|\bspace-y-/);
+    // The card has the countdown, the faces, the note and the links.
+    expect(chip).not.toMatch(/<Countdown\b|<InhouseNightWhen\b|<Avatar\b|<WhoIsIn\b|<CardHeader\b|night\.note/);
+    // Its "I'm in" is the night's one rule, and a refusal stays in its toast.
+    expect(chip).toMatch(/<InhouseNightRsvpControl\b[^>]*\bcompact\b/);
+    expect(chip).toContain("<InhouseTimeWhen ts={night.startsAtMs}");
+    // A night can be weeks off: past tomorrow its chip names the date.
+    expect(chip).toMatch(/<InhouseTimeWhen ts=\{night\.startsAtMs\}[^>]*\bdated\b/);
+    const client = sourceFile("src/components/inhouse-times-client.tsx").text;
+    expect(client).toContain("inhouseChipWhenText(ms, nowMs, viewerZone(), { dated })");
+    expect(client).toContain("() => dayAndTime(ts, Date.now(), dated)");
+  });
+
+  it("puts the bar between the title and the live room, streamed, shown only by its rule", () => {
     const page = stripLineComments(sourceFile("src/app/inhouse/page.tsx").text);
     expect(page.match(/<InhouseTimesStrip\b/g)).toHaveLength(1);
     const strip =
-      /<Suspense fallback=\{null\}>\s*<InhouseTimesStrip linked=\{linkedTime\} \/>\s*<\/Suspense>/.exec(
+      /<Suspense fallback=\{null\}>\s*<InhouseTimesStrip linked=\{linkedTime\} invite=\{invite\} \/>\s*<\/Suspense>/.exec(
         page,
       );
     expect(strip).not.toBeNull();
     // Not wrapped in a condition or fragment of the page's own: between the
-    // night card's Suspense and the banner's there is only whitespace and JSX
-    // comments, so whether it shows (signed out too) is inhouseTimesStrip's
-    // call alone.
-    const night = /<InhouseNightCard invite=\{invite\} \/>\s*<\/Suspense>/.exec(page);
-    expect(night).not.toBeNull();
-    const between = page.slice(night!.index + night![0].length, strip!.index);
-    expect(between.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").trim()).toBe("");
-    expect(strip!.index).toBeGreaterThan(page.indexOf("<InhouseNightCard"));
-    expect(strip!.index).toBeLessThan(page.indexOf('id="live-room"'));
+    // title row and the bar, and the bar and the room, there is only
+    // whitespace and JSX comments, so whether it shows (signed out too) is
+    // the bar's own rule alone, and nothing else sits above the queue.
+    const title = /<PageTitle\b[\s\S]*?\n {10}\/>/.exec(page);
+    expect(title).not.toBeNull();
+    expect(title![0]).toContain("compact");
+    const room = page.indexOf("<section\n            id=\"live-room\"");
+    expect(room).toBeGreaterThan(-1);
+    const jsxComments = /\{\/\*[\s\S]*?\*\/\}/g;
+    const before = page.slice(title!.index + title![0].length, strip!.index);
+    expect(before.replace(jsxComments, "").trim()).toBe("");
+    const after = page.slice(strip!.index + strip![0].length, room);
+    expect(after.replace(jsxComments, "").trim()).toBe("");
+    // The night's card is under the room now: its chip rides the bar.
+    expect(page.indexOf("<InhouseNightCard")).toBeGreaterThan(room);
   });
 
   it("keeps the card under the room in one layout, a time's link too", () => {
@@ -486,8 +637,9 @@ describe("the card follows the rules", () => {
     const room = page.indexOf('id="live-room"');
     const card = page.indexOf("<PlayLater linked={linkedTime} />");
     expect(card).toBeGreaterThan(room);
+    // Only the first screen's group closes between them.
     const between = page.slice(page.indexOf("</section>", room) + "</section>".length, card);
-    expect(between.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").trim()).toBe("");
+    expect(between.replace(/\{\/\*[\s\S]*?\*\/\}/g, "").trim()).toBe("</div>");
     expect(page).not.toMatch(/linkedTime (?:!==|===) undefined/);
     expect(page).toContain("const linkedTime = inhouseTimeLinked(singleSearchParam(params.at));");
   });

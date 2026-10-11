@@ -104,8 +104,22 @@ export function inhouseTimeDuringNight(
   );
 }
 
+/**
+ * The refusal for a new time inside the night. The night's "I'm in" is in two
+ * places on /inhouse: its chip in the bar at the top, and its card under Play
+ * later, just below the form that was refused.
+ */
 export const INHOUSE_TIME_DURING_NIGHT =
-  "That's during the inhouse night: say you're in on its card at the top of the page instead.";
+  "That's during the inhouse night: say you're in on the night instead, on its card below or in the bar at the top of the page.";
+
+/** The same refusal once the night has started: its "I'm in" is gone, the queue is the way in. */
+export const INHOUSE_TIME_DURING_NIGHT_ON =
+  "That's during the inhouse night, which is on now: join the queue instead.";
+
+/** The refusal for a new time inside the night, worded for whether it has started. */
+export function inhouseTimeDuringNightRefusal(nightStartsAtMs: number, nowMs: number): string {
+  return nowMs >= nightStartsAtMs ? INHOUSE_TIME_DURING_NIGHT_ON : INHOUSE_TIME_DURING_NIGHT;
+}
 
 export const INHOUSE_TIME_AT_CAP = `You're in on ${INHOUSE_TIME_MAX_PER_PLAYER} upcoming times, the most at once. Take yourself off one first.`;
 
@@ -201,6 +215,13 @@ export function inhouseTimeCanPost(input: { signedIn: boolean; atCap: boolean })
 export const INHOUSE_TIMES_STRIP_SHOWN = 3;
 
 /**
+ * Times the bar shows beside the inhouse night's chip, a link's own
+ * included: the night's chip is wide, and its "I'm in" was cut off at a
+ * laptop's right edge behind three times.
+ */
+export const INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT = 2;
+
+/**
  * The time a page was opened for, from its link (`?at=`): its start, "gone"
  * for a link that names no one time, or null when there's no link.
  */
@@ -228,10 +249,14 @@ export function inhouseTimeLinked(at: string | null | undefined): InhouseTimeLin
  * (`gone`), with any open times after it. Null, so the top of the page
  * carries no empty box, only when no time is open and no link needs
  * answering.
+ *
+ * Beside the inhouse night's chip (`night`) the bar shows at most
+ * INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT times in all, a link's own first,
+ * and counts the rest, so the night's "I'm in" stays on a laptop's screen.
  */
 export function inhouseTimesStrip<T extends { startsAtMs: number; phase: InhouseTimePhase }>(
   times: readonly T[],
-  input: { linked: InhouseTimeLinked },
+  input: { linked: InhouseTimeLinked; night?: boolean },
 ): { shown: T[]; linkedMs: number | null; gone: boolean; more: number } | null {
   const open = times
     .filter((time) => time.phase === "upcoming" || time.phase === "on")
@@ -241,8 +266,14 @@ export function inhouseTimesStrip<T extends { startsAtMs: number; phase: Inhouse
       ? open.find((time) => time.startsAtMs === input.linked)
       : undefined;
   const gone = input.linked !== null && !linked;
-  const soonest = open.slice(0, INHOUSE_TIMES_STRIP_SHOWN);
-  const shown = linked ? [linked, ...soonest.filter((time) => time !== linked)] : soonest;
+  // Beside a night, a gone link's line takes a time's place, so the night's
+  // chip still fits on a laptop's bar.
+  const cap = input.night
+    ? INHOUSE_TIMES_STRIP_SHOWN_BESIDE_NIGHT - (gone ? 1 : 0)
+    : INHOUSE_TIMES_STRIP_SHOWN;
+  const soonest = open.slice(0, cap);
+  const leading = linked ? [linked, ...soonest.filter((time) => time !== linked)] : soonest;
+  const shown = input.night ? leading.slice(0, cap) : leading;
   if (shown.length === 0 && !gone) return null;
   return {
     shown,
@@ -263,6 +294,31 @@ export function inhouseTimesStripLinkText(input: { more: number; atCap: boolean 
 }
 
 /**
+ * Whether the one bar at the top of /inhouse leads with the planned inhouse
+ * night's chip (true) or with the Play later times (Tim, 2026-10-10: the
+ * whole queue on the first screen, so the night rides the times' bar instead
+ * of a card above the room). The earliest leads, so a phone, which shows one
+ * chip before the swipe, shows the next thing to happen; a night that's on
+ * leads any time. A link answers first: a time's (`?at=`, `linkedTime`)
+ * leads with its time, or the line saying it's over, and the night's invite
+ * (`?imin=1`, `invite`) leads with the night. `firstTimeMs` is the first
+ * time the bar shows, null when it shows none.
+ */
+export function inhousePlansNightFirst(input: {
+  nightStartsAtMs: number;
+  nightOn: boolean;
+  firstTimeMs: number | null;
+  linkedTime: boolean;
+  invite: boolean;
+}): boolean {
+  if (input.invite) return true;
+  if (input.linkedTime) return false;
+  return (
+    input.nightOn || input.firstTimeMs == null || input.nightStartsAtMs <= input.firstTimeMs
+  );
+}
+
+/**
  * Which day a time falls on against now, on `timeZone`'s clock: "Today",
  * "Tomorrow", or "Yesterday" for one on since before midnight. Null further
  * out (a 25-hour day can put a time two midnights away), for a full date.
@@ -279,6 +335,30 @@ export function inhouseTimeDayWord(
   if (diff === 1) return "Tomorrow";
   if (diff === -1) return "Yesterday";
   return null;
+}
+
+/**
+ * A start as a chip in /inhouse's top bar says it, on `timeZone`'s clock
+ * (`locale` undefined is the viewer's own): "Today, 8:00 PM" or "Tomorrow,
+ * 1:00 AM" (inhouseTimeDayWord), and further out a Play later time, never
+ * more than 25 hours off, by its weekday ("Sun 1:00 AM"). The inhouse night
+ * (`dated`) can be weeks off, so past tomorrow it carries its date ("Fri,
+ * Oct 23, 8:00 PM"): a weekday alone read a night next month as this week's.
+ */
+export function inhouseChipWhenText(
+  startsAtMs: number,
+  nowMs: number,
+  timeZone: string,
+  { locale, dated = false }: { locale?: string; dated?: boolean } = {},
+): string {
+  const at = new Date(startsAtMs);
+  const format = (options: Intl.DateTimeFormatOptions) =>
+    new Intl.DateTimeFormat(locale, { timeZone, ...options }).format(at);
+  const word = inhouseTimeDayWord(startsAtMs, nowMs, timeZone);
+  if (word) return `${word}, ${format({ hour: "numeric", minute: "2-digit" })}`;
+  return dated
+    ? format({ weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })
+    : format({ weekday: "short", hour: "numeric", minute: "2-digit" });
 }
 
 /**

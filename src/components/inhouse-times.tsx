@@ -3,10 +3,12 @@ import { cache } from "react";
 import { setInhouseTimeAction } from "@/app/actions/inhouse-times";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Countdown } from "@/components/countdown";
+import { InhouseNightChip, loadInhouseNightView } from "@/components/inhouse-night";
 import {
   CopyInhouseTimeLink,
   InhouseTimePicker,
   InhouseTimeWhen,
+  PlansRow,
 } from "@/components/inhouse-times-client";
 import { LocalTime } from "@/components/local-time";
 import {
@@ -29,6 +31,7 @@ import {
   inhouseTimeGoogleCalendarUrl,
   inhouseTimeLinkPath,
   inhouseTimeParam,
+  inhousePlansNightFirst,
   inhouseTimesStrip,
   inhouseTimesStripLinkText,
   upcomingInhouseTimesFor,
@@ -45,15 +48,18 @@ import { cn } from "@/lib/utils";
 
 // Play later on /inhouse (rules: src/lib/inhouse-times.ts): the card under
 // the live room with the times players posted, who's in on each, "I'm in",
-// and "Post a time", and the thin banner above the room with the soonest few
-// and their "I'm in". Nothing here posts to Discord or pings anyone; a time's
-// link is the one way to share it.
+// and "Post a time", and the one thin bar above the room with the soonest few
+// and their "I'm in", beside the planned inhouse night's chip. Nothing here
+// posts to Discord or pings anyone; a time's link is the one way to share it.
 
 /** Profile chips on a time before "and N more": a full lobby's worth. */
 const PLAYERS_SHOWN = 10;
 
 /** The anchor the card sits under, the one its sign-in comes back to, and the banner's link down. */
 export const PLAY_LATER_ANCHOR = "play-later";
+
+/** The one bar at the top of /inhouse (the night's chip and the times). */
+export const INHOUSE_PLANS_BAR = "inhouse-plans";
 
 /**
  * The page's one read of Play later: the clock it judged the times by, the
@@ -396,75 +402,114 @@ function StripChip({
 }
 
 /**
- * The Play later banner, above the live room (Tim, 2026-10-10): a thin
- * sliver, one button high, with the soonest open times and each one's "I'm
- * in", so a visitor sees them and still has the queue on the first screen.
- * The chips swipe in one row inside it when they don't fit; it never grows a
- * second. A time's link changes only what this shows (its time leads,
- * picked out, or a line saying it's over); the card stays under the room
- * either way. inhouseTimesStrip decides it all, nothing while no time is
- * open and no link needs answering. Posting, the links and everyone's names
- * stay on the card.
+ * The one bar at the top of /inhouse, between the title and the live room
+ * (Tim, 2026-10-10: the whole queue on the first screen, and a little bar
+ * where you can say you're in on a time): the planned inhouse night's chip
+ * and the Play later times, each one button high, in one row that swipes
+ * inside the bar when it doesn't fit; it never grows a second. The earliest
+ * leads, and a link leads with its own (inhousePlansNightFirst). The times
+ * are the soonest open ones and each one's "I'm in" (two beside the night,
+ * whose chip is wide); a time's link changes only what they show (its time
+ * leads, picked out, or a line saying it's over); the card stays under the
+ * room either way. inhouseTimesStrip decides the times, and the bar is
+ * nothing while there's neither a time to show nor a night. A fade marks a
+ * side of the row with more off screen (PlansRow). Posting, the links,
+ * everyone's names and the night's details stay on the cards under the room.
  */
-export async function InhouseTimesStrip({ linked }: { linked: InhouseTimeLinked }) {
-  const { nowMs, user, times, atCap } = await loadPlayLater();
-  const strip = inhouseTimesStrip(times, { linked });
-  if (!strip) return null;
-  return (
-    <section id="play-later-next" aria-label="Play later times">
-      {/* overflow-hidden: the chips' row scrolls inside the banner, never the page. */}
-      <Card className="flex items-center gap-2 overflow-hidden py-1 pl-2 pr-1 sm:pl-3 sm:pr-2">
-        <p className="flex shrink-0 items-center gap-2 text-sm font-semibold text-fg">
-          <span
-            aria-hidden
-            className="grid h-7 w-7 place-items-center rounded-md bg-info/15 text-sm"
-          >
-            🕗
-          </span>
-          {/* A phone keeps its width for the times: the clock says it. */}
-          <span className="sr-only sm:not-sr-only">Play later</span>
+export async function InhouseTimesStrip({
+  linked,
+  invite = false,
+}: {
+  linked: InhouseTimeLinked;
+  /** Opened from the inhouse night's invite link (?imin=1). */
+  invite?: boolean;
+}) {
+  const [{ nowMs, user, times, atCap }, night] = await Promise.all([
+    loadPlayLater(),
+    loadInhouseNightView(),
+  ]);
+  const strip = inhouseTimesStrip(times, { linked, night: !!night });
+  if (!strip && !night) return null;
+  const nightFirst =
+    !!night &&
+    inhousePlansNightFirst({
+      nightStartsAtMs: night.night.startsAtMs,
+      nightOn: night.phase === "on",
+      firstTimeMs: strip?.shown[0]?.startsAtMs ?? null,
+      linkedTime: linked !== null,
+      invite,
+    });
+  const nightChip = night ? <InhouseNightChip view={night} /> : null;
+  // A link's time that's gone, with no time to show: the line keeps two lines.
+  const goneAlone = !!strip && strip.gone && strip.shown.length === 0;
+  const timesPart = strip ? (
+    <section
+      id="play-later-next"
+      aria-label="Play later times"
+      className={cn("flex shrink-0 items-center gap-2", goneAlone && "min-w-[min(19rem,100%)]")}
+    >
+      <p className="flex shrink-0 items-center gap-2 text-sm font-semibold text-fg">
+        <span
+          aria-hidden
+          className="grid h-7 w-7 place-items-center rounded-md bg-info/15 text-sm"
+        >
+          🕗
+        </span>
+        {/* A phone keeps its width for the times: the clock says it. */}
+        <span className="sr-only whitespace-nowrap sm:not-sr-only">Play later</span>
+      </p>
+      {strip.gone ? (
+        <p className="w-[17rem] shrink-0 text-xs leading-4 text-muted sm:w-auto sm:whitespace-nowrap">
+          The time in that link is over, or everyone on it dropped out.{" "}
+          <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink()}>
+            See Play later below
+          </a>
+          .
         </p>
-        {/* p-0.5 leaves room for the focus rings the scroller clips; it
-            never scrolls up and down (a link's tap padding can poke out). */}
-        <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto overflow-y-hidden p-0.5 [scrollbar-width:thin]">
-          {strip.gone ? (
-            <p className="min-w-44 flex-1 text-xs leading-4 text-muted sm:flex-none sm:whitespace-nowrap">
-              The time in that link is over, or everyone on it dropped out.{" "}
-              <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink()}>
-                See Play later below
-              </a>
-              .
-            </p>
-          ) : null}
-          {strip.shown.length > 0 ? (
-            <>
-              <ul className="flex shrink-0 items-center gap-2">
-                {strip.shown.map((time) => (
-                  <StripChip
-                    key={time.startsAtMs}
-                    time={time}
-                    user={user}
-                    atCap={atCap}
-                    nowMs={nowMs}
-                    linked={time.startsAtMs === strip.linkedMs}
-                  />
-                ))}
-              </ul>
-              <a
-                href={`#${PLAY_LATER_ANCHOR}`}
-                className={textLink("ml-auto shrink-0 whitespace-nowrap px-1 text-sm")}
-              >
-                {inhouseTimesStripLinkText({ more: strip.more, atCap })}
-                {/* The short "N more" names what it counts for a screen reader. */}
-                {strip.more > 0 ? (
-                  <span className="sr-only">{strip.more === 1 ? " time" : " times"}</span>
-                ) : null}{" "}
-                <span aria-hidden>↓</span>
-              </a>
-            </>
-          ) : null}
-        </div>
-      </Card>
+      ) : null}
+      {strip.shown.length > 0 ? (
+        <>
+          <ul className="flex shrink-0 items-center gap-2">
+            {strip.shown.map((time) => (
+              <StripChip
+                key={time.startsAtMs}
+                time={time}
+                user={user}
+                atCap={atCap}
+                nowMs={nowMs}
+                linked={time.startsAtMs === strip.linkedMs}
+              />
+            ))}
+          </ul>
+          <a
+            href={`#${PLAY_LATER_ANCHOR}`}
+            className={textLink("shrink-0 whitespace-nowrap px-1 text-sm")}
+          >
+            {inhouseTimesStripLinkText({ more: strip.more, atCap })}
+            {/* The short "N more" names what it counts for a screen reader. */}
+            {strip.more > 0 ? (
+              <span className="sr-only">{strip.more === 1 ? " time" : " times"}</span>
+            ) : null}{" "}
+            <span aria-hidden>↓</span>
+          </a>
+        </>
+      ) : null}
     </section>
+  ) : null;
+  const divider =
+    nightChip && timesPart ? (
+      <span aria-hidden className="h-6 w-px shrink-0 bg-line" />
+    ) : null;
+  return (
+    // overflow-hidden: the row scrolls inside the bar, never the page.
+    <Card id={INHOUSE_PLANS_BAR} className="flex items-center overflow-hidden py-1 pl-1 pr-1 sm:pr-2">
+      {/* p-0.5 leaves room for the focus rings the scroller clips; it never
+          scrolls up and down (a link's tap padding can poke out). */}
+      <PlansRow className="flex min-w-0 flex-1 items-center gap-3 overflow-x-auto overflow-y-hidden p-0.5 [scrollbar-width:thin]">
+        {nightFirst ? nightChip : timesPart}
+        {divider}
+        {nightFirst ? timesPart : nightChip}
+      </PlansRow>
+    </Card>
   );
 }

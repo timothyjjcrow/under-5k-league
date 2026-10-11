@@ -92,6 +92,7 @@ export function SectionNav({
   openNested = "first",
   wrap = false,
   followHash = true,
+  bare = false,
 }: {
   items: { id: string; label: string }[];
   label: string;
@@ -115,6 +116,13 @@ export function SectionNav({
    * the page's jump targets need a larger desktop scroll offset.
    */
   wrap?: boolean;
+  /**
+   * No rule or backdrop of its own: the bar sits on a rule the page already
+   * draws (/inhouse's compact title row, whose bottom border its tabs sit
+   * on). Off by default, which renders exactly what shipped. Ignored with
+   * `wrap`, which draws a box.
+   */
+  bare?: boolean;
 }) {
   const [active, setActive] = useState("");
   const resolvedHash = useRef("");
@@ -272,7 +280,9 @@ export function SectionNav({
         // scrolls sideways (or wraps into chips from lg, with `wrap`).
         wrap
           ? "max-w-full rounded-xl border border-line bg-bg/95 px-2 py-2 sm:w-fit"
-          : "max-w-full border-b border-line-soft bg-bg/95",
+          : bare
+            ? "max-w-full"
+            : "max-w-full border-b border-line-soft bg-bg/95",
         sticky && "lg:sticky lg:top-16 lg:z-20 lg:backdrop-blur",
       )}
     >

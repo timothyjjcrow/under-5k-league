@@ -189,13 +189,14 @@ describe("I'm in needs a linked Discord", () => {
     expect(kind({ open: false, needsDiscord: true })).toBe("none");
   });
 
-  it("has every I'm in on the bar and the card follow the rule, and the invite ask, not bounce", () => {
+  it("has every I'm in on the bar, the chip and the card follow the rule, and the invite ask, not bounce", () => {
     const [night] = sourceFiles("src/components/inhouse-night.tsx", 1);
-    // Both controls (Home's bar and /inhouse's card) are told whether the
-    // viewer must link, from the one loader, and the control decides by the
-    // one rule.
-    expect(night.text.match(/<InhouseNightRsvpControl\b/g)).toHaveLength(2);
-    expect(night.text.match(/needsDiscord=\{needsDiscord\}/g)).toHaveLength(2);
+    // Every control (Home's bar, /inhouse's top-bar chip and its card) is
+    // told whether the viewer must link, from a loader (Home's bar's own, and
+    // /inhouse's one read the chip and the card share), and the control
+    // decides by the one rule.
+    expect(night.text.match(/<InhouseNightRsvpControl\b/g)).toHaveLength(3);
+    expect(night.text.match(/needsDiscord=\{needsDiscord\}/g)).toHaveLength(3);
     expect(night.text.match(/inhouseNightNeedsDiscordFor\(/g)).toHaveLength(2);
     expect(night.text).toMatch(/needsDiscord,\n\s*\}\);/);
     expect(night.text).toContain("inhouseNightRsvpControlKind({");
@@ -205,6 +206,37 @@ describe("I'm in needs a linked Discord", () => {
     expect(invite.text).not.toMatch(
       /location\.(assign|replace)\(|location\.href\s*=(?!=)|router\.(push|replace)\(/,
     );
+  });
+
+  it("has the invite's note name a control /inhouse shows: Link Discord, on the chip and the card", () => {
+    const [night] = sourceFiles("src/components/inhouse-night.tsx", 1);
+    const [invite] = sourceFiles("src/components/inhouse-night-invite.tsx", 1);
+    // The note opened from the invite link tells the player what to press.
+    expect(invite.text).toMatch(/One step left: press Link Discord to say you're in/);
+    // The bar's chip, first on screen, and the card under the room carry
+    // those words for a player who must link (Home's bar keeps "I'm in").
+    const from = night.text.indexOf("export function InhouseNightChip(");
+    const chip = night.text.slice(from, night.text.indexOf("\n}\n", from));
+    expect(chip).toMatch(/<InhouseNightRsvpControl\b[^>]*needsDiscordLabel="Link Discord"/);
+    const cardFrom = night.text.indexOf("export async function InhouseNightCard(");
+    const card = night.text.slice(cardFrom, night.text.indexOf("\n}\n", cardFrom));
+    expect(card).toContain('needsDiscordLabel="Link Discord to say you\'re in"');
+  });
+});
+
+describe("Home's bar links to the night's card on /inhouse", () => {
+  it("names the card's anchor", () => {
+    const [night] = sourceFiles("src/components/inhouse-night.tsx", 1);
+    const from = night.text.indexOf("export async function InhouseNightBar(");
+    const bar = night.text.slice(from, night.text.indexOf("\n}\n", from));
+    // The card sits under the room, below the first screen: a bare /inhouse
+    // landed on the queue with the card out of sight.
+    expect(bar).toContain("href={`/inhouse#${INHOUSE_NIGHT_ANCHOR}`}");
+    expect(bar).not.toMatch(/href="\/inhouse"/);
+    const cardFrom = night.text.indexOf("export async function InhouseNightCard(");
+    const card = night.text.slice(cardFrom, night.text.indexOf("\n}\n", cardFrom));
+    expect(card).toContain("<section id={INHOUSE_NIGHT_ANCHOR}");
+    expect(card).toMatch(/<section id=\{INHOUSE_NIGHT_ANCHOR\}[^>]*\bscroll-mt-28\b/);
   });
 });
 
