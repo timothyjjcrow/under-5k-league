@@ -51,9 +51,12 @@ export function DotaLobbyRecovery() {
   useEffect(() => {
     const abort = new AbortController();
     const initial = setTimeout(() => void check(false, abort.signal), 0);
+    // A background refresh of the status line, once a minute: each check is a
+    // function call and a relay round trip, on a hosting budget both leagues
+    // share. "Check bot connection" asks at once.
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void check(false, abort.signal);
-    }, 15_000);
+    }, 60_000);
     return () => {
       clearTimeout(initial);
       clearInterval(interval);

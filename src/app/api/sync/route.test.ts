@@ -30,7 +30,7 @@ describe("public result status route", () => {
       "public, max-age=0, must-revalidate",
     );
     expect(response.headers.get("vercel-cdn-cache-control")).toBe(
-      "public, max-age=5, stale-while-revalidate=10",
+      "public, max-age=30, stale-while-revalidate=30",
     );
     expect(await response.json()).toEqual({
       updated: false,

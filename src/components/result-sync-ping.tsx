@@ -1,9 +1,13 @@
 "use client";
 
-import { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useRef } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { AUTO_SYNC } from "@/lib/constants";
-import { syncPingStep } from "@/lib/result-sync";
+import {
+  syncPingSkipsPage,
+  syncPingStep,
+  syncPingWakesOnNavigation,
+} from "@/lib/result-sync";
 
 const STATUS_READ_TIMEOUT_MS = 10_000;
 
@@ -15,15 +19,27 @@ const STATUS_READ_TIMEOUT_MS = 10_000;
 // parked on the dashboard/standings sees results appear on their own.
 // The refresh/delay/cursor rule is pure `syncPingStep` (result-sync.ts) —
 // the two-triggers rationale (why `updated` alone strands parked tabs) lives
-// on it. This component keeps only the timer, the inFlight latch, the
-// visibility listener, and the fetch. Mounted once in the root layout;
-// renders nothing.
+// on it. A page that keeps itself current (`syncPingSkipsPage`: the /inhouse
+// room) is skipped like a hidden tab, and leaving it wakes the loop. This
+// component keeps only the timer, the inFlight latch, the visibility
+// listener, and the fetch. Mounted once in the root layout; renders nothing.
 export function ResultSyncPing({
   initialCursor,
 }: {
   initialCursor: string | null;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  // Read by the loop, which outlives navigations: restarting it on each one
+  // would reset its cursor baseline and refresh pages that just rendered.
+  const pathRef = useRef(pathname);
+  const wakeRef = useRef<(() => void) | null>(null);
+
+  useEffect(() => {
+    const from = pathRef.current;
+    pathRef.current = pathname;
+    if (syncPingWakesOnNavigation(from, pathname)) wakeRef.current?.();
+  }, [pathname]);
 
   useEffect(() => {
     let alive = true;
@@ -45,9 +61,13 @@ export function ResultSyncPing({
       // inFlight also covers a visibilitychange firing mid-request — the
       // active call reschedules when it finishes.
       if (!alive || inFlight) return;
-      if (document.visibilityState === "hidden") {
-        // Hidden tabs don't ping (browsers throttle them anyway); check back
-        // lazily and let the visibility listener wake us properly.
+      if (
+        document.visibilityState === "hidden" ||
+        syncPingSkipsPage(pathRef.current)
+      ) {
+        // Hidden tabs don't ping (browsers throttle them anyway), nor does a
+        // page that keeps itself current; check back lazily and let the
+        // visibility listener or a navigation wake us properly.
         schedule(AUTO_SYNC.IDLE_POLL_SECONDS * 1000);
         return;
       }
@@ -86,10 +106,14 @@ export function ResultSyncPing({
       if (document.visibilityState === "visible") tick();
     };
     document.addEventListener("visibilitychange", onVisibility);
+    wakeRef.current = () => {
+      if (document.visibilityState === "visible") tick();
+    };
     tick();
 
     return () => {
       alive = false;
+      wakeRef.current = null;
       document.removeEventListener("visibilitychange", onVisibility);
       if (timer) clearTimeout(timer);
     };

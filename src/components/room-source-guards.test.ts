@@ -276,6 +276,20 @@ describe("live rooms delegate their poll policy", () => {
     ).toEqual([]);
   });
 
+  it("result-sync-ping skips pages that keep themselves current, through syncPingSkipsPage", () => {
+    // The skip sits beside the hidden-tab check, before the fetch, and reads
+    // the live path from a ref: the loop outlives navigations, and leaving a
+    // skipped page wakes it (syncPingWakesOnNavigation).
+    const src = code("result-sync-ping.tsx");
+    expect(src).toMatch(
+      /document\.visibilityState === "hidden" \|\|\s*syncPingSkipsPage\(pathRef\.current\)/,
+    );
+    expect(src.indexOf("syncPingSkipsPage(pathRef.current)")).toBeLessThan(
+      src.indexOf('fetch("/api/sync"'),
+    );
+    expect(src).toMatch(/syncPingWakesOnNavigation\(from, pathname\)\) wakeRef\.current\?\.\(\)/);
+  });
+
   it("inhouse-room computes its cadence only through inhousePollCadence", () => {
     const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("inhousePollCadence(");

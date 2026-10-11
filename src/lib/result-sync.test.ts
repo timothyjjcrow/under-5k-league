@@ -12,7 +12,9 @@ import {
   leagueFallbackOpensAt,
   minutesSinceAutoSyncOpen,
   nextRosterScanAt,
+  syncPingSkipsPage,
   syncPingStep,
+  syncPingWakesOnNavigation,
 } from "./result-sync";
 
 const NOW = Date.UTC(2026, 6, 12, 20, 0, 0); // an arbitrary league night
@@ -515,5 +517,23 @@ describe("syncPingStep", () => {
     expect(syncPingStep({ watch: true }, null).delayMs).toBe(WATCH_MS);
     expect(syncPingStep({ watch: false }, null).delayMs).toBe(IDLE_MS);
     expect(syncPingStep({}, null).delayMs).toBe(IDLE_MS);
+  });
+});
+
+describe("syncPingSkipsPage", () => {
+  it("skips only the live inhouse room, which keeps itself current", () => {
+    expect(syncPingSkipsPage("/inhouse")).toBe(true);
+    // Its history and every other page still rely on the ping.
+    for (const path of ["/", "/inhouse/history", "/schedule", "/inhouse-night", null]) {
+      expect(syncPingSkipsPage(path)).toBe(false);
+    }
+  });
+
+  it("wakes the ping when a viewer leaves the room, and only then", () => {
+    expect(syncPingWakesOnNavigation("/inhouse", "/")).toBe(true);
+    expect(syncPingWakesOnNavigation("/", "/inhouse")).toBe(false);
+    // An ordinary navigation keeps the schedule: the new page just rendered.
+    expect(syncPingWakesOnNavigation("/", "/schedule")).toBe(false);
+    expect(syncPingWakesOnNavigation("/inhouse", "/inhouse")).toBe(false);
   });
 });
