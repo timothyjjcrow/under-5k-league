@@ -1,16 +1,10 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import type { Metadata, Viewport } from "next";
-import { Oswald } from "next/font/google";
-import "./globals.css";
-
 // Condensed display face for headings & stat numbers — the "jersey/billboard"
-// esports voice. Body text stays on the neutral system sans for readability.
-const display = Oswald({
-  subsets: ["latin"],
-  weight: ["500", "600", "700"],
-  variable: "--font-oswald",
-  display: "swap",
-});
+// esports voice, self-hosted (fonts/oswald.ts). Body text stays on the neutral
+// system sans for readability.
+import { oswaldVariables } from "./fonts/oswald";
+import "./globals.css";
 import { SiteHeader } from "@/components/site-header";
 import { InviteRefCapture } from "@/components/invite-ref-capture";
 import { TRANSLATION_DOM_GUARD } from "@/lib/translation-dom-guard";
@@ -166,7 +160,7 @@ export default async function RootLayout({
   return (
     <html
       lang="en"
-      className={`h-full antialiased ${display.variable}`}
+      className={`h-full antialiased ${oswaldVariables}`}
       data-scroll-behavior="smooth"
     >
       <body className="flex min-h-full flex-col">
