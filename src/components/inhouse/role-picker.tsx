@@ -27,6 +27,7 @@ export function RolePicker({
   source,
   disabled = false,
   queueCard = false,
+  phoneRow = false,
 }: {
   /** The preference order ("2,3,1"; "" = none picked). */
   value: string;
@@ -38,14 +39,25 @@ export function RolePicker({
   source: InhouseRolesSource;
   disabled?: boolean;
   /**
-   * The filled queue card (the whole queue on the first screen): below md
-   * and from lg the label, shortened to "Positions" with the rest for screen
-   * readers (so the group's name doesn't change), sits beside the toggles
-   * with the order line under them, left-aligned on a phone and centred on
-   * a desktop. md keeps the stacked picker, with the card's own spacing
-   * above it. Off, it renders exactly what shipped.
+   * The filled queue card (the whole queue on the first screen). Below md
+   * it sits beside the card's MMR box or status, so the label is for screen
+   * readers only, the toggles are 40px high and share the row's width (34px
+   * at 390, 31 at 375, up to 40 on a wider phone; 8px apart) and the order line is
+   * one line under them, cut off with an ellipsis when it doesn't fit (the
+   * toggles' rank badges and names carry the order). From lg the label,
+   * shortened to "Positions" with the rest for screen readers (so the
+   * group's name doesn't change), sits beside the toggles with the order
+   * line under them, centred. md keeps the stacked picker, with the card's
+   * own spacing above it. Off, it renders exactly what shipped.
    */
   queueCard?: boolean;
+  /**
+   * The empty queue's card on a phone (below md): the short "Positions"
+   * label beside 40px toggles and the order line under them, centred, so
+   * the card keeps a phone's first screen. md and up render exactly what
+   * shipped.
+   */
+  phoneRow?: boolean;
 }) {
   const labelId = useId();
   const keys = parseRoleOrder(value);
@@ -64,6 +76,9 @@ export function RolePicker({
       ),
     );
 
+  // A phone's short label and line: the full ones from md (both are the
+  // same words for a screen reader at every width).
+  const shortLabel = queueCard || phoneRow;
   return (
     <div
       role="group"
@@ -71,20 +86,37 @@ export function RolePicker({
       className={cn(
         "mt-4",
         queueCard &&
-          "max-md:mt-0 max-md:flex max-md:flex-wrap max-md:items-center max-md:gap-x-2 max-md:gap-y-1 md:mt-1 lg:mt-0 lg:flex lg:flex-wrap lg:items-center lg:justify-center lg:gap-x-3 lg:gap-y-1",
+          "max-md:mt-0 md:mt-1 lg:mt-0 lg:flex lg:flex-wrap lg:items-center lg:justify-center lg:gap-x-3 lg:gap-y-1",
+        phoneRow &&
+          "max-md:mt-3 max-md:flex max-md:flex-wrap max-md:items-center max-md:justify-center max-md:gap-x-2 max-md:gap-y-1",
       )}
     >
-      <p id={labelId} className="text-center text-xs font-medium text-muted">
-        {queueCard ? (
+      <p
+        id={labelId}
+        className={cn(
+          "text-center text-xs font-medium text-muted",
+          queueCard && "max-md:sr-only",
+        )}
+      >
+        {shortLabel ? (
           <>
             Positions
-            <span className="max-md:sr-only lg:sr-only"> you play, in the order you want them</span>
+            <span className={cn("max-md:sr-only", queueCard && "lg:sr-only")}>
+              {" "}
+              you play, in the order you want them
+            </span>
           </>
         ) : (
           "Positions you play, in the order you want them"
         )}
       </p>
-      <div className={cn("mt-2 flex justify-center gap-2", queueCard && "max-md:mt-0 lg:mt-0")}>
+      <div
+        className={cn(
+          "mt-2 flex justify-center gap-2",
+          queueCard && "max-md:mt-0 max-md:justify-start lg:mt-0",
+          phoneRow && "max-md:mt-0",
+        )}
+      >
         {DOTA_ROLES.map((role) => {
           const rank = keys.indexOf(role.key) + 1;
           const on = rank > 0;
@@ -102,7 +134,18 @@ export function RolePicker({
               className={buttonClasses(
                 on ? "accent" : "secondary",
                 "md",
-                "relative w-11 px-0 tabular-nums",
+                cn(
+                  "relative w-11 px-0 tabular-nums",
+                  // 40px high on a phone (the kit's small control there).
+                  (queueCard || phoneRow) && "max-md:h-10",
+                  // Beside the card's context cell: up to 40px wide, giving
+                  // way on a narrower phone (8px apart at every width).
+                  queueCard && "max-md:w-auto max-md:min-w-0 max-md:max-w-10 max-md:flex-1",
+                  // The picked (accent) variant has no border: a transparent
+                  // one keeps all five the same width, so a tap never shifts them.
+                  on && queueCard && "max-md:border max-md:border-transparent",
+                  phoneRow && "max-md:w-10",
+                ),
               )}
             >
               {role.key}
@@ -121,11 +164,25 @@ export function RolePicker({
       <p
         className={cn(
           "mt-1.5 text-center text-xs text-muted",
-          queueCard && "max-md:mt-0 max-md:basis-full max-md:text-left lg:mt-0 lg:basis-full",
+          queueCard && "max-md:mt-1 max-md:truncate max-md:text-left lg:mt-0 lg:basis-full",
+          phoneRow && "max-md:mt-0 max-md:basis-full",
         )}
       >
-        {line || "None picked yet: tap your favorite first"}
-        {source === "signup" && line ? " · from your league signup" : null}
+        {line || (
+          <>
+            {/* A phone's line is shorter: the toggles are the "pick". */}
+            <span className={cn(shortLabel && "max-md:hidden")}>None picked yet: tap</span>
+            {shortLabel ? <span className="md:hidden">Tap</span> : null}
+            {" your favorite first"}
+          </>
+        )}
+        {source === "signup" && line ? (
+          <>
+            {" · from your "}
+            <span className={cn(shortLabel && "max-md:hidden")}>league </span>
+            signup
+          </>
+        ) : null}
       </p>
     </div>
   );

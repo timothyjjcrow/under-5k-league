@@ -250,13 +250,15 @@ export default async function InhousePage({
             when you go to the in-house page, you shouldn't have to scroll
             down", with a bar where you can opt into a time): one short title
             row, the one bar with the inhouse night and the Play later times,
-            then the room, 12px apart. The e2e
-            (e2e-mid/zz-inhouse-queue-fit.spec.ts) measures the whole queue
-            card on screen from 390 to 1920, and in a laptop's browser
-            window (1280x690, 1366x657). */}
-        <div className="space-y-3">
+            then the room, 12px apart (8 on a phone, whose title row is
+            slimmer too). The e2e (e2e-mid/zz-inhouse-queue-fit.spec.ts)
+            measures the whole queue card on screen from 390 to 1920, on a
+            phone with Safari's toolbars showing (390x664) and in a laptop's
+            browser window (1280x690, 1366x657). */}
+        <div className="space-y-2 sm:space-y-3">
           <PageTitle
             compact
+            slim
             title="Inhouse"
             action={
               <Link href="/inhouse/history" className={textLink("text-sm")}>

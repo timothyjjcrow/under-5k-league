@@ -23,14 +23,15 @@ import {
 //
 // Every required viewport, signed out, signed in (with and without a league
 // signup's MMR) and queued, with 0, 1, 6 and 9 players present, with and
-// without an open Play later time and a planned inhouse night. Laptop
-// browser windows (1280x690 and 1366x657: a screen less the tabs, the
-// address bar and the dock) are required for every state; 375x667 (an old
-// small phone) for signed out only, since the join controls can't fit beside
-// ten slots there. 390x664 (a phone with Safari's toolbars showing) and
-// 1440x790 are measured and printed, never asserted. The queue, times,
-// signup and night are written straight to the suite's database and removed
-// afterwards. A zz- spec because it writes state /inhouse renders.
+// without an open Play later time and a planned inhouse night. A phone with
+// Safari's toolbars showing (390x664: what an iPhone 12 to 15 shows on first
+// load; Tim, 2026-10-11, "yes do the phone pass") and laptop browser windows
+// (1280x690 and 1366x657: a screen less the tabs, the address bar and the
+// dock) are required for every state; 375x667 (an old small phone) for
+// signed out, and measured and printed signed in. 1440x790 is measured and
+// printed, never asserted. The queue, times, signup and night are written
+// straight to the suite's database and removed afterwards. A zz- spec
+// because it writes state /inhouse renders.
 //
 // Type width: CI's Linux runner draws the page in DejaVu Sans, wider than a
 // Mac's SF Pro. FIT_FONT=Verdana (a close stand-in for DejaVu's widths) runs
@@ -49,38 +50,39 @@ const MIN = 60_000;
 const QUARTER = 15 * MIN;
 
 /**
- * Each size, which sign-in states are loaded there, and whether the queue
- * must fit (`required`) or is only measured and printed.
+ * Each size, and whether the queue must fit there (`required`: for every
+ * viewer, for the signed-out viewer only, or for none) or is only measured
+ * and printed. Every viewer is loaded at every size.
  */
 const VIEWPORTS: {
   width: number;
   height: number;
-  states: "all" | "out";
-  required: boolean;
+  required: "all" | "out" | "none";
 }[] = [
-  { width: 390, height: 844, states: "all", required: true },
-  { width: 430, height: 932, states: "all", required: true },
-  { width: 768, height: 1024, states: "all", required: true },
-  { width: 1280, height: 800, states: "all", required: true },
-  { width: 1440, height: 900, states: "all", required: true },
-  { width: 1920, height: 1080, states: "all", required: true },
-  { width: 1366, height: 768, states: "all", required: true },
+  { width: 390, height: 844, required: "all" },
+  // A 390 phone with Safari's toolbars showing: the header, the bar and
+  // the whole card between its 64px header and its tab bar.
+  { width: 390, height: 664, required: "all" },
+  { width: 430, height: 932, required: "all" },
+  { width: 768, height: 1024, required: "all" },
+  { width: 1280, height: 800, required: "all" },
+  { width: 1440, height: 900, required: "all" },
+  { width: 1920, height: 1080, required: "all" },
+  { width: 1366, height: 768, required: "all" },
   // A laptop's browser window, not its screen: the tabs, the address bar
   // and the dock take 110px or so (Tim's goal is a real window).
-  { width: 1280, height: 690, states: "all", required: true },
-  { width: 1366, height: 657, states: "all", required: true },
-  // An old small phone, signed out.
-  { width: 375, height: 667, states: "out", required: true },
-  // Reported only: a 390 phone with Safari's toolbars showing, and a bigger
-  // laptop window.
-  { width: 390, height: 664, states: "all", required: false },
-  { width: 1440, height: 790, states: "all", required: false },
+  { width: 1280, height: 690, required: "all" },
+  { width: 1366, height: 657, required: "all" },
+  // An old small phone: required signed out, printed signed in.
+  { width: 375, height: 667, required: "out" },
+  // Reported only: a bigger laptop window.
+  { width: 1440, height: 790, required: "none" },
 ];
 
 type Viewer = "out" | "new" | "signup" | "queued";
-/** The viewports a viewer is loaded at: 375x667 is only for signed out. */
-const viewportsFor = (viewer: Viewer) =>
-  VIEWPORTS.filter((viewport) => viewport.states === "all" || viewer === "out");
+/** Whether the queue must fit this viewer at this size. */
+const requiredFor = (viewport: (typeof VIEWPORTS)[number], viewer: Viewer) =>
+  viewport.required === "all" || (viewport.required === "out" && viewer === "out");
 const VIEWERS: Record<Exclude<Viewer, "out">, { name: string; steamId: string }> = {
   new: { name: "Fit Newcomer", steamId: "76561190000996101" },
   signup: { name: "Fit Signed Up", steamId: "76561190000996102" },
@@ -343,9 +345,10 @@ async function check(
   const label = `${viewport.width}x${viewport.height} ${viewer} ${present} present, ${timesText}, ${
     plans.night === "none" ? "no night" : `night ${plans.night}`
   }`;
+  const required = requiredFor(viewport, viewer);
   rows.push({
     viewport: `${viewport.width}x${viewport.height}`,
-    required: viewport.required,
+    required,
     viewer,
     present,
     plans: `${plans.times}/${plans.night}`,
@@ -360,7 +363,7 @@ async function check(
     },
   });
   // Reported only: printed in the table, never asserted.
-  if (!viewport.required) {
+  if (!required) {
     await page.goto("about:blank");
     return [];
   }
@@ -506,7 +509,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
       // One load at a time: the dev server and its one SQLite file are the
       // bottleneck, and tabs loading side by side stalled a room's poll.
       for (const viewer of viewers) {
-        for (const viewport of viewportsFor(viewer)) {
+        for (const viewport of VIEWPORTS) {
           failures.push(...(await check(pages[viewer].page, viewport, viewer, present, plans)));
         }
       }
@@ -526,7 +529,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
     await setPlans(plans, nowMs);
     await setQueue(6, nowMs);
     for (const viewer of ["out", "queued"] as const) {
-      for (const viewport of viewportsFor(viewer)) {
+      for (const viewport of VIEWPORTS) {
         failures.push(...(await check(pages[viewer].page, viewport, viewer, 6, plans)));
       }
     }

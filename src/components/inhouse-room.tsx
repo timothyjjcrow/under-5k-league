@@ -750,6 +750,14 @@ export function InhouseRoom({
   // their first game was marked over: they have just played one.
   const firstGameFold =
     firstGame && !state.pendingResults.some((p) => p.mine);
+  // Queued and here with no lobby of their own: the filled queue card shows
+  // (the next game's too), and on a phone its place-in-line cell says
+  // "You're queued" in the header badge's place.
+  const queueCardSaysQueued =
+    !lobby &&
+    !me.inLobby &&
+    me.inQueue &&
+    state.queue.some((q) => q.userId === me.userId && !q.away);
   // The header's lobby code: the viewer's own game, or the one they watch.
   const roomCode = lobby
     ? inhouseLobbyCode(lobby.id)
@@ -899,15 +907,18 @@ export function InhouseRoom({
   };
 
   return (
-    // Blocks sit 12px apart on a phone and 16 from md (it was 20): part of
-    // keeping the whole queue on the first screen.
-    <div className="space-y-3 md:space-y-4">
+    // Blocks sit 8px apart on a phone, 12 from sm and 16 from md (it was
+    // 20): part of keeping the whole queue on the first screen, a phone's
+    // with Safari's toolbars showing too.
+    <div className="space-y-2 sm:space-y-3 md:space-y-4">
       {/* The room's header and its stage strip are one row (Tim, 2026-10-10:
           the whole queue on the first screen): the connection dot, the
           lobby's code and badge, the stages, then Sound. On a phone the
           badge takes a line of its own under them and the words beside the
           dot and the bell are for screen readers ("Reconnecting" always
-          shows). */}
+          shows). While the queue card shows (no lobby), a phone's "You're
+          queued" is the card's, in its place-in-line cell, so the badge's
+          line goes. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
           <span
@@ -926,7 +937,12 @@ export function InhouseRoom({
           )}
         </span>
         {roomCode || me.inLobby || me.inQueue ? (
-          <span className="order-last flex basis-full items-center gap-2 text-xs text-muted md:order-none md:basis-auto">
+          <span
+            className={cn(
+              "order-last flex basis-full items-center gap-2 text-xs text-muted md:order-none md:basis-auto",
+              queueCardSaysQueued && !roomCode && "max-md:hidden",
+            )}
+          >
             {roomCode ? (
               <span className="font-mono text-[11px]">#{roomCode}</span>
             ) : null}
@@ -937,7 +953,9 @@ export function InhouseRoom({
                   : "Your lobby"}
               </Badge>
             ) : me.inQueue ? (
-              <Badge tone="success">You’re queued</Badge>
+              <Badge tone="success" className={cn(queueCardSaysQueued && "max-md:hidden")}>
+                You’re queued
+              </Badge>
             ) : null}
           </span>
         ) : null}
