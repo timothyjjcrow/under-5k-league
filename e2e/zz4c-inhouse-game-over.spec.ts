@@ -7,6 +7,7 @@ import {
 } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import path from "node:path";
+import { INHOUSE } from "../src/lib/constants";
 
 // "Game over — queue again" and positions, in a real browser: the observer
 // picks positions beside Join, sees them in the draft with each side's
@@ -63,6 +64,8 @@ test("positions in the draft, then Game over frees the ten before the result lan
   page,
   browser,
 }) => {
+  // The last step waits out a spectator's poll (INHOUSE.POLL_IDLE_MS).
+  test.setTimeout(60_000 + INHOUSE.POLL_IDLE_MS);
   test.setTimeout(180_000);
   const errors = trackPageErrors(page);
   // "Game over" and the admin give-up both confirm.
@@ -216,10 +219,10 @@ test("positions in the draft, then Game over frees the ten before the result lan
   expect(row.endReason).toMatch(/while waiting for the result/);
   expect(row.finishedAt).not.toBeNull();
 
-  // The observer's card goes with it on their next poll (the idle rate, 10s).
+  // The observer's card goes with it on their next poll (a spectator's rate).
   await expect(
     page.getByRole("button", { name: "Check OpenDota now" }),
-  ).toHaveCount(0, { timeout: 20_000 });
+  ).toHaveCount(0, { timeout: INHOUSE.POLL_IDLE_MS + 10_000 });
 
   // Clean up the queue for the specs after this one.
   await act(players[2], { action: "leave" });
