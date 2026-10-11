@@ -10,8 +10,11 @@
 // That field is the arithmetic anchor playoff rounds are dated from, and
 // moving any single week moves it too, so a one-off Tuesday in week 3 would
 // have relabelled the whole season "Tuesdays".
+//
+// While a match-night poll is open during signups, the night isn't settled,
+// and every page that names it says so instead (pollDecidesMatchNight).
 
-import { MATCH_SCHEDULE, MATCH_STATUS } from "./constants";
+import { MATCH_SCHEDULE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
 import { matchNightText } from "./season-copy";
 import { zoneLabel } from "./zone-label";
@@ -121,5 +124,40 @@ export function seasonMatchNightLabel(
   return (
     announcedMatchNight(season, fixtures, timeZone, locale) ??
     MATCH_SCHEDULE.label
+  );
+}
+
+/**
+ * Whether a match-night poll could decide this season's night at all: only
+ * while the season takes signups. A page reads whether a poll is open
+ * (matchNightPollOpen) only when this holds, so later phases skip the read;
+ * pollDecidesMatchNight gives the answer.
+ */
+export function pollCanDecideMatchNight(
+  season: { status: string } | null,
+): boolean {
+  return season?.status === SEASON_STATUS.SIGNUPS;
+}
+
+/**
+ * Whether an open match-night poll is choosing the season's night, so a page
+ * that names the night prints MATCH_NIGHT_POLL_LABEL ("being decided in a
+ * player poll") instead of a time the vote may change. Only while the season
+ * takes signups and no fixture has a kickoff: from the draft on, pages print
+ * the season's night as before, and timed fixtures are the night whatever a
+ * poll says. A poll has no season, so `pollOpen` is whether any poll is open
+ * right now (matchNightPollOpen). Home, /me, How it works, Schedule and the
+ * rules all ask this one question, so none of them prints a night another
+ * says is still being voted on.
+ */
+export function pollDecidesMatchNight(
+  season: { status: string } | null,
+  fixtures: readonly FixtureKickoff[],
+  pollOpen: boolean,
+): boolean {
+  return (
+    pollOpen &&
+    pollCanDecideMatchNight(season) &&
+    !fixtures.some((f) => f.scheduledAt != null)
   );
 }

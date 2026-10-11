@@ -11,7 +11,8 @@ count, the viewer's-clock conversion, the page's view),
 `src/app/actions/match-night-poll.ts` (voting),
 `src/app/actions/admin-match-night-poll.ts` (admin),
 `src/components/home/match-night-poll.tsx` (the Home card),
-`src/components/match-night-poll/*` (the grid, the heatmap, the shared clock)
+`src/components/match-night-poll/*` (the grid, the heatmap, the shared clock,
+and the note other pages print under a night the poll is deciding)
 and `src/components/admin/match-night-poll-controls.tsx` (the Match night poll
 section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
 
@@ -135,13 +136,23 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   ACTIVE signups plus roster and captain seats) and derives the turnout, the
   counted ballots and `canVote` from it.
 - **While a poll is open during signups, every "Match night" line says the
-  poll is deciding it** (`matchNightPollOpen`, `MATCH_NIGHT_POLL_LABEL`):
-  the signed-out pitch on Home, Home's signups callout and /me's callout.
-  Home printed "Match night: Saturday 2PM PST" right above a poll asking when
-  match night should be, with Sunday leading. Fixtures with kickoffs still
-  win on /me, and later phases print the fixtures' night. It never names the
-  leading time: the count stays hidden from non-voters while voting is open.
-  `dashboard-guards.test.ts` pins the three surfaces.
+  poll is deciding it,** in Home's words (`MATCH_NIGHT_POLL_LABEL`, "being
+  decided in a player poll"): the signed-out pitch on Home, Home's signups
+  callout, /me's callout, the Match night section of /rules, How it works'
+  "When and where" and Schedule's signups callout. Home printed "Match
+  night: Saturday 2PM PST" right above a poll asking when match night
+  should be, with Sunday leading, and once Home and /me followed the poll,
+  /rules, How it works and Schedule kept printing the old night. One pure
+  rule decides it on every page (`pollDecidesMatchNight`, `match-night.ts`):
+  a poll is open (`matchNightPollOpen`), the season takes signups, and no
+  fixture has a kickoff. Fixtures with kickoffs and later phases print the
+  season's night as before. Pages read the poll only where
+  `pollCanDecideMatchNight` says one could decide the night, never behind a
+  phase test of their own, so a change to the rule reaches them all. Off
+  Home the line under it says signed-up players are voting on Home and links
+  the poll (`MatchNightPollNote`). It never names the leading time: the
+  count stays hidden from non-voters while voting is open.
+  `dashboard-guards.test.ts` pins every surface.
 
 ## Concurrency
 

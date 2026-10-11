@@ -31,7 +31,11 @@ import { getSessionUser } from "@/lib/auth";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { homeMetadata } from "@/lib/link-preview-metadata";
-import { announcedMatchNight } from "@/lib/match-night";
+import {
+  announcedMatchNight,
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
+} from "@/lib/match-night";
 import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { parseNextSeasonPlan } from "@/lib/next-season";
 import { getDefendingChampion } from "@/lib/official-champion";
@@ -154,8 +158,10 @@ export default async function Home() {
   // During signups an open match-night poll means the night isn't settled:
   // the pitch and the signups view say so instead of printing a time the
   // vote may change. Later phases print the fixtures' own night.
-  const pollOpen =
-    season.status === "SIGNUPS" ? await matchNightPollOpen() : false;
+  const pollOpen = pollCanDecideMatchNight(season)
+    ? await matchNightPollOpen()
+    : false;
+  const pollDecidesNight = pollDecidesMatchNight(season, matches, pollOpen);
 
   // The phase switch: what the phase puts in the hero, and its view below.
   let heroParts: HeroParts = {};
@@ -167,7 +173,7 @@ export default async function Home() {
         <SignupsView
           snapshot={snapshot}
           loggedIn={!!user}
-          matchNightPollOpen={pollOpen}
+          matchNightPollOpen={pollDecidesNight}
         />
       );
       break;
@@ -284,7 +290,7 @@ export default async function Home() {
           // missing, and a newcomer first needs to know what this is.
           <LeaguePitch
             matchNight={announcedMatchNight(season, [])}
-            pollOpen={pollOpen}
+            pollOpen={pollDecidesNight}
           />
         ) : undefined
       }

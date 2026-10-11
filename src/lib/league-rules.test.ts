@@ -250,6 +250,25 @@ describe("leagueRules", () => {
     );
   });
 
+  it("says an open match-night poll is deciding the night, in Home's words", () => {
+    const sentence =
+      "Match night: being decided in a player poll. Kickoff times show in your own time zone.";
+    const polled = section(build({ matchNightPoll: true }), "match-night");
+    expect(polled).toContain(sentence);
+    // Never the time the vote may change.
+    expect(polled).not.toContain("Sundays at 6:00 PM");
+    // Nothing announced yet (Europe) still says the poll is deciding it.
+    const unannounced = build({
+      config: EU,
+      matchNight: null,
+      matchNightPoll: true,
+    });
+    expect(section(unannounced, "match-night")).toContain(sentence);
+    expect(section(build({ matchNightPoll: false }), "match-night")).toContain(
+      "Match night: Sundays at 6:00 PM Pacific time.",
+    );
+  });
+
   it("follows the active season's league ticket", () => {
     const ticketed = build();
     expect(section(ticketed, "hosting")).toContain(
@@ -636,6 +655,8 @@ describe("the /rules page", () => {
       "@/lib/season",
       "@/lib/season-scope",
       "@/lib/match-night",
+      // Only whether a match-night poll is open (matchNightPollOpen).
+      "@/lib/match-night-poll-service",
       "@/lib/league-rules",
       "@/lib/share-metadata",
       "@/components/ui",

@@ -171,7 +171,9 @@ test("positions in the draft, then Game over frees the ten before the result lan
   // on one folded line while OpenDota publishes it (its checks wait until
   // they're out of the queue: a ready check can open any second).
   await page.getByRole("button", { name: "Game over — queue again" }).click();
-  await expect(page.getByText("You’re queued")).toBeVisible();
+  // On a phone the queue card says it in place of the header's badge (the
+  // badge is in the page, hidden there).
+  await expect(page.getByText("You’re queued").filter({ visible: true })).toHaveCount(1);
   await expect(page.getByText(/result on the way/i).first()).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Check OpenDota now" }),

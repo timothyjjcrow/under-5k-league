@@ -1,7 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { latestSeason } from "@/lib/season-scope";
-import { announcedMatchNight, type FixtureKickoff } from "@/lib/match-night";
+import {
+  announcedMatchNight,
+  pollCanDecideMatchNight,
+  pollDecidesMatchNight,
+  type FixtureKickoff,
+} from "@/lib/match-night";
+import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { leagueRules } from "@/lib/league-rules";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
@@ -29,19 +35,26 @@ export default async function RulesPage() {
   const active = await getActiveSeason();
   const season = active ?? (await latestSeason());
   // The match night and the playoff field are the ACTIVE season's: between
-  // seasons the next season's are not known yet.
-  const [fixtures, teamCount]: [FixtureKickoff[], number | null] = active
+  // seasons the next season's are not known yet. While a match-night poll
+  // is choosing the night, it says so, as Home does (pollDecidesMatchNight).
+  const [fixtures, teamCount, pollOpen]: [
+    FixtureKickoff[],
+    number | null,
+    boolean,
+  ] = active
     ? await Promise.all([
         prisma.match.findMany({
           where: { seasonId: active.id, scheduledAt: { not: null } },
           select: { scheduledAt: true, status: true },
         }),
         prisma.team.count({ where: { seasonId: active.id, withdrawn: false } }),
+        pollCanDecideMatchNight(active) ? matchNightPollOpen() : false,
       ])
-    : [[], null];
+    : [[], null, false];
   const rules = leagueRules({
     season,
     matchNight: announcedMatchNight(active, fixtures),
+    matchNightPoll: pollDecidesMatchNight(active, fixtures, pollOpen),
     teamCount,
   });
 

@@ -45,7 +45,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **`/how-it-works` is the one-screen explainer** (`/features` redirects
   there); its rules are pure in `src/lib/how-it-works.ts` (tested). It prints
   the night through `seasonMatchNightLabel` (`match-night.ts`), never a
-  built-in default, so it agrees with /me, Schedule and the admin hint.
+  built-in default, so it agrees with /me, Schedule and the admin hint; while
+  a match-night poll is deciding it (`pollDecidesMatchNight`), "Match night:
+  being decided in a player poll" and a link to the poll on Home, as Home
+  and /me say ([match-night-poll](match-night-poll.md)).
   `resultsCopy(hasLeagueTicket)` lets only a ticketed season say results
   arrive by themselves; the ticketless copy reuses `NO_TICKET_RESULT_LEAD`
   (`match-hosting.ts`), the match page's wording. Its one button
@@ -72,9 +75,13 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   played it, and that the next season starts with the same settings); with no
   season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
   badge. The night comes from `announcedMatchNight`, so Europe without one
-  says it is to be announced. The team count ("the top N make the playoffs")
-  and the league-ticket sentences need an active season. Only the current
-  tiebreaker format is described (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
+  says it is to be announced, and while a match-night poll is deciding it
+  (`pollDecidesMatchNight`, the `matchNightPoll` input) the section says
+  "Match night: being decided in a player poll", Home's words; the poll
+  service is on the page's import list for that one read. The team count
+  ("the top N make the playoffs") and the league-ticket sentences need an
+  active season. Only the current tiebreaker format is described
+  (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
 - **Every sentence is derived or left out.** Points come from probing
   `computeStandings`, bracket sizes from `pickBracketSize`, round one from
   `playoffFirstRound`, the withdrawal forfeit score from
@@ -184,8 +191,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   stacked for a narrow column); `StatStrip`/`StatCell` (the one-line summary
   band under a page title); `PageTitle compact` with `nav` (one short row:
   the title, a `SectionNav bare` from md and the action on the title's rule,
-  no subtitle, no margin; /inhouse, whose first screen is the queue);
-  `RoleBadges pillClassName` (a 16px pill on a phone's queue row). One deliberate exception: `TeamCrest`'s initials
+  no subtitle, no margin; /inhouse, whose first screen is the queue), plus
+  `slim` (below sm a 20px title in a 32px row, for /inhouse's phone first
+  screen; sm and up unchanged); `RoleBadges pillClassName` (a 16px pill in a
+  phone's "Who's playing" row, 14px in its queue slot rows). One deliberate exception: `TeamCrest`'s initials
   wear `crestInk` by default, not behind a prop, because an opt-in would leave
   white initials at about 2:1 on every yellow crest that didn't pass it. A
   contrast fix belongs at every call site.
@@ -603,6 +612,12 @@ the league is already draftable and many visitors have joined. Write for both.
   `schedule-jump-bar.test.ts` pins both props.
 - **A side's playoff stakes flow as one wrapping line of outcome pairs**
   (Win, Draw, Loss, each with its result), not a row per outcome.
+- **Before fixtures, the empty state's match-night callout follows an open
+  poll:** during signups it reads "Match night — being decided in a player
+  poll", with `MatchNightPollNote` (the poll on Home) in place of "Confirm
+  this slot works before you sign up" (rules:
+  [match-night-poll](match-night-poll.md)). The subtitle's "Match night …"
+  prints only once fixtures have kickoffs, which a poll never overrides.
 
 ## Teams (`/teams`, `/teams/[id]`)
 
@@ -710,45 +725,69 @@ the league is already draftable and many visitors have joined. Write for both.
 - **The whole queue card fits the first screen** (Tim, 2026-10-10: "the
   entire queue on the screen when you go to the in-house page, you
   shouldn't have to scroll down", with the bar where you can opt into a
-  time; his goal is a real browser window, not a full device screen). On a
-  fresh load the queue card, from its status to every slot and the
-  positions count, sits under the 64px header and, below 1024px, above the
-  phone tab bar, from 390x844 to 1920x1080, at 1366x768 and in a laptop's
-  browser window (1280x690, 1366x657, a screen less its tabs, address bar
-  and dock), in every state the spec writes: signed out, signed in with or
-  without a signup's MMR, queued, 0 to 9 present, with and without the bar.
-  `e2e-mid/zz-inhouse-queue-fit.spec.ts` measures it (and 375x667 signed
-  out), also prints 390x664 (Safari's toolbars showing) and 1440x790
-  without asserting them, and prints a table of every load's spare pixels
-  (the visible bottom less the card's); read the latest run's table rather
-  than a number here. The tightest required loads are 1366x657, for every
-  viewer, and a signed-in newcomer or queued player on a 390 phone. Run it
-  with `FIT_FONT=Verdana` too: CI's
-  Linux runner draws DejaVu Sans, wider than a Mac's SF Pro, and Verdana
-  is a close stand-in, so a Mac sees the wraps CI will.
+  time; his goal is a real browser window, not a full device screen; on
+  2026-10-11, "yes do the phone pass": a phone in Safari with both
+  toolbars showing). On a fresh load the queue card, from its status to
+  every slot and the positions count, sits under the 64px header and,
+  below 1024px, above the phone tab bar, from 390x844 to 1920x1080, at
+  1366x768, on a 390 phone with Safari's toolbars showing (390x664: what
+  an iPhone 12 to 15 shows on first load) and in a laptop's browser window
+  (1280x690, 1366x657, a screen less its tabs, address bar and dock), in
+  every state the spec writes: signed out, signed in with or without a
+  signup's MMR, queued, 0 to 9 present, with and without the bar.
+  `e2e-mid/zz-inhouse-queue-fit.spec.ts` measures it (and 375x667: required
+  signed out, printed signed in), also prints 1440x790 without asserting
+  it, and prints a table of every load's spare pixels (the visible bottom
+  less the card's); read the latest run's table rather than a number here.
+  The tightest required loads are 390x664 signed in (the filled card's two
+  rows of controls) and 1366x657, for every viewer. Run it with
+  `FIT_FONT=Verdana` too: CI's Linux runner draws DejaVu Sans, wider than
+  a Mac's SF Pro, and Verdana is a close stand-in, so a Mac sees the wraps
+  CI will.
   What makes it fit:
-  - **Above the room:** the compact title row; the bar, one button high (60px
-    on a phone, 52 from 640), carrying the night as a chip instead of a card
-    above the room; 12px between the title, the bar and the room. The
-    room's blocks sit 12px apart on a phone and 16 from md.
+  - **Above the room:** the compact title row (`PageTitle compact slim`:
+    on a phone a 20px title and a 32px row, "Match history" at its end);
+    the bar, one button high (60px on a phone, 52 from 640), carrying the
+    night as a chip instead of a card above the room; 8px between the
+    title, the bar and the room on a phone, 12 from 640. The room's blocks
+    sit 8px apart on a phone, 12 from 640 and 16 from md.
   - **The room's header and its stage strip are ONE row** (the connection
     dot, the lobby badge, the stages, Sound; on a phone "Live room" and the
     Sound words are screen-reader text, "Reconnecting" always shows, and the
-    badge takes a line of its own).
-  - **Below md, a compact card:** a 44px ring beside the title and the join
-    control; the picker's short "Positions" label beside its toggles; your
-    place in line and "How your MMR is set" (a 24px summary) on one row,
-    wrapping where they don't fit; 34px slot rows (the name and MMR, then
-    the slot, or "You" in your own row, and 16px pills); and the positions
-    count in the "Who's playing" row. That row never wraps (a second line
-    cost a phone its first screen in DejaVu): the heading and the counts
-    keep their width, and the average sits in a one-line box that drops it
-    whole when it doesn't fit, never cut to "4,4…". "N more · waits for a
-    game" replaces the row's "Ready check when a game finishes" while every
-    game slot is taken. On a phone the join control is 44px high with a
-    narrower MMR box everywhere (the empty queue's card and the next-game
-    card too), so the box and Join share one line: stacked, they cost the
-    empty card its first screen in DejaVu.
+    badge takes a line of its own). While the queue card shows a queued
+    player (no lobby of their own), a phone has no "You're queued" badge
+    line: the card's context cell says it.
+  - **Below md, a compact card on a four-column grid** (`PHONE_GRID` in
+    `queue-view.tsx`): row 1 is a 40px ring, the title and the action at
+    its end (Join, "Leave queue" or "Sign in to queue", 40px high); row 2
+    is one 120px context cell beside the positions: the MMR box (its "MMR"
+    label inside a 40px box, the input borderless, with no spinner), the
+    signup's MMR ("4,350 MMR", "from your signup") or "You're queued" over
+    "#N in line" (the room's status; " · listen for the ready check" is
+    screen-reader text there, and the line under the card starts "Listen for
+    the ready check ·" for a queued phone player). The positions
+    (`RolePicker queueCard`) are 40px-high toggles sharing the row (34px wide
+    at 390, 31 at 375, up to 40 on a wider phone; the picked ones keep a
+    transparent border so a tap never shifts them), 8px apart,
+    their label for screen readers, and one order line under them cut off
+    with an ellipsis (the toggles' ranks and names carry the order; a
+    phone says "Tap your favorite first" and "from your signup"). "How your
+    MMR is set" sits right under the card on a phone (in it from md). The
+    slots are 32px rows (the name and MMR at 16px, then the slot, or "You"
+    in your own, and 14px pills), and the positions count rides the
+    "Who's playing" row. That row never wraps (a second line cost a phone
+    its first screen in DejaVu): the heading and the counts keep their
+    width, and the average sits in a one-line box that drops it whole when
+    it doesn't fit, never cut to "4,4…". "N more · waits for a game"
+    replaces the row's "Ready check when a game finishes" while every game
+    slot is taken.
+  - **The empty queue's card on a phone** is tighter: no eyebrow, a 20px
+    title and a 12px blurb, the picker's short "Positions" label beside
+    40px toggles (`RolePicker phoneRow`), a 24px "How your MMR is set", and
+    16px padding below 640. On a phone the join control is 44px high with
+    a narrower MMR box (the next-game card's too), so the box and Join
+    share one line: stacked, they cost the empty card its first screen in
+    DejaVu.
   - **md (768 to 1023):** two columns, the 128px ring centred over the title
     with the controls stacked under it, and 48px slot rows (they grow when a
     narrow slot wraps its positions, with height to spare at 768x1024).
