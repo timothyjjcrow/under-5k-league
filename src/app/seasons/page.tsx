@@ -1,6 +1,6 @@
 import { shareMetadata } from "@/lib/share-metadata";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
 import { getSessionUser } from "@/lib/auth";

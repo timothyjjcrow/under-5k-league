@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { Match } from "@prisma/client";
 import { HeroIcon } from "@/components/hero-icon";
 import { Badge, Card, CardBody, CardHeader, LinkArrow, textLink } from "@/components/ui";

@@ -170,6 +170,16 @@ Captain report, admin import, league feed and roster scan all end in
   the cursor advances (pure `syncPingStep`). Its baseline is the server
   render's cursor (`initialCursor`), not the first ping, so a result landing in
   between still refreshes.
+- **A page that keeps itself current skips the ping** like a hidden tab
+  (`syncPingSkipsPage`: /inhouse, whose room polls and refreshes the page
+  below when a game ends), and leaving it wakes the loop
+  (`syncPingWakesOnNavigation`). The loop outlives navigations and reads the
+  path from a ref: restarting it per page would reset its cursor baseline and
+  refresh pages that just rendered. /inhouse tabs sent 128 of the US site's
+  175 pings in an hour on 2026-10-11. Vercel's CDN answers `/api/sync` for 30
+  seconds (`vercel-cdn-cache-control`, pinned in `route.test.ts`): a hit is no
+  function call, and a result still reaches a parked tab within about a
+  minute and a half.
 - **Bump the result cursor inside the write.** `stampResultChange(tx)`
   (`settings.ts`) sets `resultChangedAt` and a fresh `publicGameRevision`. Call
   it in the transaction of every write that changes results, games, box-score

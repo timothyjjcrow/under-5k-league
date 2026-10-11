@@ -276,18 +276,51 @@ describe("live rooms delegate their poll policy", () => {
     ).toEqual([]);
   });
 
+  it("result-sync-ping skips pages that keep themselves current, through syncPingSkipsPage", () => {
+    // The skip sits beside the hidden-tab check, before the fetch, and reads
+    // the live path from a ref: the loop outlives navigations, and leaving a
+    // skipped page wakes it (syncPingWakesOnNavigation).
+    const src = code("result-sync-ping.tsx");
+    expect(src).toMatch(
+      /document\.visibilityState === "hidden" \|\|\s*syncPingSkipsPage\(pathRef\.current\)/,
+    );
+    expect(src.indexOf("syncPingSkipsPage(pathRef.current)")).toBeLessThan(
+      src.indexOf('fetch("/api/sync"'),
+    );
+    expect(src).toMatch(/syncPingWakesOnNavigation\(from, pathname\)\) wakeRef\.current\?\.\(\)/);
+  });
+
   it("inhouse-room computes its cadence only through inhousePollCadence", () => {
     const src = roomText(INHOUSE_ROOM);
     expect(src).toContain("inhousePollCadence(");
     // The room legitimately names other INHOUSE constants (the lobby prefix,
     // the voice channels); the poll rates are the ones that must live in the
     // helper, where the 429 back-off and the hidden-tab keepalive are pinned.
-    for (const rate of ["INHOUSE.POLL_IDLE_MS", "INHOUSE.POLL_KEEPALIVE_MS"]) {
+    for (const rate of [
+      "INHOUSE.POLL_IDLE_MS",
+      "INHOUSE.POLL_KEEPALIVE_MS",
+      "INHOUSE.POLL_QUEUE_KEEPALIVE_MS",
+      "INHOUSE.POLL_QUEUE_MS",
+      "INHOUSE.POLL_GAME_MS",
+      "INHOUSE.POLL_RECOVERY_MS",
+    ]) {
       expect(
         uiFilesWith(rate),
         `${rate} is back in UI code — schedule() must take its delay ` +
           `from inhousePollCadence so the rules stay in one tested place.`,
       ).toEqual([]);
+    }
+  });
+
+  it("inhouse-room tells the cadence whose game it is showing", () => {
+    // pollingLobby hands a queued player someone else's game, and
+    // inhousePollCadence reads a game nobody attributes as the viewer's own:
+    // without `inLobby` every queued player watching a game in progress would
+    // wait at the slow game rate for their own lobby to form.
+    const calls = callArgs(roomText(INHOUSE_ROOM), "inhousePollCadence");
+    expect(calls.length).toBeGreaterThanOrEqual(2);
+    for (const args of calls) {
+      expect(args).toMatch(/\binLobby:\s*latestStateRef\.current\?\.me\.inLobby\b/);
     }
   });
 

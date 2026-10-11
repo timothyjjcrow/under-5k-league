@@ -13,7 +13,18 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   /teams, team pages, the champion moment, the season archive and the match
   preview: by price alone the $0 captain was listed last.
 - **Every name is a link:** `<PlayerLink userId>` (`ui.tsx`) for players, a
-  plain `next/link` to `/teams/[id]` for teams.
+  plain `Link` to `/teams/[id]` for teams.
+- **Links never prefetch: import `Link` from `@/components/app-link`, never
+  `next/link`** (`app-link.test.ts` fails on a direct import). Next prefetches
+  each link that scrolls into view, and the root `loading.tsx` makes every
+  dynamic page prefetchable: each visible link was a server render of the
+  root layout, repeated on every navigation. On 2026-10-11 one page view sent
+  15 to 27 of them, 114 of the US site's 125 page requests in an hour were
+  prefetches, and the bursts started the cold instances behind most of a
+  quiet day's CPU, on the Vercel Hobby plan both leagues share. A click now
+  waits for the server's first streamed chunk (the loading skeleton). Pass
+  `prefetch={null}` (Next's default) only for a link where an instant
+  skeleton is worth a function call per view.
 - **`src/lib/site-nav.ts` is the one page list** behind the header, Explore,
   the phone tab bar and the footer: one label, one group, one visibility rule
   per page. It is pure so client, server and tests share it. Never add a second

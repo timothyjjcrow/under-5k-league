@@ -1,5 +1,5 @@
 import type { Match } from "@prisma/client";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { ByeWeekNote } from "@/components/bye-week-note";
 import { CheckinBanner } from "@/components/checkin-banner";
 import { Card, LinkArrow, buttonClasses, textLink } from "@/components/ui";

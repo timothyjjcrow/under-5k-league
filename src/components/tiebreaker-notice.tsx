@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { LinkArrow } from "@/components/ui";
 import type { PlayoffFieldProjection } from "@/lib/playoff-field";
 import type { ScenarioReport } from "@/lib/scenarios";

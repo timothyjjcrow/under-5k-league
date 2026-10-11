@@ -17,12 +17,13 @@ export async function GET() {
     {
       headers: {
         // The payload is viewer-independent. Browsers always revalidate, while
-        // Vercel collapses a burst of tabs into one origin snapshot for five
-        // seconds. The worker cadence is one minute, so this cannot hide a
-        // state transition longer than the clients already tolerate.
+        // Vercel's CDN answers every tab in a region from one origin snapshot
+        // for 30 seconds: a CDN hit is no function call, on a hosting budget
+        // both leagues share. Parked tabs ping at most once a minute, so a
+        // result reaches them within about a minute and a half.
         "cache-control": "public, max-age=0, must-revalidate",
         "vercel-cdn-cache-control":
-          "public, max-age=5, stale-while-revalidate=10",
+          "public, max-age=30, stale-while-revalidate=30",
       },
     },
   );

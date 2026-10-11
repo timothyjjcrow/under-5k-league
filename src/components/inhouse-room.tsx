@@ -284,6 +284,7 @@ export function InhouseRoom({
         lobbyStatus: preClock?.status ?? null,
         scanOpensAt: preClock?.scanOpensAt ?? null,
         serverNow: latestStateRef.current?.now ?? null,
+        inLobby: latestStateRef.current?.me.inLobby,
         // Nothing has left yet, so `hasStake` is still the pre-payload `false`
         // for everyone — fetch once rather than skipping forever (a tab that is
         // HIDDEN at load would otherwise never learn it had a stake).
@@ -379,6 +380,7 @@ export function InhouseRoom({
           lobbyStatus: postClock?.status ?? null,
           scanOpensAt: postClock?.scanOpensAt ?? null,
           serverNow: latestStateRef.current?.now ?? null,
+          inLobby: latestStateRef.current?.me.inLobby,
           rateLimited,
           reached: !!next,
           failureCount: consecutiveFailures,

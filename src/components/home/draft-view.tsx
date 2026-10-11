@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Fragment } from "react";
 import { SteamSignInNote } from "@/components/steam-sign-in";
 import {

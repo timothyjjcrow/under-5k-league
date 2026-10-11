@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import { getSeasonGamesForRecap } from "@/lib/cached-queries";
 import { computeSeasonAwards, type Award } from "@/lib/awards";

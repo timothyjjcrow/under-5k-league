@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { ContextBackLink } from "@/components/context-back-link";
 import { PlayerSeasonCard } from "@/components/player-season-card";
 import { ShareButton } from "@/components/share-button";

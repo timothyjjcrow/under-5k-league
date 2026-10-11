@@ -1,5 +1,5 @@
 import type { Match } from "@prisma/client";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Fragment } from "react";
 import { Countdown } from "@/components/countdown";
 import { KickoffCountdown } from "@/components/kickoff-countdown";

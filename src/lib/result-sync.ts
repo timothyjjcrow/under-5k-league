@@ -303,3 +303,27 @@ export function syncPingStep(
     cursor: cursor ?? lastCursor,
   };
 }
+
+/**
+ * Pages whose own live loop keeps them current, where `<ResultSyncPing>`
+ * skips its fetch the way it skips a hidden tab. The /inhouse room polls the
+ * queue and lobbies itself and refreshes the page below when a game ends
+ * (`liveGameEnded`), and the page shows no league results. On 2026-10-11 its
+ * tabs sent 128 of the US site's 175 pings in an hour, each a function call
+ * on the Vercel Hobby plan both leagues share.
+ */
+export function syncPingSkipsPage(pathname: string | null): boolean {
+  return pathname === "/inhouse";
+}
+
+/**
+ * Leaving a skipped page wakes the ping at once instead of after the idle
+ * wait it was sleeping, so a match night's one-minute watch carries on; any
+ * other navigation keeps its schedule (the new page was just rendered).
+ */
+export function syncPingWakesOnNavigation(
+  from: string | null,
+  to: string | null,
+): boolean {
+  return syncPingSkipsPage(from) && !syncPingSkipsPage(to);
+}

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { HeroIcon } from "@/components/hero-icon";

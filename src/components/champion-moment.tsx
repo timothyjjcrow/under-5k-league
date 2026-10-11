@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { ChampionFinalLine } from "@/lib/champion-moment";
 import type { SeriesRecordCounts } from "@/lib/team-matches";
 import { rosterOrder } from "@/lib/team-roster";

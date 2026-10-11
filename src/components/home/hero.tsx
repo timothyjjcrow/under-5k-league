@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { ReactNode } from "react";
 import { HeroVideo } from "@/components/hero-video";
 import { Badge, LinkArrow, TeamCrest, textLink } from "@/components/ui";

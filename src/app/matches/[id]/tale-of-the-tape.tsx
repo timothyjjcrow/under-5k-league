@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import { isPlayoffPhase } from "@/lib/league-lifecycle";
 import { projectPlayoffField } from "@/lib/playoff-field";

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Suspense } from "react";
 import { confirmDraftReadiness } from "@/app/actions/registration";
 import { ActionForm, SubmitButton } from "@/components/action-form";

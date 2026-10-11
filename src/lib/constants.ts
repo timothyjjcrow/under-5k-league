@@ -288,21 +288,35 @@ export const INHOUSE = {
   LOBBY_PASSWORD: "ggd2l",
   LOBBY_TICKET: LEAGUE_CONFIG.inhouseLeagueName,
   LOBBY_TICKET_CONFIGURED: LEAGUE_CONFIG.inhouseLeagueConfigured,
-  // Keep the fast room rate for ready checks, captain votes and picks.
-  // Waiting rosters and games in progress need fewer database round trips.
-  POLL_QUEUE_MS: 5000,
-  POLL_GAME_MS: 10000,
-  POLL_IDLE_MS: 10000,
-  // Hidden-tab keepalive (ms). A hidden tab with NO stake (not queued, not in a
-  // lobby) doesn't fetch at all — the sitewide /api/sync ping keeps lobbies
-  // advancing, and it re-syncs on refocus. But a hidden tab that's IN THE QUEUE
-  // (or a lobby) keeps a slow keepalive so ready-check chimes/title can reach
-  // it. Membership does not depend on these browser timers. It must also
-  // be shorter than BOTH action windows: a lobby can form just after a queued
-  // player's poll, and a long keepalive could otherwise consume the entire
-  // accept window (and skip the 25s captain vote altogether). 10s leaves time
-  // to notice and act when the browser allows background execution.
+  // Keep the fast room rate for ready checks, captain votes and picks; every
+  // other state waits longer. Each poll is a function call on a Vercel Hobby
+  // plan both leagues share (four hours of Active CPU a month), and on
+  // 2026-10-11 five /inhouse tabs polling every ten seconds made 79% of the US
+  // site's calls. Queued: a forming lobby gives ACCEPT_SECONDS (90s) to accept.
+  POLL_QUEUE_MS: 10000,
+  // A game being played, in a visible tab or a hidden one: nothing in it is
+  // timed, and the players are in the Dota client.
+  POLL_GAME_MS: 30000,
+  // Spectating: nothing at stake.
+  POLL_IDLE_MS: 30000,
+  // After a 429, and the floor of a disconnected room's backoff. Kept at the
+  // old idle rate so the slower spectator rate never slows a recovery.
+  POLL_RECOVERY_MS: 10000,
+  // Hidden-tab keepalive (ms) in a lobby's timed stages (ready check, vote,
+  // draft, setup). A hidden tab with NO stake (not queued, not in a lobby)
+  // doesn't fetch at all — signed-in room polls and the one-minute worker
+  // advance lobbies, and it re-syncs on refocus. But a hidden tab that's in a lobby
+  // keeps a slow keepalive so its chimes and title can reach it, and it must
+  // stay shorter than the 25s captain vote, which an accepted player could
+  // otherwise sleep through. Membership does not depend on these browser
+  // timers.
   POLL_KEEPALIVE_MS: 10000,
+  // The same for a hidden tab that is queued with no lobby yet. Only the
+  // accept window binds it: a lobby can form just after this player's poll,
+  // and the vote can't open until they have seen the ready check and
+  // accepted. 20s leaves 70s to notice and act when the browser allows
+  // background execution (and the ready check pings Discord too).
+  POLL_QUEUE_KEEPALIVE_MS: 20000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // The queue holds a spot for hours with the tab closed, so the tenth join
   // can land while the others are in a pub game or away from the desk: they

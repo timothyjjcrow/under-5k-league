@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { HeroIcon, RankMedal, TeamCrest } from "@/components/ui";
 import { gradeTone } from "@/lib/benchmarks";
 import { heroById } from "@/lib/heroes";

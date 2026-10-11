@@ -14,7 +14,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { useSearchParams } from "next/navigation";
 import { Badge, LinkArrow, TeamCrest, textLink } from "@/components/ui";
 import { LocalTime, useLocalTimeText } from "@/components/local-time";

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { cache } from "react";
 import { LocalTime } from "@/components/local-time";
 import { NewsMedia } from "@/components/news-media";

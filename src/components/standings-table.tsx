@@ -4,7 +4,7 @@
 // "simple" view and a sortable "detailed" one behind a toggle, which worded
 // the same badges two ways and hid game difference, the first tiebreak.
 
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Fragment } from "react";
 import { EmptyState, FormStrip, TeamCrest } from "@/components/ui";
 import { cn } from "@/lib/utils";

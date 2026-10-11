@@ -1,6 +1,6 @@
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import { SteamJoin } from "@/components/steam-sign-in";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Suspense } from "react";
 import { hasText } from "@/lib/utils";
 import { getActiveSeason } from "@/lib/season";

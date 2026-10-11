@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { LocalTime } from "@/components/local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ImportProgressControls } from "@/components/import-progress-controls";
-import Link from "next/link";
+import Link from "@/components/app-link";
 
 const labels: Record<string, string> = {
   PENDING: "Waiting for game details",

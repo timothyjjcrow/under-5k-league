@@ -2,7 +2,7 @@
 
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";

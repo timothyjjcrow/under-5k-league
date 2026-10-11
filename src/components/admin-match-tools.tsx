@@ -1,5 +1,5 @@
 import type { Prisma } from "@prisma/client";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import {
   MATCH_PHASE,

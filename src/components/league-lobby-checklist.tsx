@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { useState } from "react";
 import { pushToast } from "@/components/toaster";
 import {

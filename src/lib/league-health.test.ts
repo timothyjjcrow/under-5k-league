@@ -585,6 +585,7 @@ describe("the /admin/health page", () => {
     // comes through loadLeagueHealth.
     expect(importsOf(page, "page.tsx").sort()).toEqual(
       [
+        "@/components/app-link",
         "@/components/season-scope",
         "@/components/ui",
         "@/lib/auth",
@@ -594,7 +595,6 @@ describe("the /admin/health page", () => {
         "@/lib/search-params",
         "@/lib/season-scope",
         "@/lib/zoned-time",
-        "next/link",
         "next/navigation",
         "react",
       ].sort(),

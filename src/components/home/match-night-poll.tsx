@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { ReactNode } from "react";
 import { Countdown } from "@/components/countdown";
 import { LocalTime } from "@/components/local-time";

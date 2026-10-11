@@ -1,5 +1,5 @@
 import * as React from "react";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { DISCORD_INVITE_URL, MATCH_SCHEDULE } from "@/lib/constants";
 import { cn, initials, teamInitials } from "@/lib/utils";
 import { teamHueVar, teamInkVar } from "@/lib/team-hues";

@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { DiscordButton, buttonClasses } from "@/components/ui";
 import { getActiveSeason } from "@/lib/season";
 import { getSeasonDraftStatus } from "@/lib/queries";

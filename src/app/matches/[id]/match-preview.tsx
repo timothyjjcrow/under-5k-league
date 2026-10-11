@@ -1,6 +1,6 @@
 import { rosterOrder } from "@/lib/team-roster";
 import { MATCH_LIST_ORDER } from "@/lib/schedule";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { recentForm, headToHead } from "@/lib/team-matches";

@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { Suspense, type ReactNode } from "react";
 import { DiscordButton, LinkArrow, buttonClasses } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";

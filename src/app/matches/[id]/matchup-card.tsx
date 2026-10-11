@@ -1,4 +1,4 @@
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { CHECKIN_NUDGE_THROTTLE_SECONDS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";

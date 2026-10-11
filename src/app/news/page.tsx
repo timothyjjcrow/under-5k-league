@@ -1,5 +1,5 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { notFound } from "next/navigation";
 import { listPage } from "@/lib/list-page";
 import { singleSearchParam } from "@/lib/search-params";

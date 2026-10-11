@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useState } from "react";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { useRouter } from "next/navigation";
 import { heroPagePath, searchHeroes } from "@/lib/heroes";
 import { HeroIcon } from "@/components/hero-icon";

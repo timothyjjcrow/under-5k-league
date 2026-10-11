@@ -1,5 +1,5 @@
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import { redirect } from "next/navigation";
 import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";

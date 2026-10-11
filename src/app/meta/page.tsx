@@ -4,7 +4,7 @@ import {
   HeroMetaTable,
   type HeroMetaTableRow,
 } from "@/components/hero-meta-table";
-import Link from "next/link";
+import Link from "@/components/app-link";
 import type { Metadata } from "next";
 import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { notFound } from "next/navigation";
