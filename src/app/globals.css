@@ -48,7 +48,7 @@
 }
 
 /* `inline` so the utility bakes in the value directly — the referenced
-   `--font-oswald` is injected at runtime by next/font on <html>. */
+   `--font-oswald` is defined on <html> below. */
 @theme inline {
   --font-display: var(--font-oswald), ui-sans-serif, system-ui, sans-serif;
 }
@@ -56,6 +56,13 @@
 :root {
   color-scheme: dark;
   --mobile-dock-height: 0px;
+  /* Oswald, one family per subset (next/font sets each variable on <html>;
+     src/app/fonts/oswald.ts). Latin stays last: it ends with the fallback
+     face, which would catch every script listed after it. */
+  --font-oswald:
+    var(--font-oswald-latin-ext), var(--font-oswald-vietnamese),
+    var(--font-oswald-cyrillic), var(--font-oswald-cyrillic-ext),
+    var(--font-oswald-latin);
 }
 
 /* Keep content, focused fields and feedback clear of the phone navigation.

@@ -186,6 +186,18 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   wear `crestInk` by default, not behind a prop, because an opt-in would leave
   white initials at about 2:1 on every yellow crest that didn't pass it. A
   contrast fix belongs at every call site.
+- **The display face (`font-display`) is self-hosted Oswald**
+  (`src/app/fonts/oswald.ts`, the files beside it; the licence is the link
+  pictures' `src/lib/og-fonts/OFL.txt`, since the release classifier reads a
+  second copy as a copied file and demands a maintenance release). Never
+  import `next/font/google`: it downloads while compiling, and Turbopack's dev
+  server failed to start in CI whenever Google answered with query-string
+  font URLs. The five files are what Google serves for weights 500 to 700,
+  one family per subset with Google's unicode range, so a browser fetches
+  latin-ext or Cyrillic only for a name that uses it. `--font-oswald`
+  (`globals.css`) chains them with latin LAST: latin alone is preloaded and
+  carries the resized-Arial fallback, which would catch any script listed
+  after it. `src/app/fonts/oswald.test.ts` pins the chain and the files.
 - **Tokens:** `--color-surface-3` is an OPAQUE elevation step (translucent
   lets scrolled rows show through a table header); `--color-line-soft` is a
   rule inside a dense list (`--color-line` boxes every row).
