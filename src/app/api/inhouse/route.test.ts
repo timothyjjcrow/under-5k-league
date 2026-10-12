@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   autoDetectResult: vi.fn(),
   cancelLobby: vi.fn(),
   voidLastResult: vi.fn(),
+  removeFromQueue: vi.fn(),
   claimThrottle: vi.fn(),
 }));
 
@@ -48,6 +49,7 @@ vi.mock("@/lib/inhouse-service", () => ({
   autoDetectResult: mocks.autoDetectResult,
   cancelLobby: mocks.cancelLobby,
   voidLastResult: mocks.voidLastResult,
+  removeFromQueue: mocks.removeFromQueue,
 }));
 vi.mock("@/lib/settings", () => ({
   claimThrottle: mocks.claimThrottle,
@@ -75,6 +77,7 @@ const actionMocks = [
   mocks.autoDetectResult,
   mocks.cancelLobby,
   mocks.voidLastResult,
+  mocks.removeFromQueue,
 ];
 
 function request(body: unknown) {
@@ -357,6 +360,17 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.giveUpOnResult).toHaveBeenCalledOnce();
     expect(mocks.giveUpOnResult).toHaveBeenCalledWith(user, "lobby-3");
     expect(mocks.cancelLobby).toHaveBeenCalledWith(user, "lobby-3");
+  });
+
+  it("removes a queued player only through its own action, naming them", async () => {
+    // The service decides who may (admins) and whether they're still queued;
+    // the route hands it the named player, and a missing name as "".
+    await POST(request({ action: "remove", userId: "player-9" }));
+    await POST(request({ action: "remove" }));
+
+    expect(mocks.removeFromQueue).toHaveBeenNthCalledWith(1, user, "player-9");
+    expect(mocks.removeFromQueue).toHaveBeenNthCalledWith(2, user, "");
+    expect(mocks.leaveQueue).not.toHaveBeenCalled();
   });
 
   it("hands the raw role choice to the service, on its own and with a join", async () => {

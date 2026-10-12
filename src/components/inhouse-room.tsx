@@ -62,6 +62,7 @@ import { DraftView } from "@/components/inhouse/draft-view";
 import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
 import { PendingResultsView } from "@/components/inhouse/pending-results-view";
+import { AdminQueueRemoval } from "@/components/inhouse/admin-queue-removal";
 
 /**
  * The lobby whose phase sets the poll rate: the viewer's own game, or the
@@ -1144,6 +1145,12 @@ export function InhouseRoom({
       </div>
 
       {lobby && me.canCancel ? cancelButton(lobby) : null}
+
+      {/* An admin takes a player out of the queue from any stage: the queue
+          may not be on screen (a live game), and away players have no slot. */}
+      {me.isAdmin && state.queue.length > 0 ? (
+        <AdminQueueRemoval queue={state.queue} pending={pending} act={act} />
+      ) : null}
 
       {lobby ? (
         <PendingResultsView

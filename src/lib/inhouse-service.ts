@@ -1466,6 +1466,50 @@ export async function leaveQueue(
 }
 
 /**
+ * Admin: take one player out of the queue (Tim, 2026-10-12): someone over
+ * the MMR cap who queued before it, a no-show holding a spot, a smurf with no
+ * medal. It is the leave the player could make, made for them: the same
+ * shared locks first and the same `deleteMany`, so it loses quietly to their
+ * own leave or to the formation that took them into a game, never crashing
+ * on a row a rival removed. Not a ban: they can join again, under the cap.
+ * Logged only when it removed someone.
+ */
+export async function removeFromQueue(
+  viewer: SessionUser,
+  userId: string,
+): Promise<InhouseActionResult> {
+  if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
+  if (!userId) return { ok: false, error: "Choose a player to remove" };
+  const removed = await prisma.$transaction(async (tx) => {
+    const now = Date.now();
+    const expired = await expireStaticQueue(tx, now);
+    const queued = await tx.inhouseQueueEntry.findUnique({
+      where: { userId },
+      select: { user: { select: { name: true } } },
+    });
+    if (expired.count > 0 || queued) {
+      // A composition change, like any leave: the shared rows first. Should
+      // a rival take the row before the delete, the deadline it refreshed is
+      // the one that rival's own change sets anyway.
+      await refreshQueueIdleDeadline(tx, now);
+    }
+    const deleted = await tx.inhouseQueueEntry.deleteMany({ where: { userId } });
+    return deleted.count > 0 ? (queued?.user.name ?? "A player") : null;
+  });
+  if (removed === null) {
+    return {
+      ok: false,
+      error: "They're not in the queue any more: they left, or a game took them.",
+    };
+  }
+  await logAdminAction({
+    action: "removeFromQueue",
+    summary: `Removed ${removed} from the inhouse queue`,
+  });
+  return { ok: true };
+}
+
+/**
  * OPTIONAL: mark the game as started once teams are set. It starts the room's
  * game clock and shows the game as live on the Discord board; nothing depends
  * on it any more — the result scan and "Record by match ID" run from READY

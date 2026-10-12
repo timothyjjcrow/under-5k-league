@@ -29,6 +29,7 @@ import {
   playersNeeded,
   queuePresence,
   queuePresentCutoff,
+  queueRemovalChoices,
   queueSlots,
   requeueLastSeenAt,
   seedOrder,
@@ -314,6 +315,36 @@ describe("playersNeeded", () => {
 // Which queue entries occupy the ten visible slots. The room used to index the
 // raw queue, which put "away" entries in slots that the headline count,
 // `needed` and lobby formation itself all ignore.
+describe("queueRemovalChoices (the admin's remove-from-queue picker)", () => {
+  const entry = (
+    name: string,
+    over: Partial<{ away: boolean; rankTier: number | null; mmr: number }> = {},
+  ) => ({ userId: `id-${name}`, name, away: false, rankTier: null, mmr: 0, ...over });
+
+  it("lists everyone queued, away players too, in queue order", () => {
+    // An away player (unseen for four hours) holds no slot but is queued.
+    const choices = queueRemovalChoices([
+      entry("first"),
+      entry("gone", { away: true }),
+      entry("last"),
+    ]);
+    expect(choices.map((c) => c.userId)).toEqual(["id-first", "id-gone", "id-last"]);
+    expect(choices.map((c) => c.name)).toEqual(["first", "gone", "last"]);
+  });
+
+  it("names each with what tells an admin who they are", () => {
+    const [smurf, newcomer, unranked] = queueRemovalChoices([
+      entry("FuzBea", { away: true, rankTier: 74, mmr: 5000 }),
+      entry("Newcomer", { rankTier: 35, mmr: 2100 }),
+      entry("Blank"),
+    ]);
+    expect(smurf.label).toBe("FuzBea · away · Divine 4 · 5,000 MMR");
+    expect(newcomer.label).toBe("Newcomer · Crusader 5 · 2,100 MMR");
+    // No medal and no number: said plainly, never as a 0.
+    expect(unranked.label).toBe("Blank · MMR unknown");
+  });
+});
+
 describe("queueSlots", () => {
   const q = (name: string, away = false) => ({ name, away });
 
