@@ -5,7 +5,7 @@ import { mkdtemp, mkdir, symlink, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { LEAGUE_TARGETS, RELEASE_REPOSITORY, assertDeployment, assertReleaseInfo, promotePair } from "./league-targets.mjs";
-import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS, AUTOMATION_PROBE_WAIT_MS, requireCanonicalRelease, CANONICAL_RELEASE_ATTEMPTS, CANONICAL_RELEASE_CONSECUTIVE } from "./release-both.mjs";
+import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCoverage, mutationShardsSkipped, MUTATION_COVERAGE_WORKFLOWS, requireMaintenanceEvidence, scheduledPasses, SCHEDULED_PASS_QUERY, cliScopeArgs, createReleaseDirectory, requireHealthy, AUTOMATION_PROBE_ATTEMPTS, AUTOMATION_PROBE_WAIT_MS, requireCanonicalRelease, CANONICAL_RELEASE_ATTEMPTS, CANONICAL_RELEASE_CONSECUTIVE } from "./release-both.mjs";
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
@@ -151,6 +151,24 @@ test("scheduler verification counts duplicate provider rows once without hiding 
   assert.equal(scheduledPasses([first, first], 0), null);
   assert.equal(scheduledPasses([first, second, { ...second, responseStatusCode: 202 }], 0), null);
   assert.throws(() => scheduledPasses([first, second, { ...second, responseStatusCode: 500 }], 0), /runtime errors/);
+});
+test("scheduler verification finds passes on a site busy enough to fill the CLI's 50-row page", () => {
+  // 2026-10-12: ~45 requests a minute on the US site. The newest 50 rows held one
+  // pass, so a healthy release rolled back; the cron-only query holds both.
+  const pass = (n) => ({ id: `cron-${n}`, timestamp: 60_000 * n, responseStatusCode: 200, requestPath: "/api/cron/automation" });
+  const poll = (ms) => ({ id: `poll-${ms}`, timestamp: ms, responseStatusCode: 200, requestPath: "/api/inhouse" });
+  const newestPage = [pass(2), ...Array.from({ length: 49 }, (_, i) => poll(60_500 + i * 1_200))];
+  assert.equal(newestPage.length, 50);
+  assert.equal(scheduledPasses(newestPage, 0), null);
+  const cronPage = [pass(1), pass(2)];
+  assert.deepEqual(scheduledPasses([...newestPage, ...cronPage], 0), [
+    new Date(60_000).toISOString(), new Date(120_000).toISOString(),
+  ]);
+  // The newest page still feeds the error scan.
+  assert.throws(() => scheduledPasses([...newestPage, { ...poll(70_000), responseStatusCode: 500 }, ...cronPage], 0), /runtime errors/);
+  assert.deepEqual([...SCHEDULED_PASS_QUERY], ["--query", "/api/cron/automation"]);
+  const source = readFileSync(new URL("./release-both.mjs", import.meta.url), "utf8");
+  assert.match(source, /logs = \[\.\.\.\(await page\(\[\]\)\), \.\.\.\(await page\(SCHEDULED_PASS_QUERY\)\)\];/);
 });
 const ciRun = { head_sha: sha, status: "completed", conclusion: "success" };
 const mutationShards = [1, 2, 3, 4].map((n) => `mutation guard ${n}/4`);
