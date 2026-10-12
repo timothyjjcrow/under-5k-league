@@ -7,6 +7,7 @@ import { str } from "@/lib/form";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { describeTimes, parseSlotKey } from "@/lib/match-night-poll";
 import { castBallot } from "@/lib/match-night-poll-service";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import { SIGN_IN_REQUIRED } from "@/lib/sign-in";
 import { actionErrorMessage } from "@/lib/user-facing-error";
 import { zoneLabel } from "@/lib/zone-label";
@@ -64,6 +65,8 @@ export async function castMatchNightBallot(
   if (!outcome.ok) return { error: outcome.error };
 
   revalidatePath("/");
+  // The #schedule status card shows the poll's turnout (never the count).
+  void refreshLeagueStatus();
   if (outcome.availability.length === 0) {
     return {
       message:

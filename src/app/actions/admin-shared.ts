@@ -13,6 +13,7 @@
 import { revalidatePath, updateTag } from "next/cache";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 
 /**
  * The signed-in admin, or the refusal every admin action returns as it is.
@@ -48,6 +49,9 @@ export class ResultWriteError extends Error {}
 export function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  // Every admin write may move the #schedule status card. It repaints after
+  // the response and only when what it says changed (league-status-service).
+  void refreshLeagueStatus();
 }
 
 // Game imports/edits also invalidate the cached all-games stat scans
@@ -61,4 +65,5 @@ export function refreshGames() {
   updateTag("games");
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  void refreshLeagueStatus();
 }

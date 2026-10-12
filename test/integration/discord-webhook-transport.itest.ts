@@ -506,6 +506,20 @@ describe("postWebhookMessage", () => {
     expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
   });
 
+  it("opts a Components V2 card in with ?with_components=true", async () => {
+    // Discord ignores components from a plain webhook without the flag, so
+    // the league status card would post as an empty message.
+    const card = { flags: 1 << 15, components: [{ type: 10, content: "## Week 3" }] };
+    await postWebhookMessage(hookUrl(), card);
+    expect(recorded[0].url).toBe(
+      "/api/v10/webhooks/1111/tok-secret?wait=true&with_components=true",
+    );
+    expect(recorded[0].body).toMatchObject({
+      ...card,
+      allowed_mentions: { parse: [] },
+    });
+  });
+
   it("returns null when Discord answers without a usable id", async () => {
     respond = () => ({ status: 200, body: {} });
     expect(await postWebhookMessage(hookUrl(), { content: "x" })).toBeNull();
@@ -534,6 +548,15 @@ describe("patchWebhookMessage", () => {
     await patchWebhookMessage(hookUrl(), MSG, {
       embeds: [{ description: "In queue: @everyone" }],
     });
+    expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
+  });
+
+  it("repeats ?with_components=true on every edit of a Components V2 card", async () => {
+    const card = { flags: 1 << 15, components: [{ type: 10, content: "@everyone" }] };
+    expect(await patchWebhookMessage(hookUrl(), MSG, card)).toBe("ok");
+    expect(recorded[0].url).toBe(
+      `/api/v10/webhooks/1111/tok-secret/messages/${MSG}?with_components=true`,
+    );
     expect(recorded[0].body?.allowed_mentions).toEqual({ parse: [] });
   });
 

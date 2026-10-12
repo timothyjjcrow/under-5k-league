@@ -1,8 +1,9 @@
 "use server";
 
-// Admin actions for the Discord integration: the league, inhouse board and
-// inhouse alert webhooks, the inhouse ping role, test posts, the pinned
-// inhouse queue board, and discarding waiting league posts.
+// Admin actions for the Discord integration: the league, inhouse board,
+// inhouse alert and status card webhooks, the inhouse ping role, test posts,
+// the pinned inhouse queue board, the league status card, and discarding
+// waiting league posts.
 
 import { str } from "@/lib/form";
 import {
@@ -11,6 +12,7 @@ import {
   webhookIdOf,
   getInhouseWebhookUrl,
   getInhouseAlertWebhookUrl,
+  getLeagueStatusWebhookUrl,
   sendInhouseDiscordMessage,
 } from "@/lib/discord";
 import {
@@ -22,6 +24,11 @@ import {
   createInhouseBoard,
   removeInhouseBoard,
 } from "@/lib/inhouse-board-service";
+import {
+  createLeagueStatusCard,
+  removeLeagueStatusCard,
+  syncLeagueStatus,
+} from "@/lib/league-status-service";
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import type { ActionResult } from "@/lib/action-result";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
@@ -393,6 +400,142 @@ export async function deleteInhouseBoard(
       ? "Cleared the board record — Discord may still have an untracked message. Check the channel and delete it by hand before posting again."
       : "Queue board removed",
   };
+}
+
+/**
+ * Save the webhook for the league status card. A webhook posts only in the
+ * channel it was made in, so this is what puts the card in #schedule (or
+ * wherever the admin made it). A move to a different channel strands the card
+ * it would no longer be able to edit: take it down first, while the old
+ * credential is still the configured one.
+ */
+export async function setLeagueStatusWebhook(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const value = str(formData, "leagueStatusWebhookUrl").trim();
+  // Renders empty on purpose (the saved URL is a secret), so a blank submit
+  // is a no-op; turning the card off is the explicit Remove action.
+  if (!value) {
+    return {
+      message:
+        "No change — paste a new URL to replace it, or press “Remove status card webhook” to turn the card off.",
+    };
+  }
+  const webhookUrl = normalizeDiscordWebhookUrl(value);
+  if (!webhookUrl) {
+    return {
+      error:
+        "That doesn't look like a Discord webhook URL (https://discord.com/api/webhooks/…)",
+    };
+  }
+  const prevId = webhookIdOf(await getLeagueStatusWebhookUrl());
+  const moved = !!prevId && prevId !== webhookIdOf(webhookUrl);
+  const torndown = moved ? await removeLeagueStatusCard({ force: true }) : null;
+  await setSetting(SETTING_KEYS.LEAGUE_STATUS_WEBHOOK_URL, webhookUrl);
+  await logAdminAction({
+    action: "setLeagueStatusWebhook",
+    summary: `Replaced the status card webhook${moved ? (torndown?.orphaned ? "; the old card may be orphaned" : "; the old card was removed") : ""}`,
+  });
+  refresh();
+  return {
+    message: !moved
+      ? "Status card webhook saved — post the card below."
+      : torndown?.orphaned
+        ? "Status card webhook saved. The old card couldn't be deleted — remove that message by hand, then post a new card below."
+        : "Status card webhook saved — the old card was removed; post a new one below.",
+  };
+}
+
+/** Turn the status card off: delete it, then forget the webhook. */
+export async function clearLeagueStatusWebhook(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  // Delete the card FIRST: it needs the credential we're about to remove.
+  const torndown = await removeLeagueStatusCard({ force: true });
+  await setSetting(SETTING_KEYS.LEAGUE_STATUS_WEBHOOK_URL, "");
+  await logAdminAction({
+    action: "clearLeagueStatusWebhook",
+    summary: `Removed the status card webhook${torndown.orphaned ? "; the old card may be orphaned" : ""}`,
+  });
+  refresh();
+  return {
+    message: torndown.orphaned
+      ? "Status card webhook removed. Discord didn't confirm deleting the card, so delete that message by hand."
+      : "Status card webhook removed — the card is off.",
+  };
+}
+
+/** Post the league status card: one message the site keeps up to date. */
+export async function postLeagueStatusCard(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await createLeagueStatusCard();
+  refresh();
+  return res.ok
+    ? {
+        message:
+          "Status card posted — it updates itself from now on. Keep it the newest message in its channel (a read-only channel works best).",
+      }
+    : { error: res.error ?? "Could not post the status card" };
+}
+
+/** Delete the status card message and stop updating it. */
+export async function deleteLeagueStatusCard(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await removeLeagueStatusCard();
+  refresh();
+  if (!res.ok) return { error: res.error ?? "Could not remove the status card" };
+  return {
+    message: res.orphaned
+      ? "Cleared the card record — Discord may still have an untracked message. Check the channel and delete it by hand before posting again."
+      : "Status card removed",
+  };
+}
+
+/** Bring the status card up to date now instead of after the next change. */
+export async function updateLeagueStatusCardNow(
+  _prev: ActionResult,
+  _fd: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const outcome = await syncLeagueStatus();
+  refresh();
+  switch (outcome) {
+    case "edited":
+      return { message: "Status card updated" };
+    case "unchanged":
+      return { message: "The status card is already up to date" };
+    case "throttled":
+      return { message: "The card was just updated — it catches up within a few seconds" };
+    case "gone":
+      return {
+        error:
+          "The card message is gone from Discord (deleted, or its webhook was). Post a new card below.",
+      };
+    case "stranded":
+      return {
+        error:
+          "The card was posted with a different webhook, so it can't be edited from here. Post a new card below and delete the old message by hand.",
+      };
+    case "failed":
+      return { error: "Discord didn't accept the edit — try again in a moment" };
+    default:
+      return { error: "The status card isn't posted" };
+  }
 }
 
 /** Post a test message so the admin can confirm the webhook works. */

@@ -39,6 +39,9 @@ vi.mock("@/lib/discord-mentions", () => ({
   mentionUsers: vi.fn(async () => []),
 }));
 vi.mock("@/lib/settings", () => ({ claimThrottle: vi.fn() }));
+vi.mock("@/lib/league-status-service", () => ({
+  refreshLeagueStatus: vi.fn(async () => {}),
+}));
 
 import { markAwayDates, setAvailability } from "./availability";
 import { captainAutoDetect, captainImportGame } from "./match-report";

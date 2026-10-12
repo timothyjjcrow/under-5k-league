@@ -115,6 +115,11 @@ import {
   testInhouseWebhook,
   postInhouseBoard,
   deleteInhouseBoard,
+  setLeagueStatusWebhook,
+  clearLeagueStatusWebhook,
+  postLeagueStatusCard,
+  deleteLeagueStatusCard,
+  updateLeagueStatusCardNow,
 } from "@/app/actions/admin-discord";
 import { runMaintenanceNow } from "@/app/actions/automation";
 import {
@@ -199,6 +204,10 @@ import {
   getInhouseBoardStatus,
   type InhouseBoardStatus,
 } from "@/lib/inhouse-board-service";
+import {
+  getLeagueStatusCardStatus,
+  type LeagueStatusCardStatus,
+} from "@/lib/league-status-service";
 import {
   getDiscordReachFunnel,
   getGuildConfig,
@@ -6249,8 +6258,9 @@ async function DiscordSection() {
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, pingHealth, delivery] = await Promise.all([
+  const [board, statusCard, pingHealth, delivery] = await Promise.all([
     getInhouseBoardStatus(),
+    getLeagueStatusCardStatus(),
     getPingHealth(),
     loadLeagueDeliveryHealth().catch(() => null),
   ]);
@@ -6265,6 +6275,7 @@ async function DiscordSection() {
         envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
       }}
       board={board}
+      statusCard={statusCard}
       pingHealth={pingHealth}
       mutationsAllowed={discordMutationsAllowed()}
     />
@@ -6346,12 +6357,14 @@ function DiscordControls({
   status,
   delivery,
   board,
+  statusCard,
   pingHealth,
   mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   delivery: LeagueDeliveryHealth | null;
   board: InhouseBoardStatus;
+  statusCard: LeagueStatusCardStatus;
   pingHealth: PingHealth;
   mutationsAllowed: boolean;
 }) {
@@ -6787,8 +6800,210 @@ function DiscordControls({
             what actually alerts people; this board just shows the state.
           </p>
         </div>
+
+        <LeagueStatusCardControls
+          card={statusCard}
+          mutationsAllowed={mutationsAllowed}
+        />
       </CardBody>
     </AdminSection>
+  );
+}
+
+/**
+ * The league status card: its own webhook (made in #schedule), the post and
+ * remove controls, and whether the card is showing what the league is now.
+ */
+function LeagueStatusCardControls({
+  card,
+  mutationsAllowed,
+}: {
+  card: LeagueStatusCardStatus;
+  mutationsAllowed: boolean;
+}) {
+  return (
+    <div className="space-y-3 border-t border-line pt-3">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="font-medium">League status card</span>
+        {card.posted ? (
+          card.stranded ? (
+            <Badge tone="danger">Stranded</Badge>
+          ) : (
+            <Badge tone="success">Posted</Badge>
+          )
+        ) : card.postingStuck ? (
+          <Badge tone="danger">Post interrupted</Badge>
+        ) : card.posting ? (
+          <Badge tone="accent">Posting…</Badge>
+        ) : (
+          <Badge tone="neutral">Not posted</Badge>
+        )}
+        {card.posted ? (
+          <span className="font-mono text-xs text-muted">
+            msg {card.messageHint}
+          </span>
+        ) : null}
+        {card.posted && card.failures > 0 ? (
+          <Badge tone="danger">
+            {card.failures} failed edit{card.failures === 1 ? "" : "s"}
+          </Badge>
+        ) : null}
+        {card.posted && card.lastEdit ? (
+          <span className="text-xs text-muted">
+            · last edit{" "}
+            <LocalTime
+              ts={new Date(card.lastEdit).getTime()}
+              variant="full"
+              initial={formatLeagueMatchTime(new Date(card.lastEdit), "full")}
+            />
+          </span>
+        ) : null}
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <span className="text-xs text-muted">Webhook:</span>
+        {card.configured ? (
+          <span className="font-mono text-xs text-muted">{card.masked}</span>
+        ) : (
+          <Badge tone="neutral">Not set</Badge>
+        )}
+      </div>
+
+      <ActionForm
+        action={setLeagueStatusWebhook}
+        className="flex flex-wrap items-end gap-2"
+      >
+        <div className="min-w-0 flex-1">
+          <label
+            htmlFor="leagueStatusWebhookUrl"
+            className="mb-1 block text-xs text-muted"
+          >
+            {card.configured
+              ? "Replace status card webhook URL"
+              : "Status card webhook URL"}
+          </label>
+          <input
+            id="leagueStatusWebhookUrl"
+            name="leagueStatusWebhookUrl"
+            type="url"
+            autoComplete="off"
+            placeholder="https://discord.com/api/webhooks/…"
+            className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+          />
+        </div>
+        <SubmitButton variant="secondary" size="sm">
+          Save
+        </SubmitButton>
+      </ActionForm>
+
+      {card.posted ? (
+        <p className="text-xs text-muted">
+          League right now: <b>{card.liveState}</b> —{" "}
+          {card.inSync
+            ? "the card is showing this."
+            : "the card hasn't caught up yet. A change made on the site reaches it within seconds, and one only time makes (a poll closing) within about ten minutes; Update now does it at once."}
+        </p>
+      ) : null}
+
+      {card.stranded ? (
+        <p className="text-xs text-danger">
+          The card belongs to a different webhook than the one saved now, so it
+          can no longer be updated or deleted from here. Remove it here, delete
+          the message by hand in the old channel, then post a new one.
+        </p>
+      ) : null}
+
+      {card.postingStuck ? (
+        <p className="text-xs text-danger">
+          The server stopped while it was posting this card, so it never saved
+          a Discord message id. Check the channel for an untracked card first;
+          then clear this interrupted post below and delete any orphaned
+          message by hand before posting again.
+        </p>
+      ) : card.posting ? (
+        <p className="text-xs text-muted">
+          Discord is creating the message. Reload in a moment; a second post is
+          blocked while this short lease is active.
+        </p>
+      ) : null}
+
+      {card.posted && card.failures > 0 ? (
+        <p className="text-xs text-danger">
+          Discord has rejected the last {card.failures} edit
+          {card.failures === 1 ? "" : "s"}, so the card is showing something
+          the site already knows is out of date. Check the webhook.
+        </p>
+      ) : null}
+
+      <div className="flex flex-wrap gap-2">
+        {card.posted ? (
+          <>
+            <ActionForm action={updateLeagueStatusCardNow}>
+              <SubmitButton
+                variant="secondary"
+                size="sm"
+                disabled={!mutationsAllowed}
+              >
+                Update now
+              </SubmitButton>
+            </ActionForm>
+            <ActionForm action={deleteLeagueStatusCard}>
+              <SubmitButton
+                variant="ghost"
+                size="sm"
+                disabled={!mutationsAllowed}
+                confirm="Delete the league status card message from Discord?"
+              >
+                Remove status card
+              </SubmitButton>
+            </ActionForm>
+          </>
+        ) : card.postingStuck ? (
+          <ActionForm action={deleteLeagueStatusCard}>
+            <SubmitButton
+              variant="ghost"
+              size="sm"
+              disabled={!mutationsAllowed}
+              confirm="Clear the interrupted card post? First check Discord and delete any card message that may have been created, because the site never received its message id."
+            >
+              Clear interrupted post
+            </SubmitButton>
+          </ActionForm>
+        ) : card.posting ? null : (
+          <ActionForm action={postLeagueStatusCard}>
+            <SubmitButton
+              variant="secondary"
+              size="sm"
+              disabled={!mutationsAllowed || !card.configured}
+            >
+              Post status card
+            </SubmitButton>
+          </ActionForm>
+        )}
+        {card.configured ? (
+          <ActionForm action={clearLeagueStatusWebhook}>
+            <SubmitButton
+              variant="ghost"
+              size="sm"
+              confirm="Remove the status card webhook? The card is deleted from Discord and stops updating."
+            >
+              Remove status card webhook
+            </SubmitButton>
+          </ActionForm>
+        ) : null}
+      </div>
+
+      <p className="text-xs text-muted">
+        Posts <b>one</b> message that shows where the league is: signups and
+        the team goal, draft night, this week&apos;s fixtures with standins,
+        reschedule offers and moved kickoffs, the table and last week&apos;s
+        Player and Team of the week, the playoffs or the champion, plus a
+        planned inhouse night. The site rewrites it in place as things change,
+        so it never adds a message or notifies anyone. Make the webhook in a
+        read-only channel such as <b>#schedule</b>, so nothing pushes the card
+        out of view.
+      </p>
+    </div>
   );
 }
 

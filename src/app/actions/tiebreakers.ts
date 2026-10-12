@@ -6,6 +6,7 @@ import { createTiebreakerWeek, clearTiebreakerWeek } from "@/lib/tiebreaker-serv
 import { actionErrorMessage } from "@/lib/user-facing-error";
 import { logAdminAction } from "@/lib/admin-log";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import type { ActionResult } from "@/lib/action-result";
 import { sendDiscordMessage, standinRemovedMessage } from "@/lib/discord";
 import { mentionsOf } from "@/lib/discord-mentions";
@@ -19,6 +20,7 @@ export async function scheduleTiebreakerWeek(_prev: ActionResult, form: FormData
     const result = await createTiebreakerWeek(seasonId, revision);
     updateTag(AUTOMATION_GATE_TAG);
     revalidatePath("/", "layout");
+    void refreshLeagueStatus();
     await logAdminAction({ action: "scheduleTiebreakerWeek", seasonId,
       summary: `Scheduled ${result.matchCount} tiebreaker match${result.matchCount === 1 ? "" : "es"} in week ${result.week}` });
     return { message: `Tiebreaker week ${result.week}: ${result.matchCount} match${result.matchCount === 1 ? "" : "es"} scheduled.${result.untimedCount ? " Set the opening times in Admin → Tiebreakers." : ""}` };
@@ -37,6 +39,7 @@ export async function resetTiebreakerWeek(_prev: ActionResult, form: FormData): 
     updateTag("games");
     updateTag(AUTOMATION_GATE_TAG);
     revalidatePath("/", "layout");
+    void refreshLeagueStatus();
     let failedStandDownNotices = 0;
     for (const assignment of result.standDowns) {
       try {

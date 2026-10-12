@@ -44,6 +44,7 @@ import { advancePlayoffBracket, announceChampionOnce } from "./playoff-service";
 import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
+import { syncLeagueStatusFromWorker } from "./league-status-service";
 import {
   deliverInhouseAnnouncements,
   reconcileMissingInhouseResultAnnouncements,
@@ -1214,11 +1215,12 @@ export async function runResultSync(
 
   // The inhouse night's start post (inhouse-night-service.ts). Inhouse has no
   // season, so it runs with or without one; the gate wakes the worker for it.
+  let nightStarted = false;
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     skipped.push(RESULT_SYNC_SKIPPED.REMINDER);
   } else {
     try {
-      await announceInhouseNightStart();
+      nightStarted = await announceInhouseNightStart();
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.REMINDER);
       logStepFailure("inhouse-night", error);
@@ -1247,6 +1249,26 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
       logStepFailure("notifications", error);
+    }
+  }
+
+  // The #schedule status card, after this run's results, playoff rounds and
+  // reminders so it shows them. This pass is also how changes that no write
+  // announces reach it: a match-night poll closing, an inhouse night ending.
+  // A pass that changed nothing the card shows looks only now and then
+  // (syncLeagueStatusFromWorker). It shares the notification codes: it is a
+  // Discord surface like they are, and a new code would need every reader of
+  // the runner summary to learn it.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.NOTIFICATIONS);
+  } else {
+    try {
+      await syncLeagueStatusFromWorker(
+        league.imported > 0 || draft.advanced || playoff || nightStarted,
+      );
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
+      logStepFailure("status-card", error);
     }
   }
 

@@ -1,11 +1,13 @@
 # Discord integration
 
-League announcements (webhook plus a durable outbox), inhouse alerts and the
-pinned inhouse queue board, the small bot behind the ping role and membership
-checks, and Discord account linking. Main files: `src/lib/discord.ts`
-(formatters, transport), `league-announcement-outbox.ts` + `league-delivery.ts`,
-`discord-payload.ts`, `discord-escape.ts`, `discord-mentions.ts`,
-`inhouse-board.ts` + `inhouse-board-service.ts`, `discord-roles.ts` (bot),
+League announcements (webhook plus a durable outbox), inhouse alerts, the
+pinned inhouse queue board and the league status card, the small bot behind
+the ping role and membership checks, and Discord account linking. Main files:
+`src/lib/discord.ts` (formatters, transport), `league-announcement-outbox.ts` +
+`league-delivery.ts`, `discord-payload.ts`, `discord-escape.ts`,
+`discord-mentions.ts`, `inhouse-board.ts` + `inhouse-board-service.ts`,
+`league-status.ts` + `league-status-snapshot.ts` + `league-status-service.ts`,
+`discord-roles.ts` (bot),
 `discord-reach.ts`, `discord-oauth.ts` + `discord-link-service.ts`. Admin
 actions: `src/app/actions/admin-discord.ts`.
 
@@ -49,7 +51,9 @@ actions: `src/app/actions/admin-discord.ts`.
   `DISCORD_INHOUSE_ALERT_WEBHOOK_URL` (`getInhouseAlertWebhookUrl`, falls back
   to board, then league). The board is read from the bottom of its channel and
   one alert under it pushes it out of view; changing the alert webhook never
-  touches the board.
+  touches the board. A fourth, the status card's (`leagueStatusWebhookUrl`,
+  `getLeagueStatusWebhookUrl`, Setting only), never falls back: see
+  [the league status card](#the-league-status-card).
 - **League posts go through the durable outbox.** `sendDiscordMessage` queues
   the row, returns true, and makes one attempt; the worker's
   `deliverPendingLeagueAnnouncements` drains in order. `discordRefusalKind`
@@ -472,3 +476,78 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   stretch); omit what's missing; no "updated <t:R>" line ("3 days ago").
 - **Keep `public/brand/banner.png` off the board:** its "Under 4.5K, sub-4500
   MMR" gate doesn't apply to inhouses.
+
+## The league status card
+
+One message in the read-only #schedule channel, rewritten in place, that says
+where the league is: signups and the team goal, the match-night poll's
+turnout, draft night, the live draft, this week's fixtures with their standins,
+open reschedule offers and moved kickoffs, the table with its playoff line,
+last week's Player and Team of the week, the playoff round, the champion, and
+a planned inhouse night (Tim's call, 2026-10-12). Render: `league-status.ts`
+(pure, `league-status.test.ts`). Read: `league-status-snapshot.ts`
+(`league-status-snapshot.itest.ts`). Service: `league-status-service.ts`
+(`league-status.itest.ts`). It is the queue board's machinery, and the board's
+rules above hold word for word (the row is the switch, claim before posting,
+CAS write-backs, `gone` turns it off, health from `lastOkAt`), with these
+additions.
+
+- **Its own webhook, never a fallback.** Falling back to the league webhook
+  would drop a self-editing message into the feed. It is set on /admin's
+  Discord card ("League status card"); saving one for another channel removes
+  the old card first (`removeLeagueStatusCard({ force: true })`). Admins post
+  it, update it now, remove it, and see its last edit, failures, a stranded
+  card and whether it matches the league ("League right now").
+- **Components V2, one container.** `flags: IS_COMPONENTS_V2` with sections, a
+  thumbnail, dividers and link buttons; a webhook may send display components
+  and link buttons only, and only with `?with_components=true` on the POST and
+  every PATCH (`webhookQuery`). The flag can't come off a message, and a V2
+  message carries no `content` or `embeds`. Stay inside 40 components and
+  4,000 characters: an over-limit edit is refused whole and leaves the card
+  stale, so `fitToLimits` trims the longest text first.
+- **Every number is the one the site prints.** The snapshot reuses Home's
+  helpers: `capacityInfo`, Home's captain count, `announcedMatchNight`,
+  `isRelevantOpenMatch` for the week in focus, `projectPlayoffField` for the
+  table and its cut, the honors readiness for the highlights,
+  `resolveChampionPresentation` and `championFinalLine`. Add to the card
+  through the same helper, never a second count that can disagree with Home.
+- **The poll's count never reaches it.** Turnout and the closing time only: the
+  poll view is built for no viewer, so `results` is null while voting is open,
+  and the snapshot type has no field for a leader.
+- **Reading never writes, and stays cheap.** Never `getDraftState` (it resolves
+  expired clocks); honors read one finished week at a time, newest first, at
+  most three, never the season's box scores.
+- **Who repaints.** `refreshLeagueStatus()` runs after the response of every
+  admin action (`refresh()`, `refreshGames()`, and the two tiebreaker actions)
+  and of the player actions that move it: signups and withdrawals, standin
+  bookings, reschedules, team names and logos, match reports, poll votes and
+  box-score identity fixes. Losing the 5 s spam floor waits it out once and
+  looks again, so a burst ends on the last write. The worker
+  (`syncLeagueStatusFromWorker`) looks after a pass that imported a game,
+  resolved a draft lot, built a playoff round or started an inhouse night;
+  every pass while the card shows a live draft (`hot`: its sales land through
+  the draft room's own requests); otherwise at most every 10 minutes
+  (`leagueStatusCheckAt`).
+- **No automation-gate wake of its own.** What only time changes (a poll
+  closing, an inhouse night ending, the week in focus moving on) arrives with
+  the 10-minute look while the worker runs, or the gate's hourly hard wake
+  when it sleeps. Every time on the card is a Discord timestamp that keeps
+  counting by itself, so that window is cosmetic, and a wake would bump the
+  gate's version for it.
+- **Cost.** Off is one primary-key read anywhere. On, a look is one snapshot
+  read (about a dozen queries) and no Discord request unless the digest moved.
+- **Design.** One idea per section, the number first and the detail as grey
+  subtext; times as `<t:…>` on the reader's clock; no emoji (the board's
+  rule). The strip's colour is the phase: blue signups, amber draft, red only
+  while the draft is live, green season, coral playoffs, gold champion, grey
+  between seasons. Names players and captains chose go through
+  `escapeDiscordText`; season names, round labels, the match-night label and
+  the inhouse night's note are admin or site text and print as written (the
+  note on one line). The table is a 28-character code block of position, name
+  and points (W-D-L is on the site): a phone's code block holds about 30
+  characters, and a wrapped row breaks the columns. Standin and offer lines sit under unplayed fixtures
+  only, and an offer whose every time has passed is dropped. Budgets are left
+  out of the draft card: they are MMR-weighted per team, so no one figure is
+  true.
+- **No inhouse headcount.** Discord's own event shows who is interested, and
+  the site never hears those clicks, so a count on the card would go stale.

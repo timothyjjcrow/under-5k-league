@@ -341,6 +341,7 @@ const FILES = [
   "src/lib/playoff-service.ts",
   "src/lib/result-sync-service.ts",
   "src/lib/inhouse-board-service.ts",
+  "src/lib/league-status-service.ts",
   "src/lib/settings.ts",
   "src/lib/season.ts",
   "src/app/actions/admin-season.ts",
