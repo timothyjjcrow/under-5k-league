@@ -370,15 +370,15 @@ describe("fixture lines", () => {
   it("notes standins and a waiting reschedule under an unplayed fixture only", () => {
     const busy = fixture({
       standins: [
-        { standin: "Giribaldi_TTV", replaced: "DonV", team: "Vegan Squadron" },
-        { standin: "Rada", replaced: null, team: "Bleeding Hearts" },
+        { standin: "Fill_In", replaced: "Carry Kid", team: "Vegan Squadron" },
+        { standin: "Spare Sam", replaced: null, team: "Bleeding Hearts" },
       ],
       reschedule: { proposer: "Bleeding Hearts", waitingOn: "Vegan Squadron", options: 3 },
     });
     expect(fixtureLines(busy)).toEqual([
       "Bleeding Hearts `vs` Vegan Squadron",
-      "-# ↳ Standin: Giribaldi\\_TTV for DonV (Vegan Squadron)",
-      "-# ↳ Standin: Rada fills a seat for Bleeding Hearts",
+      "-# ↳ Standin: Fill\\_In for Carry Kid (Vegan Squadron)",
+      "-# ↳ Standin: Spare Sam fills a seat for Bleeding Hearts",
       "-# ↳ Bleeding Hearts offered 3 new times · waiting on Vegan Squadron",
     ]);
     expect(
@@ -453,7 +453,7 @@ describe("regular season card", () => {
     },
     highlights: {
       week: 2,
-      player: { name: "saukko", points: 167.5, hero: "Drow Ranger" },
+      player: { name: "Mid Mike", points: 167.5, hero: "Drow Ranger" },
       team: { name: "Bad Boys of Dota", wins: 4 },
       heroImageUrl: "https://cdn.example/drow.png",
       recapUrl: `${SITE}/seasons/s2/weeks/2`,
@@ -471,7 +471,7 @@ describe("regular season card", () => {
     // The honors post's wording: the points are the week's, the hero is the
     // best game's.
     expect(text).toContain(
-      "Player of the week: **saukko**\n-# 167.5 impact points · best game on Drow Ranger",
+      "Player of the week: **Mid Mike**\n-# 167.5 impact points · best game on Drow Ranger",
     );
     expect(text).toContain("Team of the week: **Bad Boys of Dota**\n-# 4 game wins");
     expect(text.indexOf("**Standings**\n```")).toBeGreaterThan(text.indexOf("This week"));
@@ -545,8 +545,8 @@ describe("complete and offseason cards", () => {
           logoUrl: `${SITE}/team-logo.png`,
           final: { opponent: "Bleeding Hearts", score: "3–1", forfeit: false },
           roster: [
-            { name: "Wish", captain: false },
-            { name: "Borpo", captain: true },
+            { name: "Support Sue", captain: false },
+            { name: "Cap Carl", captain: true },
           ],
           recapUrl: `${SITE}/seasons/s2`,
         },
@@ -559,7 +559,7 @@ describe("complete and offseason cards", () => {
     expect(text).toContain("-# GGD2L · Season 2 · Champions");
     expect(text).toContain("## Bad Boys of Dota");
     expect(text).toContain("Won the grand final `3–1` over Bleeding Hearts");
-    expect(text).toContain("-# Wish · Borpo (captain)");
+    expect(text).toContain("-# Support Sue · Cap Carl (captain)");
     expect(text).toContain("**Next season**\nComing soon");
     expect(JSON.stringify(payload)).toContain(`${SITE}/team-logo.png`);
     expect(buttons(c.components)).toEqual([

@@ -71,10 +71,10 @@ describe("league status snapshot — signups", () => {
       draftAt: new Date(Date.now() + 5 * DAY),
     });
     // One named captain, two volunteers (one of them the captain again).
-    await makeCaptain(season.id, "Borpo", 100, 0);
-    await makePlayer(season.id, "Wish", 4000, { wantsCaptain: true });
+    await makeCaptain(season.id, "Cap Carl", 100, 0);
+    await makePlayer(season.id, "Volunteer Val", 4000, { wantsCaptain: true });
     for (let i = 0; i < 9; i++) await makePlayer(season.id, `Player ${i}`, 3000);
-    const standin = await makeUser("Rada");
+    const standin = await makeUser("Spare Sam");
     await prisma.registration.create({
       data: { seasonId: season.id, userId: standin.id, type: "STANDIN", status: "ACTIVE" },
     });
@@ -337,7 +337,7 @@ describe("league status snapshot — the regular season", () => {
 
   it("shows the week in focus with its standins, offers, moves and bye", async () => {
     const { season, teams, homePlayers, onNight, night } = await seasonInWeekTwo();
-    const standin = await makeUser("Giribaldi_TTV");
+    const standin = await makeUser("Fill_In");
     await prisma.standinAssignment.create({
       data: {
         matchId: onNight.id,
@@ -378,7 +378,7 @@ describe("league status snapshot — the regular season", () => {
         away: "Charlie",
         state: "UPCOMING",
         moved: false,
-        standins: [{ standin: "Giribaldi_TTV", replaced: "Alpha 1", team: "Alpha" }],
+        standins: [{ standin: "Fill_In", replaced: "Alpha 1", team: "Alpha" }],
         reschedule: { proposer: "Charlie", waitingOn: "Alpha", options: 2 },
       }),
       expect.objectContaining({ home: "Bravo", away: "Delta", moved: true, standins: [] }),
@@ -505,14 +505,14 @@ describe("league status snapshot — the playoffs", () => {
 describe("league status snapshot — season complete", () => {
   it("crowns the champion with the final, the roster and the next season's date", async () => {
     const season = await makeSeason({ name: "Season 2", status: SEASON_STATUS.COMPLETE });
-    const champ = await makeCaptain(season.id, "Borpo", 100, 0);
+    const champ = await makeCaptain(season.id, "Cap Carl", 100, 0);
     await prisma.team.update({
       where: { id: champ.team.id },
       data: { name: "Bad Boys of Dota", logoUrl: "/brand/bad-boys.png" },
     });
-    const wish = await makeUser("Wish");
+    const sue = await makeUser("Support Sue");
     await prisma.teamMember.create({
-      data: { seasonId: season.id, teamId: champ.team.id, userId: wish.id, price: 30 },
+      data: { seasonId: season.id, teamId: champ.team.id, userId: sue.id, price: 30 },
     });
     const other = await makeTeam(season.id, "Bleeding Hearts", 1);
     await prisma.match.create({
@@ -548,8 +548,8 @@ describe("league status snapshot — season complete", () => {
       logoUrl: `${resolveSiteUrl()}/brand/bad-boys.png`,
       final: { opponent: "Bleeding Hearts", score: "3–1", forfeit: false },
       roster: [
-        { name: "Borpo", captain: true },
-        { name: "Wish", captain: false },
+        { name: "Cap Carl", captain: true },
+        { name: "Support Sue", captain: false },
       ],
       recapUrl: `${resolveSiteUrl()}/seasons/${season.id}`,
     });
