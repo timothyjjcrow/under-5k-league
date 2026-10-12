@@ -384,7 +384,7 @@ export async function saveRegistration(
   //  * REVIVAL: a WITHDRAWN player resubmitting sets status ACTIVE below, so
   //    they'd inject themselves into the live pool between lots. The /me UI
   //    disables that tile, but a replayed POST never reads the UI.
-  //  * MMR: getDraftState re-reads Registration.mmr on every ~1.2s poll — it
+  //  * MMR: getDraftState re-reads Registration.mmr on every room poll — it
   //    feeds the pool's MMR sort, the nominated panel, and
   //    resolveStalledNomination's top-MMR auto-pick — and the admin's
   //    Edit-MMR forms are deliberately hidden once the draft starts, so a

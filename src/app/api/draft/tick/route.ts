@@ -29,8 +29,8 @@ export async function POST(req: NextRequest) {
 
   // Public spectator reads still reach the database, so retain the same
   // per-instance speed bump as /api/inhouse beneath the required edge rule.
-  // Generous: the room polls at ~1.2s (≈50/min per tab) and captains may have
-  // a couple of tabs open.
+  // Generous: captains poll every 2s (30/min per tab), everyone else slower,
+  // and captains may have a couple of tabs open.
   const ip = clientIp(req);
   const preflightAllowance = rateLimit(
     `draft:preflight:ip:${ip}`,
