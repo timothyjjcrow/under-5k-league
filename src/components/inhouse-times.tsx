@@ -406,15 +406,17 @@ function StripChip({
  * (Tim, 2026-10-10: the whole queue on the first screen, and a little bar
  * where you can say you're in on a time): the planned inhouse night's chip
  * and the Play later times, each one button high, in one row that swipes
- * inside the bar when it doesn't fit; it never grows a second. The earliest
- * leads, and a link leads with its own (inhousePlansNightFirst). The times
- * are the soonest open ones and each one's "I'm in" (two beside the night,
- * whose chip is wide); a time's link changes only what they show (its time
- * leads, picked out, or a line saying it's over); the card stays under the
- * room either way. inhouseTimesStrip decides the times, and the bar is
- * nothing while there's neither a time to show nor a night. A fade marks a
- * side of the row with more off screen (PlansRow). Posting, the links,
- * everyone's names and the night's details stay on the cards under the room.
+ * inside the bar when it doesn't fit; it never grows a second. From xl only
+ * the times' chips swipe, in a row of their own, so a laptop keeps the
+ * night's chip whole however wide their words. The earliest leads, and a
+ * link leads with its own (inhousePlansNightFirst). The times are the
+ * soonest open ones and each one's "I'm in" (two beside the night, whose
+ * chip is wide); a time's link changes only what they show (its time leads,
+ * picked out, or a line saying it's over); the card stays under the room
+ * either way. inhouseTimesStrip decides the times, and the bar is nothing
+ * while there's neither a time to show nor a night. A fade marks a side of
+ * a row with more off screen (PlansRow). Posting, the links, everyone's
+ * names and the night's details stay on the cards under the room.
  */
 export async function InhouseTimesStrip({
   linked,
@@ -446,7 +448,16 @@ export async function InhouseTimesStrip({
     <section
       id="play-later-next"
       aria-label="Play later times"
-      className={cn("flex shrink-0 items-center gap-2", goneAlone && "min-w-[min(19rem,100%)]")}
+      className={cn(
+        "flex shrink-0 items-center gap-2",
+        // From xl (a laptop, where the bar is as wide as it gets) the times
+        // give way to the night's chip beside them, which never shrinks:
+        // their chips swipe in a row of their own between the label and the
+        // link down, so the night's chip stays whole however wide their
+        // words ("Tomorrow, 12:45 AM" in CI's DejaVu Sans pushed it off).
+        "xl:min-w-0 xl:shrink",
+        goneAlone && "min-w-[min(19rem,100%)]",
+      )}
     >
       <p className="flex shrink-0 items-center gap-2 text-sm font-semibold text-fg">
         <span
@@ -458,17 +469,20 @@ export async function InhouseTimesStrip({
         {/* A phone keeps its width for the times: the clock says it. */}
         <span className="sr-only whitespace-nowrap sm:not-sr-only">Play later</span>
       </p>
-      {strip.gone ? (
-        <p className="w-[17rem] shrink-0 text-xs leading-4 text-muted sm:w-auto sm:whitespace-nowrap">
-          The time in that link is over, or everyone on it dropped out.{" "}
-          <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink()}>
-            See Play later below
-          </a>
-          .
-        </p>
-      ) : null}
-      {strip.shown.length > 0 ? (
-        <>
+      {/* The times' own row: below xl it is as wide as its chips and the
+          bar's row swipes them all; -m-px p-px leaves a linked chip's ring
+          the edge the row clips once it swipes on its own. */}
+      <PlansRow className="flex shrink-0 items-center gap-2 xl:-m-px xl:min-w-0 xl:shrink xl:overflow-x-auto xl:overflow-y-hidden xl:p-px xl:[scrollbar-width:thin]">
+        {strip.gone ? (
+          <p className="w-[17rem] shrink-0 text-xs leading-4 text-muted sm:w-auto sm:whitespace-nowrap">
+            The time in that link is over, or everyone on it dropped out.{" "}
+            <a href={`#${PLAY_LATER_ANCHOR}`} className={textLink()}>
+              See Play later below
+            </a>
+            .
+          </p>
+        ) : null}
+        {strip.shown.length > 0 ? (
           <ul className="flex shrink-0 items-center gap-2">
             {strip.shown.map((time) => (
               <StripChip
@@ -481,18 +495,20 @@ export async function InhouseTimesStrip({
               />
             ))}
           </ul>
-          <a
-            href={`#${PLAY_LATER_ANCHOR}`}
-            className={textLink("shrink-0 whitespace-nowrap px-1 text-sm")}
-          >
-            {inhouseTimesStripLinkText({ more: strip.more, atCap })}
-            {/* The short "N more" names what it counts for a screen reader. */}
-            {strip.more > 0 ? (
-              <span className="sr-only">{strip.more === 1 ? " time" : " times"}</span>
-            ) : null}{" "}
-            <span aria-hidden>↓</span>
-          </a>
-        </>
+        ) : null}
+      </PlansRow>
+      {strip.shown.length > 0 ? (
+        <a
+          href={`#${PLAY_LATER_ANCHOR}`}
+          className={textLink("shrink-0 whitespace-nowrap px-1 text-sm")}
+        >
+          {inhouseTimesStripLinkText({ more: strip.more, atCap })}
+          {/* The short "N more" names what it counts for a screen reader. */}
+          {strip.more > 0 ? (
+            <span className="sr-only">{strip.more === 1 ? " time" : " times"}</span>
+          ) : null}{" "}
+          <span aria-hidden>↓</span>
+        </a>
       ) : null}
     </section>
   ) : null;

@@ -38,6 +38,14 @@ import {
 // the spec with the page's body font forced to it, so a Mac sees what CI
 // will: `FIT_FONT=Verdana npx playwright test --config
 // playwright.midseason.config.ts e2e-mid/zz-inhouse-queue-fit.spec.ts`.
+//
+// The bar's words: the chips say a start on the browser's clock ("Today,
+// 8:45 PM", "Tomorrow, 12:45 AM"), so times written a fixed while from the
+// runner's clock read wider in the evening, and on 2026-10-11 the night's
+// chip fell off a laptop's bar in CI only after 20:00 UTC. The browsers run
+// on a clock that reads 9 PM at the start instead (pinnedClock), with the
+// times and the night written on it, so every run measures the widest words
+// the chips get, whatever the hour.
 
 const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
 
@@ -47,7 +55,43 @@ const NIGHT_KEY = "inhouseNight";
 const HEADER_PX = 64;
 const BAR_MAX_PX = 64;
 const MIN = 60_000;
-const QUARTER = 15 * MIN;
+const HOUR = 60 * MIN;
+const DAY = 24 * HOUR;
+
+/**
+ * The browsers' clock: a whole-hour zone that reads 9 PM (9:00 to 9:59)
+ * when the spec starts, and the next midnight on it. The run ends long
+ * before that midnight, so every start below keeps its words throughout.
+ */
+function pinnedClock(nowMs: number): { timezoneId: string; midnightMs: number } {
+  let hours = 21 - new Date(nowMs).getUTCHours();
+  // Whole-hour zones run from UTC-12 to UTC+14.
+  if (hours > 14) hours -= 24;
+  const offsetMs = hours * HOUR;
+  return {
+    // IANA's Etc zones count west as positive: Etc/GMT-3 is UTC+3.
+    timezoneId: hours === 0 ? "Etc/UTC" : `Etc/GMT${hours > 0 ? "-" : "+"}${Math.abs(hours)}`,
+    midnightMs: (Math.floor((nowMs + offsetMs) / DAY) + 1) * DAY - offsetMs,
+  };
+}
+
+/**
+ * The Play later times on that clock, soonest first, at their widest: the
+ * first after midnight ("Tomorrow, 12:45 AM"), the others at two-digit hours
+ * ("Tomorrow, 10:45 AM" and 11:45). The words are checked before each
+ * measure, so a clock that drifts can't measure narrower ones.
+ */
+const TIME_STARTS = [45 * MIN, 10 * HOUR + 45 * MIN, 11 * HOUR + 45 * MIN];
+const TIME_WORDS = ["Tomorrow, 12:45 AM", "Tomorrow, 10:45 AM"];
+/**
+ * The night later than the times, two days out, which its chip names by
+ * date ("Wed, Oct 14, 10:45 AM"), or sooner, 11:45 PM tonight.
+ */
+const NIGHT_STARTS = { later: DAY + 10 * HOUR + 45 * MIN, sooner: -15 * MIN };
+const NIGHT_WORDS = {
+  later: /^(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [A-Z][a-z]{2} \d{1,2}, 10:45\sAM$/,
+  sooner: "Today, 11:45 PM",
+};
 
 /**
  * Each size, and whether the queue must fit there (`required`: for every
@@ -155,18 +199,12 @@ test.afterAll(async () => {
   await db.$disconnect();
 });
 
-/** The next quarter hour two hours out: a Play later time that's upcoming. */
-function timeStart(nowMs: number) {
-  return Math.ceil((nowMs + 2 * 60 * MIN) / QUARTER) * QUARTER;
-}
-
-async function setPlans(plans: Plans, nowMs: number) {
+/** The plans on the pinned clock (its next midnight, `midnightMs`). */
+async function setPlans(plans: Plans, nowMs: number, midnightMs: number) {
   await db.inhouseTimeRsvp.deleteMany({ where: { userId: { in: otherIds } } });
-  const time = timeStart(nowMs);
-  // The first two hours out, any others an hour apart after it.
   await db.inhouseTimeRsvp.createMany({
-    data: Array.from({ length: plans.times }, (_, i) => ({
-      startsAt: new Date(time + i * 60 * MIN),
+    data: TIME_STARTS.slice(0, plans.times).map((start) => ({
+      startsAt: new Date(midnightMs + start),
       userId: otherIds[1],
     })),
   });
@@ -174,8 +212,8 @@ async function setPlans(plans: Plans, nowMs: number) {
     await db.setting.deleteMany({ where: { key: NIGHT_KEY } });
     return;
   }
-  // Later than the time (the time leads the bar), or an hour sooner.
-  const startsAtMs = plans.night === "later" ? time + 22 * 60 * MIN : time - 60 * MIN;
+  // Later than the times (they lead the bar), or sooner than the first.
+  const startsAtMs = midnightMs + NIGHT_STARTS[plans.night];
   const value = serializeInhouseNight({
     id: "e2e-queue-fit-night",
     startsAtMs,
@@ -208,12 +246,12 @@ async function setQueue(present: number, nowMs: number) {
 }
 
 /**
- * A context for one viewer. With FIT_FONT set, the page's body font is
- * forced to it (a stand-in for CI's wider DejaVu Sans; the display font,
- * Oswald, is a web font that is the same everywhere).
+ * A context for one viewer, on the pinned clock's zone. With FIT_FONT set,
+ * the page's body font is forced to it (a stand-in for CI's wider DejaVu
+ * Sans; the display font, Oswald, is a web font that is the same everywhere).
  */
-async function viewerContext(browser: Browser, baseURL: string) {
-  const context = await browser.newContext({ baseURL });
+async function viewerContext(browser: Browser, baseURL: string, timezoneId: string) {
+  const context = await browser.newContext({ baseURL, timezoneId });
   const font = process.env.FIT_FONT;
   if (font) {
     await context.addInitScript((family: string) => {
@@ -231,8 +269,13 @@ async function viewerContext(browser: Browser, baseURL: string) {
   return context;
 }
 
-async function signedIn(browser: Browser, baseURL: string, who: Exclude<Viewer, "out">) {
-  const context = await viewerContext(browser, baseURL);
+async function signedIn(
+  browser: Browser,
+  baseURL: string,
+  timezoneId: string,
+  who: Exclude<Viewer, "out">,
+) {
+  const context = await viewerContext(browser, baseURL, timezoneId);
   const page = await context.newPage();
   const { name, steamId } = VIEWERS[who];
   await page.goto(
@@ -250,9 +293,12 @@ type Measure = {
   timeChips: number;
   night: { top: number; bottom: number; left: number; right: number } | null;
   firstTimeAction: { top: number; bottom: number; left: number; right: number } | null;
+  /** Not cut off by the rows or the bar around it (`whole`). */
+  nightWhole: boolean;
+  firstTimeActionWhole: boolean;
   nightFirst: boolean | null;
-  /** The bar's row: cut off at its end, and whether it shows the end fade. */
-  row: { right: number; cutOff: boolean; endFade: boolean } | null;
+  /** The bar's rows (PlansRow): cut off at the end, and whether each shows the end fade. */
+  rows: { cutOff: boolean; endFade: boolean }[];
   /** "Who's playing": its height against its heading's, and any spill. */
   whoRow: { height: number; lineHeight: number; spills: boolean } | null;
   spilledSlots: string[];
@@ -279,9 +325,33 @@ async function measure(page: Page): Promise<Measure> {
     const spilledSlots = [...(card?.querySelectorAll("ul > li") ?? [])]
       .filter((li) => li.scrollWidth > li.clientWidth + 1)
       .map((li) => (li.textContent ?? "").trim().slice(0, 30));
-    // The bar's swipeable row is its one child (PlansRow); at load it sits
-    // at its start, so anything past its width is cut off at the end.
-    const rowEl = bar?.firstElementChild as HTMLElement | null | undefined;
+    // The bar's swipeable rows (PlansRow: the whole row, and the times'
+    // own inside it); at load each sits at its start, so anything past its
+    // width is cut off at the end.
+    const rowEls = [...(bar?.querySelectorAll<HTMLElement>("[data-plans-row]") ?? [])];
+    // Inside every box that clips it, up to the bar: getBoundingClientRect
+    // ignores clipping, so a chip cut off by a row that scrolls still
+    // reports its whole box.
+    const whole = (el: Element | null) => {
+      if (!el || !bar) return false;
+      const r = el.getBoundingClientRect();
+      for (let at = el.parentElement; at; at = at.parentElement) {
+        const style = getComputedStyle(at);
+        const clip = at.getBoundingClientRect();
+        const left = clip.left + at.clientLeft;
+        const top = clip.top + at.clientTop;
+        if (
+          (style.overflowX !== "visible" &&
+            (r.left < left - 0.5 || r.right > left + at.clientWidth + 0.5)) ||
+          (style.overflowY !== "visible" &&
+            (r.top < top - 0.5 || r.bottom > top + at.clientHeight + 0.5))
+        ) {
+          return false;
+        }
+        if (at === bar) break;
+      }
+      return true;
+    };
     const who = card?.querySelector<HTMLElement>("[data-who-row]") ?? null;
     const barBox = box(bar);
     const nightBox = box(night);
@@ -295,14 +365,13 @@ async function measure(page: Page): Promise<Measure> {
       timeChips: times?.querySelectorAll("li").length ?? 0,
       night: nightBox,
       firstTimeAction: box(action),
+      nightWhole: whole(night),
+      firstTimeActionWhole: whole(action),
       nightFirst: nightBox && timesBox ? nightBox.left < timesBox.left : null,
-      row: rowEl
-        ? {
-            right: rowEl.getBoundingClientRect().right,
-            cutOff: rowEl.scrollWidth > rowEl.clientWidth + 1,
-            endFade: (rowEl.dataset.edges ?? "").split(" ").includes("end"),
-          }
-        : null,
+      rows: rowEls.map((row) => ({
+        cutOff: row.scrollWidth > row.clientWidth + 1,
+        endFade: (row.dataset.edges ?? "").split(" ").includes("end"),
+      })),
       whoRow: who
         ? {
             height: who.getBoundingClientRect().height,
@@ -336,8 +405,19 @@ async function check(
   const expectBar = plans.times > 0 || plans.night !== "none";
   if (expectBar) {
     await expect(page.locator("#inhouse-plans")).toBeVisible();
-    // The row has measured its edges (PlansRow, once hydrated).
-    await expect(page.locator("#inhouse-plans > [data-edges]")).toHaveCount(1);
+    // Every row has measured its edges (PlansRow, once hydrated).
+    await expect(page.locator("#inhouse-plans > [data-plans-row]")).toHaveCount(1);
+    await expect(page.locator("#inhouse-plans [data-plans-row]:not([data-edges])")).toHaveCount(0);
+    // The browser has put the pinned clock's words in for the server's.
+    const timeWords = page.locator("#play-later-next li time");
+    for (const [i, words] of TIME_WORDS.slice(0, plans.times).entries()) {
+      await expect(timeWords.nth(i)).toHaveText(words);
+    }
+    if (plans.night !== "none") {
+      await expect(
+        page.locator('#inhouse-plans section[aria-label="Inhouse night"] time'),
+      ).toHaveText(NIGHT_WORDS[plans.night]);
+    }
   } else await expect(page.locator("#inhouse-plans")).toHaveCount(0);
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   const m = await measure(page);
@@ -388,8 +468,10 @@ async function check(
     const bar = m.bar!;
     if (bar.height > BAR_MAX_PX) fail(`bar is ${bar.height}px tall`);
     if (bar.top < HEADER_PX || bar.bottom > m.visibleBottom) fail(`bar off screen (${bar.top}-${bar.bottom})`);
-    // Cut off at its end, the row says so with the edge fade.
-    if (m.row?.cutOff && !m.row.endFade) fail("the bar's row is cut off with no edge fade");
+    // Cut off at its end, a row says so with the edge fade.
+    if (m.rows.some((row) => row.cutOff && !row.endFade)) {
+      fail("a row in the bar is cut off with no edge fade");
+    }
     if (plans.times > 0) {
       const times = m.times!;
       if (times.top < HEADER_PX || times.bottom > m.visibleBottom) fail("times off screen");
@@ -402,15 +484,17 @@ async function check(
       // Beside the night, two times at most (the link down counts the rest).
       if (m.timeChips > 2) fail(`${m.timeChips} times beside the night`);
       // On a laptop the night's chip, "I'm in" and all, is whole in the bar
-      // behind the times.
-      if (viewport.width >= 1280 && !(m.night && m.row && m.night.right <= m.row.right + 0.5)) {
+      // behind the times, however wide their words.
+      if (viewport.width >= 1280 && !(m.night && m.nightWhole)) {
         fail("the night chip is cut off at the bar's end");
       }
     }
     if (timeLeads) {
-      if (!inView(m.firstTimeAction)) fail("the first time's I'm in isn't fully on screen");
+      if (!inView(m.firstTimeAction) || !m.firstTimeActionWhole) {
+        fail("the first time's I'm in isn't fully on screen");
+      }
     } else if (plans.night !== "none") {
-      if (!inView(m.night)) fail("the night chip isn't fully on screen");
+      if (!inView(m.night) || !m.nightWhole) fail("the night chip isn't fully on screen");
       if (plans.times > 0 && !(m.times && m.times.left < m.innerWidth)) {
         fail("the times don't start on screen");
       }
@@ -452,11 +536,12 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
   )
     .sort((a, b) => a.steamId.localeCompare(b.steamId))
     .map((u) => u.id);
+  const { timezoneId, midnightMs } = pinnedClock(Date.now());
   const contexts: Record<Viewer, BrowserContext> = {
-    out: await viewerContext(browser, baseURL!),
-    new: await signedIn(browser, baseURL!, "new"),
-    signup: await signedIn(browser, baseURL!, "signup"),
-    queued: await signedIn(browser, baseURL!, "queued"),
+    out: await viewerContext(browser, baseURL!, timezoneId),
+    new: await signedIn(browser, baseURL!, timezoneId, "new"),
+    signup: await signedIn(browser, baseURL!, timezoneId, "signup"),
+    queued: await signedIn(browser, baseURL!, timezoneId, "queued"),
   };
   const ids = Object.fromEntries(
     (
@@ -496,7 +581,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
   for (const plans of PLANS) {
     for (const present of [0, 1, 6, 9]) {
       const nowMs = Date.now();
-      await setPlans(plans, nowMs);
+      await setPlans(plans, nowMs, midnightMs);
       await setQueue(present, nowMs);
       // The queued player is the one present at 1 (with nobody here there is
       // no one queued to view it as).
@@ -519,14 +604,15 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
   // The night sooner than the time: it leads the bar, whole on screen, and
   // the time starts beside it (a phone swipes to it). Then three times and
   // a later night: two times lead, the link counts the third, and on a
-  // laptop the night's chip is whole behind them (a phone swipes, the fade
-  // saying there's more).
+  // laptop the night's chip is whole behind them, the times' own row giving
+  // way when their words don't fit (a phone swipes, the fade saying there's
+  // more).
   for (const plans of [
     { times: 1, night: "sooner" },
     { times: 3, night: "later" },
   ] satisfies Plans[]) {
     const nowMs = Date.now();
-    await setPlans(plans, nowMs);
+    await setPlans(plans, nowMs, midnightMs);
     await setQueue(6, nowMs);
     for (const viewer of ["out", "queued"] as const) {
       for (const viewport of VIEWPORTS) {
@@ -540,7 +626,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
   // measured, never asserted).
   console.log(
     [
-      `type: ${process.env.FIT_FONT ? `body font forced to ${process.env.FIT_FONT}` : "the browser's own"}`,
+      `type: ${process.env.FIT_FONT ? `body font forced to ${process.env.FIT_FONT}` : "the browser's own"}; clock: ${timezoneId}, 9 PM at the start`,
       "viewport | | viewer | present | times/night | card top-bottom | visible bottom | spare | bar",
       ...rows.map(
         (r) =>

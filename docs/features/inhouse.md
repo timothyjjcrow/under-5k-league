@@ -865,8 +865,13 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   card's. The chips swipe in one row inside the banner's `overflow-hidden`
   card when they don't fit (a phone shows about one), so it never grows a
   second row, and a fade marks each side with more off screen (`PlansRow`,
-  SectionNav's `chipBarEdges`/`chipBarMask`); a link down to the card ends the row: "N more", else "Post a
-  time", else "All times" at the cap (`inhouseTimesStripLinkText`).
+  SectionNav's `chipBarEdges`/`chipBarMask`). From xl only the times' chips
+  swipe, in a row of their own between "Play later" and the link down, so
+  a laptop shows the night's chip whole however wide the times' words get
+  (on 2026-10-11, "Tomorrow, 12:00 AM" and "Tomorrow, 1:00 AM" in CI's
+  DejaVu Sans pushed it 17px past the bar). A link down to the card ends
+  the times: "N more", else "Post a time", else "All times" at the cap
+  (`inhouseTimesStripLinkText`).
   `inhouseTimesStrip` alone decides which times show, a time's link
   included (`inhouseTimeLinked` reads `?at=`): none while no time is open
   and no link needs answering, and the bar is nothing at all while there's
@@ -902,11 +907,19 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   visible viewport (under the header, above the phone tab bar), the bar is
   taller than 64px or off screen, the leading chip's "I'm in" isn't whole on
   screen, more than two times sit beside the night or a laptop cuts the
-  night's chip off, the bar's row is cut off with no fade, the "Who's
+  night's chip off, a row in the bar is cut off with no fade, the "Who's
   playing" row wraps or spills, a slot row spills, or the page scrolls
-  sideways. It prints the measured table, with 1440x790 and 375x667 signed
-  in as report-only rows. `FIT_FONT=Verdana` forces the body font to a DejaVu
-  stand-in, so a Mac run sees CI's wider type.
+  sideways. "Whole" counts the rows that clip a chip, not just the screen
+  (`getBoundingClientRect` ignores clipping). It prints the measured table,
+  with 1440x790 and 375x667 signed in as report-only rows.
+  `FIT_FONT=Verdana` forces the body font to a DejaVu stand-in, so a Mac
+  run sees CI's wider type. Its browsers run on a clock that reads 9 PM
+  when it starts, with the times and the night written on it, so every run
+  measures the chips' widest words ("Tomorrow, 12:45 AM", "Tomorrow, 10:45
+  AM", a night named by its date) whatever the hour, and checks them before
+  measuring: times written from the runner's clock read wider in the
+  evening, and the night's chip fell off a laptop's bar only on evening CI
+  runs.
 - **Game over and positions:** `test/integration/inhouse-game-over.itest.ts`
   (the claim and its seams, the result window, the Elo stamp with
   overlapping players, the give-up paths, pending results, positions).

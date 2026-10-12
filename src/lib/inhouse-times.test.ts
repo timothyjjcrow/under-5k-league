@@ -561,6 +561,17 @@ describe("the card follows the rules", () => {
     expect(card).toMatch(
       /<Card\b[^>]*className="[^"]*\boverflow-hidden\b[^"]*"[^>]*>[\s\S]*?<PlansRow className="[^"]*\boverflow-x-auto\b/,
     );
+    // From xl the times give way to the night's chip, which never shrinks:
+    // their section shrinks and the chips swipe in a row of their own, so a
+    // laptop keeps the night's chip whole however wide the times' words
+    // (CI's DejaVu Sans pushed it 17px off with "Tomorrow, 12:00 AM").
+    expect(card.match(/<PlansRow\b/g)).toHaveLength(2);
+    const from = card.indexOf('id="play-later-next"');
+    const times = card.slice(from, card.indexOf("</section>", from));
+    expect(times).toContain('"xl:min-w-0 xl:shrink"');
+    expect(times).toMatch(
+      /<PlansRow className="[^"]*\bxl:min-w-0 xl:shrink xl:overflow-x-auto\b[^"]*">[\s\S]*?<ul className="flex shrink-0 items-center gap-2">[\s\S]*?<\/ul>[\s\S]*?<\/PlansRow>/,
+    );
     const client = sourceFile("src/components/inhouse-times-client.tsx").text;
     const row = client.slice(client.indexOf("export function PlansRow("));
     expect(row).toContain("chipBarEdges(row)");
