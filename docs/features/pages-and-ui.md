@@ -754,7 +754,13 @@ the league is already draftable and many visitors have joined. Write for both.
   rows of controls) and 1366x657, for every viewer. Run it with
   `FIT_FONT=Verdana` too: CI's Linux runner draws DejaVu Sans, wider than
   a Mac's SF Pro, and Verdana is a close stand-in, so a Mac sees the wraps
-  CI will.
+  CI will. Its browsers run on a clock that reads 9 PM when it starts (a
+  whole-hour zone picked from the runner's clock), and it writes the times
+  and the night on that clock, so the bar's chips always carry their
+  widest words ("Tomorrow, 12:45 AM", a night named by its date) and the
+  spec checks them before measuring. Written from the runner's clock, the
+  words followed the hour: on 2026-10-11 the night's chip fell off a
+  laptop's bar in CI only on runs after 20:00 UTC.
   What makes it fit:
   - **Above the room:** the compact title row (`PageTitle compact slim`:
     on a phone a 20px title and a 32px row, "Match history" at its end);
@@ -762,6 +768,15 @@ the league is already draftable and many visitors have joined. Write for both.
     night as a chip instead of a card above the room; 8px between the
     title, the bar and the room on a phone, 12 from 640. The room's blocks
     sit 8px apart on a phone, 12 from 640 and 16 from md.
+  - **From xl the night's chip never scrolls.** Every laptop's bar is the
+    same 1216px, and beside the night the times' chips swipe in a row of
+    their own (a nested `PlansRow`, with its own fade) between "Play
+    later" and the link down, so the night's chip and its "I'm in" stay
+    whole however wide the times' words get. Below xl the bar's whole row
+    swipes, as on a phone. Capping the times at two beside the night was
+    not enough: in CI's DejaVu Sans, "Tomorrow, 12:00 AM" and "Tomorrow,
+    1:00 AM" pushed a signed-in viewer's night chip ("Link Discord", 440px
+    wide) 17px past the bar's end at every laptop size.
   - **The room's header and its stage strip are ONE row** (the connection
     dot, the lobby badge, the stages, Sound; on a phone "Live room" and the
     Sound words are screen-reader text, "Reconnecting" always shows, and the

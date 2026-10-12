@@ -216,12 +216,14 @@ export function CopyInhouseTimeLink({ at }: { at: string }) {
 }
 
 /**
- * The bar's one row of chips, which swipes sideways inside the bar when it
- * doesn't fit (a phone shows about one chip). A fade marks each side that
- * has more, by SectionNav's rule (chipBarEdges, chipBarMask), so a chip cut
- * off at the edge never reads as the whole bar. It measures again when a
- * chip changes size (the night's headcount streams in after the bar) or a
- * refresh adds or drops one.
+ * A row of the bar's chips, which swipes sideways inside the bar when it
+ * doesn't fit (a phone shows about one chip): the whole row, and from xl the
+ * Play later times' own inside it, so the night's chip beside them never
+ * scrolls on a laptop. A fade marks each side that has more, by
+ * SectionNav's rule (chipBarEdges, chipBarMask), so a chip cut off at the
+ * edge never reads as the whole bar. It measures again when a chip changes
+ * size (the night's headcount streams in after the bar) or a refresh adds or
+ * drops one.
  */
 export function PlansRow({ className, children }: { className?: string; children: ReactNode }) {
   const rowRef = useRef<HTMLDivElement>(null);
@@ -256,7 +258,9 @@ export function PlansRow({ className, children }: { className?: string; children
   return (
     <div
       ref={rowRef}
-      // Which sides fade ("start end", "end", ""), once measured: the e2e reads it.
+      // A row of the bar, and which sides fade ("start end", "end", ""),
+      // once measured: the e2e reads both.
+      data-plans-row=""
       data-edges={
         edges
           ? [edges.start && "start", edges.end && "end"].filter(Boolean).join(" ")
