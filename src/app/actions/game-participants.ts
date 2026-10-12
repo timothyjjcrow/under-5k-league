@@ -7,6 +7,7 @@ import { str } from "@/lib/form";
 import { backfillGameParticipants } from "@/lib/game-participants";
 import { correctGameIdentity } from "@/lib/game-identity-correction";
 import { actionErrorMessage } from "@/lib/user-facing-error";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 
 export async function correctGameIdentityAction(_prev: ActionResult, form: FormData): Promise<ActionResult> {
   let actor;
@@ -23,6 +24,8 @@ export async function correctGameIdentityAction(_prev: ActionResult, form: FormD
     });
     if (result.changed) {
       updateTag("games");
+      // A corrected attribution can change the week's honors on the card.
+      void refreshLeagueStatus();
       revalidatePath(`/matches/${result.matchId}`);
       revalidatePath("/players", "layout");
       revalidatePath("/hall-of-fame");

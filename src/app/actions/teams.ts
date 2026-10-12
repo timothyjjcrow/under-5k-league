@@ -8,6 +8,7 @@
 
 import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -38,6 +39,8 @@ function refreshGames() {
   updateTag("games");
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  // The #schedule status card names teams (and shows the champion's logo).
+  void refreshLeagueStatus();
 }
 
 /**

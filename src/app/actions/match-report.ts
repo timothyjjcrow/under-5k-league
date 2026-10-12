@@ -5,6 +5,7 @@
 
 import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -20,6 +21,8 @@ function refreshGames() {
   updateTag("games");
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  // The #schedule status card shows this week's scores and the table.
+  void refreshLeagueStatus();
 }
 
 /** A captain imports their finished game by Dota match id/URL. */

@@ -925,11 +925,12 @@ enums, so every status column is a string whose allowed values live in
   human-operator history.
 - `Setting` — a two-column key/value table serving **five distinct
   patterns**: (1) plain config via `getSetting`/`setSetting`
-  (`src/lib/settings.ts`; empty value _deletes_ the row) — the three Discord
+  (`src/lib/settings.ts`; empty value _deletes_ the row) — the Discord
   webhooks, ping role id, `sessionEpoch`; (2) atomic global throttles via
   `claimThrottle` (conditional `updateMany` on an ISO-string value, then
   create-with-P2002-catch) — `leagueAutoSyncAt`, `rosterAutoSyncAt`,
-  `announceRetryAt`, `inhouseBoardAt`, `outPing:<matchId>:<userId>`;
+  `announceRetryAt`, `inhouseBoardAt`, `leagueStatusAt`,
+  `leagueStatusCheckAt`, `outPing:<matchId>:<userId>`;
   (3) once-only domain markers — series, champion, and reminder markers use
   tokened 90-second `claim:v2:` leases and preserve an event generation across
   stale/failed recovery; that generation becomes the `LeagueAnnouncement`
@@ -937,8 +938,9 @@ enums, so every status column is a string whose allowed values live in
   equivalent generation-preserving CAS state machine for initial, stale,
   corrected, and failed awards. `playoffRoundBuilt:<season>:<round>` remains a
   transactionally revalidated round-build marker;
-  (4) JSON state blobs written by compare-and-swap — `inhouseBoard` (a live
-  message state or leased pre-POST reservation; a row means on or posting),
+  (4) JSON state blobs written by compare-and-swap — `inhouseBoard` and
+  `leagueStatusCard` (a live message state or leased pre-POST reservation; a
+  row means on or posting),
   `importSkip:<seasonId>` and
   `leagueSyncSkip:<seasonId>` (legacy, still read, never written),
   `playoffGamesArchive:<seasonId>` (merge-only).
@@ -992,6 +994,7 @@ an expired RUNNING lease before taking ownership.
 | Draft-night reminder (`maybeAnnounceDraftNight`) | Posts the draft time and pool/captain counts in the 24 hours before draft night, mentioning the captains and the linked players who haven't confirmed that time | Maintenance pass only; the automation gate wakes the worker when `draftReminderDue` opens | One `draftReminder:<season>:<revision>` marker on the week reminder's claim machinery; moving draft night re-arms under the new revision, and `setDraftNight` drops the old revision's in-flight markers. Exception: when a reminder was already delivered and the new time is still inside the `draftReminderDue` window, `setDraftNight` records the new revision as covered, so no second reminder posts (the "draft rescheduled" message carries the change) |
 | Weekly honors (`maybeAnnounceWeekHonors`) | Announces Player/Team of the Week only from publication-ready attributed 5v5 evidence | Result recomputation/correction plus maintenance retry | Generation-preserving CAS supports initial, stale, corrected, failed, and expired-claim recovery; reopen/remove marks previous awards stale |
 | Board repaint (`syncInhouseBoard`) | PATCHes the pinned Discord queue board when its semantic digest changes | Inhouse state reads and scheduled `syncInhouse` | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST requires explicit admin recovery; digest gate; `inhouseBoardAt` (10s); permanent gone handling |
+| Status card repaint (`syncLeagueStatus`) | PATCHes the #schedule league status card when what it says changes | After the response of admin actions and the player actions that move it (`refreshLeagueStatus`); the maintenance pass after a pass that imported, sold, built a round or started an inhouse night, every pass during a live draft, else every 10 minutes (`syncLeagueStatusFromWorker`) | The board's contract: pre-POST CAS reservation + 30s lease, digest gate, `leagueStatusAt` (5s, doubling per failure to 300s), permanent gone handling; read-only snapshot; no gate wake of its own (time-only changes wait for the 10-minute look or the hourly hard wake) |
 | Session epoch (`src/lib/session-epoch.ts`) | Invalidates all signed sessions | Admin `revokeAllSessions` | 30s in-process cache; tokens carry the epoch minted into them |
 
 `GET /api/sync` is intentionally absent from this table: it only reads
@@ -1020,7 +1023,7 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Automation runner (evergreen) | Persisted last attempt/success/source/duration, failure streak, safe issue/deferred codes, active/expired lease signal, and expected one-minute/four-minute-stale cadence. **Run maintenance now** is admin-only and uses the same lease as cron: it can recover an expired owner but is visibly disabled and cannot force or overlap an active run. This card remains available in every phase and offseason. |
 | Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, league-feed games set aside, private-data players                                                                                                                                                                                                                                                                                                                                                                             |
 | Dota league integration    | `setLeagueId`, `syncLeagueAction`, history backfills; player data refreshes itself hourly (`refreshPlayerDataAutomatically`)                                                                                                                                                                                                                                                                                                                                                           |
-| Discord (streamed)         | Webhook set/clear ×3 (league / inhouse board / inhouse alerts; board-webhook moves attempt teardown, alert moves never touch it), ping role, test sends, board post/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
+| Discord (streamed)         | Webhook set/clear ×4 (league / inhouse board / inhouse alerts / status card; board- and card-webhook moves attempt teardown, alert moves never touch the board), ping role, test sends, board and status card post/update/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
 | Admin activity (streamed)  | `recentAdminActions(40)` — the append-only `AdminAction` log (coverage is partial; see the log's call sites)                                                                                                                                                                                                                                                                                                                                                                           |
 | Match night poll           | `createMatchNightPoll` (self-filling grid: ticked days × hourly starts, default every day noon–6 PM league time; closing time; optional Discord post), `closeMatchNightPoll` (confirm), `setMatchNightPollClosing` (extend/reopen), `announceMatchNightPollResult` (once per close), `deleteMatchNightPoll` (`DangerSubmit`, the question), and the winner into the Match night box via `setMatchSchedule` (`src/app/actions/admin-match-night-poll.ts`)                                                                                                     |
 | League news                | create/edit/pin/delete (`src/app/actions/news.ts`); optional Discord copy tracked by `discordMessageId` (edit PATCHes it, delete removes it), `@everyone` only when ticked                                                                                                                                                                                                                                                                                                             |
@@ -1093,7 +1096,11 @@ permission; duplicate instances cannot multiply the roster fan-out.
    acceptance, not proof that Discord already rendered it. Three webhooks form
    a fallback chain:
    league (`discordWebhookUrl`) ← inhouse board channel ← inhouse alerts
-   channel, so an alert can never scroll the pinned board out of view. Every
+   channel, so an alert can never scroll the pinned board out of view. A
+   fourth, the status card's (`leagueStatusWebhookUrl`), has no fallback: the
+   card is one self-editing Components V2 message in #schedule
+   (`league-status.ts` render, `league-status-snapshot.ts` read,
+   `league-status-service.ts` service). Every
    send pins API v10 and `allowed_mentions: {parse: []}` — mentions happen
    only through an explicit server-chosen `MentionAllowlist`; untrusted names
    pass through `escapeDiscordText` (`src/lib/discord-escape.ts`). Webhook

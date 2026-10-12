@@ -6,6 +6,7 @@
 
 import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import { getSessionUser, requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import {
@@ -36,6 +37,8 @@ import { actionErrorMessage } from "@/lib/user-facing-error";
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  // The #schedule status card shows open offers and moved kickoffs.
+  void refreshLeagueStatus();
 }
 
 /** An epoch-ms form value, or null when it isn't one. */

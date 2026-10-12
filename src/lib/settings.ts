@@ -60,6 +60,23 @@ export const SETTING_KEYS = {
   INHOUSE_BOARD: "inhouseBoard",
   // ISO timestamp of the last board edit (claimThrottle spam floor).
   INHOUSE_BOARD_AT: "inhouseBoardAt",
+  // OPTIONAL webhook for the league status card: one message, made in the
+  // read-only #schedule channel, that the site rewrites in place to show the
+  // season's phase, signups, draft night, this week's fixtures and table, the
+  // playoffs or the champion. Unset = no card. It never falls back to the
+  // league webhook, which would drop a self-editing card into the feed.
+  LEAGUE_STATUS_WEBHOOK_URL: "leagueStatusWebhookUrl",
+  // The status card's state, the INHOUSE_BOARD shape: `{webhookId, messageId,
+  // digest, ...health}`, or a short `{webhookId, messageId:"", digest,
+  // reservedAt}` reservation while the first post is in flight. Absent = the
+  // card is off. Never write it from anywhere but league-status-service.
+  LEAGUE_STATUS_CARD: "leagueStatusCard",
+  // ISO timestamp of the last status card edit (claimThrottle spam floor).
+  LEAGUE_STATUS_AT: "leagueStatusAt",
+  // ISO timestamp of the worker's last look at the card in a pass that
+  // changed nothing it shows (claimThrottle): what only time changes, such as
+  // a poll closing, reaches the card without a snapshot read every minute.
+  LEAGUE_STATUS_CHECK_AT: "leagueStatusCheckAt",
   // Discord role id pinged by the two inhouse messages that are SUPPOSED to
   // interrupt someone (queue filling, match found). Unset = no ping, which is
   // the pre-existing behaviour. The role must be SELF-ASSIGNABLE in Discord:

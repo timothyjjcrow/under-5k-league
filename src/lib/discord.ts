@@ -1950,6 +1950,18 @@ export async function getInhouseWebhookUrl(): Promise<string | null> {
 }
 
 /**
+ * Where the league STATUS CARD goes (league-status-service.ts): its own
+ * webhook, made in the read-only #schedule channel. Deliberately NO fallback
+ * to the league webhook — a card that rewrites itself would sit among the
+ * feed's posts and scroll away, which defeats it. Unset = no card.
+ */
+export async function getLeagueStatusWebhookUrl(): Promise<string | null> {
+  return runtimeWebhookUrl(
+    await getSetting(SETTING_KEYS.LEAGUE_STATUS_WEBHOOK_URL),
+  );
+}
+
+/**
  * A safe, display-only fingerprint of a webhook URL. The full URL is a bearer
  * credential (anyone holding it can post to the channel — prime phishing bait),
  * so it must NEVER be sent to the browser. This keeps a short piece of the id
@@ -1989,11 +2001,30 @@ export function webhookApiUrl(url: string): string {
 }
 
 /** What a webhook message can carry. Embeds keep the queue board off the
- *  plain-text path so it reads as a panel rather than a chat line. */
-export type WebhookPayload = { content?: string; embeds?: unknown[] };
+ *  plain-text path so it reads as a panel rather than a chat line.
+ *
+ *  `components` + `flags` carry a Components V2 layout (the league status
+ *  card): Discord accepts those from a plain webhook only behind
+ *  `?with_components=true`, display components and link buttons only, and a
+ *  message flagged IS_COMPONENTS_V2 may not also carry content or embeds. */
+export type WebhookPayload = {
+  content?: string;
+  embeds?: unknown[];
+  components?: unknown[];
+  flags?: number;
+};
 
 /** Always sent on every POST *and* PATCH — see patchWebhookMessage. */
 const NO_MENTIONS = { parse: [] as string[] };
+
+/** Query string for a webhook call: Components V2 are ignored without it. */
+function webhookQuery(payload: WebhookPayload, wait: boolean): string {
+  const params = [
+    ...(wait ? ["wait=true"] : []),
+    ...(payload.components ? ["with_components=true"] : []),
+  ];
+  return params.length > 0 ? `?${params.join("&")}` : "";
+}
 
 /**
  * POST a message and return its id, via `?wait=true`.
@@ -2019,7 +2050,7 @@ async function postKeepingId(
   if (!target) return null;
   if (!discordMutationsAllowed()) return null;
   try {
-    const res = await fetch(`${webhookApiUrl(target)}?wait=true`, {
+    const res = await fetch(`${webhookApiUrl(target)}${webhookQuery(payload, true)}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ ...payload, allowed_mentions: allowedMentions }),
@@ -2063,7 +2094,7 @@ export async function patchWebhookMessage(
   if (!discordMutationsAllowed()) return "failed";
   try {
     const res = await fetch(
-      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}`,
+      `${webhookApiUrl(target)}/messages/${encodeURIComponent(messageId)}${webhookQuery(payload, false)}`,
       {
         method: "PATCH",
         headers: { "content-type": "application/json" },

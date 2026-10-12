@@ -2,6 +2,7 @@
 
 import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
+import { refreshLeagueStatus } from "@/lib/league-status-service";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireUser, type SessionUser } from "@/lib/auth";
@@ -67,6 +68,8 @@ import { waitBeforeSerializableRetry } from "@/lib/serializable-retry";
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  // The #schedule status card counts signups, standins and captain offers.
+  void refreshLeagueStatus();
 }
 
 const clearedDraftConfirmation = {
