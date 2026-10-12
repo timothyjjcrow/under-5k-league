@@ -27,6 +27,7 @@ import { MatchPreview } from "./match-preview";
 import { RescheduleSection } from "./reschedule";
 import { PlayoffContextLine, TiebreakerNote } from "./round-context";
 import { MatchScoreboard } from "./scoreboard";
+import { StreamOverlayLinks } from "./stream-overlay-links";
 
 export async function generateMetadata({
   params,
@@ -290,6 +291,10 @@ export default async function MatchDetailPage({
           renderedAt={renderedAt}
         />
       ) : null}
+
+      {/* For casters, last and folded: the OBS overlay's links. The overlay
+          is public facts only, so anyone may take them. */}
+      {match.season.isActive ? <StreamOverlayLinks matchId={match.id} /> : null}
     </div>
   );
 }

@@ -687,6 +687,12 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/rules`           | The league's rules by section, every number from the season's settings or the code             | Always: Explore (League group), `/how-it-works`, the match page's How to host line                 | `leagueRules` (pure), `announcedMatchNight`, `pollDecidesMatchNight`; the active season, else the latest      |
 | `/admin`           | The control panel (§8)                                                                         | Admin only                                                                                         | `loadSeasonAdminData`                                                                                         |
 
+`/overlay/[id]` is a route handler, not a page: the casters' OBS overlay for
+one fixture, drawn outside the layout (no header, footer or session read) from
+`src/app/overlay/` and fed by `/api/overlay`
+([pages-and-ui](features/pages-and-ui.md#stream-overlay-overlayid)). The match
+page links it, folded at its foot.
+
 API routes (one per `route.ts` under `src/app/api/`): `/api/auth/steam` +
 `/callback`, `/api/auth/discord` + `/callback`, `/api/auth/dev`,
 `/api/auth/logout` — auth (§2);
@@ -707,7 +713,10 @@ minute per user), relayed to the bot by `callLobbyBot`; the browser gets
 names, sides, seats and invite results, never a Steam ID;
 `/api/dota-lobby/recovery` — the admin-only bot recovery check;
 `/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
-result cursor; no POST/mutation path); `/api/cron/automation` — the
+result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,
+read-only GET of one fixture's overlay data, its version (the result cursor and
+a 10-minute bucket until the series is decided) in the path so Vercel's CDN
+keeps each answer; `/api/cron/automation` — the
 `CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
 60-second route ceiling); `/api/health/live` — dependency-free process
 liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
@@ -745,7 +754,8 @@ fail before authentication/database work on malformed input. Scalar-only
 Server Actions have a 64 KB raw multipart ceiling; the app has no file upload.
 `/api/sync` and
 calendar are viewer-independent and use short Vercel-only microcaches while
-browsers must revalidate; room state remains personalized and `no-store`.
+browsers must revalidate; the overlay page and each version of its data are
+kept by the CDN for a day; room state remains personalized and `no-store`.
 
 ## 6. Database models
 
