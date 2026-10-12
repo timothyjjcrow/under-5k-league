@@ -635,3 +635,31 @@ describe("the inhouse room is its shell plus the stage folder", () => {
     }
   });
 });
+
+describe("the admin's remove-from-queue control", () => {
+  // The room can't render in a unit test, so the wiring is pinned here and
+  // the click is driven in e2e/zz4-inhouse.spec.ts.
+  it("shows to admins whenever anyone is queued, in any stage", () => {
+    const room = stripLineComments(sourceFile("src/components/inhouse-room.tsx").text);
+    expect(room).toContain(
+      "{me.isAdmin && state.queue.length > 0 ? (\n        <AdminQueueRemoval queue={state.queue} pending={pending} act={act} />",
+    );
+    // Outside the stage's own branches, so a live game doesn't hide it.
+    const stageEnd = room.indexOf("{lobby && me.canCancel ? cancelButton(lobby) : null}");
+    expect(stageEnd).toBeGreaterThan(-1);
+    expect(room.indexOf("<AdminQueueRemoval")).toBeGreaterThan(stageEnd);
+  });
+
+  it("offers everyone queued through the lib's choices, and confirms before it sends", () => {
+    const control = stripLineComments(
+      sourceFile("src/components/inhouse/admin-queue-removal.tsx").text,
+    );
+    expect(control).toContain("queueRemovalChoices(queue)");
+    const confirm = control.indexOf("window.confirm(");
+    const send = control.indexOf('act({ action: "remove", userId: picked.userId })');
+    expect(confirm).toBeGreaterThan(-1);
+    expect(send).toBeGreaterThan(confirm);
+    // Success is claimed only once the server agrees.
+    expect(control).toMatch(/if \(await act\(\{ action: "remove"[^)]*\)\) \{\s*pushToast\("success"/);
+  });
+});

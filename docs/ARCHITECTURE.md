@@ -474,7 +474,8 @@ completion, and the real no-active-season offseason.
    userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
    Outsiders may queue for the next game while a lobby is active; nobody in
-   a live lobby can queue (a game marked over is not live). A queue crossing
+   a live lobby can queue (a game marked over is not live). An admin can
+   take one player out (`removeFromQueue`). A queue crossing
    4 present players fires a throttled Discord ping. Positions (1 to 5) are
    `User.inhouseRoles`, read live by the room, with the latest signup's
    `Registration.roles` standing in until a player picks.

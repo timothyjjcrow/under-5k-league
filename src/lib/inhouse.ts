@@ -5,6 +5,7 @@ import {
   INHOUSE_STATUS,
 } from "./constants";
 import { uncoveredRoles } from "./draft";
+import { rankMedalName, rankMedalTier } from "./rank";
 import { parseRoles } from "./roles";
 
 // Pure inhouse-draft rules. All DB effects live in inhouse-service.ts; these
@@ -201,6 +202,34 @@ export function queueSlots<T extends { away: boolean }>(
     overflow: present.slice(lobbySize),
     away,
   };
+}
+
+/** MMR in a hydrated client: one locale, so "7,200" never hydrates as "7.200". */
+const MMR_FORMAT = new Intl.NumberFormat("en-US");
+
+/**
+ * The admin's "remove from the queue" choices: everyone queued, in queue
+ * order, including the players no slot shows (away, unseen for four hours,
+ * and "Also queued" past the ten). Each
+ * label says what tells an admin who they are at a glance: away, the medal
+ * and the MMR they queued at ("FuzBea · away · Divine 4 · 5,000 MMR").
+ */
+export function queueRemovalChoices(
+  queue: ReadonlyArray<{
+    userId: string;
+    name: string;
+    away: boolean;
+    rankTier: number | null;
+    mmr: number;
+  }>,
+): { userId: string; name: string; label: string }[] {
+  return queue.map((q) => {
+    const parts = [q.name];
+    if (q.away) parts.push("away");
+    if (rankMedalTier(q.rankTier) > 0) parts.push(rankMedalName(q.rankTier));
+    parts.push(q.mmr > 0 ? `${MMR_FORMAT.format(q.mmr)} MMR` : "MMR unknown");
+    return { userId: q.userId, name: q.name, label: parts.join(" · ") };
+  });
 }
 
 /**

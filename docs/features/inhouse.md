@@ -51,7 +51,7 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   repaints. Don't make every poll sync the board to "fix" this.
 - **API contract:** `state` plus `join`, `leave`, `accept`, `decline`, `vote`,
   `pick`, `start`, `finish`, `roles`, `record`, `detect`, `cancel`, `giveup`,
-  `void`. The body must be a JSON
+  `void`, `remove`. The body must be a JSON
   object with a non-empty string `action`, else 400. Lobby actions carry the
   `lobbyId` the room showed. `state` allows 1,200/min
   per IP; mutations 300/min per signed-in user (signed-out attempts are
@@ -316,8 +316,21 @@ Every transition is a guarded claim; keep it that way (general rules:
 
 - **Membership is not presence. Never delete an entry for a missing
   heartbeat:** browsers suspend hidden tabs for hours, and the queue holds a
-  spot with the tab closed. An entry leaves only by a leave, formation, or the
-  shared idle deadline.
+  spot with the tab closed. An entry leaves only by a leave, formation, the
+  shared idle deadline, or an admin's removal.
+- **An admin can take one player out of the queue (Tim, 2026-10-12):**
+  `removeFromQueue`, action `remove` with the player's `userId`. It is the
+  leave the player could make, made for them: the shared locks and idle
+  deadline first, then `deleteMany` and its count, so a second admin's click,
+  the player's own leave or the formation that took them into a game gets
+  "not in the queue any more" instead of a crash (raced tests in
+  `inhouse.itest.ts`). An `AdminAction` is written only when it removed
+  someone. Not a ban: they can join again, and the MMR cap still judges them.
+  The room shows admins one picker under the stage, in every stage
+  (`AdminQueueRemoval`), since a slot's button would miss the players no slot
+  shows (away, "Also queued") and the whole queue while the admin is in a
+  game: everyone queued in queue order, each with away, medal and MMR
+  (`queueRemovalChoices`), and a confirm.
 - **One idle clock for the whole queue.** Every composition change (join,
   leave, formation, requeue) resets `idleExpiresAt` on EVERY row to now plus
   `QUEUE_IDLE_HOURS`; heartbeats never do, or an open tab keeps a static queue

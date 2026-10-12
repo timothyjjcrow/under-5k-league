@@ -23,6 +23,7 @@ import {
   maybeFormLobby,
   maybeAutoDetectResult,
   recordMatch,
+  removeFromQueue,
   resolveAbandonedLobby,
   resolveCaptainVote,
   resolveReadyCheck,
@@ -1511,6 +1512,128 @@ describe("inhouse — misc guards", () => {
     const players = await enqueue(3, () => 3000);
     expect((await leaveQueue(players[0].session)).ok).toBe(true);
     expect(await prisma.inhouseQueueEntry.count()).toBe(2);
+  });
+});
+
+// An admin takes one player out of the queue (Tim, 2026-10-12): the leave
+// the player could make, made for them, logged, and never a ban.
+describe("inhouse — an admin removes a player from the queue", () => {
+  const removals = () =>
+    prisma.adminAction.findMany({ where: { action: "removeFromQueue" } });
+
+  it("takes the named player out, moves the shared idle deadline and logs it", async () => {
+    const players = await enqueue(3, () => 3000);
+    const admin = sessionFor(await makeUser("Queue Admin", "ADMIN"));
+    // An older shared deadline, so the removal's refresh is visible.
+    const stale = new Date(Date.now() + 60 * 60_000);
+    await prisma.inhouseQueueEntry.updateMany({ data: { idleExpiresAt: stale } });
+
+    expect(await removeFromQueue(admin, players[1].user.id)).toEqual({ ok: true });
+
+    const rows = await prisma.inhouseQueueEntry.findMany({
+      orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
+    });
+    expect(rows.map((r) => r.userId)).toEqual([
+      players[0].user.id,
+      players[2].user.id,
+    ]);
+    // A composition change, like any leave: every row's deadline moved on.
+    for (const row of rows) {
+      expect(row.idleExpiresAt!.getTime()).toBeGreaterThan(stale.getTime());
+    }
+    const log = await removals();
+    expect(log).toHaveLength(1);
+    expect(log[0].summary).toBe(
+      `Removed ${players[1].user.name} from the inhouse queue`,
+    );
+  });
+
+  it("refuses anyone but an admin, and leaves the row", async () => {
+    const [target, other] = await enqueue(2, () => 3000);
+    expect(await removeFromQueue(other.session, target.user.id)).toEqual({
+      ok: false,
+      error: "Admins only",
+    });
+    expect(
+      await prisma.inhouseQueueEntry.findUnique({ where: { userId: target.user.id } }),
+    ).not.toBeNull();
+    expect(await removals()).toHaveLength(0);
+  });
+
+  it("says so when the player isn't queued, and logs nothing", async () => {
+    const admin = sessionFor(await makeUser("Queue Admin", "ADMIN"));
+    const outsider = await makeUser("Never Queued");
+    expect(await removeFromQueue(admin, outsider.id)).toEqual({
+      ok: false,
+      error: "They're not in the queue any more: they left, or a game took them.",
+    });
+    expect(await removeFromQueue(admin, "")).toEqual({
+      ok: false,
+      error: "Choose a player to remove",
+    });
+    expect(await removals()).toHaveLength(0);
+  });
+
+  it("is no ban: the removed player can join again", async () => {
+    const [target] = await enqueue(1, () => 3000);
+    const admin = sessionFor(await makeUser("Queue Admin", "ADMIN"));
+    expect((await removeFromQueue(admin, target.user.id)).ok).toBe(true);
+    expect(await joinQueue(target.session, 3000)).toEqual({ ok: true });
+    expect(
+      await prisma.inhouseQueueEntry.count({ where: { userId: target.user.id } }),
+    ).toBe(1);
+  });
+
+  it("two admins removing one player: one removes, the other is told, nothing throws", async () => {
+    // A delete by unique key would crash the loser on P2025; the deleteMany
+    // and its count are what make the second click an answer, not an error.
+    const [target] = await enqueue(1, () => 3000);
+    const a = sessionFor(await makeUser("Admin A", "ADMIN"));
+    const b = sessionFor(await makeUser("Admin B", "ADMIN"));
+    const results = await raceAll([
+      () => removeFromQueue(a, target.user.id),
+      () => removeFromQueue(b, target.user.id),
+    ]);
+    expect(results.filter((r) => r.ok)).toHaveLength(1);
+    expect(results.filter((r) => !r.ok)).toEqual([
+      {
+        ok: false,
+        error: "They're not in the queue any more: they left, or a game took them.",
+      },
+    ]);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(await removals()).toHaveLength(1);
+  });
+
+  it("racing the tenth join, the player ends up in the game or out of the queue, never both", async () => {
+    for (const removalFirst of [true, false]) {
+      await prisma.inhouseLobby.deleteMany();
+      await prisma.inhouseQueueEntry.deleteMany();
+      await prisma.adminAction.deleteMany();
+      const nine = await enqueue(INHOUSE.LOBBY_SIZE - 1, () => 3000);
+      const target = nine[4];
+      const tenth = sessionFor(await makeUser(`Tenth ${removalFirst}`));
+      const admin = sessionFor(await makeUser(`Racing Admin ${removalFirst}`, "ADMIN"));
+      const remove = () => removeFromQueue(admin, target.user.id);
+      const join = () => joinQueue(tenth, 3000);
+      const [removal] = removalFirst
+        ? await raceAll<{ ok: boolean }>([remove, join])
+        : (await raceAll<{ ok: boolean }>([join, remove])).reverse();
+
+      const queued = await prisma.inhouseQueueEntry.count({
+        where: { userId: target.user.id },
+      });
+      const inGame = await prisma.inhouseLobbyPlayer.count({
+        where: {
+          userId: target.user.id,
+          lobby: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+        },
+      });
+      expect(queued, `removal first: ${removalFirst}`).toBe(0);
+      // Removed means out of the game too; refused means a game took them.
+      expect(inGame, `removal first: ${removalFirst}`).toBe(removal.ok ? 0 : 1);
+      expect(await removals()).toHaveLength(removal.ok ? 1 : 0);
+    }
   });
 });
 

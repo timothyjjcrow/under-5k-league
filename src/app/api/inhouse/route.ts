@@ -20,6 +20,7 @@ import {
   leaveQueue,
   makePick,
   recordMatch,
+  removeFromQueue,
   setInhouseRoles,
   startGame,
 } from "@/lib/inhouse-service";
@@ -50,6 +51,7 @@ const MUTATION_ACTIONS = new Set([
   "cancel",
   "giveup",
   "void",
+  "remove",
 ]);
 
 // One JSON endpoint for the whole inhouse room. `state` is polled; the rest are
@@ -208,6 +210,10 @@ export async function POST(req: NextRequest) {
         break;
       case "void":
         res = await voidLastResult(user, lobbyId);
+        break;
+      case "remove":
+        // Admin: take the named player out of the queue.
+        res = await removeFromQueue(user, String(body.userId ?? ""));
         break;
       default:
         throw new Error("Unsupported inhouse mutation");

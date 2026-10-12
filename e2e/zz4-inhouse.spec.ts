@@ -127,6 +127,8 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
   await page.getByRole("button", { name: /Join queue/ }).click();
   await expect(progress).toHaveAttribute("aria-valuenow", "1");
   await expect(page.getByRole("button", { name: /Leave queue/ })).toBeVisible();
+  // Only an admin can take someone out of the queue.
+  await expect(page.getByLabel("Admin: remove from the queue")).toHaveCount(0);
   await checkRoomHeader(page, "Queue");
   await captureRoom(page, "queue");
 
@@ -136,6 +138,36 @@ test("queue join/leave works and the page fits a phone", async ({ page }) => {
   await page.getByRole("button", { name: /Leave queue/ }).click();
   await expect(progress).toHaveAttribute("aria-valuenow", "0");
 
+  expect(errors).toEqual([]);
+});
+
+test("an admin takes a queued player out of the queue", async ({ page }) => {
+  const errors = trackPageErrors(page);
+  // The admin's confirm.
+  page.on("dialog", (d) => d.accept());
+
+  const player = await apiPlayer("IH Removed", "76561190000002500");
+  expect((await act(player, { action: "join", mmr: 3000 })).ok).toBe(true);
+  // A player can't remove anyone, themselves included: admins only.
+  expect((await act(player, { action: "remove", userId: "anyone" })).ok).toBe(false);
+
+  await page.goto(
+    "/api/auth/dev?name=IH+Queue+Admin&steamId=76561190000002501&admin=1&redirect=/inhouse",
+  );
+  const progress = page.getByRole("progressbar", {
+    name: "Inhouse queue progress",
+  });
+  await expect(progress).toHaveAttribute("aria-valuenow", "1");
+  // One picker for everyone queued (the seed's away demo players too), each
+  // named with their medal and MMR.
+  const picker = page.getByLabel("Admin: remove from the queue");
+  await picker.selectOption({ label: "IH Removed · 3,000 MMR" });
+  await page.getByRole("button", { name: "Remove", exact: true }).click();
+  await expect(page.getByText("IH Removed is out of the queue")).toBeVisible();
+  await expect(progress).toHaveAttribute("aria-valuenow", "0");
+
+  const after = await act(player, { action: "state" });
+  expect((after.json.me as { inQueue: boolean }).inQueue).toBe(false);
   expect(errors).toEqual([]);
 });
 
