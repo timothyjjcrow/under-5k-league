@@ -134,6 +134,13 @@ export async function requireReleaseCi(run, jobs, sha, gates, findCoverage) {
   return coverage;
 }
 
+// The promotion's scheduler gate reads `vercel logs` twice per attempt: the
+// newest page for the error scan and this query for the passes. The CLI returns
+// at most 50 rows whatever --limit asks for, and on 2026-10-12 the US site's
+// inhouse traffic filled 50 rows in about a minute, so the plain page rarely
+// held two passes a minute apart and a healthy release rolled back.
+export const SCHEDULED_PASS_QUERY = Object.freeze(["--query", "/api/cron/automation"]);
+
 export function scheduledPasses(logs, since) {
   const recent = logs.filter((log) => log.timestamp >= since);
   if (recent.some((log) => log.level === "error" || log.level === "fatal" || log.responseStatusCode >= 500))
@@ -419,10 +426,16 @@ export async function runRelease(argv = process.argv.slice(2)) {
             let logs;
             if (providers.has(target.region)) logs = await providers.get(target.region).logs(report.candidates[target.region].id, promotedAt);
             else {
-              const raw = await command("npx", ["--yes", CLI, "logs", "--project", target.projectId,
-                "--deployment", report.candidates[target.region].id, "--since", new Date(promotedAt).toISOString(),
-                "--json", "--limit", "100"], { cwd, env: envFor(target) });
-              logs = raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
+              const page = async (query) => {
+                const raw = await command("npx", ["--yes", CLI, "logs", "--project", target.projectId,
+                  "--deployment", report.candidates[target.region].id, "--since", new Date(promotedAt).toISOString(),
+                  ...query, "--json", "--limit", "100"], { cwd, env: envFor(target) });
+                return raw ? raw.split("\n").map((line) => JSON.parse(line)) : [];
+              };
+              // The newest page feeds the error scan; the scheduler's own rows
+              // come from a query, because the CLI returns 50 rows at most and
+              // a busy site fills them in under a minute (SCHEDULED_PASS_QUERY).
+              logs = [...(await page([])), ...(await page(SCHEDULED_PASS_QUERY))];
             }
             passes = scheduledPasses(logs, promotedAt);
             if (!passes) await sleep(15_000);
