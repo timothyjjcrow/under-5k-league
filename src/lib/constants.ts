@@ -107,7 +107,7 @@ export const DEFAULTS = {
 // loop: a fixed 1.2s setInterval meant every open tab — including hidden and
 // spectator ones — burned 50 req/min against /api/draft/tick's 300/min per-IP
 // limit, so ~6 tabs behind one NAT could saturate it and 429 everyone. The
-// room's fast rate stays its `pollMs` prop (default 1200) while the auction is
+// room's fast rate stays its `pollMs` prop (default 2000) while the auction is
 // actually live.
 /**
  * Deadline on a live room's STATE POLL fetch (draft + inhouse share it).
@@ -179,13 +179,16 @@ export const DRAFT_ROOM = {
    *  the "your turn" / "outbid" chime and tab-title flip to reach them. */
   POLL_KEEPALIVE_MS: 5000,
   /** Backoff after a 429. The tick limiter is a fixed 60s window, so easing
-   *  off actually lets it drain instead of re-saturating it every 1.2s. */
+   *  off actually lets it drain instead of re-saturating it every 2s. */
   POLL_RATE_LIMITED_MS: 8000,
   /** A viewer who can't act on a live lot (a spectator, a pool player, a
-   *  drafted player) during the auction. Only captains and admins act; with
-   *  every open tab at 1.2s, 40 viewers made about 33 requests a second on a
-   *  Hobby-plan budget both leagues share. Bids reach watchers this late. */
-  POLL_WATCH_MS: 2500,
+   *  drafted player) during the auction. Only captains and admins act (every
+   *  2s, the room's `pollMs`). Each poll is a function call on the Vercel
+   *  Hobby plan both leagues share: a two-hour auction with 10 captains and
+   *  admins and 25 watchers was ~130,000 calls at the old 1.2s/2.5s, about
+   *  40 minutes of the plan's four CPU hours a month. Bids reach watchers this
+   *  late, still well inside the 30s bid clock. */
+  POLL_WATCH_MS: 5000,
   /** The same viewers in the waiting room or a finished draft. */
   POLL_WATCH_IDLE_MS: 6000,
   /** A HIDDEN tab of a pool player (a stake, but no controls): still well in

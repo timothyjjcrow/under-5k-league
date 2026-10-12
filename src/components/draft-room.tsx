@@ -287,7 +287,9 @@ function ExactBidControl({
 }
 
 export function DraftRoom({
-  pollMs = 1200,
+  // Captains' and admins' rate while the auction runs (draftPollCadence): a
+  // bid resets a 30s clock, and a tab polls at once when a clock hits zero.
+  pollMs = 2000,
   seasonId,
   pauseAction,
   resumeAction,

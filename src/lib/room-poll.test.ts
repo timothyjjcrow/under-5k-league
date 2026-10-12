@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { draftPollCadence, inhousePollCadence } from "./room-poll";
-import { DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
+import { DEFAULTS, DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
 
 // Two ~1800-line client components' poll loops, with no unit-testable surface
 // of their own (the vitest env is `node` — no jsdom), so these rules were
@@ -287,8 +287,8 @@ describe("draftPollCadence", () => {
     ).toEqual({ skip: false, delayMs: FAST });
   });
 
-  // Every open tab at 1.2s was about 33 requests a second with 40 viewers, on
-  // a hosting budget both leagues share; a watcher sees bids a beat later.
+  // Every poll is a function call on a hosting budget both leagues share; a
+  // watcher sees bids a few seconds later.
   it("polls watchers (spectators, pool players) at the watch rate", () => {
     for (const hasStake of [false, true]) {
       expect(
@@ -313,6 +313,15 @@ describe("draftPollCadence", () => {
         canAct: false,
       }),
     ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_MS });
+  });
+
+  it("keeps the watch rate slow for the budget but well inside the 30s bid clock", () => {
+    // A bid resets the clock, so a pool player watching their own lot still
+    // follows it; the hosting budget asks for the slowest rate that holds.
+    const bidClockMs = DEFAULTS.BID_TIMER_SECONDS * 1000;
+    expect(DRAFT_ROOM.POLL_WATCH_MS).toBeGreaterThanOrEqual(5000);
+    expect(DRAFT_ROOM.POLL_WATCH_MS).toBeLessThanOrEqual(bidClockMs / 6);
+    expect(DRAFT_ROOM.POLL_WATCH_IDLE_MS).toBeGreaterThanOrEqual(DRAFT_ROOM.POLL_WATCH_MS);
   });
 
   it("counts a PAUSED auction as live so a resume is caught immediately", () => {

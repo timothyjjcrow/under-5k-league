@@ -7,6 +7,7 @@ import {
   stripLineComments,
   type SourceFile,
 } from "../../test/support/source-files";
+import { DEFAULTS } from "@/lib/constants";
 
 // SOURCE-LEVEL GUARDS for the two live rooms, deliberately.
 //
@@ -368,6 +369,17 @@ describe("live rooms delegate their poll policy", () => {
           `demoted a live auction to the waiting-room rate for the whole outage.`,
       ).toEqual([]);
     }
+  });
+
+  it("draft-room's captains and admins poll every 2s, well inside the bid clock", () => {
+    // Their rate is the room's `pollMs` default (draftPollCadence takes it as
+    // activeMs). Slower for the hosting budget than the old 1.2s; a bid still
+    // resets a 30s clock, and a tab polls at once when a clock hits zero.
+    const match = /export function DraftRoom\(\{[\s\S]*?\bpollMs = (\d+),/.exec(code("draft-room.tsx"));
+    expect(match, "DraftRoom's pollMs default moved").not.toBeNull();
+    const ms = Number(match![1]);
+    expect(ms).toBe(2000);
+    expect(ms).toBeLessThanOrEqual((DEFAULTS.BID_TIMER_SECONDS * 1000) / 10);
   });
 });
 

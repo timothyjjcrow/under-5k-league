@@ -222,11 +222,11 @@ export function inhousePollCadence(
 /**
  * The draft room's binding. Its "active" is the AUCTION's phase (PAUSED counts
  * as live, so a resume is caught at once), and its RATE is the viewer's role:
- * captains and admins, who act on a live lot, poll at the room's 1.2s; every
+ * captains and admins, who act on a live lot, poll at the room's 2s; every
  * other viewer (a spectator, a player in the pool, a drafted player) at
- * POLL_WATCH_MS. Polling every open tab at 1.2s cost about 33 requests a
- * second with 40 viewers, on a hosting budget both leagues share, for bids a
- * watcher sees a second or two later instead.
+ * POLL_WATCH_MS (5s). Every poll is a function call on the hosting budget
+ * both leagues share (constants.ts); a bid resets a 30s clock, so a captain
+ * still sees it with most of the clock left, and a watcher a few seconds on.
  */
 export function draftPollCadence(
   o: Omit<RoomPollInput, "active"> & {

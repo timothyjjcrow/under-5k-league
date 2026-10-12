@@ -203,11 +203,16 @@ In the Captains & draft card on `/admin` and inside the room
   the draft binding of `roomPollCadence`). Whether it is fast keys on the
   AUCTION (IN_PROGRESS or PAUSED; PAUSED counts as live so a resume shows at
   once); how fast keys on the VIEWER (`canAct`: a captain or an admin). Those
-  who act poll at the room's 1.2s; everyone else (spectators, players in the
-  pool, drafted players) at `DRAFT_ROOM.POLL_WATCH_MS` (2.5s) live and
-  `POLL_WATCH_IDLE_MS` in the waiting room. Every open tab at 1.2s was about
-  33 requests a second with 40 viewers, on a hosting budget both leagues
-  share; a watcher sees a bid a beat later. A hidden tab keeps polling only
+  who act poll at the room's `pollMs` (2s, source-guarded); everyone else
+  (spectators, players in the pool, drafted players) at
+  `DRAFT_ROOM.POLL_WATCH_MS` (5s) live and `POLL_WATCH_IDLE_MS` in the
+  waiting room. Every poll is a function call on the Vercel Hobby plan both
+  leagues share: a two-hour auction with 10 captains and admins and 25
+  watchers was ~130,000 calls at the old 1.2s/2.5s, about 40 minutes of the
+  plan's four CPU hours a month, and these rates roughly halve it. A bid
+  resets a 30s clock, so a captain sees it with most of the clock left and a
+  watcher a few seconds on (`room-poll.test.ts` keeps the watch rate inside
+  the clock). A hidden tab keeps polling only
   for `draftViewerStake` (captains and admins at `POLL_KEEPALIVE_MS`, a pool
   player at `POLL_WATCH_KEEPALIVE_MS`). A failed poll in a live auction
   retries at the viewer's live rate, never the waiting-room rate, so
