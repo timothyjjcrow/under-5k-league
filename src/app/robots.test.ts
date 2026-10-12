@@ -10,6 +10,12 @@ describe("robots policy", () => {
     });
   });
 
+  it("keeps crawlers off the stream overlay, a tool for OBS", () => {
+    expect(robots().rules).toMatchObject({
+      disallow: expect.arrayContaining(["/overlay"]),
+    });
+  });
+
   it("lets crawlers fetch player profiles, so they see the profiles' noindex", () => {
     const rules = robots().rules;
     const disallow = (Array.isArray(rules) ? rules : [rules]).flatMap((rule) =>

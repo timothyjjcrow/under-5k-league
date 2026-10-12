@@ -1021,6 +1021,65 @@ the league is already draftable and many visitors have joined. Write for both.
   list's names are plain text, an exception to "every name is a link": its
   row carries no user id.
 
+## Stream overlay (`/overlay/[id]`)
+
+- **What it is.** A caster adds `/overlay/<match id>` to OBS as a Browser
+  source. It draws a matchup bar (crests in the team colours, the regular
+  season record with the table place or a knockout seed, the last five
+  series, the round and series length, the score, and a status line: a
+  countdown over the last hour, "Game N · BoX" with a Live pill from kickoff,
+  "Awaiting result" once long overdue, "Final"), a ticker under it (this
+  season's earlier meetings, a run of series wins going in) and rotating
+  player cards (tonight's players: medal, positions, season line, impact
+  points, Match MVPs or KDA, most-played heroes, or pub heroes before a first
+  league game, saying so). `?widget=matchup|players` draws one layout,
+  `side=home|away` one team's cards, `seconds=` the card time (4 to 60),
+  `notes=0` drops the ticker and `preview=1` adds a checkerboard for a normal
+  browser. The match page lists the three layouts with the source size each
+  is drawn at, folded at its foot (`stream-overlay-links.tsx`, active season
+  only), each with Copy link and Preview.
+- **It must cost Vercel next to nothing** (the Hobby plan, DECISIONS.md).
+  Twitch viewers never load it; only the caster's OBS does, and even that is
+  served from the CDN. The page route reads no database and the CDN keeps it
+  a day. The data route (`/api/overlay/[id]/[rev]`) carries its version in
+  the path: the result cursor `/api/sync` publishes and, until the series is
+  decided, a 10-minute bucket (`overlayRevision`) that catches a late standin
+  or a retimed kickoff. Each version is one function call for everyone. The
+  page reads `/api/sync` (a 30-second CDN copy) every 30 seconds, asks for data
+  only when the version moves, and asks for nothing while OBS hides the
+  source. Never add a per-poll function call, a cookie, or anything that
+  differs by viewer to either route.
+- **It sits outside the site's layout on purpose.** A route handler returns
+  the whole page (`overlayPageHtml` in `stream-overlay-page.ts`): no header,
+  footer, analytics or session read, a transparent background, Oswald's latin
+  file embedded, and `src/app/overlay/overlay-client.js` and `overlay.css`
+  inline, read by literal paths (`route.test.ts` checks they exist). They
+  stay under `src/`, never `public/`: the release classifier reads a new
+  `public/` HTML or JS file as an unknown path, a maintenance release.
+- **Plain JavaScript for OBS's own Chromium**, which can trail Chrome by
+  years: `overlay-client.js` is `// @ts-check` JavaScript (tsc checks it
+  through its test) with nothing newer than Chromium 103, text set only
+  through `textContent`, https images only (`safeImageUrl`) and one `fetch`
+  with a timeout (`overlay-client.test.ts` pins all three). Every size is in
+  rem off a root size that follows the source's viewport, so a source of the
+  size in `OVERLAY_WIDGETS` (1620x250, 1020x400, 1620x650) fits its layout
+  exactly; `stream-overlay-page.test.ts` reads `overlay.css` to keep them
+  equal.
+- **Public facts only, like a link picture:** no MMR, contact detail or
+  check-in answer (`stream-overlay.test.ts` pins the player card's keys).
+  Every rule is the site's own, in the pure `stream-overlay.ts`:
+  `projectPlayoffField`, `seedsFromFirstRound`, `recentForm`,
+  `seriesWinStreak`, `matchNightRoster` (who plays tonight; the overlay only
+  orders them, a standin in the covered player's seat), `summarizePlayerGames`
+  over complete box scores, `fantasyPoints` and `gameMvp`.
+  `stream-overlay-service.ts` loads it, the season's games through
+  `getSeasonGameLeaders`. The kickoff is on the league's clock with its zone
+  named: a stream is watched from everywhere.
+- **Tests:** the units above and both routes' `route.test.ts`,
+  `test/integration/stream-overlay.itest.ts`, and
+  `e2e-mid/stream-overlay.spec.ts` (the match page's links, both layouts, a
+  see-through page inside OBS, and one status read plus one data read).
+
 ## Stats pages (`/leaders`, `/meta`, `/records`, `/hall-of-fame`, `/seasons/[id]`)
 
 - **The season archive has a jump bar** (`SectionNav`: Standings, Playoffs,
