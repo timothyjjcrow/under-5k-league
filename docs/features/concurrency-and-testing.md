@@ -99,7 +99,9 @@ process hide every way it can go stale, as they hide races.
   the old version while other instances serve the old rows under it, and a
   tab moving between instances goes backwards (a drafted player back in the
   pool). The sites are a closed set, guarded by
-  `src/lib/inhouse-room-publish.test.ts`.
+  `src/lib/inhouse-room-publish.test.ts`. Publish as soon as the commit
+  lands, not at the end of the request (a follow-up read is a window too),
+  and in a `finally` where a later step can throw after an earlier commit.
 - **Never publish inside a transaction.** It is a write to one hot Setting row:
   inside the Serializable `joinQueue` or `formOneLobby` it adds P2034 aborts,
   and `formOneLobby` takes those as "someone else formed". It runs after the

@@ -13,7 +13,10 @@ import {
 } from "@/lib/inhouse-service";
 import { inhouseRoomDue } from "@/lib/inhouse-room-due";
 import { pollInhouseState } from "@/lib/inhouse-room-state";
-import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
+import {
+  publishInhouseRoomChange,
+  readInhouseRoomVersion,
+} from "@/lib/inhouse-room-version";
 import {
   createInhouseBoard,
   resetBoardStatsCache,
@@ -620,8 +623,10 @@ describe("room poll — the heartbeat", () => {
 
     const first = await pollInhouseState(p.session);
     expect(await hb.written()).toBe(1);
-    // Present before and after: no presence flip for the gate.
+    // Present before and after: no presence flip for the gate, and no
+    // publish (every instance would rebuild for a write nobody sees).
     expect(first.invalidateGate).toBe(false);
+    expect(await readInhouseRoomVersion()).toBeNull();
 
     await pollInhouseState(p.session);
     expect(hb.calls()).toBe(1);

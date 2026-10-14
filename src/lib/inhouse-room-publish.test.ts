@@ -109,7 +109,7 @@ describe("rule P: who publishes the inhouse room's changes", () => {
     // Callers that publish around what they call, and why.
     const PUBLISHING_CALLERS: Record<string, string> = {
       "src/app/api/inhouse/route.ts":
-        "every dispatched mutation publishes in the route's outer finally",
+        "every dispatched mutation publishes right after the dispatch and again in the route's outer finally",
       "src/lib/inhouse-room-state.ts":
         "maintenance goes through getInhouseState, which publishes; a present viewer's heartbeat moves only lastSeenAt, which the seenAt memo tracks",
       "src/lib/result-sync-service.ts":
@@ -175,6 +175,11 @@ describe("rule P: the publish sites, in order", () => {
     expect(block.length).toBeGreaterThan(0);
     ordered(block, "await resolveStalledPick()", "maybeAutoDetectResult()", PUBLISH);
     ordered(body, PUBLISH, "loadInhouseRoomRows(", "syncInhouseBoard(");
+    // In a finally around the whole chain: a later resolver that throws must
+    // not leave the earlier ones' commits unpublished.
+    expect(block).toMatch(
+      /if \(runMaintenance\) \{\s*try \{\s*await resolveAbandonedLobby\(\);[\s\S]*?\} finally \{\s*await publishInhouseRoomChange\(\);\s*\}\s*\}/,
+    );
   });
 
   it("syncInhouse publishes after the resolvers and before the OpenDota scan, and its caller in a finally", () => {
@@ -190,7 +195,12 @@ describe("rule P: the publish sites, in order", () => {
     ["formOneLobby", [PUBLISH, "sendInhouseDiscordMessage("]],
     ["joinQueue", [PUBLISH, "maybeFormLobby()", "sendInhouseDiscordMessage("]],
     ["applyResult", ["eloDeltas: JSON.stringify(deltas)", PUBLISH, "deliverInhouseAnnouncements("]],
-    ["voidLastResult", ["status: INHOUSE_STATUS.CANCELLED", PUBLISH, "deliverInhouseAnnouncements("]],
+    // After the result cursor: a board check that sees the new version must
+    // see the post-void stats.
+    [
+      "voidLastResult",
+      ["status: INHOUSE_STATUS.CANCELLED", "await stampResultChange()", PUBLISH, "deliverInhouseAnnouncements("],
+    ],
     ["autoDetectResult", ["data: { detectedAt: new Date() }", PUBLISH, "lookUpLobbyGame("]],
     [
       "maybeAutoDetectResult",

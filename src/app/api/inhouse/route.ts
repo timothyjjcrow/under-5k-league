@@ -151,6 +151,9 @@ export async function POST(req: NextRequest) {
   // click is judged against that game even with two live (see
   // chooseActionLobby in inhouse-service.ts).
   const lobbyId = typeof body.lobbyId === "string" ? body.lobbyId : null;
+  // Rule P: whether a write since the last publish may still be unpublished.
+  // Starts true: the action itself may commit and then throw.
+  let unpublished = true;
   try {
     let res: { ok: true } | { ok: false; error: string };
     switch (action) {
@@ -215,9 +218,20 @@ export async function POST(req: NextRequest) {
         throw new Error("Unsupported inhouse mutation");
     }
 
+    // Rule P: publish the action's commit NOW, before the follow-up read
+    // below. That read is several round trips (heartbeat, rows, viewer
+    // extras), and a poll this client sent while the action was in flight
+    // must not find the old version (and another instance's pre-action
+    // snapshot) all that time, or its later reply repaints the room as it was
+    // before the click. A refusal publishes too: refusals can commit
+    // (removeFromQueue).
+    await publishInhouseRoomChange();
+    unpublished = false;
     if (!res.ok) {
       return NextResponse.json({ error: res.error }, { status: 400 });
     }
+    // The follow-up read heartbeats, so publish once more in the finally.
+    unpublished = true;
     // A mutation must never block on the Discord queue board: the request that
     // CHANGES the state is the one that would render the new digest and win the
     // edit claim, so ACCEPT / vote / pick — the second-sensitive clocks — would
@@ -229,12 +243,11 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(state);
   } finally {
-    // Rule P: every action may have committed something the room shows, a
-    // refusal or a throw included (removeFromQueue, resolver writes before an
-    // error), and the follow-up read above heartbeats. Publish before the
-    // response goes out, so this client's poll ~250ms later, on any
-    // instance, sees it.
-    await publishInhouseRoomChange();
+    // Rule P, again: an action that threw may have committed (resolver
+    // writes before an error), and the follow-up read above heartbeats.
+    // Publish before the response goes out, so this client's poll ~250ms
+    // later, on any instance, sees it. A refusal already published above.
+    if (unpublished) await publishInhouseRoomChange();
     // Some services perform safe resolver/claim writes before returning an
     // error. Expire after every dispatched action and follow-up read.
     invalidateAutomationGateBestEffort();

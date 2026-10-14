@@ -2779,9 +2779,11 @@ export async function voidLastResult(
   // Signal before the cursor and audit follow-ups so neither best-effort step
   // can hide the correction from a sleeping worker.
   invalidateAutomationGateBestEffort();
-  // Rule P: the room drops the voided banner before Discord hears of it.
-  await publishInhouseRoomChange();
   await stampResultChange();
+  // Rule P: the room drops the voided banner before Discord hears of it.
+  // After the cursor stamp: a board check that sees the new version must
+  // also see the moved cursor, or it settles on the pre-void stats.
+  await publishInhouseRoomChange();
 
   // Post-claim, so only the winner of a concurrent void writes the record —
   // the cancelLobby ordering. The lobby reads CANCELLED like any abandoned
@@ -3704,18 +3706,23 @@ export async function getInhouseState(
   // Heartbeat before forming: the polling viewer must count as present.
   if (viewer) await touchQueueHeartbeat(viewer.id);
   if (runMaintenance) {
-    // Abandoned lobbies first: each frees a game slot, so maybeFormLobby can
-    // form the next game on this poll instead of the one after.
-    await resolveAbandonedLobby();
-    await maybeFormLobby();
-    await resolveReadyCheck();
-    await resolveCaptainVote();
-    await resolveStalledPick();
-    if (detectResults) await maybeAutoDetectResult();
-    // Rule P: one unconditional publish for the whole chain, before the reads
-    // and the board edit below (a resolver's own result says nothing about
-    // writes such as the queue reset or a restored pick turn).
-    await publishInhouseRoomChange();
+    try {
+      // Abandoned lobbies first: each frees a game slot, so maybeFormLobby
+      // can form the next game on this poll instead of the one after.
+      await resolveAbandonedLobby();
+      await maybeFormLobby();
+      await resolveReadyCheck();
+      await resolveCaptainVote();
+      await resolveStalledPick();
+      if (detectResults) await maybeAutoDetectResult();
+    } finally {
+      // Rule P: one unconditional publish for the whole chain, before the
+      // reads and the board edit below (a resolver's own result says nothing
+      // about writes such as the queue reset or a restored pick turn). In a
+      // finally: when a later resolver throws, the earlier ones' commits are
+      // still announced. It never throws, so the original error propagates.
+      await publishInhouseRoomChange();
+    }
   }
 
   const rows = await loadInhouseRoomRows(Date.now());

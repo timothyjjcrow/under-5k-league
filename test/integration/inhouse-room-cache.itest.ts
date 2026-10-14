@@ -515,9 +515,13 @@ describe("room snapshot — the heartbeat on a warm snapshot", () => {
     await queueRows([p, other], { lastSeenAt: () => new Date(Date.now() - 2 * MIN) });
     await publishInhouseRoomChange();
     await pollInhouseState(other.session); // warm, and other's own write
+    const version = await readInhouseRoomVersion();
     const count = heartbeats();
     const first = await pollInhouseState(p.session);
     expect(first.invalidateGate).toBe(false); // present before and after
+    // ... and no publish: every instance would rebuild for a write nobody
+    // sees, every 30s per queued tab.
+    expect(await readInhouseRoomVersion()).toBe(version);
     // The snapshot still holds the old lastSeenAt (a present → present write
     // publishes nothing), but this instance knows what it wrote.
     for (let i = 0; i < 3; i++) await pollInhouseState(p.session);
@@ -974,6 +978,30 @@ describe("room snapshot — a resolver's work shows on every instance's next pol
       await runResultSync();
     });
   });
+
+  it("a later resolver that throws still publishes what the earlier ones committed", async () => {
+    // resolveReadyCheck commits the failed check (game cancelled, accepters
+    // requeued); then resolveCaptainVote's scan fails as a pool timeout
+    // would. The poll errors, but every instance must see the requeue.
+    const outsider = (await players(1, "Poller-"))[0];
+    const due = RESOLVER_CASES["an expired ready check"];
+    await expectResolved(due, async () => {
+      const findMany = prisma.inhouseLobby.findMany.bind(prisma.inhouseLobby);
+      const scan = vi.spyOn(prisma.inhouseLobby, "findMany").mockImplementation(((
+        args?: { where?: { status?: unknown } },
+      ) =>
+        args?.where?.status === INHOUSE_STATUS.CAPTAIN_VOTE
+          ? Promise.reject(Object.assign(new Error("pool timeout"), { code: "P2024" }))
+          : findMany(args as never)) as never);
+      await expect(pollInhouseState(outsider.session)).rejects.toThrow("pool timeout");
+      expect(
+        scan.mock.calls.some(([args]) => args?.where?.status === INHOUSE_STATUS.CAPTAIN_VOTE),
+      ).toBe(true);
+      scan.mockRestore();
+      // The ready check really was resolved before the throw.
+      expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.READY_CHECK } })).toBe(0);
+    });
+  });
 });
 
 // ---- cross-instance ---------------------------------------------------------
@@ -1110,6 +1138,32 @@ describe("room snapshot — every provider call sees the change already publishe
     expect(await voidLastResult(boss.session, game.id)).toEqual({ ok: true });
     expect(sent).toHaveLength(1);
     expect(sent[0]).not.toBe(before);
+  });
+
+  it("voidLastResult stamps the result cursor before it publishes", async () => {
+    // A board check that sees the new version reads the board's stats by
+    // the result cursor: it must already have moved, or the check settles
+    // on the voided game's stats under the new key.
+    const p = await players(10, "VC-");
+    const game = await completedGame(p, 3 * MIN);
+    const boss = await admin();
+    mockSession.mockResolvedValue(boss.session);
+    const OLD = "2020-01-01T00:00:00.000Z";
+    await setSetting(SETTING_KEYS.RESULT_CHANGED_AT, OLD);
+    const cursorAtPublish: (string | null)[] = [];
+    const executeRaw = prisma.$executeRaw.bind(prisma);
+    vi.spyOn(prisma, "$executeRaw").mockImplementation((async (...args: unknown[]) => {
+      if (args.includes(SETTING_KEYS.INHOUSE_ROOM_VERSION)) {
+        const cursor = await prisma.setting.findUnique({
+          where: { key: SETTING_KEYS.RESULT_CHANGED_AT },
+        });
+        cursorAtPublish.push(cursor?.value ?? null);
+      }
+      return (executeRaw as (...a: unknown[]) => Promise<number>)(...args);
+    }) as never);
+    expect(await voidLastResult(boss.session, game.id)).toEqual({ ok: true });
+    expect(cursorAtPublish).toHaveLength(1);
+    expect(cursorAtPublish[0]).not.toBe(OLD);
   });
 
   it("the worker's scan, after its claim", async () => {

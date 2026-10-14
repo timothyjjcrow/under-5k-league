@@ -96,16 +96,23 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   silently slip. It bumps a process-local generation first, then runs one
   `INSERT … ON CONFLICT` (`claimThrottle`'s shape), retries once, logs only
   the error code and never throws.
-  - **The sites are a closed set.** The route's outer finally (ok, refusal
-    and throw, before the gate expiry). `getInhouseState`'s maintenance block:
-    one unconditional publish after the chain, before the reads and the board
-    edit (`formOneLobby`'s queue reset returns false and `resolveStalledPick`
-    drops `restoreLostPickTurn`'s result, so per-resolver bumps would miss
-    writes). `syncInhouse` after `resolveStalledPick`, plus a try/finally
+  - **The sites are a closed set.** The route publishes right after the
+    dispatch (ok and refusal), before its follow-up read: that read is
+    several round trips, and a poll the client sent during the action must
+    not find the old version all that time. It publishes again in its outer
+    finally (the follow-up read's heartbeat, or an action that threw), before
+    the gate expiry. `getInhouseState`'s maintenance block: one unconditional
+    publish in a finally around the chain, so a resolver that throws still
+    announces what the ones before it committed, and before the reads and the
+    board edit (`formOneLobby`'s queue reset returns false and
+    `resolveStalledPick` drops `restoreLostPickTurn`'s result, so
+    per-resolver bumps would miss writes). `syncInhouse` after `resolveStalledPick`, plus a try/finally
     around its call. `formOneLobby` before its ping when it formed or
     `expireStaticQueue` deleted rows. `joinQueue` before forming. The
     auto-detect claims and their deadline rollback. `applyResult` and
-    `voidLastResult` before delivery (the admin `voidInhouseResult` too). The
+    `voidLastResult` before delivery (the admin `voidInhouseResult` too;
+    `voidLastResult` after its result-cursor stamp, so a board check that
+    sees the new version reads the post-void stats). The
     bot's IN_PROGRESS write when it lands. The outbox reconcile when it
     committed (its `eloDeltas` show in `lastResult`). `/api/test/cache`. The
     login upsert, the Steam refresh and the signup save.

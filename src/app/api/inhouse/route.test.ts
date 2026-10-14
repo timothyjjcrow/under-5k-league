@@ -348,7 +348,7 @@ describe("POST /api/inhouse request boundary", () => {
       expect(response.status).toBe(status);
       expect(order).toEqual(
         status === 200
-          ? ["dispatch", "read", "publish", "gate"]
+          ? ["dispatch", "publish", "read", "publish", "gate"]
           : ["dispatch", "publish", "gate"],
       );
     },
@@ -370,7 +370,7 @@ describe("POST /api/inhouse request boundary", () => {
     ["giveup", mocks.giveUpOnResult],
     ["void", mocks.voidLastResult],
     ["remove", mocks.removeFromQueue],
-  ] as const)("%s: dispatch, fresh read, publish, then the gate", async (action, service) => {
+  ] as const)("%s: dispatch, publish, fresh read, publish, then the gate", async (action, service) => {
     const order: string[] = [];
     service.mockImplementation(async () => {
       order.push("dispatch");
@@ -390,7 +390,32 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action, mmr: 3000, userId: "u2" }));
 
     expect(response.status).toBe(200);
-    expect(order).toEqual(["dispatch", "read", "publish", "gate"]);
+    expect(order).toEqual(["dispatch", "publish", "read", "publish", "gate"]);
+  });
+
+  it("publishes the action's commit before the follow-up read starts", async () => {
+    // The read is several round trips: a poll sent while the action was in
+    // flight must find the new version during it, not after it.
+    let publishedBeforeRead = 0;
+    mocks.getInhouseState.mockImplementation(async () => {
+      publishedBeforeRead = mocks.publishInhouseRoomChange.mock.calls.length;
+      return state;
+    });
+
+    const response = await POST(request({ action: "pick", userId: "u2" }));
+
+    expect(response.status).toBe(200);
+    expect(publishedBeforeRead).toBe(1);
+  });
+
+  it("publishes again when the follow-up read throws after its heartbeat", async () => {
+    mocks.getInhouseState.mockRejectedValue(new Error("read failed"));
+
+    await expect(
+      POST(request({ action: "pick", userId: "u2" })),
+    ).rejects.toThrow("read failed");
+    expect(mocks.publishInhouseRoomChange).toHaveBeenCalledTimes(2);
+    expect(mocks.revalidateTag).toHaveBeenCalledOnce();
   });
 
   it("publishes the room change when an action throws", async () => {
