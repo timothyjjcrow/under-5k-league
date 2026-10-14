@@ -28,6 +28,31 @@ export type DotaLobbyStatus = {
   message?: string;
 };
 
+/** How often the lobby-bot panel re-reads the bot while it sets up a lobby. */
+export const LOBBY_PANEL_POLL_MS = 5_000;
+
+/**
+ * How often it re-reads once Dota reports the game running. Nothing on the
+ * panel changes for the rest of the game, and every read is a function call on
+ * the Vercel Hobby plan both leagues share that also asks the bot through the
+ * relay: at 5s, ten players' panels made a fifth of the US site's Active CPU
+ * on 2026-10-13. The first "started" answer, read at the setup rate, already
+ * moved the inhouse lobby to IN_PROGRESS (the route's guarded READY write), so
+ * this slow read is only a safety net for that.
+ */
+export const LOBBY_PANEL_STARTED_POLL_MS = 60_000;
+
+/**
+ * The panel's refresh interval for a bot lobby state, or null when it should
+ * not refresh at all (no bot lobby yet, or the bot let it go).
+ */
+export function lobbyPanelPollMs(
+  state: DotaLobbyStatus["state"] | undefined,
+): number | null {
+  if (!state || state === "idle" || state === "released") return null;
+  return state === "started" ? LOBBY_PANEL_STARTED_POLL_MS : LOBBY_PANEL_POLL_MS;
+}
+
 /** The two sides of the bot's Dota lobby, in its spec's order. */
 export type LobbySide = "radiant" | "dire";
 

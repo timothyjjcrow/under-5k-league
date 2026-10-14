@@ -6,6 +6,7 @@ import {
   SESSION_REFRESH_AFTER_SECONDS,
   refreshSessionToken,
   sessionCookieOptions,
+  sessionRefreshDue,
   signSessionToken,
   verifySessionToken,
 } from "./session-token";
@@ -126,6 +127,35 @@ describe("refreshSessionToken", () => {
       .sign(new TextEncoder().encode("wrong-secret-wrong-secret-wrong-secret!"));
     expect(await refreshSessionToken(forged, NOW)).toBeNull();
     expect(await refreshSessionToken(await tokenIssued(31), NOW)).toBeNull();
+  });
+});
+
+describe("sessionRefreshDue", () => {
+  const verified = async (daysAgo: number, signedInDaysAgo = daysAgo) =>
+    (await verifySessionToken(await tokenIssued(daysAgo, signedInDaysAgo), NOW))!;
+
+  it("is due exactly when refreshSessionToken would re-issue", async () => {
+    const capDays = SESSION_ABSOLUTE_MAX_SECONDS / 86400;
+    const maxDays = SESSION_MAX_AGE_SECONDS / 86400;
+    for (const [daysAgo, signedInDaysAgo] of [
+      [0, 0],
+      [6.9, 6.9],
+      [8, 8],
+      [8, capDays - maxDays],
+      [8, capDays - maxDays + 1],
+    ]) {
+      const token = await tokenIssued(daysAgo, signedInDaysAgo);
+      const session = (await verifySessionToken(token, NOW))!;
+      expect(sessionRefreshDue(session, NOW), `${daysAgo}/${signedInDaysAgo}`).toBe(
+        (await refreshSessionToken(token, NOW)) !== null,
+      );
+    }
+    expect(sessionRefreshDue(await verified(8), NOW)).toBe(true);
+    expect(sessionRefreshDue(await verified(6.9), NOW)).toBe(false);
+  });
+
+  it("never asks for a token with no issue time", () => {
+    expect(sessionRefreshDue({ uid: "user-1", ep: 0, iat: null, at: null }, NOW)).toBe(false);
   });
 });
 

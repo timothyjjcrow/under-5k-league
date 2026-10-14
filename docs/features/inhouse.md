@@ -471,6 +471,14 @@ Every transition is a guarded claim; keep it that way (general rules:
   non-friends": a blocked invite looks sent to the bot. A bot without invites
   reports no seats, so the panel shows no list and keeps the Custom Lobbies
   line.
+- **The bot panel re-reads the bot every 5s only while it sets a lobby up**
+  (`lobbyPanelPollMs` in `src/lib/dota-lobby.ts`, source-guarded in the
+  panel): once a minute once Dota reports the game "started", never with no
+  bot lobby. Each read is a function call that also asks the bot through the
+  relay, and the panel stays mounted for the whole game for its players and
+  admins: on 2026-10-13 ten players' panels at 5s made a fifth of the US
+  site's Active CPU. The first "started" answer, read at 5s, is the one that
+  stamps the lobby IN_PROGRESS; the minute read is its safety net.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
   share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`
@@ -598,9 +606,12 @@ Every transition is a guarded claim; keep it that way (general rules:
     tabs polling every 10s made 79% of the US site's calls, and the plan ran
     out. Poll fast only where seconds decide something; every long wait is
     slow.
-  - Fast (`pollMs`, 1500) only for timed stages: ready check, vote, draft, and
-    READY until the scan window opens (`inhouseReadyInPlay`, after which a
-    hand-hosted game polls like IN_PROGRESS and drops "(!) Teams locked").
+  - Fast (`pollMs`, 1500) only for the clocked stages: ready check, vote and
+    draft. Game setup (READY until the scan window opens,
+    `inhouseReadyInPlay`, after which a hand-hosted game polls like
+    IN_PROGRESS and drops "(!) Teams locked") has no clock: it polls at
+    `POLL_SETUP_MS` (5s). At 1.5s a setup that ran its 15 minutes cost about
+    6,000 calls for ten players (2026-10-13 logs).
   - Otherwise `POLL_QUEUE_MS` (10s) when queued, `POLL_GAME_MS` (30s) in your
     own game, `POLL_IDLE_MS` (30s) spectating. The room passes `inLobby`
     (source-guarded): `pollingLobby` shows a queued player someone else's

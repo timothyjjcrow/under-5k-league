@@ -54,17 +54,22 @@ unique administrator before deployment, while the atomic
 `bootstrapAdminSteamId` Setting claim is local-development fallback only),
 best-effort backfills the OpenDota rank medal (`ensureRankTier`), and mints a stateless
 jose HS256 JWT session cookie (`src/lib/auth.ts` over `session-token.ts`,
-claims `{uid, ep, at}`, 30 days). `src/proxy.ts` re-issues a session more
-than a week old on GET page loads, keeping uid, epoch and the sign-in time
-`at`, and stops 180 days after sign-in, so active players stay signed in
-through a season. Production session and one-shot OAuth cookies use browser-enforced
+claims `{uid, ep, at}`, 30 days). A session more than a week old is
+re-issued by one call a week, keeping uid, epoch and the sign-in time `at`,
+and re-issuing stops 180 days after sign-in, so active players stay signed in
+through a season: the root layout mounts `<SessionRefresh>` only when
+`getSessionRefreshDue` finds the cookie due, and it calls
+`POST /api/auth/refresh` (`refreshSessionCookie`, only for a session that
+still counts). It replaced the Next proxy `src/proxy.ts` (removed
+2026-10-14), a separate, often-cold Vercel function that ran on every
+signed-in page load. Production session and one-shot OAuth cookies use browser-enforced
 `__Host-` names (Secure, host-only, `Path=/`), preventing a sibling subdomain
 from tossing a competing identity/state cookie. The first hardened deployment
 therefore intentionally signs out sessions minted under the legacy name.
 Production `getSessionUser` re-evaluates the allowlist on every
 authenticated request, so removing an administrator revokes the existing
 cookie's authority on the next request instead of waiting for another login.
-The proxy never authorizes anything: every page, action, and route calls
+The refresh never authorizes anything: every page, action, and route calls
 `getSessionUser`/`requireUser`/`requireAdmin` itself. Revocation is a global
 session epoch in the `Setting` table (`src/lib/session-epoch.ts`), bumped by
 the admin "revoke all sessions" action. A dev/mock login exists at

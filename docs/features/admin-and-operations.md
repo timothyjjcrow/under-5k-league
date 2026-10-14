@@ -257,9 +257,8 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   for a player profile, four for a match. On a production build, scrolling
   `/players` ran 408 statements against the page's own 37. `PlayerLink`
   defaults to `prefetch={false}` (pass `prefetch` to opt back in), and the
-  schedule's, bracket's and season grid's match links set it. The proxy's
-  matcher also skips prefetch requests (`missing` the `next-router-prefetch`
-  header), so a signed-in visitor's prefetches never run it.
+  schedule's, bracket's and season grid's match links set it. (Since
+  2026-10-12 no link prefetches at all: `@/components/app-link`.)
 - **Draw medals from the 72px copies** (`public/ranks/72`, behind a
   year-long immutable cache header in `next.config.ts`): `RankMedal` at its
   24px default used the 256px masters, 374KB on `/players`. The share

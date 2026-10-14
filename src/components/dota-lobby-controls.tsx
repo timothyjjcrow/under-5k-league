@@ -4,6 +4,7 @@ import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   inviteResultToast,
   inviteUnknownToast,
+  lobbyPanelPollMs,
   lobbyPlayerRow,
   noPopupHelp,
   reinviteMissingOpen,
@@ -156,10 +157,13 @@ export function DotaLobbyControls({
     onAvailability?.(availability);
   }, [availability, onAvailability]);
   useEffect(() => {
-    if (!state || ["idle", "released"].includes(state)) return;
+    // Fast while the bot sets the lobby up, once a minute once the game runs
+    // (lobbyPanelPollMs says why), never without a bot lobby.
+    const every = lobbyPanelPollMs(state);
+    if (every === null) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void request("status");
-    }, 5000);
+    }, every);
     return () => clearInterval(timer);
   }, [state, request]);
 

@@ -89,3 +89,18 @@ describe("DotaLobbyControls invite controls (source)", () => {
     expect(code).not.toMatch(/withPlayers|steamId|invite:/);
   });
 });
+
+// SOURCE GUARD: the panel's refresh comes only from the tested pure rate, so
+// a running game is read once a minute instead of every five seconds.
+describe("DotaLobbyControls refresh (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+
+  it("sets its interval from lobbyPanelPollMs(state)", () => {
+    expect(code).toMatch(/const every = lobbyPanelPollMs\(state\);/);
+    expect(code).toMatch(/if \(every === null\) return;/);
+    expect(code).toMatch(/setInterval\([^]*?\}, every\);/);
+    expect(code).not.toMatch(/\b5000\b|5_000|60_000/);
+  });
+});
