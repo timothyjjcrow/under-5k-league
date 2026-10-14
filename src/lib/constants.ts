@@ -297,6 +297,11 @@ export const INHOUSE = {
   // 2026-10-11 five /inhouse tabs polling every ten seconds made 79% of the US
   // site's calls. Queued: a forming lobby gives ACCEPT_SECONDS (90s) to accept.
   POLL_QUEUE_MS: 10000,
+  // Game setup (READY until the result scan's window opens): ten people
+  // getting into one Dota lobby, which takes minutes and has no clock. The
+  // lobby name, the Start answer and a cancel can arrive a few seconds late;
+  // at the 1.5s rate a setup could last 15 minutes and cost ~6,000 calls.
+  POLL_SETUP_MS: 5000,
   // A game being played, in a visible tab or a hidden one: nothing in it is
   // timed, and the players are in the Dota client.
   POLL_GAME_MS: 30000,

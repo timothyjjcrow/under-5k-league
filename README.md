@@ -577,8 +577,9 @@ declares the same runtime line used by every CI job.
    deliberately added to that exemption list.
 
    The root tooling (`.claude/launch.json`, `.nvmrc`, `eslint.config.mjs`, the
-   Playwright and Vitest configs), the Next proxy `src/proxy.ts` and the
-   artwork exports in `brand/` are strict without either impact flag. The
+   Playwright and Vitest configs), the removed Next proxy `src/proxy.ts` (its
+   deletion, or a new one) and the artwork exports in `brand/` are strict
+   without either impact flag. The
    helpers, seeds and global setups of all three browser suites (`e2e/`,
    `e2e-mid/`, `e2e-postseason/`) are neutral test paths. Any other path the
    classifier does not name, such as a new top-level file or folder, is

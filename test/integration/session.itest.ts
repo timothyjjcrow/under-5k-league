@@ -38,9 +38,18 @@ vi.mock("next/headers", () => ({
 
 import { revokeAllSessions } from "@/app/actions/admin-season";
 import { getSessionEpoch, bumpSessionEpoch } from "@/lib/session-epoch";
-import { createSession, destroySession, getSessionUser } from "@/lib/auth";
+import {
+  createSession,
+  destroySession,
+  getSessionUser,
+  refreshSessionCookie,
+} from "@/lib/auth";
 import { SESSION_COOKIE } from "@/lib/constants";
-import { refreshSessionToken, verifySessionToken } from "@/lib/session-token";
+import {
+  refreshSessionToken,
+  signSessionToken,
+  verifySessionToken,
+} from "@/lib/session-token";
 import { prisma } from "@/lib/prisma";
 import { makeUser } from "./factories";
 
@@ -254,13 +263,15 @@ describe("session JWT path (real createSession/getSessionUser)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Staying signed in: src/proxy.ts re-issues a week-old token. The re-issue
-// must not become a way around revocation or the admin allowlist.
+// Staying signed in: refreshSessionCookie (POST /api/auth/refresh, which the
+// root layout's <SessionRefresh> calls when getSessionRefreshDue says so)
+// re-issues a week-old token through refreshSessionToken. The re-issue must
+// not become a way around revocation or the admin allowlist.
 // ---------------------------------------------------------------------------
 
 const WEEK_AND_A_DAY_MS = 8 * 24 * 60 * 60 * 1000;
 
-/** The cookie as the proxy would re-issue it on a page load 8 days later. */
+/** The cookie as refreshSessionToken would re-issue it 8 days later. */
 async function reissuedAWeekLater(): Promise<string> {
   const token = jar.get(SESSION_COOKIE)!;
   const fresh = await refreshSessionToken(token, Date.now() + WEEK_AND_A_DAY_MS);
@@ -268,7 +279,7 @@ async function reissuedAWeekLater(): Promise<string> {
   return fresh!;
 }
 
-describe("re-issued sessions (the proxy's sliding refresh)", () => {
+describe("re-issued sessions (the weekly sliding refresh)", () => {
   beforeEach(async () => {
     jar.clear();
     jarOptions.clear();
@@ -309,6 +320,48 @@ describe("re-issued sessions (the proxy's sliding refresh)", () => {
 
     vi.stubEnv("ADMIN_STEAM_IDS", "76561199999999999");
     expect((await getSessionUser())?.role).toBe("USER");
+  });
+
+  // POST /api/auth/refresh's own path, on the real epoch and user row.
+  async function signedInAWeekAgo(userId: string): Promise<string> {
+    const issued = Date.now() - WEEK_AND_A_DAY_MS;
+    const token = await signSessionToken(
+      { uid: userId, ep: await getSessionEpoch(Date.now()), at: Math.floor(issued / 1000) },
+      issued,
+    );
+    jar.set(SESSION_COOKIE, token);
+    return token;
+  }
+
+  it("refreshSessionCookie re-issues a week-old session that still counts", async () => {
+    const user = await makeUser("Weekly Refresh");
+    const old = await signedInAWeekAgo(user.id);
+    expect(await refreshSessionCookie()).toBe(true);
+    const fresh = jar.get(SESSION_COOKIE)!;
+    expect(fresh).not.toBe(old);
+    expect(await verifySessionToken(fresh)).toMatchObject({
+      uid: user.id,
+      at: (await verifySessionToken(old))!.at,
+    });
+    expect((await getSessionUser())?.id).toBe(user.id);
+    // Fresh now: a second ask re-issues nothing.
+    expect(await refreshSessionCookie()).toBe(false);
+    expect(jar.get(SESSION_COOKIE)).toBe(fresh);
+  });
+
+  it("refreshSessionCookie never extends a revoked session or a deleted user's", async () => {
+    const revoked = await makeUser("Weekly Then Revoked");
+    const old = await signedInAWeekAgo(revoked.id);
+    await bumpSessionEpoch();
+    expect(await refreshSessionCookie()).toBe(false);
+    expect(jar.get(SESSION_COOKIE)).toBe(old);
+
+    await syncEpochCache();
+    const gone = await makeUser("Weekly Then Deleted");
+    const goneToken = await signedInAWeekAgo(gone.id);
+    await prisma.user.delete({ where: { id: gone.id } });
+    expect(await refreshSessionCookie()).toBe(false);
+    expect(jar.get(SESSION_COOKIE)).toBe(goneToken);
   });
 
   it("createSession records the sign-in time the re-issue cap counts from", async () => {

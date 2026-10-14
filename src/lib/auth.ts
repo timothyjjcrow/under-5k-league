@@ -6,7 +6,9 @@ import { getSessionEpoch } from "./session-epoch";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import { expireHttpOnlyCookie } from "./cookie-policy";
 import {
+  refreshSessionToken,
   sessionCookieOptions,
+  sessionRefreshDue,
   signSessionToken,
   verifySessionToken,
 } from "./session-token";
@@ -21,8 +23,8 @@ export type SessionUser = {
 
 /**
  * Sign a session JWT and set it as an httpOnly cookie. Route handlers/actions
- * only. src/proxy.ts re-issues it (same user, epoch and sign-in time) once
- * it is a week old, so an active player stays signed in.
+ * only. refreshSessionCookie re-issues it (same user, epoch and sign-in time)
+ * once it is a week old, so an active player stays signed in.
  */
 export async function createSession(userId: string) {
   const now = Date.now();
@@ -101,6 +103,36 @@ export const getSessionUser = cache(async function getSessionUser(): Promise<Ses
     return null;
   }
 });
+
+/**
+ * Is the viewer's session cookie due its weekly re-issue? The root layout asks
+ * once per render pass and, only then, mounts <SessionRefresh>, which calls
+ * POST /api/auth/refresh. One call per player per week replaced the Next
+ * proxy, a separate, often cold Vercel function that ran on every signed-in
+ * page load to do the same (the Hobby plan's CPU budget, DECISIONS.md).
+ */
+export const getSessionRefreshDue = cache(async function getSessionRefreshDue(): Promise<boolean> {
+  const token = (await cookies()).get(SESSION_COOKIE)?.value;
+  if (!token) return false;
+  const session = await verifySessionToken(token);
+  return session !== null && sessionRefreshDue(session);
+});
+
+/**
+ * Re-issue the session cookie when it is due (refreshSessionToken: the same
+ * user, epoch and sign-in time, never past the absolute cap), for a session
+ * that still counts (getSessionUser: the epoch, the user row). Route handlers
+ * only. True when a fresh cookie was set.
+ */
+export async function refreshSessionCookie(): Promise<boolean> {
+  if (!(await getSessionUser())) return false;
+  const cookieStore = await cookies();
+  const token = cookieStore.get(SESSION_COOKIE)?.value;
+  const fresh = token ? await refreshSessionToken(token) : null;
+  if (!fresh) return false;
+  cookieStore.set(SESSION_COOKIE, fresh, sessionCookieOptions());
+  return true;
+}
 
 export async function requireUser(): Promise<SessionUser> {
   const user = await getSessionUser();

@@ -4,8 +4,11 @@ import {
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_INVITES,
+  LOBBY_PANEL_POLL_MS,
+  LOBBY_PANEL_STARTED_POLL_MS,
   LOBBY_SEATS,
   lobbyInviteScope,
+  lobbyPanelPollMs,
   lobbyPlayerRow,
   noPopupHelp,
   lobbyPlayerViews,
@@ -20,6 +23,34 @@ import {
   type LobbyRosterEntry,
   type LobbySeat,
 } from "./dota-lobby";
+
+describe("lobbyPanelPollMs", () => {
+  // Every state the bot reports, with the panel's refresh for it.
+  const cases = {
+    idle: null,
+    creating: LOBBY_PANEL_POLL_MS,
+    ready: LOBBY_PANEL_POLL_MS,
+    starting: LOBBY_PANEL_POLL_MS,
+    started: LOBBY_PANEL_STARTED_POLL_MS,
+    blocked: LOBBY_PANEL_POLL_MS,
+    released: null,
+  } satisfies Record<DotaLobbyStatus["state"], number | null>;
+
+  it.each(Object.entries(cases))("%s refreshes every %s ms", (state, every) => {
+    expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"])).toBe(every);
+  });
+
+  it("does not refresh before the bot has answered", () => {
+    expect(lobbyPanelPollMs(undefined)).toBeNull();
+  });
+
+  // Setup keeps the 5s read (seats, invites, the Start answer); the running
+  // game's read is the CPU saving and must stay well above it.
+  it("reads a running game at least ten times less often than setup", () => {
+    expect(LOBBY_PANEL_POLL_MS).toBe(5_000);
+    expect(LOBBY_PANEL_STARTED_POLL_MS).toBeGreaterThanOrEqual(10 * LOBBY_PANEL_POLL_MS);
+  });
+});
 
 describe("botHoldsUnlaunchedLobby", () => {
   // Every state the bot reports, each with its answer. `satisfies` makes a new

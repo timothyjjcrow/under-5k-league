@@ -60,15 +60,18 @@ note before changing that area: it is required reading, not background.
 - **Route handlers:** `src/app/api/`: the polled rooms, sign-in, the worker
   (`cron/automation`), read-only status (`sync`, `health/*`) and exports.
 - **Auth:** `src/lib/auth.ts` over `session-token.ts` (a jose-signed cookie).
-  **Authorize on every request, never in the token or the proxy.**
+  **Authorize on every request, never in the token.**
   `getSessionUser` re-checks the session epoch and re-resolves the role from
   `ADMIN_STEAM_IDS` (`resolveSessionRole`) on every call, so removing an admin
-  revokes their cookie at once. `src/proxy.ts` only re-issues an ageing cookie
-  with the same uid, epoch and sign-in time (180-day cap); keep
-  `session-token.ts` free of the database and `next/headers`: the proxy
-  imports it. Bumping `session-epoch.ts` signs everyone out, `npm run
-  set-admins` reconciles stored roles, `/api/auth/dev` needs `ALLOW_DEV_LOGIN`,
-  and `bootstrapAdminSteamId` is a local-development fallback only.
+  revokes their cookie at once. A session over a week old is re-issued with
+  the same uid, epoch and sign-in time (180-day cap) by one call a week: the
+  layout mounts `<SessionRefresh>` only when `getSessionRefreshDue` says so,
+  and `POST /api/auth/refresh` runs `refreshSessionCookie`. **Add no Next
+  proxy or middleware:** each is its own often-cold Vercel function on every
+  page load (`session-refresh.test.ts`). Bumping `session-epoch.ts` signs
+  everyone out, `npm run set-admins` reconciles stored roles, `/api/auth/dev`
+  needs `ALLOW_DEV_LOGIN`, and `bootstrapAdminSteamId` is a local-development
+  fallback only.
 - **UI:** the kit is `src/components/ui.tsx` (server-safe). Home is
   `src/app/page.tsx` plus `src/components/home/` (the shared hero and one view
   per phase). The match page is the folder `src/app/matches/[id]/`: `load.ts`

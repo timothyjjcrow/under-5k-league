@@ -13,7 +13,8 @@ import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
 import { NavigationContextTracker } from "@/components/context-back-link";
 import { SiteAnalytics } from "@/components/site-analytics";
-import { getSessionUser } from "@/lib/auth";
+import { SessionRefresh } from "@/components/session-refresh";
+import { getSessionRefreshDue, getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
 import { draftNightSoon } from "@/lib/draft-setup";
 import { prisma } from "@/lib/prisma";
@@ -100,7 +101,7 @@ export default async function RootLayout({
   );
   // The draft status, the viewer's signup and their fantasy entry are
   // request-cached (queries.ts): Home's page and link preview reuse them.
-  const [myTeam, draftStatus, registration, seriesLive, seasonHasGames, fantasyEntered] =
+  const [myTeam, draftStatus, registration, seriesLive, seasonHasGames, fantasyEntered, sessionRefreshDue] =
     await Promise.all([
       user && season
         ? prisma.teamMember.findFirst({
@@ -141,6 +142,9 @@ export default async function RootLayout({
         season?.status === "COMPLETE")
         ? getViewerFantasyEntered(season.id, user.id)
         : false,
+      // A signed-in session more than a week old asks to be re-issued once
+      // (<SessionRefresh>): a token check, no database.
+      user ? getSessionRefreshDue() : false,
     ]);
   const navContent: NavContent = {
     hasHistory,
@@ -212,6 +216,8 @@ export default async function RootLayout({
         <NavigationContextTracker />
         {/* Observe worker progress so parked pages refresh after results land. */}
         <ResultSyncPing initialCursor={resultCursorAtRender} />
+        {/* Keeps an active player signed in: one call a week at most. */}
+        {sessionRefreshDue ? <SessionRefresh /> : null}
         {/* The SDK counts navigation, not room polling or server refreshes. */}
         {process.env.VERCEL_ENV === "production" ? <SiteAnalytics /> : null}
       </body>

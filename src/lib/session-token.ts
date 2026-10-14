@@ -1,9 +1,11 @@
 import { SignJWT, jwtVerify } from "jose";
 
-// The session JWT itself: signing, verifying and the sliding refresh. Kept
-// free of the database and of next/headers so src/proxy.ts can re-issue an
-// ageing cookie before a page renders. Everything that decides WHETHER a
-// session still counts (the session epoch, the user row, the admin
+// The session JWT itself: signing, verifying and the sliding refresh, as pure
+// functions over the token and a clock (no database, no next/headers), so
+// they are unit-tested on their own. The weekly re-issue runs in
+// refreshSessionCookie (auth.ts) behind POST /api/auth/refresh, which a page
+// asks for only when sessionRefreshDue says so. Everything that decides
+// WHETHER a session still counts (the session epoch, the user row, the admin
 // allowlist) stays in getSessionUser (auth.ts), which runs on every request
 // whatever token the browser holds.
 
@@ -40,7 +42,7 @@ export const SESSION_MAX_AGE_SECONDS = 30 * DAY_SECONDS;
 /**
  * A session this old is re-issued on the next page visit, so someone who
  * plays every week never meets the 30-day expiry mid-season. A week keeps
- * re-issues rare: one Set-Cookie per player per week at most.
+ * re-issues rare: one refresh call per player per week at most.
  */
 export const SESSION_REFRESH_AFTER_SECONDS = 7 * DAY_SECONDS;
 
@@ -117,29 +119,38 @@ export async function verifySessionToken(
 }
 
 /**
- * A re-issued copy of `token` when it is due one, else null.
- *
- * Due means: validly signed and unexpired, issued at least
- * SESSION_REFRESH_AFTER_SECONDS ago, and the new token would still end
- * within SESSION_ABSOLUTE_MAX_SECONDS of the sign-in. The copy keeps the
- * SAME uid, epoch and sign-in time, so revoking all sessions (an epoch bump)
- * still rejects it, and the admin allowlist is still re-read on every request
- * because nothing about the role is in the token.
+ * Is this verified session due a re-issue at `nowMs`? Due means: issued at
+ * least SESSION_REFRESH_AFTER_SECONDS ago, and the new token would still end
+ * within SESSION_ABSOLUTE_MAX_SECONDS of the sign-in. The page decides with
+ * this whether to ask for a refresh at all; refreshSessionToken decides with
+ * it again before signing.
+ */
+export function sessionRefreshDue(
+  session: VerifiedSession,
+  nowMs = Date.now(),
+): boolean {
+  if (session.iat === null) return false;
+  const now = nowSeconds(nowMs);
+  if (now - session.iat < SESSION_REFRESH_AFTER_SECONDS) return false;
+  const signedInAt = session.at ?? session.iat;
+  return now + SESSION_MAX_AGE_SECONDS <= signedInAt + SESSION_ABSOLUTE_MAX_SECONDS;
+}
+
+/**
+ * A re-issued copy of `token` when it is due one (validly signed, unexpired
+ * and `sessionRefreshDue`), else null. The copy keeps the SAME uid, epoch and
+ * sign-in time, so revoking all sessions (an epoch bump) still rejects it,
+ * and the admin allowlist is still re-read on every request because nothing
+ * about the role is in the token.
  */
 export async function refreshSessionToken(
   token: string,
   nowMs = Date.now(),
 ): Promise<string | null> {
   const session = await verifySessionToken(token, nowMs);
-  if (!session || session.iat === null) return null;
-  const now = nowSeconds(nowMs);
-  if (now - session.iat < SESSION_REFRESH_AFTER_SECONDS) return null;
-  const signedInAt = session.at ?? session.iat;
-  if (now + SESSION_MAX_AGE_SECONDS > signedInAt + SESSION_ABSOLUTE_MAX_SECONDS) {
-    return null;
-  }
+  if (!session || !sessionRefreshDue(session, nowMs)) return null;
   return signSessionToken(
-    { uid: session.uid, ep: session.ep, at: signedInAt },
+    { uid: session.uid, ep: session.ep, at: session.at ?? session.iat! },
     nowMs,
   );
 }

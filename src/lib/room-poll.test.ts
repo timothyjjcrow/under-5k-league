@@ -17,11 +17,15 @@ describe("inhousePollCadence", () => {
     expect(inhousePollCadence({
       ...base, hidden: false, hasStake: true, lobbyStatus: null,
     })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_MS });
-    for (const lobbyStatus of [INHOUSE_STATUS.READY_CHECK, INHOUSE_STATUS.CAPTAIN_VOTE, INHOUSE_STATUS.DRAFTING, INHOUSE_STATUS.READY]) {
+    for (const lobbyStatus of [INHOUSE_STATUS.READY_CHECK, INHOUSE_STATUS.CAPTAIN_VOTE, INHOUSE_STATUS.DRAFTING]) {
       expect(inhousePollCadence({
         ...base, hidden: false, hasStake: true, lobbyStatus,
       })).toEqual({ skip: false, delayMs: FAST });
     }
+    // Game setup has no clock: ten people joining a Dota lobby.
+    expect(inhousePollCadence({
+      ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.READY,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_SETUP_MS });
     // Waiting is a long state: a queue that takes an afternoon to fill must
     // not poll like a ready check (the hosting budget, constants.ts).
     expect(INHOUSE.POLL_QUEUE_MS).toBeGreaterThanOrEqual(10_000);
@@ -68,11 +72,11 @@ describe("inhousePollCadence", () => {
 
   it("polls a READY game at the game rate once it is plausibly being played", () => {
     // Start is optional, so a game hosted by hand is READY for its whole
-    // length. Setup (the fast rate) ends when the result scan's window opens.
+    // length. Setup (POLL_SETUP_MS) ends when the result scan's window opens.
     const scanOpensAt = Date.UTC(2026, 8, 28, 20, 15);
     const ready = { ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.READY, scanOpensAt };
     expect(inhousePollCadence({ ...ready, serverNow: scanOpensAt - 1 })).toEqual({
-      skip: false, delayMs: FAST,
+      skip: false, delayMs: INHOUSE.POLL_SETUP_MS,
     });
     for (const serverNow of [scanOpensAt, scanOpensAt + 40 * 60_000]) {
       expect(inhousePollCadence({ ...ready, serverNow })).toEqual({
@@ -81,11 +85,19 @@ describe("inhousePollCadence", () => {
     }
     // An unknown window or clock keeps the setup rate.
     expect(inhousePollCadence({ ...ready, scanOpensAt: null, serverNow: scanOpensAt })).toEqual({
-      skip: false, delayMs: FAST,
+      skip: false, delayMs: INHOUSE.POLL_SETUP_MS,
     });
     expect(inhousePollCadence({ ...ready, serverNow: null })).toEqual({
-      skip: false, delayMs: FAST,
+      skip: false, delayMs: INHOUSE.POLL_SETUP_MS,
     });
+    // A room that asks for something slower than setup's rate keeps it.
+    expect(inhousePollCadence({ ...ready, activeMs: 8000, serverNow: scanOpensAt - 1 })).toEqual({
+      skip: false, delayMs: 8000,
+    });
+    // Setup is minutes of joining a lobby, with no clock: well above the fast
+    // rate, yet quick enough that the Start answer or a cancel shows promptly.
+    expect(INHOUSE.POLL_SETUP_MS).toBeGreaterThanOrEqual(3 * FAST);
+    expect(INHOUSE.POLL_SETUP_MS).toBeLessThanOrEqual(INHOUSE.POLL_QUEUE_MS);
     // The window only speaks for READY: a draft past it is still a draft.
     expect(inhousePollCadence({
       ...ready, lobbyStatus: INHOUSE_STATUS.DRAFTING, serverNow: scanOpensAt + 1,

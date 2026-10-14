@@ -142,10 +142,12 @@ export function roomPollCadence(
 
 /**
  * Membership controls background updates; the phase controls foreground speed.
- * Only ready checks, captain votes, draft picks and game setup need the fast rate.
- * Game setup ends when a READY lobby is plausibly being played
- * (inhouseReadyInPlay): Start is optional, so a game hosted by hand stays
- * READY for its whole length and must poll at the game rate like IN_PROGRESS.
+ * Only ready checks, captain votes and draft picks need the fast rate. Game
+ * setup (READY) is timed only in that it ends: it polls at `POLL_SETUP_MS`
+ * (or a slower `activeMs`), and ends when a READY lobby is plausibly being
+ * played (inhouseReadyInPlay): Start is optional, so a game hosted by hand
+ * stays READY for its whole length and must poll at the game rate like
+ * IN_PROGRESS.
  *
  * Every other state is a long wait, so it polls slowly: each poll is a
  * function call on the Vercel Hobby plan both leagues share (constants.ts).
@@ -194,8 +196,11 @@ export function inhousePollCadence(
     (readyInPlay || o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS);
   const ownLobby = o.lobbyStatus != null && o.inLobby !== false;
   const playing = inGame && ownLobby;
+  const setup = timedPhase && o.lobbyStatus === INHOUSE_STATUS.READY;
   const activeMs = timedPhase
-    ? o.activeMs
+    ? setup
+      ? Math.max(o.activeMs, INHOUSE.POLL_SETUP_MS)
+      : o.activeMs
     : playing
       ? INHOUSE.POLL_GAME_MS
       : INHOUSE.POLL_QUEUE_MS;

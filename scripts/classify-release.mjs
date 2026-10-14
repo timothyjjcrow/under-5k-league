@@ -40,9 +40,11 @@ const STRICT_FILES = new Set([
   "postcss.config.js",
   "postcss.config.mjs",
   "postcss.config.ts",
-  // The Next proxy refreshes the session cookie on page loads. It never
-  // touches the database and never matches /api, so never the cron route
-  // (src/proxy.test.ts pins the matcher).
+  // The Next proxy that re-issued the session cookie on page loads, removed
+  // 2026-10-14 (a separate, often-cold Vercel function on every signed-in
+  // page load; POST /api/auth/refresh does it weekly now). Named so its
+  // deletion stays strict without impact flags; session-refresh.test.ts
+  // refuses a new one.
   "src/proxy.ts",
   "tsconfig.json",
   "vercel.json",
