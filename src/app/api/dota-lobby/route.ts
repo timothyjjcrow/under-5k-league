@@ -16,6 +16,7 @@ import {
 import { UserFacingError } from "@/lib/user-facing-error";
 import { rateLimit } from "@/lib/rate-limit";
 import { prisma } from "@/lib/prisma";
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -119,10 +120,14 @@ export async function POST(req: NextRequest) {
     if (kind === "inhouse" && playable && status.state === "started") {
       // The GC has confirmed a running game. A cancelled/replaced lobby can
       // never be resurrected by this delayed response.
-      await prisma.inhouseLobby.updateMany({
+      const started = await prisma.inhouseLobby.updateMany({
         where: { id, status: "READY" },
         data: { status: "IN_PROGRESS", startedAt: new Date() },
       });
+      // The game's clocks moved (the abandon floor now runs from startedAt).
+      // Room polls no longer run maintenance every 2s, so nothing else would
+      // tell the automation gate.
+      if (started.count > 0) invalidateAutomationGateBestEffort();
     }
     // The bot's list carries Steam ids: the browser gets the roster's names
     // with each seat, and the status alone, never the reply as it came.

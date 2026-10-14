@@ -19,6 +19,12 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
+// The bot's IN_PROGRESS write expires the automation gate (the abandon floor
+// moves to startedAt); spied so the test can see when.
+vi.mock("@/lib/automation-gate-invalidation", () => ({
+  invalidateAutomationGateBestEffort: vi.fn(),
+}));
+import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
 const keyPrefix = LEAGUE_CONFIG.region === "eu" ? "eu:" : "";
 
 beforeEach(() => {
@@ -350,6 +356,43 @@ describe("Dota lobby authorization and settings", () => {
       (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } }))
         .status,
     ).toBe("CANCELLED");
+  });
+  it("expires the automation gate only when the bot's start lands", async () => {
+    const user = await makeUser("Captain");
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        players: { create: { userId: user.id, team: 1, isCaptain: true } },
+      },
+    });
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+    const gate = vi.mocked(invalidateAutomationGateBestEffort);
+    gate.mockClear();
+    // A status read with the game not started yet writes nothing.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ state: "lobby" })));
+    await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+    expect(gate).not.toHaveBeenCalled();
+
+    // A fresh Response per call: a body can be read once.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => Response.json({ state: "started" })),
+    );
+    expect(
+      (await POST(request({ kind: "inhouse", id: lobby.id, action: "status" })))
+        .status,
+    ).toBe(200);
+    expect(
+      (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status,
+    ).toBe("IN_PROGRESS");
+    expect(gate).toHaveBeenCalledOnce();
+
+    // Already started: the guarded write matches nothing, so no signal.
+    expect(
+      (await POST(request({ kind: "inhouse", id: lobby.id, action: "status" })))
+        .status,
+    ).toBe(200);
+    expect(gate).toHaveBeenCalledOnce();
   });
   it.each(["COMPLETED", "CANCELLED"])(
     "does not resurrect a game changed to %s while the bot response is pending",

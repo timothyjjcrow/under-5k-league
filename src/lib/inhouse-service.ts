@@ -83,6 +83,12 @@ import { clampMmrToRank } from "./rank";
 import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { raceHook } from "./race-hook";
+import {
+  inhouseAllAccepted,
+  inhouseAllVoted,
+  inhouseClockDue,
+  inhouseDraftPool,
+} from "./inhouse-room-due";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
 import type { SessionUser } from "./auth";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
@@ -635,11 +641,12 @@ export async function resolveReadyCheck(): Promise<boolean> {
         },
       });
       if (!lobby) return false;
-      const allAccepted =
-        lobby.players.length > 0 && lobby.players.every((p) => p.acceptedAt);
-      if (allAccepted) return startCaptainVote(tx, lobby.id);
-      const expired =
-        !!lobby.acceptEndsAt && lobby.acceptEndsAt.getTime() <= Date.now();
+      // The room poll's due check (inhouse-room-due.ts) asks these same two
+      // predicates; change them there, never here alone.
+      if (inhouseAllAccepted(lobby.players)) {
+        return startCaptainVote(tx, lobby.id);
+      }
+      const expired = inhouseClockDue(lobby.acceptEndsAt, Date.now());
       if (!expired) return false;
       // Timed out with pending players: they ignored the Discord ping, the
       // chime and the tab flash for the whole accept window — proven AFK,
@@ -755,10 +762,9 @@ export async function resolveCaptainVote(): Promise<boolean> {
       });
       if (!lobby) return false;
 
-      const allVoted =
-        lobby.players.length > 0 && lobby.players.every((p) => p.votedMethod);
-      const expired =
-        !!lobby.voteEndsAt && lobby.voteEndsAt.getTime() <= Date.now();
+      // Shared with the room poll's due check (inhouse-room-due.ts).
+      const allVoted = inhouseAllVoted(lobby.players);
+      const expired = inhouseClockDue(lobby.voteEndsAt, Date.now());
       if (!allVoted && !expired) return false;
 
       const method = tallyMethod(
@@ -1125,21 +1131,20 @@ export async function resolveStalledPick(): Promise<boolean> {
           },
           include: { players: true },
         });
+        // Shared with the room poll's due check (inhouse-room-due.ts).
         if (
           !lobby ||
           !lobby.pickEndsAt ||
-          lobby.pickEndsAt.getTime() > Date.now()
+          !inhouseClockDue(lobby.pickEndsAt, Date.now())
         ) {
           return false;
         }
-        const pool = lobby.players
-          .filter((p) => p.team === null)
-          .sort(
-            (a, b) =>
-              b.mmr - a.mmr ||
-              a.queuedAt.getTime() - b.queuedAt.getTime() ||
-              a.userId.localeCompare(b.userId),
-          );
+        const pool = inhouseDraftPool(lobby.players).sort(
+          (a, b) =>
+            b.mmr - a.mmr ||
+            a.queuedAt.getTime() - b.queuedAt.getTime() ||
+            a.userId.localeCompare(b.userId),
+        );
         if (pool.length === 0) return false;
         // Seam: the clock was judged expired on the read above and nothing is
         // written yet, so a rival on another connection commits here without

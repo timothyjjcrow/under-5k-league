@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import { REASON_RESOLVER } from "./inhouse-room-due";
 
 // SOURCE-LEVEL PARITY GUARD for the inhouse resolver chain, which lives
 // in TWO places on purpose:
@@ -137,5 +138,16 @@ describe("inhouse resolver-chain parity", () => {
           `a deliberate add/remove, update BOTH chains and EXPECTED together.`,
       ).toEqual(EXPECTED);
     }
+  });
+
+  it("the room poll's due check can wake every resolver the room runs", () => {
+    // A signed-in poll runs the chain only when inhouseRoomDue names a reason
+    // (inhouse-room-state.ts). A resolver with no reason there would only
+    // ever run from the one-minute worker. maybeAutoDetectResult is the one
+    // exception: room polls pass detectResults: false.
+    const woken = [...new Set(Object.values(REASON_RESOLVER))].sort();
+    expect(woken).toEqual(
+      EXPECTED.filter((name) => name !== "maybeAutoDetectResult"),
+    );
   });
 });

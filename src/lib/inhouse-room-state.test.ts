@@ -1,0 +1,99 @@
+import { describe, expect, it } from "vitest";
+import { sourceFile, sourceFiles } from "../../test/support/source-files";
+
+// SOURCE GUARDS for the room poll (inhouse-room-state.ts). Its behaviour is
+// tested in test/integration/inhouse-room-poll.itest.ts; these pin the shape
+// no behavioural test can see:
+//
+// - the poll never runs a resolver itself. Maintenance goes only through
+//   getInhouseState(runMaintenance: true) after winning the 2s claim, so the
+//   resolver chain stays the one the parity guard checks;
+// - the route's state branch hands the poll the session and claims nothing;
+// - the resolvers and the due check decide with the same predicates.
+
+/** Lines with code only: comments may quote what the code must not do. */
+const code = (src: string) =>
+  src
+    .split("\n")
+    .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+    .join("\n");
+
+/** One top-level function's text, from its declaration to the next one. */
+function fn(src: string, name: string): string {
+  const start = src.search(
+    new RegExp(`\\n(export )?(async )?function ${name}\\b`),
+  );
+  if (start === -1) return "";
+  const rest = src.slice(start + 1);
+  const next = rest.search(/\n(export |async function |function |const |type )/);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+describe("the room poll's source", () => {
+  // Every module of the poll: the pure rules, its memory and the poll itself.
+  const poll = sourceFiles("src/lib/inhouse-room-*.ts", 3);
+
+  it("never awaits a resolver in any of its modules", () => {
+    for (const file of poll) {
+      expect(
+        [...code(file.text).matchAll(/await ((?:resolve|maybe)[A-Z]\w*)\(/g)].map(
+          (m) => m[1],
+        ),
+        `${file.path} calls a resolver; maintenance runs only through getInhouseState`,
+      ).toEqual([]);
+    }
+  });
+
+  it("runs maintenance only through getInhouseState, after claiming the throttle", () => {
+    const state = poll.find((f) => f.path === "src/lib/inhouse-room-state.ts");
+    expect(state, "inhouse-room-state.ts moved; re-point this guard").toBeTruthy();
+    const body = code(fn(state!.text, "pollInhouseState"));
+    expect(body.length).toBeGreaterThan(0);
+    const calls = [...body.matchAll(/getInhouseState\(/g)];
+    expect(calls).toHaveLength(1);
+    const call = body.indexOf("getInhouseState(");
+    const claim = body.lastIndexOf("claimThrottle(", call);
+    expect(claim, "getInhouseState must follow a claimThrottle(").toBeGreaterThan(-1);
+    expect(body.slice(claim, call)).toContain("INHOUSE_ROOM_MAINTENANCE_AT");
+    expect(body.slice(call, call + 200)).toMatch(/runMaintenance: true/);
+    expect(body.slice(call, call + 200)).toMatch(/detectResults: false/);
+    // The heartbeat goes through the one guarded writer, after its seam.
+    const seam = body.indexOf('raceHook("inhouse.pollInhouseState.beforeHeartbeat")');
+    const touch = body.indexOf("touchQueueHeartbeat(");
+    expect(seam).toBeGreaterThan(-1);
+    expect(touch).toBeGreaterThan(seam);
+    // No write of its own to the inhouse tables.
+    for (const file of poll) {
+      expect(code(file.text)).not.toMatch(
+        /\.(inhouseQueueEntry|inhouseLobby|inhouseLobbyPlayer)\.(update|updateMany|create|createMany|upsert|delete|deleteMany)\(/,
+      );
+    }
+  });
+
+  it("the route's state branch polls and claims nothing itself", () => {
+    const route = code(sourceFile("src/app/api/inhouse/route.ts").text);
+    const branch = route.slice(
+      route.indexOf('if (action === "state")'),
+      route.indexOf("requireSameOrigin(req)"),
+    );
+    expect(branch).toContain("getSessionUser()");
+    expect(branch).toContain("pollInhouseState(user)");
+    expect(branch).not.toContain("claimThrottle(");
+    expect(branch).not.toContain("getInhouseState(");
+    expect(route).not.toContain("claimThrottle(");
+  });
+
+  it("the resolvers decide with the due check's predicates", () => {
+    const service = code(sourceFile("src/lib/inhouse-service.ts").text);
+    const expectations: [string, string[]][] = [
+      ["resolveReadyCheck", ["inhouseAllAccepted(", "inhouseClockDue("]],
+      ["resolveCaptainVote", ["inhouseAllVoted(", "inhouseClockDue("]],
+      ["resolveStalledPick", ["inhouseDraftPool(", "inhouseClockDue("]],
+    ];
+    for (const [name, calls] of expectations) {
+      const body = fn(service, name);
+      expect(body.length, `${name} not found`).toBeGreaterThan(0);
+      for (const call of calls) expect(body, `${name} → ${call}`).toContain(call);
+    }
+  });
+});

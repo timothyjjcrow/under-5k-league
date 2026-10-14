@@ -24,7 +24,7 @@ import {
   setInhouseRoles,
   startGame,
 } from "@/lib/inhouse-service";
-import { claimThrottle, SETTING_KEYS } from "@/lib/settings";
+import { pollInhouseState } from "@/lib/inhouse-room-state";
 import {
   readBoundedJsonObject,
   requireJsonContentType,
@@ -90,32 +90,19 @@ export async function POST(req: NextRequest) {
         },
       );
     }
+    // Authorization on every request; the poll decides what is due.
     const user = await getSessionUser();
-    const runMaintenance = user
-      ? await claimThrottle(
-          SETTING_KEYS.INHOUSE_ROOM_MAINTENANCE_AT,
-          2,
-          Date.now(),
-        )
-      : false;
+    let invalidateGate = false;
     try {
-      return NextResponse.json(
-        await getInhouseState(user, {
-          runMaintenance,
-          // The authenticated worker owns automatic result scans. A room
-          // refresh must not wait on a chain of OpenDota requests; manual
-          // detect/record controls keep their existing explicit paths.
-          detectResults: false,
-          // The same fleet-wide winner repaints Discord. A losing poll remains a
-          // personalized DB read and never multiplies provider traffic.
-          syncBoard: runMaintenance,
-        }),
-      );
+      const polled = await pollInhouseState(user);
+      invalidateGate = polled.invalidateGate;
+      return NextResponse.json(polled.state);
     } finally {
-      // Only the throttle winner may resolve lobby clocks, form/abandon a
-      // lobby, or enqueue repairs. Queue a fresh snapshot; the hard wake
-      // bounds any older fill that happens to finish after this signal.
-      if (runMaintenance) {
+      // Only a signed-in poll that won the 2s maintenance claim, flipped a
+      // queued player back to present or edited the board changed what the
+      // gate schedules on. Queue a fresh snapshot; the hard wake bounds any
+      // older fill that happens to finish after this signal.
+      if (invalidateGate) {
         invalidateAutomationGateBestEffort();
       }
     }

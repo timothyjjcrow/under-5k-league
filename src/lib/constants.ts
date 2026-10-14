@@ -433,6 +433,15 @@ export const INHOUSE = {
   // shares with real announcements. The board must always be the one that
   // loses a rate-limit race, never a result or a lobby ping.
   BOARD_MIN_SECONDS: 10,
+  // A room poll with nothing due still checks the board, but each server
+  // instance only when what the board shows has moved since its last check,
+  // or this long after it (inhouse-room-state.ts). Edits made where no poll
+  // sees them, such as a new result reaching the empty board's stats, show
+  // within this window, or sooner through the worker.
+  BOARD_RECHECK_MS: 60_000,
+  // After another poll won the room's 2s maintenance claim, this instance
+  // skips its board checks for this long instead of re-claiming every poll.
+  BOARD_CLAIM_BACKOFF_MS: 2_000,
 } as const;
 
 // Match-night Discord reminder: announced by the leased maintenance worker for

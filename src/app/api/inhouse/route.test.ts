@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   cancelLobby: vi.fn(),
   voidLastResult: vi.fn(),
   removeFromQueue: vi.fn(),
-  claimThrottle: vi.fn(),
+  pollInhouseState: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -51,11 +51,8 @@ vi.mock("@/lib/inhouse-service", () => ({
   voidLastResult: mocks.voidLastResult,
   removeFromQueue: mocks.removeFromQueue,
 }));
-vi.mock("@/lib/settings", () => ({
-  claimThrottle: mocks.claimThrottle,
-  SETTING_KEYS: {
-    INHOUSE_ROOM_MAINTENANCE_AT: "inhouseRoomMaintenanceAt",
-  },
+vi.mock("@/lib/inhouse-room-state", () => ({
+  pollInhouseState: mocks.pollInhouseState,
 }));
 
 import { POST } from "./route";
@@ -107,7 +104,7 @@ beforeEach(() => {
   mocks.getSessionUser.mockResolvedValue(user);
   mocks.clientIp.mockReturnValue("203.0.113.10");
   mocks.rateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
-  mocks.claimThrottle.mockResolvedValue(true);
+  mocks.pollInhouseState.mockResolvedValue({ state, invalidateGate: false });
   mocks.getInhouseState.mockResolvedValue(state);
   for (const action of actionMocks) action.mockResolvedValue({ ok: true });
 });
@@ -146,12 +143,10 @@ describe("POST /api/inhouse request boundary", () => {
       { limit: 1200, windowMs: 60_000 },
       expect.any(Number),
     );
-    expect(mocks.claimThrottle).not.toHaveBeenCalled();
-    expect(mocks.getInhouseState).toHaveBeenCalledWith(null, {
-      runMaintenance: false,
-      detectResults: false,
-      syncBoard: false,
-    });
+    // The poll owns the signed-out rules (reads only); the route hands it
+    // the session as resolved on this request and runs nothing itself.
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(null);
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
@@ -174,6 +169,7 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.rateLimit).not.toHaveBeenCalled();
     expect(mocks.getSessionUser).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.pollInhouseState).not.toHaveBeenCalled();
   });
 
   it.each([null, [], "state", 7, true])(
@@ -207,6 +203,7 @@ describe("POST /api/inhouse request boundary", () => {
     expect(response.headers.get("retry-after")).toBe("1");
     expect(mocks.getSessionUser).not.toHaveBeenCalled();
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.pollInhouseState).not.toHaveBeenCalled();
   });
 
   it("requires authentication for mutations and bounds signed-out attempts by IP", async () => {
@@ -268,36 +265,39 @@ describe("POST /api/inhouse request boundary", () => {
     });
   });
 
-  it("lets the fleet-throttled authenticated poll winner run recovery", async () => {
+  it("polls as the signed-in viewer and expires the gate when the poll changed it", async () => {
+    mocks.pollInhouseState.mockResolvedValue({ state, invalidateGate: true });
+
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(mocks.claimThrottle).toHaveBeenCalledWith(
-      "inhouseRoomMaintenanceAt",
-      2,
-      expect.any(Number),
-    );
-    expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
-      runMaintenance: true,
-      detectResults: false,
-      syncBoard: true,
-    });
+    expect(await response.json()).toEqual(state);
+    expect(mocks.getSessionUser).toHaveBeenCalledOnce();
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user);
+    // Maintenance is the poll's call, never the route's own.
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).toHaveBeenCalledOnce();
     expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
       expire: 0,
     });
   });
 
-  it("returns personalized state without maintenance when another instance owns the throttle", async () => {
-    mocks.claimThrottle.mockResolvedValue(false);
-
+  it("leaves the gate alone when a signed-in poll changed nothing it schedules on", async () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(mocks.getInhouseState).toHaveBeenCalledWith(user, {
-      runMaintenance: false,
-      detectResults: false,
-      syncBoard: false,
-    });
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user);
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("passes a failed poll through without expiring the gate itself", async () => {
+    // pollInhouseState expires the gate on its own throw path once it has
+    // changed something; the route never saw a result to read the flag from.
+    mocks.pollInhouseState.mockRejectedValue(new Error("read failed"));
+
+    await expect(POST(request({ action: "state" }))).rejects.toThrow(
+      "read failed",
+    );
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
