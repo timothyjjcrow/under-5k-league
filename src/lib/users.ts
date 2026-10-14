@@ -7,6 +7,7 @@ import {
 } from "./dota-account";
 import { retireStaleDotaAccountClaims } from "./dota-account-service";
 import { placeholderPersona, steamProfileUrl } from "./steam";
+import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { SETTING_KEYS } from "./settings";
 
 type UpsertInput = {
@@ -87,7 +88,7 @@ export async function upsertLeagueUser(
   const bootstrapAllowed = process.env.NODE_ENV !== "production";
   const verifiedDotaAccountId = steamIdToAccountId(input.steamId);
 
-  return prisma.$transaction(async (tx) => {
+  const user = await prisma.$transaction(async (tx) => {
     if (verifiedDotaAccountId != null) {
       // Steam OpenID proves ownership of `input.steamId`, and a Dota account
       // id is deterministically derived from that identity. Older versions of
@@ -165,6 +166,10 @@ export async function upsertLeagueUser(
       },
     });
   });
+  // Rule P: a login refreshes the Steam name and avatar the inhouse room
+  // shows. After the commit, before the session cookie goes out.
+  await publishInhouseRoomChange();
+  return user;
 }
 
 /**

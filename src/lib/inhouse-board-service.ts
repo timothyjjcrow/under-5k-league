@@ -545,6 +545,22 @@ export async function inhouseBoardNeedsSync(
 }
 
 /**
+ * What one syncInhouseBoard call did. Callers that only need the board kept
+ * in step can ignore it; the room poll's per-instance board memo
+ * (inhouse-room-state.ts) settles on every outcome except "throttled" and
+ * "failed", which leave the board behind and must be tried again.
+ */
+export type InhouseBoardSyncOutcome =
+  | "off" // Discord writes disabled here, or no board posted
+  | "no-webhook" // the board's webhook is unset (left alone)
+  | "cleared" // the webhook moved channel; the stranded board was forgotten
+  | "unchanged" // the render matches the stored digest: no request
+  | "throttled" // the render moved but another edit is inside the cooldown
+  | "edited" // Discord accepted the edit
+  | "failed" // the edit failed; the old digest stays, so it is retried
+  | "gone"; // the message is gone; the board turned itself off
+
+/**
  * Bring the board in line with reality. Safe to call on any hot path — it is
  * a no-op (one PK read) when the board isn't set up, and a second no-op when
  * the rendered state hasn't moved.
@@ -554,30 +570,30 @@ export async function inhouseBoardNeedsSync(
  */
 export async function syncInhouseBoard(
   snapshot?: BoardSnapshotInput,
-): Promise<void> {
+): Promise<InhouseBoardSyncOutcome> {
   // A production snapshot can include the live board's credential and state.
   // Preview must not edit the real message or mutate its copied retry/throttle
   // bookkeeping as though an intentional safety block were an outage.
-  if (!discordMutationsAllowed()) return;
+  if (!discordMutationsAllowed()) return "off";
   const raw = await getSetting(SETTING_KEYS.INHOUSE_BOARD);
   const state = parseState(raw);
-  if (!state || !raw) return; // off — the cheap exit, taken on almost every call
+  if (!state || !raw) return "off"; // the cheap exit, taken on almost every call
 
   const url = await getInhouseWebhookUrl();
   // No webhook configured: leave the row alone. The admin may be mid-rotation,
   // and dropping the board here would silently orphan a live message (same
   // rule as never burning an announcement marker when Discord isn't wired up).
-  if (!url) return;
+  if (!url) return "no-webhook";
   if (webhookIdOf(url) !== state.webhookId) {
     // Different channel now. The old message is stranded where we can no
     // longer edit it; forget it rather than write into the wrong place.
     await clearStateIf(raw);
-    return;
+    return "cleared";
   }
 
   const snap = await resolveSnapshot(snapshot ?? (await loadBoardSnapshot()));
   const { digest, embed } = renderBoard(snap);
-  if (digest === state.digest) return; // nothing changed — no request, no write
+  if (digest === state.digest) return "unchanged"; // no request, no write
 
   // Spam floor. Losing the claim is fine and self-correcting: the digest still
   // differs, so the next poll tries again. That retry-on-difference property is
@@ -597,7 +613,7 @@ export async function syncInhouseBoard(
       snap.nowMs,
     ))
   ) {
-    return;
+    return "throttled";
   }
 
   const res = await patchWebhookMessage(url, state.messageId, {
@@ -610,11 +626,13 @@ export async function syncInhouseBoard(
       lastOkAt: new Date(snap.nowMs).toISOString(),
       failures: 0,
     });
+    return "edited";
   } else if (res === "failed") {
     // Keep the OLD digest so the next poll retries, but record that it broke —
     // otherwise a board whose every edit is failing is indistinguishable from
     // a board with nothing to say.
     await swapState(raw, { ...state, failures: (state.failures ?? 0) + 1 });
+    return "failed";
   } else if (res === "gone") {
     // Somebody deleted the message (or the webhook died). Deleting the board in
     // Discord is the natural "turn it off" gesture, so we stop rather than
@@ -623,7 +641,11 @@ export async function syncInhouseBoard(
     // Guarded: an admin can post a fresh board during the round trip, and this
     // 404 is about the OLD message, not that one.
     await clearStateIf(raw);
+    return "gone";
   }
+  // Exhaustive over WebhookEditResult: a new result must choose its outcome.
+  const unknown: never = res;
+  return unknown;
 }
 
 /** Admin: post the board for the first time and start tracking it. */

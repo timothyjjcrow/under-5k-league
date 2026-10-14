@@ -410,6 +410,9 @@ export const INHOUSE = {
   // off the shared OpenDota budget). Most results land well inside it; the
   // scan itself keeps going until the give-up floor either way.
   AWAITING_RESULT_WATCH_MINUTES: 60,
+  // The room's post-game banner: a viewer sees the result of the newest game
+  // they played that completed within this long (from completedAt).
+  LAST_RESULT_WINDOW_MS: 10 * 60_000,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
   //
@@ -430,6 +433,22 @@ export const INHOUSE = {
   // shares with real announcements. The board must always be the one that
   // loses a rate-limit race, never a result or a lobby ping.
   BOARD_MIN_SECONDS: 10,
+  // A room poll with nothing due still checks the board, but each server
+  // instance only when what the board shows has moved since its last check,
+  // or this long after it (inhouse-room-state.ts). Edits made where no poll
+  // sees them, such as a new result reaching the empty board's stats, show
+  // within this window, or sooner through the worker.
+  BOARD_RECHECK_MS: 60_000,
+  // After another poll won the room's 2s maintenance claim, this instance
+  // skips its board checks for this long instead of re-claiming every poll.
+  BOARD_CLAIM_BACKOFF_MS: 2_000,
+  // A server instance's room snapshot (inhouse-room-cache.ts) is rebuilt at
+  // least this often even when no publish moved the room version: the bound
+  // on writers that never publish (an admin's display edit, the worker's rank
+  // refresh) and on a publish lost between commit and statement. Far under
+  // the away cutoff, so a presence judged from a snapshot is never wrong for
+  // longer than this.
+  ROOM_SNAPSHOT_MAX_AGE_MS: 15_000,
 } as const;
 
 // Match-night Discord reminder: announced by the leased maintenance worker for

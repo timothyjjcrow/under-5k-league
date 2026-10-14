@@ -144,9 +144,12 @@ Captain report, admin import, league feed and roster scan all end in
 - **The scheduler is the only clock.** `GET /api/cron/automation` checks
   `Authorization: Bearer <CRON_SECRET>` first, then `runAutomation`
   (`automation-service.ts`) takes the single global lease and runs
-  `runResultSync` within `AUTOMATION_WORK_BUDGET_MS`. Page traffic never runs
-  maintenance. The admin run-now action (`src/app/actions/automation.ts`) uses
-  the same worker.
+  `runResultSync` within `AUTOMATION_WORK_BUDGET_MS`. Pages, `/api/sync` and
+  anonymous polls never run maintenance. The one exception is a signed-in
+  room poll that wins a 2s `claimThrottle` (the inhouse room's only when its
+  snapshot shows a resolver due, [inhouse](inhouse.md#scope-and-where-it-runs)):
+  it resolves that room at once, and it never scans OpenDota. The admin
+  run-now action (`src/app/actions/automation.ts`) uses the same worker.
 - **Keep the automation gate honest.** Before leasing, the route asks
   `getAutomationGateDecision` (cached under `AUTOMATION_GATE_TAG`) and answers
   `NOT_DUE` when nothing is due. A mutation that creates or moves due work

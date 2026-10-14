@@ -167,6 +167,9 @@ test("positions in the draft, then Game over frees the ten before the result lan
     where: { id: lobbyId },
     data: { createdAt: new Date(Date.now() - 20 * 60_000) },
   });
+  // A direct write bypasses the services, so fence the room's snapshot (the
+  // fixture route publishes a new room version) before the room reads it.
+  expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
   await page.reload();
   await page.setViewportSize({ width: 375, height: 812 });
 

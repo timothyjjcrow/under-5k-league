@@ -73,12 +73,23 @@ import {
   stampResultChange,
   SETTING_KEYS,
 } from "./settings";
-import { lobbyView, syncInhouseBoard } from "./inhouse-board-service";
+import {
+  lobbyView,
+  syncInhouseBoard,
+  type BoardSnapshotInput,
+} from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
 import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
+import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { raceHook } from "./race-hook";
+import {
+  inhouseAllAccepted,
+  inhouseAllVoted,
+  inhouseClockDue,
+  inhouseDraftPool,
+} from "./inhouse-room-due";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
 import type { SessionUser } from "./auth";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
@@ -206,6 +217,9 @@ async function formOneLobby(): Promise<boolean> {
   // "Game 2" when another game is already live, so the ping isn't a repeat.
   let gameLabel: string | null = null;
   let formed = false;
+  // Rows the queue reset deleted. It commits even when no lobby forms (the
+  // callback then returns false), and the room must be told either way.
+  let expired = 0;
   try {
     formed = await prisma.$transaction(
       async (tx) => {
@@ -214,7 +228,7 @@ async function formOneLobby(): Promise<boolean> {
         // Missing heartbeats can mean a suspended browser tab, not a leave.
         // SERIALIZABLE preserves the existing join-versus-reset ordering;
         // active lobby membership lives in a separate table and is untouched.
-        await expireStaticQueue(tx, now);
+        expired = (await expireStaticQueue(tx, now)).count;
 
         const live = await tx.inhouseLobby.findMany({
           where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -308,6 +322,9 @@ async function formOneLobby(): Promise<boolean> {
     if (code === "P2034" || code === "P2002") return false;
     throw e;
   }
+  // Rule P: committed (a new lobby, or a reset queue), so tell the room
+  // before the ping, which can take seconds on Discord.
+  if (formed || expired > 0) await publishInhouseRoomChange();
   if (formed && lobbyPlayers.length > 0) {
     const roleId = await getInhousePingRoleId();
     await sendInhouseDiscordMessage(
@@ -631,11 +648,12 @@ export async function resolveReadyCheck(): Promise<boolean> {
         },
       });
       if (!lobby) return false;
-      const allAccepted =
-        lobby.players.length > 0 && lobby.players.every((p) => p.acceptedAt);
-      if (allAccepted) return startCaptainVote(tx, lobby.id);
-      const expired =
-        !!lobby.acceptEndsAt && lobby.acceptEndsAt.getTime() <= Date.now();
+      // The room poll's due check (inhouse-room-due.ts) asks these same two
+      // predicates; change them there, never here alone.
+      if (inhouseAllAccepted(lobby.players)) {
+        return startCaptainVote(tx, lobby.id);
+      }
+      const expired = inhouseClockDue(lobby.acceptEndsAt, Date.now());
       if (!expired) return false;
       // Timed out with pending players: they ignored the Discord ping, the
       // chime and the tab flash for the whole accept window — proven AFK,
@@ -751,10 +769,9 @@ export async function resolveCaptainVote(): Promise<boolean> {
       });
       if (!lobby) return false;
 
-      const allVoted =
-        lobby.players.length > 0 && lobby.players.every((p) => p.votedMethod);
-      const expired =
-        !!lobby.voteEndsAt && lobby.voteEndsAt.getTime() <= Date.now();
+      // Shared with the room poll's due check (inhouse-room-due.ts).
+      const allVoted = inhouseAllVoted(lobby.players);
+      const expired = inhouseClockDue(lobby.voteEndsAt, Date.now());
       if (!allVoted && !expired) return false;
 
       const method = tallyMethod(
@@ -1121,21 +1138,20 @@ export async function resolveStalledPick(): Promise<boolean> {
           },
           include: { players: true },
         });
+        // Shared with the room poll's due check (inhouse-room-due.ts).
         if (
           !lobby ||
           !lobby.pickEndsAt ||
-          lobby.pickEndsAt.getTime() > Date.now()
+          !inhouseClockDue(lobby.pickEndsAt, Date.now())
         ) {
           return false;
         }
-        const pool = lobby.players
-          .filter((p) => p.team === null)
-          .sort(
-            (a, b) =>
-              b.mmr - a.mmr ||
-              a.queuedAt.getTime() - b.queuedAt.getTime() ||
-              a.userId.localeCompare(b.userId),
-          );
+        const pool = inhouseDraftPool(lobby.players).sort(
+          (a, b) =>
+            b.mmr - a.mmr ||
+            a.queuedAt.getTime() - b.queuedAt.getTime() ||
+            a.userId.localeCompare(b.userId),
+        );
         if (pool.length === 0) return false;
         // Seam: the clock was judged expired on the read above and nothing is
         // written yet, so a rival on another connection commits here without
@@ -1386,6 +1402,9 @@ export async function joinQueue(
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
   }
+  // Rule P: the join committed. Publish before forming (which publishes its
+  // own lobby) and before the milestone ping below.
+  await publishInhouseRoomChange();
   const formed = await maybeFormLobby();
 
   // "Almost there" Discord ping: only when THIS join crosses the milestone
@@ -1430,16 +1449,18 @@ async function claimQueuePingThrottle(nowMs: number): Promise<boolean> {
 /**
  * Refresh availability without renewing the shared idle deadline or requiring
  * a browser tab to stay foregrounded. The conditional update only writes
- * once per QUEUE_HEARTBEAT_SECONDS, so pollers don't hammer the DB.
+ * once per QUEUE_HEARTBEAT_SECONDS, so pollers don't hammer the DB. Returns
+ * how many rows it wrote (0 or 1): the WHERE is the only enforcement point.
  */
-async function touchQueueHeartbeat(viewerId: string): Promise<void> {
+export async function touchQueueHeartbeat(viewerId: string): Promise<number> {
   const staleBefore = new Date(
     Date.now() - INHOUSE.QUEUE_HEARTBEAT_SECONDS * 1000,
   );
-  await prisma.inhouseQueueEntry.updateMany({
+  const touched = await prisma.inhouseQueueEntry.updateMany({
     where: { userId: viewerId, lastSeenAt: { lt: staleBefore } },
     data: { lastSeenAt: new Date() },
   });
+  return touched.count;
 }
 
 /** Remove the current user from the queue. No-op if they're not queued. */
@@ -2041,6 +2062,9 @@ async function applyResult(
     await stampResultChange(tx);
     return true;
   });
+  // Rule P: COMPLETED (and, when finalized, its Elo swing, which the room's
+  // post-game banner shows) is committed; the delivery below is Discord.
+  await publishInhouseRoomChange();
   if (!finalized) return "closed";
 
   // Preserve the immediate announcement when Discord is healthy, but only
@@ -2324,6 +2348,8 @@ export async function autoDetectResult(
       error: "Just checked — give it a few seconds and try again",
     };
   }
+  // Rule P: the claim's detectedAt is committed; the lookup is OpenDota.
+  await publishInhouseRoomChange();
   // The press's claim stamps detectedAt, which holds the scheduled scan off
   // for an interval, so the press does the scan's whole job — bot id first.
   const now = Date.now();
@@ -2584,6 +2610,8 @@ export async function maybeAutoDetectResult(
       data: { detectedAt: new Date(now) },
     });
     if (claim.count === 0) continue;
+    // Rule P: the claim is committed; the lookup below is OpenDota.
+    await publishInhouseRoomChange();
 
     // Only the claim winner needs a roster. Re-check the exact live claim
     // while loading it so a cancellation or successor scan that already
@@ -2636,6 +2664,7 @@ export async function maybeAutoDetectResult(
         },
         data: { detectedAt: lobby.detectedAt },
       });
+      await publishInhouseRoomChange();
       return finish(true);
     }
     if (found && (await applyResult(lobby.id, found)) === "recorded") {
@@ -2751,6 +2780,10 @@ export async function voidLastResult(
   // can hide the correction from a sleeping worker.
   invalidateAutomationGateBestEffort();
   await stampResultChange();
+  // Rule P: the room drops the voided banner before Discord hears of it.
+  // After the cursor stamp: a board check that sees the new version must
+  // also see the moved cursor, or it settles on the pre-void stats.
+  await publishInhouseRoomChange();
 
   // Post-claim, so only the winner of a concurrent void writes the record —
   // the cancelLobby ordering. The lobby reads CANCELLED like any abandoned
@@ -3038,50 +3071,29 @@ type ReadyCheckBlock = {
   }[];
 };
 
-/** Everything the inhouse room client needs, tailored to the viewing user. */
-export async function getInhouseState(
-  viewer: SessionUser | null,
-  /**
-   * `runMaintenance: false` turns this into a side-effect-free spectator
-   * snapshot. Anonymous traffic must never be able to advance a lobby, call
-   * OpenDota, or edit Discord; the leased one-minute worker and
-   * authenticated room participants retain those recovery paths.
-   *
-   * Set `syncBoard: false` on the mutation path so a button press never waits
-   * on Discord — see the board sync at the bottom of this function.
-   */
-  {
-    runMaintenance = true,
-    syncBoard = true,
-    detectResults = true,
-  }: {
-    runMaintenance?: boolean;
-    syncBoard?: boolean;
-    /** Room HTTP polls use the leased worker for automatic OpenDota scans. */
-    detectResults?: boolean;
-  } = {},
-) {
-  // Heartbeat before forming: the polling viewer must count as present.
-  if (viewer) await touchQueueHeartbeat(viewer.id);
-  if (runMaintenance) {
-    // Abandoned lobbies first: each frees a game slot, so maybeFormLobby can
-    // form the next game on this poll instead of the one after.
-    await resolveAbandonedLobby();
-    await maybeFormLobby();
-    await resolveReadyCheck();
-    await resolveCaptainVote();
-    await resolveStalledPick();
-    if (detectResults) await maybeAutoDetectResult();
-  }
-
-  const isAdmin = viewer?.role === "ADMIN";
-  const [queue, lobbyRows, pendingRows, viewerRow] = await Promise.all([
+/**
+ * The room's viewer-independent rows: everything a room reply is built from
+ * except the viewer's own positions (loadViewerExtras). The same for every
+ * viewer, so one read serves any of them.
+ *
+ * SERVER MEMORY ONLY. The lobby rows carry every player's captain-vote ballot
+ * (votedMethod, votedNomineeId); only buildInhouseState may turn them into a
+ * reply, where they leave as the viewer's own `myVote` and the tallies. Never
+ * serialize, log or return these rows.
+ *
+ * `nowMs` opens the post-game banner window; a later build narrows it with
+ * its own clock, so pass a time no later than the build's.
+ */
+export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
+  const [queue, lobbies, pending, recentResults] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       select: {
         userId: true,
         mmr: true,
+        joinedAt: true,
         lastSeenAt: true,
+        idleExpiresAt: true,
         user: {
           select: {
             name: true,
@@ -3153,33 +3165,54 @@ export async function getInhouseState(
           select: {
             userId: true,
             team: true,
-            user: { select: { name: true } },
+            user: { select: { name: true, inhouseRoles: true } },
           },
         },
       },
     }),
-    viewer
-      ? prisma.user.findUnique({
-          where: { id: viewer.id },
-          select: { inhouseRoles: true },
-        })
-      : Promise.resolve(null),
+    // Personal end-of-game payoff: the active-statuses query above drops a
+    // COMPLETED lobby instantly, so the room would silently snap to the
+    // queue. The games completed inside the banner window (a night has a
+    // handful), newest first; buildInhouseState shows a viewer the newest
+    // one they played. `completedAt` is immutable result time; `updatedAt` is
+    // deliberately not used because any later write to the row would
+    // resurface an old game as the newest banner.
+    prisma.inhouseLobby.findMany({
+      where: {
+        status: INHOUSE_STATUS.COMPLETED,
+        completedAt: { gte: new Date(nowMs - INHOUSE.LAST_RESULT_WINDOW_MS) },
+      },
+      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
+      select: {
+        id: true,
+        completedAt: true,
+        winnerTeam: true,
+        radiantTeam: true,
+        radiantScore: true,
+        direScore: true,
+        eloDeltas: true,
+        players: { select: { userId: true, team: true } },
+      },
+    }),
   ]);
 
   // Positions, read live. A player who never chose inhouse roles shows their
   // latest league signup's: one batched read, and none at all once everyone
-  // shown has chosen.
-  const signupRoles = new Map<string, string>();
+  // shown has chosen. Pending games' players are in the batch so a viewer
+  // whose only game is marked over still needs no read of their own.
+  const signupRoles: { userId: string; roles: string }[] = [];
   {
     const unset = new Set<string>();
     for (const q of queue) if (q.user.inhouseRoles == null) unset.add(q.userId);
-    for (const l of lobbyRows) {
+    for (const l of lobbies) {
       for (const p of l.players) {
         if (p.user.inhouseRoles == null) unset.add(p.userId);
       }
     }
-    if (viewer && viewerRow && viewerRow.inhouseRoles == null) {
-      unset.add(viewer.id);
+    for (const g of pending) {
+      for (const p of g.players) {
+        if (p.user.inhouseRoles == null) unset.add(p.userId);
+      }
     }
     if (unset.size > 0) {
       const regs = await prisma.registration.findMany({
@@ -3187,11 +3220,118 @@ export async function getInhouseState(
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: { userId: true, roles: true },
       });
+      const seen = new Set<string>();
       for (const r of regs) {
-        if (!signupRoles.has(r.userId)) signupRoles.set(r.userId, r.roles);
+        if (seen.has(r.userId)) continue;
+        seen.add(r.userId);
+        signupRoles.push({ userId: r.userId, roles: r.roles });
       }
     }
   }
+
+  return { queue, lobbies, pending, recentResults, signupRoles };
+}
+
+export type InhouseRoomRows = Awaited<ReturnType<typeof loadInhouseRoomRows>>;
+
+/**
+ * The viewer's own positions: their inhouse choice, and their latest signup's
+ * when they never chose. Null signed out, or when their user row is gone.
+ */
+export type InhouseViewerExtras = {
+  inhouseRoles: string | null;
+  signupRoles: string | undefined;
+} | null;
+
+/** The viewer's joined user row, when the room rows already hold it. */
+function viewerUserInRows(
+  userId: string,
+  rows: InhouseRoomRows,
+): { inhouseRoles: string | null } | null {
+  for (const q of rows.queue) if (q.userId === userId) return q.user;
+  for (const l of rows.lobbies) {
+    for (const p of l.players) if (p.userId === userId) return p.user;
+  }
+  for (const g of rows.pending) {
+    for (const p of g.players) if (p.userId === userId) return p.user;
+  }
+  return null;
+}
+
+/**
+ * The per-viewer part of a room reply. No read at all when the viewer is in
+ * the rows (queued, in a live game, or in a game marked over): the batch
+ * already holds their signup roles. Otherwise their User row and, only when
+ * they never chose, the same Registration row the batch would have picked.
+ */
+export async function loadViewerExtras(
+  viewer: SessionUser | null,
+  rows: InhouseRoomRows,
+): Promise<InhouseViewerExtras> {
+  if (!viewer) return null;
+  const known = viewerUserInRows(viewer.id, rows);
+  if (known) {
+    return {
+      inhouseRoles: known.inhouseRoles,
+      signupRoles: rows.signupRoles.find((r) => r.userId === viewer.id)?.roles,
+    };
+  }
+  const user = await prisma.user.findUnique({
+    where: { id: viewer.id },
+    select: { inhouseRoles: true },
+  });
+  if (!user) return null;
+  if (user.inhouseRoles != null) {
+    return { inhouseRoles: user.inhouseRoles, signupRoles: undefined };
+  }
+  const reg = await prisma.registration.findFirst({
+    where: { userId: viewer.id, roles: { not: "" } },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { roles: true },
+  });
+  return { inhouseRoles: null, signupRoles: reg?.roles };
+}
+
+/**
+ * The Discord queue board's input from the room rows. lobbyView is shared
+ * with loadBoardSnapshot so the two builders can never describe the same
+ * lobby differently (a disagreement would make the two paths repaint each
+ * other's digest in a loop). Both list the live games in game order and the
+ * present names in queue order.
+ */
+export function boardInputFrom(
+  rows: InhouseRoomRows,
+  nowMs: number,
+): BoardSnapshotInput {
+  const presentEntries = rows.queue.filter(
+    (q) => queuePresence(q.lastSeenAt.getTime(), nowMs) === "present",
+  );
+  return {
+    presentNames: presentEntries.map((q) => q.user.name),
+    awayCount: rows.queue.length - presentEntries.length,
+    lobbySize: INHOUSE.LOBBY_SIZE,
+    lobbies: rows.lobbies.map(lobbyView),
+    siteUrl: resolveSiteUrl(),
+    nowMs,
+  };
+}
+
+/**
+ * Everything the inhouse room client needs, tailored to the viewing user.
+ * PURE: no read, no write, no clock but `nowMs`. The one place ballots turn
+ * into a reply (the viewer's own `myVote` and the tallies).
+ */
+export function buildInhouseState(
+  viewer: SessionUser | null,
+  rows: InhouseRoomRows,
+  extras: InhouseViewerExtras,
+  nowMs: number,
+) {
+  const { queue, lobbies: lobbyRows, pending: pendingRows } = rows;
+  const isAdmin = viewer?.role === "ADMIN";
+  const signupRoles = new Map<string, string>(
+    rows.signupRoles.map((r) => [r.userId, r.roles]),
+  );
   const rolesOf = (userId: string, own: string | null) => {
     const { roles, source } = effectiveInhouseRoles(
       own,
@@ -3202,7 +3342,7 @@ export async function getInhouseState(
 
   // Records were snapshotted onto the player rows at lobby formation — the
   // vote and draft views read them without a history scan on every poll.
-  const now = Date.now();
+  const now = nowMs;
   const toView = (p: LobbyPlayerRow): PlayerView => ({
     userId: p.userId,
     name: p.user.name,
@@ -3388,12 +3528,9 @@ export async function getInhouseState(
       }
     : null;
 
-  // Personal end-of-game payoff: the active-statuses query above drops a
-  // COMPLETED lobby instantly, so the room would silently snap to the queue.
-  // Probe cheaply (the 1.5s poll must not scan history every tick) for a
-  // completed lobby the viewer just played. `completedAt` is immutable result
-  // time; `updatedAt` is deliberately not used because any later write to the
-  // row would resurface an old game as the newest banner.
+  // Personal end-of-game payoff, from the rows' recent results (see
+  // loadInhouseRoomRows): the live-games read drops a COMPLETED lobby
+  // instantly, so without it the room would silently snap to the queue.
   let lastResult: null | {
     lobbyId: string;
     winnerSide: "Radiant" | "Dire";
@@ -3403,26 +3540,15 @@ export async function getInhouseState(
     eloDelta: number;
   } = null;
   if (viewer) {
-    const recent = await prisma.inhouseLobby.findFirst({
-      where: {
-        status: INHOUSE_STATUS.COMPLETED,
-        completedAt: { gte: new Date(now - 10 * 60_000) },
-        players: { some: { userId: viewer.id } },
-      },
-      orderBy: [{ completedAt: "desc" }, { id: "desc" }],
-      select: {
-        id: true,
-        winnerTeam: true,
-        radiantTeam: true,
-        radiantScore: true,
-        direScore: true,
-        eloDeltas: true,
-        players: {
-          where: { userId: viewer.id },
-          select: { userId: true, team: true },
-        },
-      },
-    });
+    // The newest game in the window that the viewer played. A newest game
+    // with no winner shows nothing: there is no fallback to an older one.
+    const recent =
+      rows.recentResults.find(
+        (r) =>
+          r.completedAt != null &&
+          r.completedAt.getTime() >= now - INHOUSE.LAST_RESULT_WINDOW_MS &&
+          r.players.some((pl) => pl.userId === viewer.id),
+      ) ?? null;
     if (recent && recent.winnerTeam != null) {
       let eloDelta = 0;
       try {
@@ -3477,35 +3603,6 @@ export async function getInhouseState(
     (q) => queuePresence(q.lastSeenAt.getTime(), now) === "present",
   );
   const presentCount = presentEntries.length;
-
-  // Keep the pinned Discord board in step. Everything it needs is already
-  // loaded, so an enabled board costs one Setting read per poll and an edit
-  // only when the rendered state actually moved; a board that was never set up
-  // costs the read alone. Awaited on purpose — Vercel kills orphaned work
-  // after the response, so a fire-and-forget edit would land at random.
-  //
-  // ONLY ON THE POLL PATH (`syncBoard`, default on). /api/inhouse answers
-  // every MUTATION with this same state payload, so without the opt-out the
-  // player who pressed ACCEPT is precisely the request that renders the
-  // changed digest, wins the throttle claim and then blocks on Discord for up
-  // to 2.5s — on the accept/vote/pick clocks, where seconds are the whole
-  // point. The route passes syncBoard:false there; that client's own poll
-  // lands ~250ms later (act() nudges the loop via bumpPollRef) and carries the
-  // board instead, on a request nobody is waiting on.
-  if (syncBoard) {
-    await syncInhouseBoard({
-      presentNames: presentEntries.map((q) => q.user.name),
-      awayCount: queue.length - presentCount,
-      lobbySize: INHOUSE.LOBBY_SIZE,
-      // lobbyView is shared with loadBoardSnapshot so the two builders can
-      // never describe the same lobby differently (a disagreement would make
-      // the two paths repaint each other's digest in a loop). Both list the
-      // live games in game order.
-      lobbies: lobbyRows.map(lobbyView),
-      siteUrl: resolveSiteUrl(),
-      nowMs: now,
-    });
-  }
 
   return {
     now,
@@ -3576,14 +3673,81 @@ export async function getInhouseState(
       canCancel: !!lobby && viewer?.role === "ADMIN",
       /** The viewer's positions and where they came from (null signed out). */
       roles:
-        viewer && viewerRow
-          ? effectiveInhouseRoles(
-              viewerRow.inhouseRoles,
-              signupRoles.get(viewer.id),
-            )
+        viewer && extras
+          ? effectiveInhouseRoles(extras.inhouseRoles, extras.signupRoles)
           : null,
     },
   };
 }
 
-export type InhouseState = Awaited<ReturnType<typeof getInhouseState>>;
+/** Everything the inhouse room client needs, tailored to the viewing user. */
+export async function getInhouseState(
+  viewer: SessionUser | null,
+  /**
+   * `runMaintenance: false` turns this into a side-effect-free spectator
+   * snapshot. Anonymous traffic must never be able to advance a lobby, call
+   * OpenDota, or edit Discord; the leased one-minute worker and
+   * authenticated room participants retain those recovery paths.
+   *
+   * Set `syncBoard: false` on the mutation path so a button press never waits
+   * on Discord — see the board sync at the bottom of this function.
+   */
+  {
+    runMaintenance = true,
+    syncBoard = true,
+    detectResults = true,
+  }: {
+    runMaintenance?: boolean;
+    syncBoard?: boolean;
+    /** Room HTTP polls use the leased worker for automatic OpenDota scans. */
+    detectResults?: boolean;
+  } = {},
+) {
+  // Heartbeat before forming: the polling viewer must count as present.
+  if (viewer) await touchQueueHeartbeat(viewer.id);
+  if (runMaintenance) {
+    try {
+      // Abandoned lobbies first: each frees a game slot, so maybeFormLobby
+      // can form the next game on this poll instead of the one after.
+      await resolveAbandonedLobby();
+      await maybeFormLobby();
+      await resolveReadyCheck();
+      await resolveCaptainVote();
+      await resolveStalledPick();
+      if (detectResults) await maybeAutoDetectResult();
+    } finally {
+      // Rule P: one unconditional publish for the whole chain, before the
+      // reads and the board edit below (a resolver's own result says nothing
+      // about writes such as the queue reset or a restored pick turn). In a
+      // finally: when a later resolver throws, the earlier ones' commits are
+      // still announced. It never throws, so the original error propagates.
+      await publishInhouseRoomChange();
+    }
+  }
+
+  const rows = await loadInhouseRoomRows(Date.now());
+  const extras = await loadViewerExtras(viewer, rows);
+  const now = Date.now();
+
+  // Keep the pinned Discord board in step. Everything it needs is already
+  // loaded, so an enabled board costs one Setting read per poll and an edit
+  // only when the rendered state actually moved; a board that was never set up
+  // costs the read alone. Awaited on purpose — Vercel kills orphaned work
+  // after the response, so a fire-and-forget edit would land at random.
+  //
+  // ONLY ON THE POLL PATH (`syncBoard`, default on). /api/inhouse answers
+  // every MUTATION with this same state payload, so without the opt-out the
+  // player who pressed ACCEPT is precisely the request that renders the
+  // changed digest, wins the throttle claim and then blocks on Discord for up
+  // to 2.5s — on the accept/vote/pick clocks, where seconds are the whole
+  // point. The route passes syncBoard:false there; that client's own poll
+  // lands ~250ms later (act() nudges the loop via bumpPollRef) and carries the
+  // board instead, on a request nobody is waiting on.
+  if (syncBoard) {
+    await syncInhouseBoard(boardInputFrom(rows, now));
+  }
+
+  return buildInhouseState(viewer, rows, extras, now);
+}
+
+export type InhouseState = ReturnType<typeof buildInhouseState>;

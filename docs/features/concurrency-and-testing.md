@@ -85,6 +85,52 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   `$transaction` for this reason; its rival is an admin removal, which a blind
   write would turn from REMOVED into a WITHDRAWN the player can re-register from.
 
+## Per-instance caches: the inhouse room snapshot
+
+Each server instance serves the inhouse room from one copy of its rows,
+labelled with the `inhouseRoomVersion` Setting and checked on every poll
+(`src/lib/inhouse-room-cache.ts`, `inhouse-room-version.ts`; the rules are in
+[inhouse](inhouse.md#scope-and-where-it-runs)). SQLite and a single test
+process hide every way it can go stale, as they hide races.
+
+- **Rule P: after any commit the room shows, call `publishInhouseRoomChange()`
+  before any Discord or OpenDota call and before the response.** An
+  instance that rebuilds during a provider call would label the new rows with
+  the old version while other instances serve the old rows under it, and a
+  tab moving between instances goes backwards (a drafted player back in the
+  pool). The sites are a closed set, guarded by
+  `src/lib/inhouse-room-publish.test.ts`. Publish as soon as the commit
+  lands, not at the end of the request (a follow-up read is a window too),
+  and in a `finally` where a later step can throw after an earlier commit.
+- **Never publish inside a transaction.** It is a write to one hot Setting row:
+  inside the Serializable `joinQueue` or `formOneLobby` it adds P2034 aborts,
+  and `formOneLobby` takes those as "someone else formed". It runs after the
+  commit as one `INSERT … ON CONFLICT`, so it cannot fail on a missing row on
+  either provider, and it never throws (the change already committed).
+- **Read the label before the rows.** A load stores under the version it read
+  first, so a commit that lands mid-load leaves a label that no longer
+  matches. A stored entry is never trusted past `ROOM_SNAPSHOT_MAX_AGE_MS`.
+- **Two seams, both on both providers.** `inhouse.roomCache.beforeStore` sits
+  between a load's reads and its store: the rival makes a pick and publishes,
+  and every poll after the publish must show the pick. Run it with the rival
+  publishing through the same instance (the local fence catches it) and
+  through another (only the version label can). `inhouse.pollInhouseState.
+  beforeHeartbeat` sits between the heartbeat decision and
+  `touchQueueHeartbeat`: a rival heartbeat writes a distinctive time, and the
+  WHERE must refuse to overwrite it. Assert `fired` on both.
+- **Test a second instance with a second module graph.** `vi.resetModules()`
+  then a dynamic `import()` of the route (or `inhouse-room-version.ts`) gives
+  its own snapshot and local publish count over the same database. Warm both,
+  write through one, and the other's next poll must show it
+  (`test/integration/inhouse-room-cache.itest.ts`). A one-instance test passes
+  with the version check deleted, since the local fence alone catches it.
+- **Test the provider window from inside the stub.** Stub the Discord and
+  OpenDota transports and, in the stub, assert `readInhouseRoomVersion()`
+  already differs from the version taken before the writer ran.
+- **Race on Postgres:** twenty publishes on a missing row (no error, one row),
+  and fifty rounds of a poll raced against a pick, after which the viewer's
+  polls never go backwards.
+
 ## Lessons for closing a guard gap
 
 - **"Something upstream serializes this" only covers rivals from the SAME path.**

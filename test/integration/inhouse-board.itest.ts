@@ -790,8 +790,56 @@ describe("inhouse board — failure handling", () => {
 
   it("survives a corrupt row without throwing on a poll", async () => {
     await setSetting(SETTING_KEYS.INHOUSE_BOARD, "{not json");
-    await expect(syncInhouseBoard()).resolves.toBeUndefined();
+    // A corrupt row reads as no board: off, not a throw.
+    await expect(syncInhouseBoard()).resolves.toBe("off");
     expect(mockPatch).not.toHaveBeenCalled();
+  });
+});
+
+describe("inhouse board — what each sync reports", () => {
+  // The room poll's board memo (inhouse-room-state.ts) settles on every
+  // outcome but "throttled" and "failed", so each must be reported truly.
+  it("off, no-webhook, unchanged, edited, throttled, failed, gone and cleared", async () => {
+    await enqueue(3);
+    expect(await syncInhouseBoard()).toBe("off");
+    await createInhouseBoard();
+    await expireThrottle();
+
+    mockHook.mockResolvedValueOnce(null);
+    expect(await syncInhouseBoard()).toBe("no-webhook");
+    expect(await syncInhouseBoard()).toBe("unchanged");
+
+    await enqueue(1, "a");
+    expect(await syncInhouseBoard()).toBe("edited");
+    await enqueue(1, "b");
+    expect(await syncInhouseBoard()).toBe("throttled");
+
+    await expireThrottle();
+    mockPatch.mockResolvedValueOnce("failed");
+    expect(await syncInhouseBoard()).toBe("failed");
+
+    await expireThrottle();
+    mockPatch.mockResolvedValueOnce("gone");
+    expect(await syncInhouseBoard()).toBe("gone");
+    expect(await boardRow()).toBeNull();
+
+    await createInhouseBoard();
+    mockHook.mockResolvedValue(OTHER_HOOK);
+    expect(await syncInhouseBoard()).toBe("cleared");
+    expect(await boardRow()).toBeNull();
+  });
+
+  it("is off wherever Discord writes are off", async () => {
+    await enqueue(3);
+    await createInhouseBoard();
+    await enqueue(1, "a");
+    process.env.VERCEL_ENV = "preview";
+    try {
+      expect(await syncInhouseBoard()).toBe("off");
+      expect(mockPatch).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.VERCEL_ENV;
+    }
   });
 });
 

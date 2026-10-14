@@ -49,6 +49,7 @@ import {
   deliverInhouseAnnouncements,
   reconcileMissingInhouseResultAnnouncements,
 } from "./inhouse-announcement-outbox";
+import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { raceHook } from "./race-hook";
 import {
   resolveExpiredNomination,
@@ -589,6 +590,10 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
     };
   }
   await resolveStalledPick();
+  // Rule P: the resolvers' writes are committed. Publish before the OpenDota
+  // scan, the announcement drain and the board sync below, which can take
+  // seconds (the caller's finally covers the early returns above).
+  await publishInhouseRoomChange();
   if (!canStartWork(options, 12_500)) {
     return {
       recorded: false,
@@ -1111,7 +1116,14 @@ export async function runResultSync(
   // unavailable workflow cannot suppress the other two.
   const [leagueResult, inhouseResult, draftResult] = await Promise.all([
     settle(() => syncDueMatches(nowMs, options), RESULT_SYNC_SKIPPED.LEAGUE),
-    settle(() => syncInhouse(options), RESULT_SYNC_SKIPPED.INHOUSE),
+    settle(async () => {
+      try {
+        return await syncInhouse(options);
+      } finally {
+        // Rule P for the deadline early returns between the resolvers.
+        await publishInhouseRoomChange();
+      }
+    }, RESULT_SYNC_SKIPPED.INHOUSE),
     settle(() => syncDraftClocks(nowMs, options), RESULT_SYNC_SKIPPED.DRAFT),
   ]);
 

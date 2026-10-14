@@ -1,6 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { test, expect, type Browser, type BrowserContext, type Page } from "@playwright/test";
 import { MID_DB_URL } from "../playwright.midseason.config";
+import { INHOUSE } from "../src/lib/constants";
 import { serializeInhouseNight } from "../src/lib/inhouse-night";
 import {
   expectNoHorizontalOverflow,
@@ -229,6 +230,15 @@ async function setPlans(plans: Plans, nowMs: number, midnightMs: number) {
   });
 }
 
+/**
+ * Fence the inhouse room after a direct write: the fixture route publishes a
+ * new room version, so no server instance serves its snapshot from before.
+ */
+async function fenceRoom(baseURL: string) {
+  const res = await fetch(`${baseURL}/api/test/cache`, { method: "POST" });
+  expect(res.ok).toBe(true);
+}
+
 /** `present` players here: the queued viewer first, then the others. */
 async function setQueue(present: number, nowMs: number) {
   await db.inhouseQueueEntry.deleteMany();
@@ -402,6 +412,13 @@ async function check(
   // A room poll that loses SQLite's write lock answers 500 (production is
   // Postgres); the room retries by itself, so give it the time to.
   await expect(card).toBeVisible({ timeout: 30_000 });
+  // The room shows the queue this check wrote (its first reply, not an
+  // earlier one), before anything is measured.
+  await expect(card.getByRole("progressbar").first()).toHaveAttribute(
+    "aria-valuenow",
+    String(Math.min(present, INHOUSE.LOBBY_SIZE)),
+    { timeout: 30_000 },
+  );
   const expectBar = plans.times > 0 || plans.night !== "none";
   if (expectBar) {
     await expect(page.locator("#inhouse-plans")).toBeVisible();
@@ -583,6 +600,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
       const nowMs = Date.now();
       await setPlans(plans, nowMs, midnightMs);
       await setQueue(present, nowMs);
+      await fenceRoom(baseURL!);
       // The queued player is the one present at 1 (with nobody here there is
       // no one queued to view it as).
       const viewers: Viewer[] =
@@ -614,6 +632,7 @@ test("the whole inhouse queue is on the first screen, with the plans bar, at eve
     const nowMs = Date.now();
     await setPlans(plans, nowMs, midnightMs);
     await setQueue(6, nowMs);
+    await fenceRoom(baseURL!);
     for (const viewer of ["out", "queued"] as const) {
       for (const viewport of VIEWPORTS) {
         failures.push(...(await check(pages[viewer].page, viewport, viewer, 6, plans)));
