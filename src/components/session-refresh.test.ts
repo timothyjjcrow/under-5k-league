@@ -1,8 +1,7 @@
-import { existsSync } from "node:fs";
-import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   sourceFile,
+  sourceFiles,
   stripLineComments,
 } from "../../test/support/source-files";
 
@@ -22,15 +21,32 @@ describe("session refresh wiring (source)", () => {
     expect(layout.match(/<SessionRefresh/g)).toHaveLength(1);
   });
 
-  it("asks once, by POST, with a timeout, and ignores the answer", () => {
-    expect(component).toMatch(/fetch\("\/api\/auth\/refresh", \{\s*method: "POST",\s*signal: AbortSignal\.timeout\(REFRESH_TIMEOUT_MS\),\s*\}\)\.catch\(\(\) => \{\}\);/);
+  it("asks once, by POST, under a timeout, and ignores the answer", () => {
+    expect(component).toMatch(
+      /fetch\("\/api\/auth\/refresh", \{ method: "POST", signal: controller\.signal \}\)\s*\.catch\(\(\) => \{\}\)/,
+    );
+    expect(component).toMatch(
+      /const timer = setTimeout\(\(\) => controller\.abort\(\), REFRESH_TIMEOUT_MS\);/,
+    );
     expect(component).toMatch(/useEffect\(\(\) => \{[^]*\}, \[\]\);/);
     expect(component.match(/fetch\(/g)).toHaveLength(1);
   });
 
+  // Log out is a form post: a refresh answered after it must not set the
+  // cookie the logout just cleared, so a submit aborts the call first.
+  it("aborts the call when any form is submitted, before the post leaves", () => {
+    expect(component).toMatch(/const stop = \(\) => controller\.abort\(\);/);
+    expect(component).toMatch(/document\.addEventListener\("submit", stop, true\);/);
+    expect(component.match(/document\.removeEventListener\("submit", stop, true\);/g)).toHaveLength(2);
+  });
+
+  // Next finds ^(proxy|middleware)\.<page extension>$ at the root or in src/;
+  // any of them is a function on every matched request.
   it("leaves the app with no Next proxy or middleware", () => {
-    for (const file of ["src/proxy.ts", "src/middleware.ts", "proxy.ts", "middleware.ts"]) {
-      expect(existsSync(join(process.cwd(), file)), file).toBe(false);
-    }
+    const found = sourceFiles(
+      ["{,src/}{proxy,middleware}.{ts,tsx,js,jsx,mjs,cjs,mts,cts}"],
+      0,
+    ).map((f) => f.path);
+    expect(found).toEqual([]);
   });
 });

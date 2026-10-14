@@ -327,10 +327,10 @@ describe("live rooms delegate their poll policy", () => {
 
   it("inhouse-room tells the cadence and the tab title when a READY game is being played", () => {
     // Start is optional, so a game hosted by hand is READY for its whole
-    // length; inhouseReadyInPlay ends READY's fast poll and "(!) Teams locked"
-    // once the scan window opens. Its tests prove nothing if the room stops
-    // passing the window and the clock: READY would silently go back to
-    // polling every 1.5s, with a "(!)" in the tab, for the whole game.
+    // length; inhouseReadyInPlay ends READY's setup poll (POLL_SETUP_MS) and
+    // "(!) Teams locked" once the scan window opens. Its tests prove nothing if
+    // the room stops passing the window and the clock: READY would silently
+    // poll at the setup rate, with a "(!)" in the tab, for the whole game.
     const src = roomText(INHOUSE_ROOM);
     const uses = [
       ...callArgs(src, "inhousePollCadence"),

@@ -65,6 +65,9 @@ describe("getSessionRefreshDue", () => {
     expect(await getSessionRefreshDue()).toBe(true);
     jar.set(SESSION_COOKIE, await tokenIssued(1));
     expect(await getSessionRefreshDue()).toBe(false);
+    // The layout asks on every signed-in render: a token check, no database.
+    expect(findUnique).not.toHaveBeenCalled();
+    expect(epoch).not.toHaveBeenCalled();
   });
 
   it("is never due without a valid cookie, and reads no database", async () => {

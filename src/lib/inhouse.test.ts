@@ -534,6 +534,14 @@ describe("another live game in the room", () => {
     expect(pollingLobby(null, [inPlay, playing], 200)).toBe(inPlay);
     const settingUp = lobby(INHOUSE_STATUS.READY, 300);
     expect(pollingLobby(null, [playing, settingUp], 200)).toBe(settingUp);
+    // Setup polls slower than a clock: a draft in game 2 beats game 1's
+    // setup, whichever slot each is in.
+    expect(pollingLobby(null, [settingUp, drafting], 200)).toBe(drafting);
+    expect(pollingLobby(null, [drafting, settingUp], 200)).toBe(drafting);
+    for (const status of [INHOUSE_STATUS.READY_CHECK, INHOUSE_STATUS.CAPTAIN_VOTE]) {
+      const clocked = lobby(status);
+      expect(pollingLobby(null, [settingUp, clocked], 200)).toBe(clocked);
+    }
   });
 
   it("refreshes the page below the room when a game ends, not when one forms", () => {

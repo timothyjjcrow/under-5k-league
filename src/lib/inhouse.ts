@@ -577,11 +577,12 @@ export function inhouseTitleFlag(
  *
  * Start is optional, so a game hosted by hand stays READY from team lock
  * until its result imports — the whole game. What READY carries for setup
- * (the fast room poll, the "(!) Teams locked" tab flag) is for the few
- * minutes it takes to get ten people into the Dota lobby, so it ends when the
- * result scan's window opens (`scanOpensAt`, DETECT_READY_MIN_MINUTES after
- * formation — the moment the room starts treating the game as possibly
- * over). From then on the room treats READY like IN_PROGRESS.
+ * (the setup poll, `POLL_SETUP_MS`, and the "(!) Teams locked" tab flag) is
+ * for the few minutes it takes to get ten people into the Dota lobby, so it
+ * ends when the result scan's window opens (`scanOpensAt`,
+ * DETECT_READY_MIN_MINUTES after formation — the moment the room starts
+ * treating the game as possibly over). From then on the room treats READY
+ * like IN_PROGRESS.
  *
  * An unknown window keeps the setup behaviour. `serverNow` is the server
  * clock of the last poll, so the render stays idempotent.
@@ -629,27 +630,28 @@ export function otherGameFlags(isAdmin: boolean, status: string) {
   } as const;
 }
 
-/** Phases on a short clock, which the room polls at its fast rate. */
-const TIMED_PHASES: readonly string[] = [
+/** Phases on a running clock, which the room polls at its fast rate. */
+const CLOCKED_PHASES: readonly string[] = [
   INHOUSE_STATUS.READY_CHECK,
   INHOUSE_STATUS.CAPTAIN_VOTE,
   INHOUSE_STATUS.DRAFTING,
-  INHOUSE_STATUS.READY,
 ];
 
 /**
  * The lobby whose phase sets the room's poll rate: the viewer's own game, or
  * for a spectator the other game on the shortest clock, so watching a draft
- * stays as live as it was when one game ran at a time.
+ * stays as live as it was when one game ran at a time. A clocked phase (fast
+ * rate) beats a game in setup (`POLL_SETUP_MS`), which beats one being played.
  */
 export function pollingLobby<
   T extends { status: string; scanOpensAt: number | null },
 >(mine: T | null, others: readonly T[], serverNow: number | null): T | null {
   if (mine) return mine;
   return (
+    others.find((l) => CLOCKED_PHASES.includes(l.status)) ??
     others.find(
       (l) =>
-        TIMED_PHASES.includes(l.status) &&
+        l.status === INHOUSE_STATUS.READY &&
         !inhouseReadyInPlay(l.status, l.scanOpensAt, serverNow),
     ) ??
     others[0] ??

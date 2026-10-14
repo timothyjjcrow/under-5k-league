@@ -700,7 +700,9 @@ page links it, folded at its foot.
 
 API routes (one per `route.ts` under `src/app/api/`): `/api/auth/steam` +
 `/callback`, `/api/auth/discord` + `/callback`, `/api/auth/dev`,
-`/api/auth/logout` — auth (§2);
+`/api/auth/logout`, `/api/auth/refresh` (same-origin POST, always an empty
+`no-store` 204; `refreshSessionCookie` re-issues a due session that
+`getSessionUser` still accepts) — auth (§2);
 `/api/draft/tick|bid|nominate|admin-nominate` — the auction. Every draft POST
 requires an `application/json` media type and canonical same-origin `Origin`;
 tick takes a 1,200/min/IP preflight before session or database work, then a

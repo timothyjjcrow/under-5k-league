@@ -72,7 +72,7 @@ describe("inhousePollCadence", () => {
 
   it("polls a READY game at the game rate once it is plausibly being played", () => {
     // Start is optional, so a game hosted by hand is READY for its whole
-    // length. Setup (the fast rate) ends when the result scan's window opens.
+    // length. Setup (POLL_SETUP_MS) ends when the result scan's window opens.
     const scanOpensAt = Date.UTC(2026, 8, 28, 20, 15);
     const ready = { ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.READY, scanOpensAt };
     expect(inhousePollCadence({ ...ready, serverNow: scanOpensAt - 1 })).toEqual({
