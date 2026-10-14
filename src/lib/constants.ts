@@ -410,6 +410,9 @@ export const INHOUSE = {
   // off the shared OpenDota budget). Most results land well inside it; the
   // scan itself keeps going until the give-up floor either way.
   AWAITING_RESULT_WATCH_MINUTES: 60,
+  // The room's post-game banner: a viewer sees the result of the newest game
+  // they played that completed within this long (from completedAt).
+  LAST_RESULT_WINDOW_MS: 10 * 60_000,
   // Discord "queue is filling" ping: fires when a join crosses this many
   // PRESENT players, at most once per QUEUE_PING_MIN_MINUTES.
   //

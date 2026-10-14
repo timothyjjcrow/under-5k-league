@@ -38,7 +38,7 @@ const CHAINS = [
     // From the function declaration down to its first state read — the chain
     // is everything awaited before the queue/lobby snapshot is taken.
     start: "export async function getInhouseState",
-    end: "const [queue, lobbyRows",
+    end: "const rows = await loadInhouseRoomRows(",
   },
   {
     label: "syncInhouse (result-sync-service.ts)",
