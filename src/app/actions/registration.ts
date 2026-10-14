@@ -64,6 +64,7 @@ import { claimProviderCooldown, claimThrottle } from "@/lib/settings";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { waitBeforeSerializableRetry } from "@/lib/serializable-retry";
+import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
 
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
@@ -718,6 +719,9 @@ export async function saveRegistration(
         "That signup, season, or draft changed while you submitted — reload before trying again.",
     };
   }
+  // Rule P: the inhouse room shows a player's signup positions when they
+  // never chose inhouse ones. Publish before the Discord announcement below.
+  await publishInhouseRoomChange();
 
   // A new signup consumes this browser's invite tag, credited or not, so the
   // first link is the last word (invite-credit.ts).
@@ -1438,6 +1442,8 @@ async function refreshSteamProfileFor(
     where: { id: user.id },
     data: { name: p.name, avatar: p.avatar, profileUrl: p.profileUrl },
   });
+  // Rule P: the inhouse room shows the name and avatar.
+  await publishInhouseRoomChange();
   refresh();
   return { message: "Profile refreshed from Steam" };
 }

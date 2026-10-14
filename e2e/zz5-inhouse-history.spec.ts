@@ -259,6 +259,9 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     expect(errors).toEqual([]);
   } finally {
     await cleanFixture();
+    // Fence the inhouse room's snapshot too (the route publishes a new room
+    // version): the rows written and deleted here bypassed the services.
+    await page.request.post("/api/test/cache");
     await db.$disconnect();
   }
 });

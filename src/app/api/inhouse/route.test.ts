@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   voidLastResult: vi.fn(),
   removeFromQueue: vi.fn(),
   pollInhouseState: vi.fn(),
+  readInhouseRoomVersion: vi.fn(),
+  publishInhouseRoomChange: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -54,10 +56,15 @@ vi.mock("@/lib/inhouse-service", () => ({
 vi.mock("@/lib/inhouse-room-state", () => ({
   pollInhouseState: mocks.pollInhouseState,
 }));
+vi.mock("@/lib/inhouse-room-version", () => ({
+  readInhouseRoomVersion: mocks.readInhouseRoomVersion,
+  publishInhouseRoomChange: mocks.publishInhouseRoomChange,
+}));
 
 import { POST } from "./route";
 
 const user = { id: "player-1", name: "Player", role: "USER" };
+const VERSION = "room-version-1";
 const state = { now: 1_800_000_000_000, lobby: null, queue: [] };
 const actionMocks = [
   mocks.joinQueue,
@@ -101,11 +108,15 @@ function rawRequest(body: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Order tests below install implementations; start each test without one.
+  mocks.revalidateTag.mockReset();
   mocks.getSessionUser.mockResolvedValue(user);
   mocks.clientIp.mockReturnValue("203.0.113.10");
   mocks.rateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
   mocks.pollInhouseState.mockResolvedValue({ state, invalidateGate: false });
   mocks.getInhouseState.mockResolvedValue(state);
+  mocks.readInhouseRoomVersion.mockResolvedValue(VERSION);
+  mocks.publishInhouseRoomChange.mockResolvedValue(undefined);
   for (const action of actionMocks) action.mockResolvedValue({ ok: true });
 });
 
@@ -145,9 +156,12 @@ describe("POST /api/inhouse request boundary", () => {
     );
     // The poll owns the signed-out rules (reads only); the route hands it
     // the session as resolved on this request and runs nothing itself.
-    expect(mocks.pollInhouseState).toHaveBeenCalledWith(null);
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(null, VERSION);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+    // A poll reads the room version; it never publishes one.
+    expect(mocks.readInhouseRoomVersion).toHaveBeenCalledOnce();
+    expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
   });
 
   it("rejects malformed JSON instead of silently running a state poll", async () => {
@@ -273,7 +287,7 @@ describe("POST /api/inhouse request boundary", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual(state);
     expect(mocks.getSessionUser).toHaveBeenCalledOnce();
-    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user);
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
     // Maintenance is the poll's call, never the route's own.
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
@@ -286,8 +300,9 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user);
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+    expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
   });
 
   it("passes a failed poll through without expiring the gate itself", async () => {
@@ -299,6 +314,107 @@ describe("POST /api/inhouse request boundary", () => {
       "read failed",
     );
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ok", () => {}, 200],
+    [
+      "a refusal",
+      () => mocks.leaveQueue.mockResolvedValue({ ok: false, error: "no" }),
+      400,
+    ],
+  ] as const)(
+    "publishes the room change after %s, before the response and the gate",
+    async (_label, arrange, status) => {
+      arrange();
+      const order: string[] = [];
+      mocks.leaveQueue.mockImplementation(async () => {
+        order.push("dispatch");
+        return status === 200 ? { ok: true } : { ok: false, error: "no" };
+      });
+      mocks.getInhouseState.mockImplementation(async () => {
+        order.push("read");
+        return state;
+      });
+      mocks.publishInhouseRoomChange.mockImplementation(async () => {
+        order.push("publish");
+      });
+      mocks.revalidateTag.mockImplementation(() => {
+        order.push("gate");
+      });
+
+      const response = await POST(request({ action: "leave" }));
+
+      expect(response.status).toBe(status);
+      expect(order).toEqual(
+        status === 200
+          ? ["dispatch", "read", "publish", "gate"]
+          : ["dispatch", "publish", "gate"],
+      );
+    },
+  );
+
+  it.each([
+    ["join", mocks.joinQueue],
+    ["leave", mocks.leaveQueue],
+    ["accept", mocks.acceptMatch],
+    ["decline", mocks.declineMatch],
+    ["vote", mocks.castVote],
+    ["pick", mocks.makePick],
+    ["start", mocks.startGame],
+    ["finish", mocks.finishGame],
+    ["roles", mocks.setInhouseRoles],
+    ["record", mocks.recordMatch],
+    ["detect", mocks.autoDetectResult],
+    ["cancel", mocks.cancelLobby],
+    ["giveup", mocks.giveUpOnResult],
+    ["void", mocks.voidLastResult],
+    ["remove", mocks.removeFromQueue],
+  ] as const)("%s: dispatch, fresh read, publish, then the gate", async (action, service) => {
+    const order: string[] = [];
+    service.mockImplementation(async () => {
+      order.push("dispatch");
+      return { ok: true };
+    });
+    mocks.getInhouseState.mockImplementation(async () => {
+      order.push("read");
+      return state;
+    });
+    mocks.publishInhouseRoomChange.mockImplementation(async () => {
+      order.push("publish");
+    });
+    mocks.revalidateTag.mockImplementation(() => {
+      order.push("gate");
+    });
+
+    const response = await POST(request({ action, mmr: 3000, userId: "u2" }));
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["dispatch", "read", "publish", "gate"]);
+  });
+
+  it("publishes the room change when an action throws", async () => {
+    mocks.makePick.mockRejectedValue(new Error("boom"));
+
+    await expect(
+      POST(request({ action: "pick", userId: "u2" })),
+    ).rejects.toThrow("boom");
+    expect(mocks.publishInhouseRoomChange).toHaveBeenCalledOnce();
+    expect(mocks.revalidateTag).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["signed out", () => mocks.getSessionUser.mockResolvedValue(null), { action: "join" }],
+    ["unknown", () => {}, { action: "launch-missiles" }],
+    [
+      "rate-limited",
+      () => mocks.rateLimit.mockReturnValue({ allowed: false, retryAfterMs: 1_000 }),
+      { action: "leave" },
+    ],
+  ] as const)("publishes nothing for an action never dispatched (%s)", async (_l, arrange, body) => {
+    arrange();
+    await POST(request(body));
+    expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
   });
 
   it("returns 429 before dispatching a rate-limited mutation", async () => {

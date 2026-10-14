@@ -26,6 +26,10 @@ import {
 } from "@/lib/inhouse-service";
 import { pollInhouseState } from "@/lib/inhouse-room-state";
 import {
+  publishInhouseRoomChange,
+  readInhouseRoomVersion,
+} from "@/lib/inhouse-room-version";
+import {
   readBoundedJsonObject,
   requireJsonContentType,
   requireSameOrigin,
@@ -90,11 +94,16 @@ export async function POST(req: NextRequest) {
         },
       );
     }
-    // Authorization on every request; the poll decides what is due.
-    const user = await getSessionUser();
+    // Authorization on every request; the poll decides what is due. The
+    // room version is read beside the session: it is what decides whether
+    // this instance's room snapshot may serve.
+    const [user, version] = await Promise.all([
+      getSessionUser(),
+      readInhouseRoomVersion(),
+    ]);
     let invalidateGate = false;
     try {
-      const polled = await pollInhouseState(user);
+      const polled = await pollInhouseState(user, version);
       invalidateGate = polled.invalidateGate;
       return NextResponse.json(polled.state);
     } finally {
@@ -220,6 +229,12 @@ export async function POST(req: NextRequest) {
     });
     return NextResponse.json(state);
   } finally {
+    // Rule P: every action may have committed something the room shows, a
+    // refusal or a throw included (removeFromQueue, resolver writes before an
+    // error), and the follow-up read above heartbeats. Publish before the
+    // response goes out, so this client's poll ~250ms later, on any
+    // instance, sees it.
+    await publishInhouseRoomChange();
     // Some services perform safe resolver/claim writes before returning an
     // error. Expire after every dispatched action and follow-up read.
     invalidateAutomationGateBestEffort();

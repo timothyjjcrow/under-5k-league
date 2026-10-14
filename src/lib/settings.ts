@@ -32,6 +32,12 @@ export const SETTING_KEYS = {
   // chain. Ten active players poll far faster than state transitions need;
   // one winner every two seconds advances clocks while the rest only read.
   INHOUSE_ROOM_MAINTENANCE_AT: "inhouseRoomMaintenanceAt",
+  // The inhouse room's change stamp: an opaque random UUID, only ever compared
+  // for equality, that publishInhouseRoomChange (inhouse-room-version.ts)
+  // replaces AFTER every commit the room shows, never inside a transaction.
+  // Each server instance's room snapshot is labelled with it. Absent means
+  // "never published": polls build fresh and never create it.
+  INHOUSE_ROOM_VERSION: "inhouseRoomVersion",
   // Same boundary for draft deadline recovery. The key is global because the
   // data model permits exactly one active season/draft at a time.
   DRAFT_ROOM_MAINTENANCE_AT: "draftRoomMaintenanceAt",

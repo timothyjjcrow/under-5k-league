@@ -13,6 +13,7 @@ import {
 } from "@/lib/inhouse-service";
 import { inhouseRoomDue } from "@/lib/inhouse-room-due";
 import { pollInhouseState } from "@/lib/inhouse-room-state";
+import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
 import {
   createInhouseBoard,
   resetBoardStatsCache,
@@ -663,6 +664,7 @@ describe("room poll — the heartbeat", () => {
     expect(await prisma.inhouseLobby.count()).toBe(1);
     // …and an admin cancels: the ten go back to the queue backdated away.
     expect((await cancelLobby(admin, lobby.id)).ok).toBe(true);
+    await publishInhouseRoomChange(); // as the route does after every action
     const backdated = await row(x.id);
     expect(backdated.lastSeenAt.getTime()).toBeLessThanOrEqual(
       requeueLastSeenAt(Date.now()).getTime() + SEC,
@@ -688,8 +690,10 @@ describe("room poll — the heartbeat", () => {
     for (const p of ten) expect((await joinQueue(p.session, 3000)).ok).toBe(true);
     const x = ten[0];
     await pollInhouseState(x.session);
-    // Someone else declines before x accepted: x goes back backdated.
+    // Someone else declines before x accepted: x goes back backdated. (The
+    // route publishes after every action; this calls the service directly.)
     expect((await declineMatch(ten[1].session)).ok).toBe(true);
+    await publishInhouseRoomChange();
     const before = await row(x.id);
     expect(before.lastSeenAt.getTime()).toBeLessThan(
       Date.now() - INHOUSE.QUEUE_AWAY_SECONDS * SEC,

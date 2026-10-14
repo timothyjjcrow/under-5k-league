@@ -246,8 +246,9 @@ export type BoardCheckMemo = {
 
 /**
  * What the board shows, as a memo key: `basis` names the room rows the board
- * was rendered from, and the present players and away count catch a presence
- * flip that no write made (four hours passing).
+ * was rendered from (the room version, or a digest of the rendered input
+ * while nothing has published one), and the present players and away count
+ * catch a presence flip that no write made (four hours passing).
  */
 export function boardCheckKey(
   basis: string,

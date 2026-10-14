@@ -18,6 +18,7 @@ import { parseLobbyLeagueId } from "@/lib/dota-lobby";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
+import { readInhouseRoomVersion } from "@/lib/inhouse-room-version";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
 // The bot's IN_PROGRESS write expires the automation gate (the abandon floor
 // moves to startedAt); spied so the test can see when.
@@ -357,7 +358,7 @@ describe("Dota lobby authorization and settings", () => {
         .status,
     ).toBe("CANCELLED");
   });
-  it("expires the automation gate only when the bot's start lands", async () => {
+  it("expires the automation gate and publishes the room only when the bot's start lands", async () => {
     const user = await makeUser("Captain");
     const lobby = await prisma.inhouseLobby.create({
       data: {
@@ -372,6 +373,7 @@ describe("Dota lobby authorization and settings", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ state: "lobby" })));
     await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
     expect(gate).not.toHaveBeenCalled();
+    expect(await readInhouseRoomVersion()).toBeNull();
 
     // A fresh Response per call: a body can be read once.
     vi.stubGlobal(
@@ -386,6 +388,9 @@ describe("Dota lobby authorization and settings", () => {
       (await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status,
     ).toBe("IN_PROGRESS");
     expect(gate).toHaveBeenCalledOnce();
+    // The room shows the game started: published before the response.
+    const started = await readInhouseRoomVersion();
+    expect(started).not.toBeNull();
 
     // Already started: the guarded write matches nothing, so no signal.
     expect(
@@ -393,6 +398,7 @@ describe("Dota lobby authorization and settings", () => {
         .status,
     ).toBe(200);
     expect(gate).toHaveBeenCalledOnce();
+    expect(await readInhouseRoomVersion()).toBe(started);
   });
   it.each(["COMPLETED", "CANCELLED"])(
     "does not resurrect a game changed to %s while the bot response is pending",

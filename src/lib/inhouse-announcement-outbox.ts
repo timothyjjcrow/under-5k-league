@@ -11,6 +11,7 @@ import { inhouseEloDeltasFor, toFinishedLobby } from "./inhouse-stats";
 import { gameMvp } from "./achievements";
 import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
+import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { prisma } from "./prisma";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
 import { stampResultChange } from "./settings";
@@ -106,7 +107,7 @@ async function reconcileOneResult(
 ): Promise<"created" | "finalized" | "skipped"> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      return await prisma.$transaction(
+      const outcome = await prisma.$transaction(
         async (tx) => {
           const source = await tx.inhouseLobby.findUnique({
             where: { id: lobbyId },
@@ -273,6 +274,10 @@ async function reconcileOneResult(
         },
         { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
       );
+      // Rule P: the claim committed eloDeltas, which the room's post-game
+      // banner shows (lastResult.eloDelta), before any delivery runs.
+      if (outcome !== "skipped") await publishInhouseRoomChange();
+      return outcome;
     } catch (error) {
       const code = (error as { code?: string }).code;
       if (code === "P2002") return "skipped";

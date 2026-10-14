@@ -82,6 +82,7 @@ import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
 import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
+import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { raceHook } from "./race-hook";
 import {
   inhouseAllAccepted,
@@ -216,6 +217,9 @@ async function formOneLobby(): Promise<boolean> {
   // "Game 2" when another game is already live, so the ping isn't a repeat.
   let gameLabel: string | null = null;
   let formed = false;
+  // Rows the queue reset deleted. It commits even when no lobby forms (the
+  // callback then returns false), and the room must be told either way.
+  let expired = 0;
   try {
     formed = await prisma.$transaction(
       async (tx) => {
@@ -224,7 +228,7 @@ async function formOneLobby(): Promise<boolean> {
         // Missing heartbeats can mean a suspended browser tab, not a leave.
         // SERIALIZABLE preserves the existing join-versus-reset ordering;
         // active lobby membership lives in a separate table and is untouched.
-        await expireStaticQueue(tx, now);
+        expired = (await expireStaticQueue(tx, now)).count;
 
         const live = await tx.inhouseLobby.findMany({
           where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
@@ -318,6 +322,9 @@ async function formOneLobby(): Promise<boolean> {
     if (code === "P2034" || code === "P2002") return false;
     throw e;
   }
+  // Rule P: committed (a new lobby, or a reset queue), so tell the room
+  // before the ping, which can take seconds on Discord.
+  if (formed || expired > 0) await publishInhouseRoomChange();
   if (formed && lobbyPlayers.length > 0) {
     const roleId = await getInhousePingRoleId();
     await sendInhouseDiscordMessage(
@@ -1395,6 +1402,9 @@ export async function joinQueue(
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
   }
+  // Rule P: the join committed. Publish before forming (which publishes its
+  // own lobby) and before the milestone ping below.
+  await publishInhouseRoomChange();
   const formed = await maybeFormLobby();
 
   // "Almost there" Discord ping: only when THIS join crosses the milestone
@@ -2052,6 +2062,9 @@ async function applyResult(
     await stampResultChange(tx);
     return true;
   });
+  // Rule P: COMPLETED (and, when finalized, its Elo swing, which the room's
+  // post-game banner shows) is committed; the delivery below is Discord.
+  await publishInhouseRoomChange();
   if (!finalized) return "closed";
 
   // Preserve the immediate announcement when Discord is healthy, but only
@@ -2335,6 +2348,8 @@ export async function autoDetectResult(
       error: "Just checked — give it a few seconds and try again",
     };
   }
+  // Rule P: the claim's detectedAt is committed; the lookup is OpenDota.
+  await publishInhouseRoomChange();
   // The press's claim stamps detectedAt, which holds the scheduled scan off
   // for an interval, so the press does the scan's whole job — bot id first.
   const now = Date.now();
@@ -2595,6 +2610,8 @@ export async function maybeAutoDetectResult(
       data: { detectedAt: new Date(now) },
     });
     if (claim.count === 0) continue;
+    // Rule P: the claim is committed; the lookup below is OpenDota.
+    await publishInhouseRoomChange();
 
     // Only the claim winner needs a roster. Re-check the exact live claim
     // while loading it so a cancellation or successor scan that already
@@ -2647,6 +2664,7 @@ export async function maybeAutoDetectResult(
         },
         data: { detectedAt: lobby.detectedAt },
       });
+      await publishInhouseRoomChange();
       return finish(true);
     }
     if (found && (await applyResult(lobby.id, found)) === "recorded") {
@@ -2761,6 +2779,8 @@ export async function voidLastResult(
   // Signal before the cursor and audit follow-ups so neither best-effort step
   // can hide the correction from a sleeping worker.
   invalidateAutomationGateBestEffort();
+  // Rule P: the room drops the voided banner before Discord hears of it.
+  await publishInhouseRoomChange();
   await stampResultChange();
 
   // Post-claim, so only the winner of a concurrent void writes the record —
@@ -3692,6 +3712,10 @@ export async function getInhouseState(
     await resolveCaptainVote();
     await resolveStalledPick();
     if (detectResults) await maybeAutoDetectResult();
+    // Rule P: one unconditional publish for the whole chain, before the reads
+    // and the board edit below (a resolver's own result says nothing about
+    // writes such as the queue reset or a restored pick turn).
+    await publishInhouseRoomChange();
   }
 
   const rows = await loadInhouseRoomRows(Date.now());

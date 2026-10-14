@@ -76,8 +76,12 @@ describe("the room poll's source", () => {
       route.indexOf('if (action === "state")'),
       route.indexOf("requireSameOrigin(req)"),
     );
-    expect(branch).toContain("getSessionUser()");
-    expect(branch).toContain("pollInhouseState(user)");
+    // The session and the room version, read side by side, then the poll.
+    expect(branch).toMatch(
+      /Promise\.all\(\[\s*getSessionUser\(\),\s*readInhouseRoomVersion\(\),\s*\]\)/,
+    );
+    expect(branch).toContain("pollInhouseState(user, version)");
+    expect(branch).not.toContain("publishInhouseRoomChange(");
     expect(branch).not.toContain("claimThrottle(");
     expect(branch).not.toContain("getInhouseState(");
     expect(route).not.toContain("claimThrottle(");

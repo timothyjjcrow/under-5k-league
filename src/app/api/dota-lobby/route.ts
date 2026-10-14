@@ -17,6 +17,7 @@ import { UserFacingError } from "@/lib/user-facing-error";
 import { rateLimit } from "@/lib/rate-limit";
 import { prisma } from "@/lib/prisma";
 import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
+import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -126,8 +127,12 @@ export async function POST(req: NextRequest) {
       });
       // The game's clocks moved (the abandon floor now runs from startedAt).
       // Room polls no longer run maintenance every 2s, so nothing else would
-      // tell the automation gate.
-      if (started.count > 0) invalidateAutomationGateBestEffort();
+      // tell the automation gate; and the room shows the game as started
+      // (rule P: publish after the commit, before the response).
+      if (started.count > 0) {
+        await publishInhouseRoomChange();
+        invalidateAutomationGateBestEffort();
+      }
     }
     // The bot's list carries Steam ids: the browser gets the roster's names
     // with each seat, and the status alone, never the reply as it came.

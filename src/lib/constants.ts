@@ -442,6 +442,13 @@ export const INHOUSE = {
   // After another poll won the room's 2s maintenance claim, this instance
   // skips its board checks for this long instead of re-claiming every poll.
   BOARD_CLAIM_BACKOFF_MS: 2_000,
+  // A server instance's room snapshot (inhouse-room-cache.ts) is rebuilt at
+  // least this often even when no publish moved the room version: the bound
+  // on writers that never publish (an admin's display edit, the worker's rank
+  // refresh) and on a publish lost between commit and statement. Far under
+  // the away cutoff, so a presence judged from a snapshot is never wrong for
+  // longer than this.
+  ROOM_SNAPSHOT_MAX_AGE_MS: 15_000,
 } as const;
 
 // Match-night Discord reminder: announced by the leased maintenance worker for
