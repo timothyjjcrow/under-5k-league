@@ -417,7 +417,8 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   pinned message.
 - **Keep the clock out of the digest.** Semantic state only; elapsed time is
   `<t:...:R>`. A time-varying digest costs a PATCH every throttle window,
-  forever. Both builders (`loadBoardSnapshot`, `getInhouseState`) list every
+  forever. Both builders (`loadBoardSnapshot`, and `boardInputFrom` over the
+  room's rows, which `getInhouseState` and the room poll share) list every
   live game in game order through `lobbyView`; if they disagreed they would
   repaint each other in a loop.
 - **Two live games:** the board leads with the one that needs the channel
@@ -450,9 +451,17 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   queue (a game just ended, the last player left), pinned by the
   `runResultSync` tests. The gate (`inhouseBoardNeedsSync`,
   `automation-gate.ts`) wakes on digest drift and at each entry's away
-  moment; `watch` includes a present queue. Polls repaint only for the
-  room-maintenance winner, mutations never (`syncBoard: false`). Never use
-  `/api/sync` as a heartbeat.
+  moment; `watch` includes a present queue. Mutations never repaint
+  (`syncBoard: false`). A signed-in room poll repaints only as a winner of the
+  2s `inhouseRoomMaintenanceAt` claim: the maintenance winner when a resolver
+  is due, else a poll whose per-instance board check is due (`boardCheckDue`
+  in `inhouse-room-due.ts`: a new key of room version plus present ids and
+  away count, `BOARD_RECHECK_MS` (60s) since the last check, or a `throttled`
+  or `failed` outcome, which stay due so the board's retry-on-difference
+  holds). `syncInhouseBoard` returns its outcome for that memo (`off`,
+  `no-webhook`, `cleared`, `unchanged`, `throttled`, `edited`, `failed`,
+  `gone`), and `edited` expires the automation gate. Signed-out polls never
+  check. Never use `/api/sync` as a heartbeat.
 - **The board informs; it does not convert.** Edits notify nobody; the pings
   reach phones.
 - **Design "Find Match":** Dota's own state names (Find Match, Searching,

@@ -26,7 +26,9 @@ identity and opportunistic reuse of the latest trusted `Registration.mmr`; it
 has no `seasonId` or league-phase gate. There is no websocket. Interactive
 rooms still use HTTP polling; anonymous polls are side-effect-free, while
 authenticated polls elect at most one database-backed maintenance winner per
-room every two seconds. Sitewide background work runs once per minute through the bearer-authenticated
+room every two seconds (the inhouse room only when a resolver is due, and it
+serves each poll from a per-instance snapshot checked against a room version).
+Sitewide background work runs once per minute through the bearer-authenticated
 `GET /api/cron/automation` boundary. Public page traffic observes automation
 state but does not serve as its clock.
 
@@ -466,8 +468,13 @@ with up to `INHOUSE.MAX_LIVE_GAMES` (2) live lobbies at once, one per game
 slot (`InhouseLobby.slot`). "Game over" (`finishGame`) moves a game being
 played to AWAITING_RESULT, which is not live: its slot and its ten are free
 while the result scan keeps looking for it. Pure rules in `src/lib/inhouse.ts`, the engine in
-`src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery, and
-the viewer payload builder `getInhouseState`), the client in
+`src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery,
+the room's shared reads `loadInhouseRoomRows`, the pure viewer payload builder
+`buildInhouseState`, and `getInhouseState`, which runs the maintenance chain
+and then both), the room poll in `src/lib/inhouse-room-state.ts`
+(`pollInhouseState`, over the pure due check `inhouse-room-due.ts`, the
+per-instance snapshot `inhouse-room-cache.ts` and the version token
+`inhouse-room-version.ts`), the client in
 `src/components/inhouse-room.tsx` (poll loop and actions) with one file per
 stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`.
 The mode remains available through signup, draft, season play, playoffs,
@@ -482,7 +489,7 @@ completion, and the real no-active-season offseason.
    a live lobby can queue (a game marked over is not live). An admin can
    take one player out (`removeFromQueue`). A queue crossing
    4 present players fires a throttled Discord ping. Positions (1 to 5) are
-   `User.inhouseRoles`, read live by the room, with the latest signup's
+   `User.inhouseRoles`, read with the room's rows, with the latest signup's
    `Registration.roles` standing in until a player picks.
 2. **Formation** — `maybeFormLobby` fills free game slots: each formation
    (Serializable, one slot) takes the lowest free slot and 10 present players
@@ -560,11 +567,20 @@ completion, and the real no-active-season offseason.
     stuck state, blocking every repost until an admin checks Discord and clears
     it. Repainted from both resolver chains.
 
-Lazy resolution mirrors the draft. A state read runs heartbeat → abandoned-
-lobby sweep → formation → ready check → captain vote → stalled
-pick → auto-detect → board repaint; the tenth join also attempts formation
-synchronously. The authenticated maintenance worker runs the equivalent chain
-sitewide so an unwatched lobby still resolves. Inhouse result and void Discord messages use the durable
+Lazy resolution mirrors the draft. `getInhouseState`'s maintenance pass runs
+heartbeat → abandoned-lobby sweep → formation → ready check → captain vote →
+stalled pick → (auto-detect) → publish → reads → board repaint; the tenth join
+also attempts formation synchronously. A room poll runs that pass only when the
+pure `inhouseRoomDue` finds a resolver with work and the poll wins the 2s
+`inhouseRoomMaintenanceAt` claim; otherwise it writes the viewer's heartbeat
+only when one is due, checks the board when what it shows moved, and builds
+the reply from this instance's snapshot of the room's rows. The snapshot
+serves only while the `inhouseRoomVersion` Setting it was labelled with
+(read before the rows) is unchanged, and every writer the room shows publishes
+a new version after its commit and before any Discord or OpenDota call
+([inhouse](features/inhouse.md#scope-and-where-it-runs)). The authenticated
+maintenance worker runs the equivalent chain sitewide so an unwatched lobby
+still resolves. Inhouse result and void Discord messages use the durable
 `InhouseAnnouncement` outbox: the exact payload commits with the state change,
 then a leased/tokened worker sends outside the transaction and retries with
 backoff even when the room is idle. The webhook API has no idempotency key, so
@@ -600,7 +616,8 @@ Rules that follow from the layering:
 - **One authenticated worker, public observation only.** `getDraftState` and
   `getInhouseState` retain guarded resolvers so a fleet-throttled authenticated
   room poll can respond immediately without multiplying writes or provider
-  calls across every tab. Anonymous room snapshots never run them. Sitewide
+  calls across every tab; the inhouse poll runs them only when its snapshot
+  shows one due. Anonymous room snapshots never run them. Sitewide
   work is different: the private Cloudflare Worker in
   `ops/cloudflare-automation-worker` owns the repository's only one-minute Cron
   Trigger and calls `GET /api/cron/automation` with `Authorization: Bearer
@@ -709,7 +726,7 @@ tick takes a 1,200/min/IP preflight before session or database work, then a
 signed-in user also takes a 300/min/user allowance. Bid, nominate, and
 admin-nominate share one 120/min-per-user mutation bucket;
 `/api/inhouse` — single POST dispatch (`{action: state|join|leave|accept|
-decline|vote|pick|start|finish|roles|detect|record|cancel|giveup|void}`); valid JSON object and
+decline|vote|pick|start|finish|roles|detect|record|cancel|giveup|void|remove}`); valid JSON object and
 explicit action required. Every call requires the JSON media type. Public state
 reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
@@ -947,7 +964,8 @@ enums, so every status column is a string whose allowed values live in
   `claimThrottle` (conditional `updateMany` on an ISO-string value, then
   create-with-P2002-catch) — `leagueAutoSyncAt`, `rosterAutoSyncAt`,
   `announceRetryAt`, `inhouseBoardAt`, `leagueStatusAt`,
-  `leagueStatusCheckAt`, `outPing:<matchId>:<userId>`;
+  `leagueStatusCheckAt`, `inhouseRoomMaintenanceAt`,
+  `draftRoomMaintenanceAt`, `outPing:<matchId>:<userId>`;
   (3) once-only domain markers — series, champion, and reminder markers use
   tokened 90-second `claim:v2:` leases and preserve an event generation across
   stale/failed recovery; that generation becomes the `LeagueAnnouncement`
@@ -966,6 +984,12 @@ enums, so every status column is a string whose allowed values live in
   creation, crowning, and generic phase changes. Each open tab compares it to
   the cursor captured during its own server render, preserving render-to-first-
   heartbeat causality.
+  (6) the `inhouseRoomVersion` token: an opaque randomUUID that
+  `publishInhouseRoomChange` (`src/lib/inhouse-room-version.ts`) replaces with
+  one `INSERT … ON CONFLICT` after every commit the inhouse room shows, never
+  inside a transaction, and that each room poll compares for equality with
+  its instance's snapshot label. No row means no snapshot is kept; polls
+  never create it.
   The dynamic keyspace is invisible to `SETTING_KEYS` — consumers rely on
   prefix conventions, so key-format changes have cross-file blast radius.
 
@@ -1003,14 +1027,14 @@ an expired RUNNING lease before taking ownership.
 | Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
 | Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, revision-fenced `ImportCandidate` decisions (reconsidered each pass; the legacy `leagueSyncSkip` Setting is read-only), and the same deadline/abort propagation; manual admin sync remains a bounded override |
 | Playoff reconciliation (`advancePlayoffBracket`) | Repairs a committed result whose immediate round-build/crown handoff was interrupted | Every maintenance pass while PLAYOFFS | Round claims plus Serializable revalidation of current source winners/final; committed work is idempotently rediscovered |
-| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; `/api/inhouse` state reads retain immediate interactive resolution | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor |
+| Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; a signed-in `/api/inhouse` state poll resolves at once when `inhouseRoomDue` finds work and it wins the 2s claim | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor; both chains publish the room version after their resolvers and before any provider call |
 | League marker reconciliation | Recovers series, champion, reminder, and honor announcement generations | Immediate domain path plus bounded maintenance retry sweep | 90s marker leases recover pre-enqueue death; stable generation/dedupe keys reuse the same `LeagueAnnouncement` after enqueue-before-finalize death; exact-value finalization cannot overwrite a newer claim |
 | League outbox (`deliverLeagueAnnouncements`) | Sends all league-channel webhook work in global creation order | One immediate bounded attempt after enqueue; maintenance drains existing work before creating/retrying later marker events | PENDING/SENDING/SENT/CANCELLED, tokened 30s claims, bounded batches, exponential backoff; an earlier non-terminal row blocks later rows. Discord accept-before-`SENT` death can still duplicate once on recovery (at-least-once) |
 | Inhouse result recovery/outbox (`reconcileMissingInhouseResultAnnouncements` / `deliverInhouseAnnouncements`) | Reconstructs missing completion-derived Elo/result work, then sends RESULT/RESULT_VOIDED in per-lobby order | Maintenance/inhouse reconciliation plus an immediate post-commit delivery attempt | Source completion and `dotaMatchId` are revalidated; unique `(lobbyId, kind)`, sequence, tokened 30s claims, cancellation of invalidated unsent results, and backoff. The same unavoidable Discord accept/commit duplicate gap applies |
 | Week reminder (`maybeAnnounceUpcomingWeek`) | Announces each kickoff cluster in the 24-hour window and mentions only linked players who still owe an RSVP | Maintenance pass only | Exact `(season, week, kickoff)` key, 90s recoverable marker lease, stable outbox dedupe generation, and exact-delimiter cleanup on retime |
 | Draft-night reminder (`maybeAnnounceDraftNight`) | Posts the draft time and pool/captain counts in the 24 hours before draft night, mentioning the captains and the linked players who haven't confirmed that time | Maintenance pass only; the automation gate wakes the worker when `draftReminderDue` opens | One `draftReminder:<season>:<revision>` marker on the week reminder's claim machinery; moving draft night re-arms under the new revision, and `setDraftNight` drops the old revision's in-flight markers. Exception: when a reminder was already delivered and the new time is still inside the `draftReminderDue` window, `setDraftNight` records the new revision as covered, so no second reminder posts (the "draft rescheduled" message carries the change) |
 | Weekly honors (`maybeAnnounceWeekHonors`) | Announces Player/Team of the Week only from publication-ready attributed 5v5 evidence | Result recomputation/correction plus maintenance retry | Generation-preserving CAS supports initial, stale, corrected, failed, and expired-claim recovery; reopen/remove marks previous awards stale |
-| Board repaint (`syncInhouseBoard`) | PATCHes the pinned Discord queue board when its semantic digest changes | Inhouse state reads and scheduled `syncInhouse` | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST requires explicit admin recovery; digest gate; `inhouseBoardAt` (10s); permanent gone handling |
+| Board repaint (`syncInhouseBoard`) | PATCHes the pinned Discord queue board when its semantic digest changes | Scheduled `syncInhouse`; a signed-in state poll that wins the 2s room claim, as the maintenance winner or when its per-instance board check is due (new version, presence change, 60s, or a throttled/failed edit) | Pre-POST CAS reservation + 30s lease; ambiguous/no-id POST requires explicit admin recovery; digest gate; `inhouseBoardAt` (10s); permanent gone handling |
 | Status card repaint (`syncLeagueStatus`) | PATCHes the #schedule league status card when what it says changes | After the response of admin actions and the player actions that move it (`refreshLeagueStatus`); the maintenance pass after a pass that imported, sold, built a round or started an inhouse night, every pass during a live draft, else every 10 minutes (`syncLeagueStatusFromWorker`) | The board's contract: pre-POST CAS reservation + 30s lease, digest gate, `leagueStatusAt` (5s, doubling per failure to 300s), permanent gone handling; read-only snapshot; no gate wake of its own (time-only changes wait for the 10-minute look or the hourly hard wake) |
 | Session epoch (`src/lib/session-epoch.ts`) | Invalidates all signed sessions | Admin `revokeAllSessions` | 30s in-process cache; tokens carry the epoch minted into them |
 

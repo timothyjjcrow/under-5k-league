@@ -28,27 +28,116 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   way: not live, not playing, but a result still lands on it
   (`INHOUSE_RESULT_STATUSES`; see "Game over" below).
 - **Two chains run the resolvers; keep them the same SET.** `getInhouseState`
-  (room poll) and `syncInhouse` in `result-sync-service.ts` (the
-  bearer-authenticated one-minute worker at `/api/cron/automation`, which
+  (the room's maintenance pass) and `syncInhouse` in `result-sync-service.ts`
+  (the bearer-authenticated one-minute worker at `/api/cron/automation`, which
   reaches a lobby nobody watches). A resolver missing from one fails silently;
-  `src/lib/inhouse-resolver-parity.test.ts` compares the sets. The order differs
-  on purpose (the room runs the abandon sweep first so a freed slot re-forms on
-  the same poll), so never make it compare order. `GET /api/sync` is read-only.
-- **Only a signed-in poll that wins the fleet-wide throttle runs maintenance**
-  (`inhouseRoomMaintenanceAt`, 2s `claimThrottle`). Anonymous polls get a
-  side-effect-free snapshot, so spectators never advance a lobby, call OpenDota
-  or edit Discord. Room polls pass `detectResults: false`: the worker owns the
-  automatic scan.
+  `src/lib/inhouse-resolver-parity.test.ts` compares the sets (the room's
+  slice ends at `const rows = await loadInhouseRoomRows(`) and holds
+  `REASON_RESOLVER` to the room's chain. The order differs on purpose (the
+  room runs the abandon sweep first so a freed slot re-forms on the same
+  poll), so never make it compare order. `GET /api/sync` is read-only.
+- **A room poll runs maintenance only when something is due and it wins the
+  fleet-wide 2s claim** (`pollInhouseState`, `src/lib/inhouse-room-state.ts`;
+  the reply is the same `InhouseState`). The pure `inhouseRoomDue`
+  (`src/lib/inhouse-room-due.ts`) mirrors each resolver's act condition at its
+  exact boundary: the three abandon floors (strict lt), the 4h queue idle
+  reset, formation (a free slot by `freeGameSlot` and `LOBBY_SIZE` present),
+  all accepted, all voted, a lost pick turn, and the accept, vote and pick
+  clocks (`<= now`); a null clock is never due. Where a resolver decides in JS
+  both call one predicate (`inhouseAllAccepted`, `inhouseAllVoted`,
+  `inhouseDraftPool`, `inhouseClockDue`); the claims' WHEREs stay the
+  enforcement. With work due, the signed-in poll that wins `claimThrottle` on
+  `inhouseRoomMaintenanceAt` runs `getInhouseState(viewer, { runMaintenance:
+  true, detectResults: false, syncBoard: true })`; losers only read.
+  - **Change a resolver's act condition and its due clause together.** A
+    missing clause is a lobby only the worker moves, and dev and e2e have no
+    worker. `pollInhouseState` never calls a resolver itself (source-guarded
+    in `inhouse-room-state.test.ts`).
+  - **Keep `getInhouseState`'s defaults** (maintenance, board and detection
+    on; heartbeat first, then the chain, then fresh reads): its integration
+    callers and `scripts/inhouse-night-check.ts` expect a full pass. Gate on
+    due only in the opt-in poll path.
+  - **Anonymous polls only read:** no heartbeat, claim, publish, board,
+    resolver, Discord or OpenDota, so spectators never advance a lobby. Room
+    polls never scan OpenDota: the worker owns the automatic scan.
+- **Each server instance serves the room from one snapshot, checked against
+  the room version on every poll** (`src/lib/inhouse-room-cache.ts`). The
+  snapshot is `loadInhouseRoomRows`: the queue, live games, games marked over,
+  the last `LAST_RESULT_WINDOW_MS` of results with their `eloDeltas`, and the
+  signup-roles batch. Its label is the `inhouseRoomVersion` Setting
+  (`src/lib/inhouse-room-version.ts`), an opaque randomUUID compared only for
+  equality.
+  - **The route reads the version beside `getSessionUser()`, and the label is
+    read BEFORE the rows.** A poll serves the stored copy only when its label
+    equals the version just read, this instance has not published since the
+    load began, and it is younger than `ROOM_SNAPSHOT_MAX_AGE_MS` (15s). So
+    every change published before the poll is in its reply, on any instance,
+    and the room's request-start ordering holds with no client field. A TTL
+    cache or a client freshness floor would break it (a drafted player back in
+    the pool, the pick chime again).
+  - **One pure builder serves both paths:** `buildInhouseState(viewer, rows,
+    extras, nowMs)`, with `now` stamped per reply. `loadViewerExtras` reads
+    nothing when the rows hold the viewer. A hit for a queued or playing
+    viewer costs two statements (the session and the version).
+  - **No version row means uncached:** every poll reads fresh and nothing is
+    stored. Polls never create the row, so anonymous polls stay write-free.
+  - **Loads are single-flight** per version and local generation. An older
+    load never replaces a newer one, a rejected load is never kept, and rows
+    are deep-frozen outside production. `resetInhouseRoomCacheForTests()` runs
+    in `test/integration/setup.ts`.
+  - **The rows hold every ballot: server memory only,** never serialized,
+    returned or logged. Ballots leave only as the viewer's `myVote` and the
+    tallies; `isAdmin` and the role come from the session on every request.
+- **Rule P: after any commit the room shows, call
+  `publishInhouseRoomChange()` before any Discord or OpenDota call and before
+  the response. Never inside a transaction:** the hot Setting row would add
+  P2034s to the Serializable `joinQueue` and `formOneLobby`, and
+  `formOneLobby` takes those as "someone else formed", so formation would
+  silently slip. It bumps a process-local generation first, then runs one
+  `INSERT … ON CONFLICT` (`claimThrottle`'s shape), retries once, logs only
+  the error code and never throws.
+  - **The sites are a closed set.** The route's outer finally (ok, refusal
+    and throw, before the gate expiry). `getInhouseState`'s maintenance block:
+    one unconditional publish after the chain, before the reads and the board
+    edit (`formOneLobby`'s queue reset returns false and `resolveStalledPick`
+    drops `restoreLostPickTurn`'s result, so per-resolver bumps would miss
+    writes). `syncInhouse` after `resolveStalledPick`, plus a try/finally
+    around its call. `formOneLobby` before its ping when it formed or
+    `expireStaticQueue` deleted rows. `joinQueue` before forming. The
+    auto-detect claims and their deadline rollback. `applyResult` and
+    `voidLastResult` before delivery (the admin `voidInhouseResult` too). The
+    bot's IN_PROGRESS write when it lands. The outbox reconcile when it
+    committed (its `eloDeltas` show in `lastResult`). `/api/test/cache`. The
+    login upsert, the Steam refresh and the signup save.
+  - **`src/lib/inhouse-room-publish.test.ts` guards them.** Every src file
+    outside the engine that writes the room's tables publishes. Every importer
+    of an engine writer publishes or imports only self-publishing ones. No
+    publish sits in a `$transaction`, and each listed site comes before its
+    provider call.
+  - **Writers that never publish show within the 15s max age:** admin
+    display edits, the worker's rank refresh and profile writes outside the
+    room's flows, such as a relinked Dota account's medal (`docs/DECISIONS.md`).
+    So does a lost publish, and during a rolling deploy an old instance's
+    writes. A new writer the room waits on publishes.
 - **Give every new lobby or queue clock a wake-up in
   `src/lib/automation-gate.ts`,** which schedules the worker for accept, vote
   and pick deadlines, the detect window, abandonment floors and queue
   idle/away transitions. Mutations call `invalidateAutomationGateBestEffort()`.
+  So do a poll that won maintenance, flipped its viewer back to present or
+  edited the board, and the bot's IN_PROGRESS write when it lands.
 - **Never make a mutation wait on Discord.** Mutations answer with
-  `getInhouseState(user, { runMaintenance: false, syncBoard: false })`. A poll
-  repaints the board only when it wins the 2s `inhouseRoomMaintenanceAt`
-  claim (`syncBoard: runMaintenance`, `src/app/api/inhouse/route.ts`), and
-  signed-out polls never do; otherwise the claim's winner or the worker
-  repaints. Don't make every poll sync the board to "fix" this.
+  `getInhouseState(user, { runMaintenance: false, syncBoard: false })`. Only a
+  claim winner or the worker repaints the board. That is the maintenance
+  winner, or, with nothing due, a signed-in poll whose board check is due
+  (`boardCheckDue`) and that wins the same 2s claim.
+  - **The check is due on a new key, 60s (`BOARD_RECHECK_MS`) after the last
+    check, or after a `throttled` or `failed` outcome.** The key is this
+    instance's: the room version (a digest of the board input while none
+    exists) plus the present ids and the away count, so a presence flip no
+    write made still repaints.
+  - **A lost claim backs this instance off for `BOARD_CLAIM_BACKOFF_MS`
+    (2s).** Signed-out polls never check. Don't make every poll sync the
+    board to "fix" this.
 - **API contract:** `state` plus `join`, `leave`, `accept`, `decline`, `vote`,
   `pick`, `start`, `finish`, `roles`, `record`, `detect`, `cancel`, `giveup`,
   `void`, `remove`. The body must be a JSON
@@ -90,8 +179,9 @@ be marked over.
   for the earliest clock of every live game, and for formation only while a
   slot is free.
 - **The room shows the viewer's own game; every `me` flag is about it.**
-  `getInhouseState` returns `lobby` (the viewer's, or null), `otherLobbies`
-  (read-only, game order), `liveGames` and `maxLiveGames`. The room renders
+  The room payload (`buildInhouseState`) has `lobby` (the viewer's, or null),
+  `otherLobbies` (read-only, game order), `liveGames` and `maxLiveGames`. The
+  room renders
   other games with `otherGameFlags` (an admin keeps start, record, pick and
   cancel, each naming the game); beside the viewer's own game they fold to
   one line. Only the viewer's game (or the one game a spectator watches) pins
@@ -221,11 +311,13 @@ own inhouse choice).
   signup. The player's
   own inhouse choice wins (`effectiveInhouseRoles`): unlike MMR, both are
   their own word, and this one is newer.
-- **Read live** on every poll from the joined user row, with one batched
-  `Registration` read for players who never chose (none once everyone shown
-  has). No snapshot on queue or lobby rows: it would need four copy sites and
-  write rows the Serializable join and formation contend on. A change shows
-  at once, mid-draft too.
+- **Read with the room's rows** (`loadInhouseRoomRows` selects them with each
+  user, and `loadViewerExtras` for a viewer the rows don't hold), with one
+  batched `Registration` read for players who never chose (none once everyone
+  shown has). No copy on queue or lobby rows: it would need four copy sites
+  and write rows the Serializable join and formation contend on. A change
+  shows on the next poll, mid-draft too: `roles` and `join` are route actions,
+  and the signup save publishes (rule P above).
 - **Saved by** action `roles` (`setInhouseRoles`, strict `parseRoleKeys`:
   the order is kept, junk is refused, never dropped) or with `join` (the
   picker's unsaved choice, saved before the join). Auto-join, "Run it back" and API joins
@@ -345,6 +437,21 @@ Every transition is a guarded claim; keep it that way (general rules:
   `QUEUE_AWAY_SECONDS` means "away": still queued, but excluded from `needed`,
   the counts (room, home strip `src/components/home/inhouse-strip.tsx`, queue
   ping) and formation. Use `queuePresence` / `queuePresentCutoff` everywhere.
+- **The room poll skips only a heartbeat that would write nothing.**
+  `touchQueueHeartbeat`'s strict `lastSeenAt < now - 30s` WHERE stays the one
+  enforcement point. `roomHeartbeatAction` skips a viewer who isn't queued or
+  was seen inside `QUEUE_HEARTBEAT_SECONDS`, judged on the row and on the
+  snapshot's `seenAt` memo of heartbeats this instance wrote (recorded when
+  the write lands). The seam `inhouse.pollInhouseState.beforeHeartbeat` sits
+  between the decision and the write.
+  - **An away viewer's own poll writes, publishes, expires the gate and
+    re-reads the rows.** The reply then shows them present, `needed` counts
+    them, and they can be the tenth that forms a lobby on that same poll (a
+    backdated requeue, a tab back after four hours).
+  - **Never skip on "this instance wrote recently" without the snapshot's
+    version:** a player who polled just before a cancel or decline backdated
+    them would never re-confirm. Never raise `QUEUE_HEARTBEAT_SECONDS` to save
+    writes either; it moves when "away" appears, which players see.
 - **`joinQueue` guards and upserts at Serializable,** or a concurrent formation
   can roster the player in the live lobby AND queue them. It retries P2034/P2002
   up to `QUEUE_WRITE_RETRY_ATTEMPTS` with a jittered wait
@@ -574,7 +681,7 @@ Every transition is a guarded claim; keep it that way (general rules:
   survives only for API callers.
 - **Keep the per-row Void on `/inhouse/history`.** The room's Void shows only to
   an admin who PLAYED that game, within 10 minutes of it ending (`lastResult`
-  in `getInhouseState`), so the history row is the only control when players
+  in `buildInhouseState`), so the history row is the only control when players
   report a wrong auto-import to an admin who wasn't one of the ten.
 
 ## Ladder
@@ -637,7 +744,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   writer of room state; `src/components/room-source-guards.test.ts` checks
   both, reading the shell and the stage folder as one room. `apply()` also
   folds the payload's server `now` into the clock offset (`nextClockOffset`,
-  1s hysteresis), so vote and pick clocks run on server time.
+  1s hysteresis), so vote and pick clocks run on server time. The server's
+  room snapshot keeps this contract only because every poll checks the room
+  version (see "Scope and where it runs"); never cache `now`.
 - **Every room fetch has an `AbortSignal.timeout`** (`ROOM_POLL_TIMEOUT_MS`;
   actions `ROOM_ACTION_TIMEOUT_MS`, or `INHOUSE_SCAN_ACTION_TIMEOUT_MS` for
   `INHOUSE_SCAN_ACTIONS`). A timed-out, 5xx or unreadable action may have
@@ -950,6 +1059,22 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
 - **SQLite hides every race here.** `test/integration/inhouse*.itest.ts` stage
   races by hand; `npm run test:pg` runs them on Postgres. Run it after touching
   any claim. Seams are `inhouse.<function>.<point>`.
+- **The room poll and its snapshot:** `src/lib/inhouse-room-due.test.ts` (one
+  row per due reason at its exact boundary, the heartbeat and board rules),
+  `inhouse-room-cache.test.ts` (hits, single flight, the local fence, no
+  cached rejection, and the max age staying under the away cutoff),
+  `inhouse-room-publish.test.ts` (rule P's sites) and
+  `inhouse-service.test.ts` (`buildInhouseState` over a viewer matrix).
+  Integration: `inhouse-room-rows.itest.ts` (the rows against the old
+  per-viewer queries), `inhouse-room-poll.itest.ts` (due against what the
+  resolvers do, heartbeat, board) and `inhouse-room-cache.itest.ts` (output
+  parity on a warm snapshot, every writer through its production entry point,
+  two module instances, the provider window, and the raced and seamed cases
+  on Postgres). `e2e/zz4d-inhouse-room-snapshot.spec.ts` drives two captains
+  and a queued watcher.
+- **Fence a direct database write in an e2e spec with `POST /api/test/cache`,**
+  which publishes: the dev server's snapshot otherwise serves the old rows
+  for up to 15s (zz4c, zz5 and the mid queue-fit spec do).
 
 ## Cred betting (removed)
 

@@ -331,8 +331,16 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   what a new background request costs before adding one.
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
-  signed-in room poll runs maintenance only when it wins a `claimThrottle`.
-  `GET /api/sync` is a read-only snapshot, never a scheduler or health signal.
+  signed-in room poll runs maintenance only when it wins a `claimThrottle`,
+  and the inhouse room's only when its snapshot shows work due
+  (`inhouseRoomDue`). `GET /api/sync` is a read-only snapshot, never a
+  scheduler or health signal.
+- **After any commit the inhouse room shows, call `publishInhouseRoomChange()`
+  before any provider call or response,** never inside a transaction. Each
+  instance serves the room from a snapshot while the room version is
+  unchanged, so a writer that skips it shows stale rows for up to 15s
+  (`inhouse-room-publish.test.ts` guards the sites;
+  [inhouse](docs/features/inhouse.md#scope-and-where-it-runs)).
 - **Give every new server-side clock or deadline a wake-up in
   `src/lib/automation-gate.ts`,** and after a mutation that creates or moves
   automated work, expire `AUTOMATION_GATE_TAG` (`updateTag` in an action,
