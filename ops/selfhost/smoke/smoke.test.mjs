@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import {
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -24,6 +25,7 @@ import {
 } from "./smoke.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./smoke.mjs", import.meta.url));
+const CI_WORKFLOW = new URL("../../../.github/workflows/ci.yml", import.meta.url);
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const HOST = "ci.ld2l.invalid";
 const ORIGIN = `https://${HOST}`;
@@ -511,3 +513,45 @@ test("the CLI still runs when started through a symlinked release folder", async
   assert.deepEqual(failed(JSON.parse(run.stdout)), ["health"]);
 });
 
+// --- The CI step that runs it ----------------------------------------------
+
+test("CI boots the built site like the box and runs this smoke with --expect staging", () => {
+  const ci = readFileSync(CI_WORKFLOW, "utf8");
+  const job = /\n {2}postgres:\n([\s\S]*?)\n {2}mutation:\n/.exec(ci)?.[1];
+  assert.ok(job, "ci.yml has the postgres job before the mutation job");
+  const steps = job.split(/\n(?= {6}- )/);
+  const build = steps.findIndex((text) =>
+    text.startsWith("      - name: Exercise the exact Vercel migration and build pipeline\n"));
+  assert.ok(build > 0, "the postgres job exercises the Vercel build");
+  const step = steps[build + 1] ?? "";
+  assert.ok(
+    step.startsWith("      - name: Boot the built site the way the box runs it\n"),
+    "the boot step comes right after the Vercel build step",
+  );
+
+  const env = Object.fromEntries(
+    [...step.matchAll(/^ {10}([A-Z_]+): "?(.*?)"?$/gm)].map((match) => [match[1], match[2]]),
+  );
+  assert.equal(env.VERCEL_ENV, undefined);
+  assert.equal(env.LEAGUE_DEPLOY_ENV, "staging");
+  assert.equal(env.CLIENT_IP_HEADER, "cf-connecting-ip");
+  assert.equal(env.LEAGUE_RELEASE_SHA, "${{ github.sha }}");
+  assert.equal(env.DATABASE_URL, "${{ env.PG_TEST_URL }}");
+  assert.doesNotMatch(step, /^ +image:/m);
+
+  assert.match(step, /\n {10}node node_modules\/next\/dist\/bin\/next start -H 127\.0\.0\.1 -p 3100 \\\n/);
+  const command = /\n {10}node ops\/selfhost\/smoke\/smoke\.mjs ([\s\S]*?) \|\| smoke=\$\?\n/.exec(step)?.[1];
+  assert.ok(command, "the step runs the smoke");
+  const argv = command
+    .replace(/\\\n\s*/g, " ")
+    .split(/\s+/)
+    .map((word) => word.replace(/^"\$\{GITHUB_SHA\}"$/, SHA));
+  const options = parseArgs(argv);
+  assert.equal(options.base, "http://127.0.0.1:3100");
+  assert.equal(options.expect, "staging");
+  assert.equal(options.commit, SHA);
+  assert.equal(env.APP_URL, options.origin);
+  assert.equal(env.NEXT_PUBLIC_SITE_URL, options.origin);
+  assert.match(step, /if \[ "\$\{status\}" != 143 \]; then/);
+  assert.match(step, /\n {12}sleep 15 &\n[\s\S]*\n {12}kill -KILL "\$\{server\}"\n {10}\) > \/dev\/null 2>&1 &\n/);
+});

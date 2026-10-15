@@ -327,6 +327,89 @@ jobs:
           APP_URL: "https://ci.ld2l.invalid"
           NEXT_PUBLIC_SITE_URL: "https://ci.ld2l.invalid"
           ALLOW_DEV_LOGIN: "false"
+      # The self-host box serves this same build with `next start` behind
+      # Caddy, which reaches it at 127.0.0.1:<port> with the public Host. Boot
+      # it that way (no VERCEL_ENV, the staging marker, Cloudflare's client IP
+      # header) and run the smoke the box's agent runs before every promote:
+      # it fails a site that judges origins by its bind address. Then SIGTERM
+      # must stop it within 15 s with Next's 143, which the units expect.
+      - name: Boot the built site the way the box runs it
+        shell: bash
+        env:
+          DATABASE_URL: ${{ env.PG_TEST_URL }}
+          DIRECT_URL: ${{ env.PG_TEST_URL }}
+          AUTH_SECRET: "C8kP2vR7xM4qT9wL6nH3dF5sJ0yB1zUa"
+          CRON_SECRET: "N6pT2yK8mW4cR9hL1sD7vF3xB5qJ0zUa"
+          BACKUP_RECEIPT_SECRET: "G9mW4rK2pX8cN6tV1hD7sQ3yL5bJ0fZa"
+          STEAM_API_KEY: "0123456789ABCDEF0123456789ABCDEF"
+          ADMIN_STEAM_IDS: "76561198000000001"
+          APP_URL: "https://ci.ld2l.invalid"
+          NEXT_PUBLIC_SITE_URL: "https://ci.ld2l.invalid"
+          ALLOW_DEV_LOGIN: "false"
+          LEAGUE_DEPLOY_ENV: staging
+          CLIENT_IP_HEADER: cf-connecting-ip
+          LEAGUE_RELEASE_SHA: ${{ github.sha }}
+          NODE_ENV: production
+          NEXT_TELEMETRY_DISABLED: "1"
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/next-start.log"
+          node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3100 \
+            --keepAliveTimeout 75000 > "${log}" 2>&1 &
+          server=$!
+          trap 'rc=$?; if [ -n "${server}" ]; then kill -KILL "${server}" 2>/dev/null || true; fi; if [ "${rc}" != 0 ]; then echo "--- next start output"; cat "${log}"; fi' EXIT
+          for attempt in $(seq 1 90); do
+            if curl -fs --max-time 5 -o /dev/null -H "Host: ci.ld2l.invalid" \
+              -H "X-Forwarded-Proto: https" http://127.0.0.1:3100/api/health/live; then
+              break
+            fi
+            if ! kill -0 "${server}" 2>/dev/null; then
+              echo "::error::next start exited before /api/health/live answered"
+              exit 1
+            fi
+            if [ "${attempt}" = 90 ]; then
+              echo "::error::next start was not live within 90 s"
+              exit 1
+            fi
+            sleep 1
+          done
+          smoke=0
+          node ops/selfhost/smoke/smoke.mjs --base http://127.0.0.1:3100 \
+            --host ci.ld2l.invalid --origin https://ci.ld2l.invalid --region us \
+            --commit "${GITHUB_SHA}" --expect staging --public-dir public || smoke=$?
+          started="${SECONDS}"
+          if ! kill -TERM "${server}" 2>/dev/null; then
+            echo "::error::next start had already exited"
+            exit 1
+          fi
+          # A watchdog, not a kill -0 poll: an exited child answers kill -0
+          # until it is waited for. Its kill shows up as status 137; stopped
+          # early, it takes its timer with it and holds no output open.
+          (
+            trap 'kill "${timer}" 2>/dev/null; exit 0' TERM
+            sleep 15 &
+            timer=$!
+            wait "${timer}"
+            kill -KILL "${server}"
+          ) > /dev/null 2>&1 &
+          watchdog=$!
+          status=0
+          wait "${server}" || status=$?
+          server=""
+          kill "${watchdog}" 2>/dev/null || true
+          if [ "${status}" = 137 ]; then
+            echo "::error::next start was still running 15 s after SIGTERM"
+            exit 1
+          fi
+          if [ "${status}" != 143 ]; then
+            echo "::error::next start exited ${status} after SIGTERM; expected 143"
+            exit 1
+          fi
+          echo "next start stopped with 143, $((SECONDS - started)) s after SIGTERM"
+          if [ "${smoke}" != 0 ]; then
+            echo "::error::the self-host smoke failed (its JSON is above)"
+          fi
+          exit "${smoke}"
 
   # THE RATCHET, sharded. A guarded claim's WHERE predicate is its entire
   # concurrency guard, and almost nothing in the suite notices if one is
