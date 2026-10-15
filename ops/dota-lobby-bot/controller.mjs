@@ -111,7 +111,27 @@ export function rosterMatches(lobby, spec) {
 function safeToLeave(lobby, job) {
   return (
     [2, 3].includes(lobby.state) ||
-    (lobby.state === 0 && !job.launchRequested && job.state !== "starting")
+    (lobby.state === 0 && !job.launchRequested && job.state !== "starting") ||
+    backInLobby(lobby, job)
+  );
+}
+
+/** A launched game's lobby back on Dota's lobby screen: the game failed to
+ * load, or ended and returned. Never the stale UI snapshot right after Launch:
+ * "started" needs a running or postgame snapshot of this lobby first. Only the
+ * bot, its leader, could launch it again, and the site never will (the job
+ * has launched), so holding it would answer BUSY to every next Create. */
+function backInLobby(lobby, job) {
+  return lobby.state === 0 && job.state === "started";
+}
+
+/** The lobby of a job the bot is done with: launched, or released. */
+function finishedJobLobby(jobs, lobby) {
+  return Object.values(jobs).some(
+    (job) =>
+      ["started", "released"].includes(job.state) &&
+      lobby.gameName === job.spec.name &&
+      lobby.passKey === job.spec.password,
   );
 }
 
@@ -326,7 +346,14 @@ export class LobbyController {
     this.lobby = lobby;
     this.absenceConfirmed = false;
     const job = this.data.jobs[this.data.active];
-    if (!job) return;
+    if (!job) {
+      // No claim, yet the bot is in a lobby: a finished job's, whose cache
+      // turned up after a reconnect had already settled its departure. Leave
+      // it, or it answers BUSY to every Create with nothing left to release.
+      // Any other lobby stays untouched.
+      if (finishedJobLobby(this.data.jobs, lobby)) this.transport.leave();
+      return;
+    }
     if (
       lobby.gameName !== job.spec.name ||
       lobby.passKey !== job.spec.password
@@ -367,9 +394,12 @@ export class LobbyController {
     // it a match id, leave on our own: the game plays on Valve's server, the
     // job keeps the id for the site's result lookup, and departure frees the
     // bot to set up the next lobby, so two in-house games can run at once.
+    // A launched game whose lobby went back to the lobby screen is done with
+    // the bot too.
     if (
       lobby.state === 3 ||
       (lobby.state === 2 && job.matchId) ||
+      backInLobby(lobby, job) ||
       (job.releasing && safeToLeave(lobby, job))
     )
       this.transport.leave();
