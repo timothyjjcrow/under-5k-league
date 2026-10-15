@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const mocks = vi.hoisted(() => ({
@@ -155,7 +155,7 @@ describe("GET /api/calendar", () => {
     }]);
     const response = await GET(request());
     const body = await response.text();
-    expect(body).toContain("UID:match-tiebreaker@league.example");
+    expect(body).toContain("UID:match-tiebreaker@ggd2l.vercel.app");
     expect(body).toContain("SUMMARY:Tiebreaker: Radiant Raiders vs Dire Wolves");
     expect(body).toContain(`best of ${bestOf}`);
     expect(body).not.toContain("Playoffs");
@@ -191,7 +191,7 @@ describe("GET /api/calendar", () => {
     expect(body).toContain("SUMMARY:Grand final: Radiant Raiders vs Dire Wolves");
     expect(body).not.toContain("Playoffs");
     // Subscribers key events on the UID: its format must never change.
-    expect(body).toContain("UID:match-semi@league.example");
+    expect(body).toContain("UID:match-semi@ggd2l.vercel.app");
     expect(mocks.findMatches).toHaveBeenCalledWith({
       where: { seasonId: season.id, phase: { in: ["PLAYOFF", "FINAL"] } },
       select: { phase: true, bracketSlot: true },
@@ -226,9 +226,9 @@ describe("GET /api/calendar", () => {
 
     expect(response.status).toBe(200);
     expect(body).toContain("X-WR-CALNAME:Ancient Order — Spring Cup");
-    expect(body).toContain("UID:match-old-season@league.example");
+    expect(body).toContain("UID:match-old-season@ggd2l.vercel.app");
     expect(body).toContain("SUMMARY:Week 1: Ancient Order vs Roshan Pit");
-    expect(body).not.toContain("match-upcoming@league.example");
+    expect(body).not.toContain("match-upcoming@ggd2l.vercel.app");
     expect(mocks.getActiveSeason).not.toHaveBeenCalled();
     expect(mocks.findMatches).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -243,7 +243,7 @@ describe("GET /api/calendar", () => {
 
     expect(response.status).toBe(200);
     expect(await response.text()).toContain(
-      "UID:match-upcoming@league.example",
+      "UID:match-upcoming@ggd2l.vercel.app",
     );
   });
 
@@ -252,9 +252,11 @@ describe("GET /api/calendar", () => {
     const body = await response.text();
 
     expect(response.status).toBe(200);
-    expect(body).toContain("UID:match-upcoming@league.example");
-    expect(body).toContain("UID:match-completed@league.example");
-    expect(body).toContain("UID:match-other-team@league.example");
+    expect(body).toContain("UID:match-upcoming@ggd2l.vercel.app");
+    expect(body).toContain("UID:match-completed@ggd2l.vercel.app");
+    expect(body).toContain("UID:match-other-team@ggd2l.vercel.app");
+    // The UID host is pinned; the event's link is the site's.
+    expect(body).toContain("URL:https://league.example/matches/match-upcoming");
     expect(body).not.toContain("match-untimed");
     expect(body).not.toContain("match-old-season");
     expect(body).toContain("DTSTAMP:20260701T120000Z");
@@ -273,9 +275,9 @@ describe("GET /api/calendar", () => {
 
     expect(response.status).toBe(200);
     expect(body).toContain("X-WR-CALNAME:Radiant Raiders — Summer Finals");
-    expect(body).toContain("match-upcoming@league.example");
-    expect(body).toContain("match-completed@league.example");
-    expect(body).not.toContain("match-other-team@league.example");
+    expect(body).toContain("match-upcoming@ggd2l.vercel.app");
+    expect(body).toContain("match-completed@ggd2l.vercel.app");
+    expect(body).not.toContain("match-other-team@ggd2l.vercel.app");
     expect(mocks.findMatches).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
@@ -341,4 +343,46 @@ describe("GET /api/calendar", () => {
       expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(75);
     }
   });
+});
+
+// Calendar apps key every event on its UID. A subscription taken while the
+// site lived on vercel.app must update its events after the move to the
+// league's own domain, not gain a duplicate of each, so the UID host is
+// pinned per league while the event links follow the site.
+describe("GET /api/calendar when the site URL changes", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  async function feedLines(region: "us" | "eu", siteUrl: string) {
+    vi.stubEnv("NEXT_PUBLIC_LEAGUE_REGION", region);
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", siteUrl);
+    vi.resetModules();
+    // The real resolveSiteUrl, reading NEXT_PUBLIC_SITE_URL as production does.
+    vi.doUnmock("@/lib/site-url");
+    const route = await import("./route");
+    const lines = (await (await route.GET(request())).text()).split("\r\n");
+    return {
+      uids: lines.filter((line) => line.startsWith("UID:")),
+      urls: lines.filter((line) => line.startsWith("URL:")),
+    };
+  }
+
+  it.each([
+    ["us", "https://ggd2l.vercel.app", "https://us.ggd2l.com", "ggd2l.vercel.app"],
+    ["eu", "https://ggd2l-europe.vercel.app", "https://eu.ggd2l.com", "ggd2l-europe.vercel.app"],
+  ] as const)(
+    "keeps the %s league's UIDs from %s at %s",
+    async (region, before, after, uidHost) => {
+      const old = await feedLines(region, before);
+      const moved = await feedLines(region, after);
+      const ids = ["match-upcoming", "match-completed", "match-other-team"];
+
+      expect(old.uids).toEqual(ids.map((id) => `UID:${id}@${uidHost}`));
+      expect(moved.uids).toEqual(old.uids);
+      expect(old.urls).toEqual(ids.map((id) => `URL:${before}/matches/${id}`));
+      expect(moved.urls).toEqual(ids.map((id) => `URL:${after}/matches/${id}`));
+    },
+  );
 });

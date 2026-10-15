@@ -12,6 +12,7 @@
 import { INHOUSE } from "./constants";
 import { icsDate, type CalendarEvent } from "./ics";
 import { INHOUSE_NIGHT_LENGTH_MS } from "./inhouse-night";
+import { LEAGUE_CONFIG } from "./league-config";
 import { dateAtWallTime, wallTime, zoneFormatter } from "./zoned-time";
 
 const MINUTE_MS = 60_000;
@@ -459,7 +460,10 @@ export function inhouseTimeGoogleCalendarUrl(
   return `https://calendar.google.com/calendar/render?${params}`;
 }
 
-/** A time as one calendar entry, for the .ics download. One time, one UID. */
+/**
+ * A time as one calendar entry, for the .ics download. One time, one UID, and
+ * the UID's host is pinned (calendarUidHost), never the site's.
+ */
 export function inhouseTimeCalendarEvent(
   startsAtMs: number,
   site: string,
@@ -467,7 +471,7 @@ export function inhouseTimeCalendarEvent(
   stampMs: number,
 ): CalendarEvent {
   return {
-    uid: `inhouse-time-${startsAtMs}@${new URL(site).host}`,
+    uid: `inhouse-time-${startsAtMs}@${LEAGUE_CONFIG.calendarUidHost}`,
     stamp: new Date(stampMs),
     sequence: 0,
     start: new Date(startsAtMs),
