@@ -103,7 +103,7 @@ function world({
       for (const slot of slots) running.delete(`${lg}:${slot}`);
       return json({ ok: true, slots });
     },
-    prune: (lg) => json({ removed: { releases: [`${lg}-20261001T120000Z-${"a".repeat(12)}`], tools: [], staticFiles: 0 } }),
+    prune: (lg) => json({ ok: true, removed: [`${lg}-20261001T120000Z-${"a".repeat(12)}`, `tools/${"d".repeat(12)}`], staticFilesRemoved: 0 }),
     logs: (lg, since) => json(logs[lg]?.(Number(since)) ?? [
       { id: `${lg}-1`, timestamp: Number(since) + 20_000, responseStatusCode: 200, requestPath: "/api/cron/automation", level: "info" },
       { id: `${lg}-2`, timestamp: Number(since) + 25_000, responseStatusCode: 200, requestPath: "/api/inhouse", level: "info" },
@@ -374,7 +374,7 @@ test("a release builds both leagues before starting either, checks, promotes US 
     assert.deepEqual(runningUnits(box), ["eu:b", "us:b"]);
     assert.deepEqual(report.events.filter((e) => e.action === "promoted").map((e) => e.region), ["us", "eu"]);
     assert.equal(report.events.filter((e) => e.action === "scheduled-passes-verified").length, 2);
-    // pruneLeague reports {removed: {releases, tools, staticFiles}}.
+    // pruneLeague reports {removed: [release ids and "tools/<sha12>"], staticFilesRemoved}.
     assert.deepEqual(report.events.filter((e) => e.action === "pruned").map((e) => e.message), ["1 old release removed", "1 old release removed"]);
     assert.deepEqual(report.cleanupProblems, []);
     assertArgvContract(box);

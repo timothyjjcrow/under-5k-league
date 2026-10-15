@@ -164,6 +164,16 @@ function logRows(target, rows) {
 }
 
 /** Design §2.3: releases run 07:00-19:00 UTC, never during a match night, inhouse night or draft. */
+/**
+ * How many releases an agent `prune` answer removed, or null when the answer
+ * does not say. The agent (ops/selfhost/agent/releases.mjs pruneLeague)
+ * answers {removed: [release ids and "tools/<sha12>"], staticFilesRemoved}.
+ */
+export function prunedReleaseCount(pruned) {
+  if (!Array.isArray(pruned?.removed)) return null;
+  return pruned.removed.filter((entry) => typeof entry === "string" && !entry.startsWith("tools/")).length;
+}
+
 export function releaseWindowOpen(now) {
   const hour = new Date(now).getUTCHours();
   return hour >= 7 && hour < 19;
@@ -395,8 +405,7 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       const deployment = await agent("deployment", built.id);
       if (deployment.id !== built.id || deployment.sha !== sha || deployment.region !== target.region || deployment.state !== "BUILT")
         throw new Error(`${target.region}: the built release does not match the reviewed commit`);
-      // The agent's `deployment` answer carries no build-log hash yet; the
-      // manifest records one only when the agent sends it.
+      // The manifest records the build-log hash only when it is a well-formed sha256.
       report.candidates[target.region] = { id: built.id, sha, buildSeconds: built.buildSeconds ?? null, peakRssMb: built.peakRssMb ?? null,
         node: deployment.node ?? null, buildLogSha256: SHA256.test(deployment.buildLogSha256 ?? "") ? deployment.buildLogSha256 : null };
       record({ region: target.region, action: "built", deploymentId: built.id });
@@ -473,15 +482,15 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     for (const target of changed) {
       try {
         const pruned = await agent("prune", target.region);
-        const removed = Array.isArray(pruned.removed?.releases) ? pruned.removed.releases.length : null;
+        const removed = prunedReleaseCount(pruned);
         record({ region: target.region, action: "pruned",
           message: removed === null ? "removed releases not reported" : `${removed} old release${removed === 1 ? "" : "s"} removed` });
       } catch (error) {
         report.cleanupProblems.push(`${target.region}: prune (${error.message})`);
       }
     }
-    // The agent's `status` answer carries no Caddy config hash yet; the
-    // manifest records one only when the agent sends it.
+    // The manifest records the agent's Caddy config hash only when it is a
+    // well-formed sha256.
     let caddyConfigSha256 = null;
     try {
       const status = await agent("status");

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
+import { prunedReleaseCount } from "../../../scripts/release-box.mjs";
 import { readMode, renderAllow, renderMode } from "./caddy-modes.mjs";
 import { SHA2, T0, addRelease, isCaddyValidate, isReload, makeBox } from "./harness.test.mjs";
 import {
@@ -286,6 +287,23 @@ test("prune removes static files older than 14 days unless a kept release still 
   utimesSync(path.join(box.layout.tools, "000000000000"), (T0 - 9000) / 1000, (T0 - 9000) / 1000);
   assert.deepEqual(pruneLeague(box.ctx, "us").removed, ["tools/000000000000"]);
   assert.ok(existsSync(path.join(box.layout.tools, "111111111111")));
+});
+
+test("release-box counts the releases a real prune answer removed, not its tools clones", async () => {
+  const box = liveBox();
+  const ancient = "us-20261001T000000Z-aaaaaaaaaaaa";
+  addRelease(box, ancient);
+  await goLive(box);
+  for (const [name, age] of [["000000000000", 9], ["111111111111", 3], ["222222222222", 2], ["333333333333", 1]]) {
+    mkdirSync(path.join(box.layout.tools, name));
+    const time = (T0 - age * 1000) / 1000;
+    utimesSync(path.join(box.layout.tools, name), time, time);
+  }
+  symlinkSync("333333333333", box.layout.toolsCurrent);
+  // The agent prints its answer as JSON; release-box reads that JSON.
+  const answer = JSON.parse(JSON.stringify(pruneLeague(box.ctx, "us")));
+  assert.deepEqual([...answer.removed].sort(), [ancient, "tools/000000000000", "tools/111111111111"].sort());
+  assert.equal(prunedReleaseCount(answer), 1);
 });
 
 test("the fetch-cache assertion finds gate and result-sync tags", () => {
