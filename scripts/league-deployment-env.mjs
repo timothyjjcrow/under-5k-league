@@ -1,6 +1,15 @@
 // Public deployment identity, shared by the production gate and EU bootstrap.
 // No credential values are ever included in validation errors.
-const US_ORIGIN = "https://ggd2l.vercel.app";
+// Every origin that serves, or redirects to, the US league: the legacy Vercel
+// host, the self-hosted host, and the apex and www, which redirect to it.
+// Europe must never be built with any of them.
+const US_ORIGINS = [
+  "https://ggd2l.vercel.app",
+  "https://us.ggd2l.com",
+  "https://ggd2l.com",
+  "https://www.ggd2l.com",
+];
+const US_HOSTS = new Set(US_ORIGINS.map((origin) => new URL(origin).hostname));
 const US_INVITE = "H7PJ4VxUGh";
 
 export function validateLeagueDeploymentEnv(env) {
@@ -23,7 +32,9 @@ export function validateLeagueDeploymentEnv(env) {
   }
   for (const key of ["APP_URL", "NEXT_PUBLIC_SITE_URL"]) {
     try {
-      if (new URL(env[key]).origin === US_ORIGIN) {
+      // Compare hosts, so a different scheme, an explicit port or a trailing
+      // dot cannot slip a US host past this check.
+      if (US_HOSTS.has(new URL(env[key]).hostname.replace(/\.$/, ""))) {
         errors.push(`${key} must use the Europe site, not the US origin`);
       }
     } catch {

@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { authorizeEuropeBootstrap, europeBootstrapSql, runEuropeBootstrap } from "./bootstrap-europe.mjs";
 import { instanceIdentitySql, executeInstanceSql } from "./instance-database.mjs";
 import { validateProductionEnv } from "./validate-prod-env.mjs";
+import { validateLeagueDeploymentEnv } from "./league-deployment-env.mjs";
 import { assertLocalManagedPostgresUrl } from "./test-db-safety.mjs";
 
 const VALID = {
@@ -25,6 +26,8 @@ const VALID = {
   NEXT_PUBLIC_MATCH_DAY: "",
   NEXT_PUBLIC_MATCH_TIME: "",
 };
+// Every origin that serves or redirects to the US league, legacy and self-hosted.
+const US_ORIGINS = ["https://ggd2l.vercel.app", "https://us.ggd2l.com", "https://ggd2l.com", "https://www.ggd2l.com"];
 
 test("a fresh Europe site can launch with Discord and match night unannounced", () => {
   assert.deepEqual(validateProductionEnv(VALID), []);
@@ -46,17 +49,43 @@ test("Europe rejects US identity, US invite, invalid timezone and half-announced
   assert.deepEqual(validateProductionEnv({ ...VALID, NEXT_PUBLIC_DISCORD_INVITE_URL: "https://discord.gg/europe-code" }), []);
 });
 
+test("Europe refuses every US origin, legacy or self-hosted, in either origin variable", () => {
+  for (const origin of US_ORIGINS) {
+    // A copied US env sets both; each variable is also checked on its own.
+    assert.deepEqual(validateProductionEnv({ ...VALID, APP_URL: origin, NEXT_PUBLIC_SITE_URL: origin }), [
+      "APP_URL must use the Europe site, not the US origin",
+      "NEXT_PUBLIC_SITE_URL must use the Europe site, not the US origin",
+    ]);
+    for (const key of ["APP_URL", "NEXT_PUBLIC_SITE_URL"]) {
+      assert.deepEqual(validateLeagueDeploymentEnv({ ...VALID, [key]: origin }),
+        [`${key} must use the Europe site, not the US origin`]);
+    }
+  }
+  // The comparison is by host: case, ports and a trailing dot do not hide one.
+  for (const variant of ["https://US.GGD2L.COM", "https://us.ggd2l.com:443", "https://us.ggd2l.com:8443",
+    "https://us.ggd2l.com.", "http://www.ggd2l.com"]) {
+    assert.deepEqual(validateLeagueDeploymentEnv({ ...VALID, APP_URL: variant }),
+      ["APP_URL must use the Europe site, not the US origin"]);
+  }
+  for (const origin of ["https://eu.ggd2l.com", "https://ggd2l-europe.vercel.app"]) {
+    assert.deepEqual(validateProductionEnv({ ...VALID, APP_URL: origin, NEXT_PUBLIC_SITE_URL: origin }), []);
+  }
+});
+
 test("existing US deployments require no new configuration", () => {
-  const env = { ...VALID, NEXT_PUBLIC_LEAGUE_REGION: undefined, NEXT_PUBLIC_APP_NAME: undefined,
-    NEXT_PUBLIC_LEAGUE_TIMEZONE: undefined, APP_URL: "https://ggd2l.vercel.app",
-    NEXT_PUBLIC_SITE_URL: "https://ggd2l.vercel.app" };
-  assert.deepEqual(validateProductionEnv(env), []);
+  for (const origin of ["https://ggd2l.vercel.app", "https://us.ggd2l.com"]) {
+    const env = { ...VALID, NEXT_PUBLIC_LEAGUE_REGION: undefined, NEXT_PUBLIC_APP_NAME: undefined,
+      NEXT_PUBLIC_LEAGUE_TIMEZONE: undefined, APP_URL: origin, NEXT_PUBLIC_SITE_URL: origin };
+    assert.deepEqual(validateProductionEnv(env), []);
+  }
 });
 
 test("bootstrap refuses wrong target and invalid environment before inspecting or writing", async () => {
   for (const { argv, env } of [
     { argv: [], env: VALID },
     { argv: ["--apply", "https://ggd2l.vercel.app"], env: VALID },
+    { argv: ["--apply", "https://us.ggd2l.com"],
+      env: { ...VALID, APP_URL: "https://us.ggd2l.com", NEXT_PUBLIC_SITE_URL: "https://us.ggd2l.com" } },
     { argv: ["--apply", VALID.APP_URL], env: { ...VALID, VERCEL_ENV: "preview" } },
     { argv: ["--apply", VALID.APP_URL], env: { ...VALID, NEXT_PUBLIC_LEAGUE_REGION: "us" } },
     { argv: ["--apply", VALID.APP_URL], env: { ...VALID, ADMIN_STEAM_IDS: "" } },
