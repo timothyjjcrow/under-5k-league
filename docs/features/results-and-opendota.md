@@ -14,9 +14,8 @@ in `result-sync.ts`), `automation-service.ts`, `automation-gate.ts`,
   account id/URL parsing (`parseMatchId`, `parseLeagueId`, `parseAccountId`)
   and every OpenDota fetch. `OPENDOTA_API_KEY` is optional; it only raises the
   rate limit. On the self-hosted box both leagues call OpenDota from one IP
-  address and share its anonymous limit; neither has a key yet
-  (`docs/DECISIONS.md`), so watch the journal for 429s on busy evenings
-  before getting one.
+  address and share its anonymous limit. Neither has a key yet: watch the
+  journal for 429s on busy evenings before getting one.
 - **Never fetch hero names.** `heroById` (`src/lib/heroes.ts`) is a static
   table, so no hero label depends on OpenDota being up.
 - **Keep "unreachable" distinct from "nothing there".** `fetchRankTier` and
