@@ -1459,7 +1459,8 @@ The runtime contract: `/api/health/live` returns 200 without dependency work;
 `/api/health/ready` returns 200 with the target database and 503 when that
 probe fails; unauthenticated/incorrect-auth cron is 401; POST `/api/sync` is
 405; GET `/api/sync` is a read-only `updated`/`watch`/`cursor` response; and a
-manual Admin run can complete (on a staging slot, never a candidate). The
+manual Admin run can complete (on a fixture server or the rehearsal, never a
+candidate). The
 exact reviewed SHA is built on the box as a production candidate with the
 league's production configuration; its read-only database gate attests the
 actual production database. The candidate starts in the league's idle slot,

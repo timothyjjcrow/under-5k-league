@@ -241,12 +241,9 @@ seams: [concurrency-and-testing](docs/features/concurrency-and-testing.md).
   `node scripts/mutation-guard.mjs --static` after touching a file in `FILES`.
 - **Scripts:** `npm run test:scripts` after touching `scripts/`
   (`test:release` and `test:provisioning` for the release and Europe scripts).
-  `test:release` also runs the box agent's and the shared smoke's tests
-  (`ops/selfhost/agent/*.test.mjs`, `ops/selfhost/smoke/*.test.mjs`): run it
-  after touching `ops/selfhost/` or `scripts/release-box.mjs`. The kit's
-  other tests (units, Caddy, Postgres, SQL, backup scripts, the cutover dump)
-  run in no npm script or CI job, so also run
-  `node --test 'ops/selfhost/**/*.test.mjs'` (quoted: Node expands the glob).
+  `test:release` also runs every `ops/selfhost/**/*.test.mjs` (the agent,
+  smoke, units, Caddy, Postgres, SQL, backup scripts and the cutover dump),
+  so run it after touching `ops/selfhost/` or `scripts/release-box.mjs`.
   CI's Postgres job boots the built site the way the box runs it and runs the
   smoke against it (the step "Boot the built site the way the box runs it").
 - **Browser:** `npm run test:e2e` (signup, draft, inhouse), `test:e2e:mid` (a

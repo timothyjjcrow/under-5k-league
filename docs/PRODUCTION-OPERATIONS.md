@@ -122,7 +122,8 @@ PostgreSQL connection limits (max_connections, per-league connection_limit):
 Candidate slots on 127.0.0.1 only; Caddy mode file names the live slot:
 
 Canonical DNS: proxied CNAMEs to the tunnel; ufw allows SSH only:
-Cloudflare zone settings (SSL Full (strict), Always Use HTTPS, Rocket Loader off, Email Obfuscation off, Bot Fight Mode off, no Cache Rules):
+Cloudflare zone settings (SSL Full (strict), Always Use HTTPS, Rocket Loader off, Email Obfuscation off, Bot Fight Mode off, no Cache Rules, the Browser Integrity Check skip rule for `/api/cron/automation`):
+Scheduler-style probe of each league's `/api/cron/automation` (the app's own 401, no `cf-mitigated: challenge`):
 Caddy header contract (stripped and set headers) evidence:
 `CLIENT_IP_HEADER=cf-connecting-ip` trust-path evidence (forged headers ignored):
 Abuse test and database plateau result:
@@ -281,8 +282,11 @@ Complete only the branches selected by `needs_db_release` and
    (`box_agent lease <lg>` answers `null` for both fields).
 3. When `needs_db_release` is true, validate production configuration with no
    test overrides (`box_agent envcheck <lg>` reports names only). The migration
-   runs with the league's owner role, from `/etc/ggd2l/<lg>-migrate.env`,
-   whose `DATABASE_URL` and `DIRECT_URL` are the same URL. That role owns every
+   runs with the league's owner role: the agent loads `/etc/ggd2l/<lg>.env`
+   (which must pass the env contract, because the migration first validates
+   the full production environment) and then `/etc/ggd2l/<lg>-migrate.env`,
+   whose `DATABASE_URL` and `DIRECT_URL` are the same owner URL and replace the
+   app role's. That role owns every
    application relation and function and has `CREATE` on the schema, because
    every restore onto the box runs as the owner. Ordinary
    `SELECT`/`INSERT`/`UPDATE`/`DELETE` grants do not authorize `ALTER TABLE`.
@@ -315,8 +319,10 @@ Complete only the branches selected by `needs_db_release` and
 
    It runs `scripts/release-migrations.mjs --apply <sha>` (the script behind
    `npm run db:migrate:release`) from a clean tools clone at that commit, with
-   the owner URL from the migrate env file and `VERCEL_ENV=production` set
-   only in that process, then the grants check. This is the only production
+   the league env file and then the migrate env file (so only the database
+   URLs become the owner's) and `VERCEL_ENV=production` set only in that
+   process, then the grants check. Its output, redacted, is in
+   `/var/log/ggd2l/tools/migrate-<lg>-<stamp>-<sha12>.log`. This is the only production
    migration writer. It enforces technical environment, immutable-checkout,
    reviewed-SHA, migration-safety, preflight, deploy, and postflight gates, and
    refuses root or `prisma/` `.env` files that Prisma could auto-load after
@@ -613,9 +619,17 @@ or bypass must have an owner, expiry, and monitor.
 **The zone.** SSL/TLS Full (strict); Always Use HTTPS on; Automatic HTTPS
 Rewrites, Rocket Loader and Email Address Obfuscation off (they rewrite pages);
 Bot Fight Mode off and "Remove visitor IP headers" off. Keep health probes and
-the bearer-authenticated cron path free of browser challenges: the scheduler's
-user agent keeps Browser Integrity Check quiet, and the application keeps its
-constant-time bearer check and the independent non-2xx alert.
+the bearer-authenticated cron path free of browser challenges. The scheduler's
+user agent (`ggd2l-automation-scheduler`) only names its passes in the logs:
+Browser Integrity Check also challenges a non-standard user agent, so the zone
+carries one WAF custom rule with action Skip, Browser Integrity Check, on
+`http.request.uri.path eq "/api/cron/automation" and http.host in
+{"us.ggd2l.com" "eu.ggd2l.com"}`. The application keeps its constant-time
+bearer check and the independent non-2xx alert. Before a league's point of no
+return, prove the rule from the allowlisted Mac:
+`curl -sS -o /dev/null -w '%{http_code} %header{cf-mitigated}\n' -A ggd2l-automation-scheduler -H 'accept: application/json' https://us.ggd2l.com/api/cron/automation`
+(and the same for `eu.ggd2l.com`) must print the app's own `401` with an
+empty `cf-mitigated`, never `challenge`.
 
 **No edge cache for dynamic routes.** The zone has **no Cache Rules** and
 never "Cache Everything". The `vercel-cdn-cache-control` headers in the code
@@ -969,8 +983,8 @@ of errors) or release again.
 - An SSH key: remove it from `~ggd2l/.ssh/authorized_keys` on the box.
 
 For every compromise, review provider and SSH access logs, revoke leaked
-copies, check backups (once the config archive is scheduled, R2 holds copies
-of `/etc/ggd2l`) and CI artifacts, communicate impact through the incident owner, and record only
+copies, check backups (the daily config archive in R2 holds copies of
+`/etc/ggd2l`, so a leaked value stays in archives up to 35 days old) and CI artifacts, communicate impact through the incident owner, and record only
 timestamps/credential identifiers—not values.
 
 ## Box operations
@@ -993,14 +1007,15 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | `ggd2l-backup@us.timer`, `ggd2l-backup@eu.timer` | Hourly dumps at :17 |
 | `ggd2l-drill@us.timer`, `ggd2l-drill@eu.timer` | Weekly restore drills, Sundays 10:30 and 11:30 UTC |
 | `ggd2l-heartbeat.timer` | The healthchecks pings, every 5 minutes |
+| `ggd2l-config-archive.timer` | The daily encrypted config archive, 04:47 UTC, as root |
 | `ggd2l-bot.service` | The lobby bot, on 127.0.0.1:8090 ([DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md)) |
 
 `box_agent status` reports the units, each league's live release, slots,
 disk, memory, swap, the last backup and drill, a pending reboot and the 5xx
 count of the last 24 hours. Every unit refuses to start without a valid
 environment (the env contract: `LEAGUE_DEPLOY_ENV`, the league's region, the
-canonical origin in production, the app role's local URL, no Vercel or Neon
-keys).
+canonical origin `https://<lg>.ggd2l.com` in production and staging alike, the
+app role's local URL, no Vercel or Neon keys).
 
 **The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
 PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
@@ -1018,6 +1033,7 @@ and don't run one across it.
 | `backup-us`, `backup-eu` | Each backup run | 1 h / 2 h |
 | `drill` | Each drill | 7 days / 1 day |
 | `bot` | The heartbeat, while `ggd2l-bot` is active | 5 min / 20 min |
+| `config` | Each daily config archive | 1 day / 1 day |
 
 **Memory and disk.** Steady state is expected around 1.2-1.5 GB (both slots,
 Postgres, cloudflared, Caddy and the bot), confirmed in the rehearsal; a
@@ -1030,8 +1046,10 @@ live, previous and newest. Check `df -h` monthly.
 **Logs.** App output goes to journald (capped at 500 MB):
 `journalctl -u ggd2l-us@a`. Caddy writes a JSON access log per host under
 `/var/log/caddy/` (rolled at 50 MiB, ten kept); it holds player IP addresses,
-so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`, with
-every environment value redacted.
+so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`, and
+the output of `attest`, `preflight`, `migrate` and `drill <lg> <sha>` in
+`/var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log` (0640 `root:ggd2l`),
+with every environment value redacted.
 
 **SSH.** Key-only login as `ggd2l`, the only account with a shell and sudo;
 everything else runs as its own user with no login. The Mac's `~/.ssh/config`
@@ -1039,27 +1057,30 @@ alias `ggd2l-1` pins the host key. Review `authorized_keys` monthly.
 
 **Backups and drills.** Each league is dumped hourly as the app role,
 verified, gzipped, age-encrypted to Tim's offline key and copied to R2
-(`ggd2l-backups`). **Not yet scheduled:** a daily encrypted archive of
-`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` to R2, so a rebuild can
-recover the secrets. The kit has the script
-(`ops/selfhost/backup/config-archive.sh`), but no unit runs it yet: until a
-`ggd2l-config-archive` timer lands and is enabled, there is no config
-archive. The weekly drill restores the newest dump on the box. Quarterly,
+(`ggd2l-backups`). Daily at 04:47 UTC, `ggd2l-config-archive.timer` runs
+`config-archive.sh` as root: an age-encrypted archive of `/etc/ggd2l`,
+`/etc/cloudflared` and `/etc/caddy` to R2 (`config/`), so a rebuild can
+recover the secrets. After changing anything in those folders, run
+`sudo systemctl start ggd2l-config-archive` at once. The weekly drill restores the newest dump on the box. Quarterly,
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
 
 **Tim's monthly hour.** Read the healthchecks dashboard and
-`box_agent status`; check `df -h`; look for OpenDota 429s in the journal (both
-leagues share one IP now); review `authorized_keys`. Quarterly, the offsite
+`box_agent status`; check `df -h`; watch for OpenDota rate limits (both leagues
+share one IP now; the app treats a 429 as unreachable and does not log it, so
+look for result imports that lag, not for journal lines); review
+`authorized_keys`. Quarterly, the offsite
 decrypt drill.
 
 **Rebuild from zero (about an hour).** Create a new droplet, run
-`ops/selfhost/provision-base.sh` and then `install-kit.sh <live sha>` from a
-verified clone. Tim decrypts the newest dumps on the Mac, and they are
+`ops/selfhost/provision-base.sh` and then `install-kit.sh <live sha>` from
+root's own clone (for example `/root/ggd2l-kit`; the script refuses a clone any
+other user could change). Tim decrypts the newest dumps on the Mac, and they are
 copied with their `.sha256` into `/var/backups/ggd2l/cutover/<lg>/`. Restore
-`/etc/ggd2l` and `/etc/cloudflared` from the newest config archive once one
-is scheduled; until then regenerate or supply again every file in them, a
-new tunnel included (Tim's `cloudflared tunnel login`). Then
+`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` from the newest config
+archive (Tim decrypts it on the Mac and streams it in, as the kit README's
+"Rebuild from zero" shows); if none exists, regenerate or supply again every
+file in them, a new tunnel included (Tim's `cloudflared tunnel login`). Then
 `box_agent import` each league (a fresh install leaves every site in
 maintenance, which `import` requires; run `box_agent identity <lg>` only if
 a dump predates the cutover's identity markers), build, start and promote

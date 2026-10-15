@@ -107,10 +107,10 @@ window (07:00-19:00 UTC, never during a match night, an inhouse night or a
 draft):
 
 ```bash
-npm run release:both
+npm run release:both -- --apply
 ```
 
-It runs `scripts/release-box.mjs`: it refuses a SHA whose exact-SHA CI run is
+Plain `npm run release:both` (or `-- --check`) only plans and says so. It runs `scripts/release-box.mjs`: it refuses a SHA whose exact-SHA CI run is
 not green, builds both leagues on the box (`agent build`), starts and smoke-tests
 each candidate (`start`, `check --expect production`), promotes US then Europe
 (`promote`, then the canonical release check through Cloudflare), waits for two
@@ -121,13 +121,16 @@ and prunes. Any failure promotes both leagues back to their base release.
 Appendix B): pause the scheduler and prove the quiet window
 (`agent cron-requests`, `agent lease`), take a fresh dump (`agent backup <lg>`),
 `agent prepare <sha>` and `agent drill <lg> <sha>`, then `agent migrate <lg> <sha>`,
-then `npm run release:both -- --maintenance-file <file>`, then resume the
+then `npm run release:both -- --apply --maintenance-file <file>`, then resume the
 scheduler and wait for two passes. The evidence's "PITR point" is the dump's
 sha256 and its R2 key (`state/last-backup.json`).
 
 **Kit changes** (anything in `ops/selfhost/`) never ride an app release. They
-reach the box only through `install-kit.sh <sha>` from a verified clone, as a
-separate, recorded operation.
+reach the box only through `install-kit.sh <sha>` run from root's own clone
+(`sudo git -C /root/ggd2l-kit fetch origin`, check out `<sha>`, then
+`sudo bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <sha>`), as a separate,
+recorded operation. Never run it from a tools clone: it refuses any clone, or
+folder above it, that a user other than root could change.
 
 ## Rollback
 
@@ -256,8 +259,9 @@ with `LoadCredential=`, otherwise from `/etc/ggd2l/`, which must then let
 before a migration) restores the newest local dump into the scratch database
 `ld2l_restore_test` as `ggd2l_rehearsal` (URL in `/etc/ggd2l/drill.env`), using
 `scripts/rehearse-backup-restore.mjs` from `tools/current`, or with a SHA from
-`tools/<sha12>` (the agent passes it as `GGD2L_TOOLS_DIR`; `tools/current`
-still points at the live commit until `migrate` moves it).
+`tools/<sha12>` (the agent passes the SHA as the second argument and the
+same folder as `GGD2L_TOOLS_DIR`, which must agree; `tools/current` still
+points at the live commit until `migrate` moves it).
 That verifies the checksum, restores in one transaction, applies the commit's
 migrations and attests the full schema. The scratch database is dropped
 afterwards, pass or fail. The result is in `state/last-drill.json`.
@@ -302,7 +306,8 @@ written after the dump is lost, so say so in the incident record):
    `ggd2l-1` alias (and its pinned host key) at it.
 2. As root: `provision-base.sh`; check `ssh ggd2l@<ip> sudo true` from a second
    terminal, then `harden-ssh.sh`.
-3. From a verified clone at the live SHA: `install-kit.sh <live sha>`.
+3. From root's own clone at the live SHA (`sudo git clone` into `/root/ggd2l-kit`):
+   `sudo bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <live sha>`.
 4. Tim decrypts the newest `config/` archive on the Mac and streams it straight
    in, so no plaintext lands on either disk:
    `age -d -i <key file> config-<stamp>.tar.gz.age | ssh ggd2l-1 'sudo tar -C / -xzpf -'`.

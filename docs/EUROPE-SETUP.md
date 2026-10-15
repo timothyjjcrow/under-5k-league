@@ -331,10 +331,9 @@ ticketed hosting remains pending.
 
 On the box, Europe's secrets live only in its root-only files under
 `/etc/ggd2l/` (`eu.env`, `eu-migrate.env`, `backup-eu.env`), and each hourly
-dump goes to R2 under `eu/`, encrypted to Tim's offline key. A daily
-encrypted config archive of these files, for a rebuild, is not yet scheduled
-(no unit runs `config-archive.sh`). Never copy these secrets into the US
-files.
+dump goes to R2 under `eu/`, encrypted to Tim's offline key. The box's daily
+encrypted config archive (`ggd2l-config-archive.timer`) carries these files
+for a rebuild. Never copy these secrets into the US files.
 
 Before the cutover, private Europe configuration is retained outside the
 repository under `~/.config/ggd2l-europe`, and the cutover's final Neon dump

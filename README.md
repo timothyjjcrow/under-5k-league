@@ -382,7 +382,7 @@ ggd2l-1   cloudflared ─> Caddy 127.0.0.1:8080
           PostgreSQL 18 on 127.0.0.1:5432 (ggd2l_us, ggd2l_eu)
           lobby bot on 127.0.0.1:8090 ─WSS─> the Cloudflare relay
 Cloudflare Workers: the one-minute schedulers -> https://{us,eu}.ggd2l.com/api/cron/automation
-R2 bucket ggd2l-backups: age-encrypted dumps (config archives: not yet scheduled)
+R2 bucket ggd2l-backups: age-encrypted dumps and daily config archives
 Vercel: ggd2l.vercel.app, ggd2l-europe.vercel.app redirect to the new origins
 ```
 
@@ -442,7 +442,8 @@ used by every CI job.
    inherit each owning role's privileges) and have `CREATE` on the application
    schema. Ordinary table DML grants are not enough for `ALTER TABLE`. On the
    box that is the owner role, which the agent gives only to the migration
-   process (`/etc/ggd2l/<lg>-migrate.env`). The guarded migration preflight
+   process (`/etc/ggd2l/<lg>-migrate.env`, loaded after the league's own env
+   file so it replaces only the database URLs). The guarded migration preflight
    checks schema `CREATE` plus immediately usable ownership of existing
    application relations and functions before it inspects migration data. Any
    named ownership gap is a release stop.
@@ -489,8 +490,9 @@ used by every CI job.
    every build and every slot start) refuses the file, naming only the
    offending keys, when `LEAGUE_DEPLOY_ENV` is missing or not exactly
    `production` or `staging`, `NEXT_PUBLIC_LEAGUE_REGION` isn't the file's
-   league, `APP_URL` isn't a bare origin equal to `NEXT_PUBLIC_SITE_URL` (in
-   production, exactly the league's canonical origin), the two database URLs
+   league, `APP_URL` isn't exactly the league's canonical origin
+   (`https://<lg>.ggd2l.com`, in production and staging alike) or differs
+   from `NEXT_PUBLIC_SITE_URL`, the two database URLs
    differ or point anywhere but the app role on 127.0.0.1, the action key
    isn't 32 bytes, a Vercel or Neon key is present, or a staging file carries
    a Discord or lobby-bot credential.
@@ -828,7 +830,8 @@ used by every CI job.
    unset LEAGUE_SITE_ORIGIN
    ```
 
-   Exercise an Admin manual run on a staging slot, never on a candidate. The
+   Exercise an Admin manual run on a fixture server or the cutover rehearsal
+   (the on-demand staging slot once it is built), never on a candidate. The
    promoted release is exactly the candidate the smoke checked; nothing is
    rebuilt. The production Cloudflare Worker always targets the canonical
    origin, never a candidate or the staging slot.
