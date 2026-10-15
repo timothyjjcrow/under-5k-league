@@ -23,12 +23,18 @@
 #     fails the unit. Without rclone.conf the copies wait in offsite/
 #     ("offsite-pending"), which passes only within 48 h of the epoch second
 #     written in /etc/ggd2l/offsite-pending, and fails after that.
-#  6. Writes state/last-backup.json, prints it, and pings HC_PING_BACKUP_<LG>
-#     when configured: success, or /fail with the fixed name of the failed step.
+#  6. Writes state/last-backup.json and a copy at <lg>/last-backup.json (the
+#     agent's `backup` and `status` report from the record), prints it, and
+#     pings HC_PING_BACKUP_<LG> when configured: success, or /fail with the
+#     fixed name of the failed step.
+#
+# The unit runs under ProtectSystem=strict, where only its ReadWritePaths= are
+# writable, so everything this script writes, its lock included, stays inside
+# the league folder (/var/backups/ggd2l/<lg>).
 #
 # A file is read from $CREDENTIALS_DIRECTORY when the unit passes it with
 # LoadCredential=, else from /etc/ggd2l. Test hooks, never set on the box:
-# GGD2L_TOOLS_ROOT, GGD2L_BACKUP_ROOT, GGD2L_ETC, GGD2L_LOCK_DIR, GGD2L_NOW.
+# GGD2L_TOOLS_ROOT, GGD2L_BACKUP_ROOT, GGD2L_ETC, GGD2L_NOW.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -41,7 +47,6 @@ case "${lg}" in us) LG_UPPER=US ;; eu) LG_UPPER=EU ;; *) usage ;; esac
 TOOLS_DIR="${GGD2L_TOOLS_ROOT:-/srv/ggd2l/tools}/current"
 BACKUP_ROOT="${GGD2L_BACKUP_ROOT:-/var/backups/ggd2l}"
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
-LOCK_DIR="${GGD2L_LOCK_DIR:-/run/lock}"
 OFFSITE_REMOTE="${GGD2L_OFFSITE_REMOTE:-r2:ggd2l-backups}"
 LEAGUE_DIR="${BACKUP_ROOT}/${lg}"
 LOCAL_DIR="${LEAGUE_DIR}/local"
@@ -168,7 +173,9 @@ if [ ! -r "${RECIPIENTS}" ] || ! grep -q '^age1' "${RECIPIENTS}"; then
 fi
 
 STEP=lock
-exec 9>"${LOCK_DIR}/ggd2l-backup-${lg}.lock"
+# In the league folder, never /run/lock: the unit's sandbox mounts /run
+# read-only, and a lock there failed every run before a dump was taken.
+exec 9>"${STATE_DIR}/.backup.lock"
 flock -n 9 || fail lock "another ${lg} backup is running"
 
 # --- 1. dump -----------------------------------------------------------------
@@ -308,7 +315,10 @@ finished="$(fmt_epoch "$(now_epoch)" %Y-%m-%dT%H:%M:%SZ)"
 if [ -n "${OFFSITE_KEY}" ]; then key_json="\"${OFFSITE_KEY}\""; else key_json=null; fi
 result="$(printf '{"ok":true,"league":"%s","file":"%s","sha256":"%s","ageFile":"%s","ageSha256":"%s","offsite":"%s","offsiteKey":%s,"daily":%s,"monthly":%s,"finishedAt":"%s"}' \
   "${lg}" "${sql}" "${sql_sha}" "${age_file}" "${age_sha}" "${OFFSITE}" "${key_json}" "${DAILY}" "${MONTHLY}" "${finished}")"
-printf '%s\n' "${result}" > "${STATE_DIR}/.last-backup.json.tmp"
-mv -f "${STATE_DIR}/.last-backup.json.tmp" "${STATE_DIR}/last-backup.json"
+# The record, then its copy in the league folder (the agent's backupDir(lg)).
+for record_dir in "${STATE_DIR}" "${LEAGUE_DIR}"; do
+  printf '%s\n' "${result}" > "${record_dir}/.last-backup.json.tmp"
+  mv -f "${record_dir}/.last-backup.json.tmp" "${record_dir}/last-backup.json"
+done
 printf '%s\n' "${result}"
 hc_ping "${HC_URL}" "" "ok ${name} sha256=${sql_sha} offsite-${OFFSITE}"

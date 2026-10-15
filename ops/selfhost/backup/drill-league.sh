@@ -9,38 +9,60 @@
 # 127.0.0.1:5432/ld2l_restore_test, from /etc/ggd2l/drill.env.
 #
 # It restores the newest local dump with scripts/rehearse-backup-restore.mjs
-# from tools/current, or from tools/<sha12> when a SHA is given. That script
-# checks the dump against its sidecar, recreates the scratch database, restores
-# in one transaction, applies that commit's migrations and attests the full
-# schema. The scratch database is dropped afterwards, pass or fail, so no copy
-# of league data outlives the drill. The drills share one scratch database, so
-# a lock serializes them.
+# from one tools clone:
+#   - GGD2L_TOOLS_DIR when set, which must be /srv/ggd2l/tools/<sha12>: the
+#     agent's pre-migration drill names the new commit's clone this way, and
+#     tools/current still points at the live commit until `migrate` moves it;
+#   - else tools/<sha12> when a SHA is given (it must agree with
+#     GGD2L_TOOLS_DIR when both are);
+#   - else tools/current (the weekly unit).
+# That script checks the dump against its sidecar, recreates the scratch
+# database, restores in one transaction, applies that commit's migrations and
+# attests the full schema. The scratch database is dropped afterwards, pass or
+# fail, so no copy of league data outlives the drill.
 #
-# Writes state/last-drill.json, prints it, and pings HC_PING_DRILL_<LG> (or the
-# shared HC_PING_DRILL) when configured: success, or /fail with the failed step.
+# The drills share one scratch database, so a lock serializes them: flock on a
+# read-only descriptor of /var/backups/ggd2l, which needs no write access and so
+# works inside the unit's sandbox (ProtectSystem=strict). Everything else the
+# drill writes stays in its league folder, which the unit must list in
+# ReadWritePaths=.
+#
+# Writes state/last-drill.json, prints it, and pings HC_PING_DRILL (the one
+# `drill` check, design §5.2) when configured: success, or /fail with the
+# failed step.
 #
 # Test hooks, never set on the box: GGD2L_TOOLS_ROOT, GGD2L_BACKUP_ROOT,
-# GGD2L_ETC, GGD2L_LOCK_DIR.
+# GGD2L_ETC.
 set -euo pipefail
 umask 077
 export LC_ALL=C
 
 usage() { echo "usage: drill-league.sh us|eu [<40-hex sha>]" >&2; exit 2; }
+refuse() { echo "drill-league.sh: $*" >&2; exit 2; }
 if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; fi
 lg="$1"
-case "${lg}" in us) LG_UPPER=US ;; eu) LG_UPPER=EU ;; *) usage ;; esac
+case "${lg}" in us | eu) ;; *) usage ;; esac
 sha="${2:-}"
+if [ -n "${sha}" ] && ! [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then usage; fi
 TOOLS_ROOT="${GGD2L_TOOLS_ROOT:-/srv/ggd2l/tools}"
-if [ -z "${sha}" ]; then
-  TOOLS_DIR="${TOOLS_ROOT}/current"
-elif [[ "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
+if [ -n "${GGD2L_TOOLS_DIR+set}" ]; then
+  # Set but wrong is refused, never read as "use current": that would drill
+  # the live commit's migrations and pass while measuring nothing.
+  tools_name="${GGD2L_TOOLS_DIR##*/}"
+  if [ "${GGD2L_TOOLS_DIR%/*}" != "${TOOLS_ROOT}" ] || ! [[ "${tools_name}" =~ ^[0-9a-f]{12}$ ]]; then
+    refuse "GGD2L_TOOLS_DIR must be ${TOOLS_ROOT}/<sha12>"
+  fi
+  if [ -n "${sha}" ] && [ "${sha:0:12}" != "${tools_name}" ]; then
+    refuse "GGD2L_TOOLS_DIR and the SHA name different commits"
+  fi
+  TOOLS_DIR="${GGD2L_TOOLS_DIR}"
+elif [ -n "${sha}" ]; then
   TOOLS_DIR="${TOOLS_ROOT}/${sha:0:12}"
 else
-  usage
+  TOOLS_DIR="${TOOLS_ROOT}/current"
 fi
 BACKUP_ROOT="${GGD2L_BACKUP_ROOT:-/var/backups/ggd2l}"
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
-LOCK_DIR="${GGD2L_LOCK_DIR:-/run/lock}"
 LEAGUE_DIR="${BACKUP_ROOT}/${lg}"
 LOCAL_DIR="${LEAGUE_DIR}/local"
 STATE_DIR="${LEAGUE_DIR}/state"
@@ -123,12 +145,11 @@ finish() {
 }
 trap finish EXIT
 
-HC_URL="$(conf_value "HC_PING_DRILL_${LG_UPPER}")"
-if [ -z "${HC_URL}" ]; then HC_URL="$(conf_value HC_PING_DRILL)"; fi
+HC_URL="$(conf_value HC_PING_DRILL)"
 
 # --- configuration -----------------------------------------------------------
 if [ ! -d "${LEAGUE_DIR}" ] || [ ! -w "${LEAGUE_DIR}" ]; then
-  fail config "${LEAGUE_DIR} is missing or not writable"
+  fail config "${LEAGUE_DIR} is missing or not writable (the unit needs ReadWritePaths=/var/backups/ggd2l/${lg})"
 fi
 mkdir -p "${STATE_DIR}"
 cd "${LEAGUE_DIR}"
@@ -155,7 +176,9 @@ name="$(basename "${dump}")"
 dump_sha="$(cut -d' ' -f1 < "${dump}.sha256")"
 
 STEP=lock
-exec 9>"${LOCK_DIR}/ggd2l-drill.lock"
+# One lock for both leagues, opened read-only: /run/lock and the other league's
+# folder are read-only inside the unit's sandbox.
+exec 9<"${BACKUP_ROOT}"
 flock -w 3600 9 || fail lock "another drill held the scratch database for an hour"
 
 # --- restore, migrate and attest ---------------------------------------------

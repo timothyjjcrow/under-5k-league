@@ -85,7 +85,7 @@ heartbeat), `ggd2l-bot`.
   | `box` | A live league's `/api/health/ready` failed through Cloudflare, `/` is 85% full, MemAvailable is under 150 MB, swap use is over 1.5 GB, or a unit has failed. The `/fail` body names which. | `ggd2l-agent status`; `systemctl --failed` |
   | `automation` | No healthy `/api/health/automation` for 30 min | the scheduler Worker; the slot's journal |
   | `backup-us`, `backup-eu` | No successful backup for 2 h, or a `/fail` naming the step | `journalctl -u ggd2l-backup@us` |
-  | `drill-us`, `drill-eu` | The weekly restore drill failed or never ran | `journalctl -u ggd2l-drill@us` |
+  | `drill` | A weekly restore drill failed (the `/fail` body names the league and step), or none passed for 8 days | `journalctl -u ggd2l-drill@us -u ggd2l-drill@eu` |
   | `bot` | `ggd2l-bot` inactive for 20 min | `journalctl -u ggd2l-bot` |
   | `config` | The daily config archive failed or never ran | `journalctl -u ggd2l-config-archive` |
 
@@ -173,7 +173,29 @@ the app role's `DIRECT_URL` and `BACKUP_DIR`):
      03:00Z each day;
    - `ggd2l-backups/<lg>/monthly/<YYYY-MM>/` for the first daily of each month.
 6. `state/last-backup.json` records the file, both sha256 values and the R2
-   key; healthchecks gets a ping, or `/fail` with the step that failed.
+   key, with a copy at `/var/backups/ggd2l/<lg>/last-backup.json`;
+   `agent backup` and `agent status` report from it. healthchecks gets a ping,
+   or `/fail` with the step that failed.
+
+The units run sandboxed (`ProtectSystem=strict`), so the backup and the drill
+write only inside their league folder, their locks included (the drills share
+one lock, a read-only hold on `/var/backups/ggd2l`). After installing or
+changing the kit, start each unit once and check it, so a sandbox gap shows up
+now and not at the next hour:
+
+```bash
+sudo systemctl start ggd2l-backup@us    # first: the drill restores the newest dump
+sudo systemctl start ggd2l-drill@us
+systemctl show -p Result ggd2l-backup@us ggd2l-drill@us   # Result=success for both
+```
+
+**The daily config archive** (`config-archive.sh`, as root) streams
+`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` through tar, gzip and
+`age -R` into `/var/backups/ggd2l/config/`, so no plaintext touches disk, and
+uploads it to `ggd2l-backups/config/<date>/` (or queues it under the same 48 h
+`offsite-pending` rule). After changing anything in those folders, run it at
+once rather than waiting for the timer:
+`sudo systemctl start ggd2l-config-archive`.
 
 R2 lifecycle rules (bucket `ggd2l-backups`): delete `us/hourly/` and
 `eu/hourly/` after 7 days, `us/daily/` and `eu/daily/` after 35, `us/monthly/`
@@ -213,8 +235,8 @@ not try to create it (`no_check_bucket`; the scripts also pass
 
 `/etc/ggd2l/healthchecks.env` (0600) holds one ping URL per check:
 `HC_PING_BOX`, `HC_PING_AUTOMATION`, `HC_PING_BOT`, `HC_PING_BACKUP_US`,
-`HC_PING_BACKUP_EU`, `HC_PING_DRILL_US`, `HC_PING_DRILL_EU` (or one shared
-`HC_PING_DRILL`), `HC_PING_CONFIG`, plus the optional
+`HC_PING_BACKUP_EU`, `HC_PING_DRILL` (both leagues' drills ping the one
+`drill` check) and `HC_PING_CONFIG`, plus the optional
 `GGD2L_HEARTBEAT_LEAGUES`. A check without a URL is simply not pinged. The units
 load it with `EnvironmentFile=-`; the scripts also read it directly when they
 can.
@@ -233,16 +255,20 @@ with `LoadCredential=`, otherwise from `/etc/ggd2l/`, which must then let
 **The weekly drill** (`drill-league.sh`, or `sudo -n ggd2l-agent drill <lg> [sha]`
 before a migration) restores the newest local dump into the scratch database
 `ld2l_restore_test` as `ggd2l_rehearsal` (URL in `/etc/ggd2l/drill.env`), using
-`scripts/rehearse-backup-restore.mjs` from `tools/current` or `tools/<sha12>`.
+`scripts/rehearse-backup-restore.mjs` from `tools/current`, or with a SHA from
+`tools/<sha12>` (the agent passes it as `GGD2L_TOOLS_DIR`; `tools/current`
+still points at the live commit until `migrate` moves it).
 That verifies the checksum, restores in one transaction, applies the commit's
 migrations and attests the full schema. The scratch database is dropped
 afterwards, pass or fail. The result is in `state/last-drill.json`.
 
 **Tim's quarterly decrypt drill** (about 15 min, on the Mac): download one
-`daily/` object with its two `.sha256` files, then:
+`daily/` object with its two `.sha256` files into an empty folder, then:
 
 ```bash
 umask 077
+# A browser download is world-readable; the rehearsal refuses such a sidecar.
+chmod 600 backup-<stamp>.sql.gz.age backup-<stamp>.sql.gz.age.sha256 backup-<stamp>.sql.sha256
 shasum -a 256 -c backup-<stamp>.sql.gz.age.sha256
 age -d -i <key file from the password manager> backup-<stamp>.sql.gz.age | gunzip > backup-<stamp>.sql
 shasum -a 256 -c backup-<stamp>.sql.sha256
@@ -256,10 +282,12 @@ Then delete the plaintext dump and the key file.
 written after the dump is lost, so say so in the incident record):
 
 1. `sudo -n ggd2l-agent mode <lg> maintenance`.
-2. Choose the dump: a local one in `/var/backups/ggd2l/<lg>/local/`, or an
-   offsite one decrypted on the Mac as above and copied with its `.sha256` into
-   `/var/backups/ggd2l/cutover/<lg>/` (root, 0600).
-3. `sudo -n ggd2l-agent import <lg> <file>`: checks the sidecar, stops both
+2. Choose the dump and put it, with its `.sha256`, in
+   `/var/backups/ggd2l/cutover/<lg>/` (root's folder; the files stay 0600):
+   `agent import` reads only that folder. A local dump is copied there:
+   `sudo cp -p /var/backups/ggd2l/<lg>/local/<name>.sql{,.sha256} /var/backups/ggd2l/cutover/<lg>/`.
+   An offsite one is decrypted on the Mac as above and copied there.
+3. `sudo -n ggd2l-agent import <lg> <name>.sql`: checks the sidecar, stops both
    slots, recreates the database, restores as the owner role, grants the app
    role and runs `ANALYZE`.
 4. `sudo -n ggd2l-agent grants-check <lg>` (0 problems) and
@@ -288,8 +316,9 @@ written after the dump is lost, so say so in the incident record):
    and `promote` at the live SHA.
 7. `sudo systemctl enable --now cloudflared-ggd2l`. The tunnel id and DNS are
    unchanged, so traffic returns once it connects.
-8. Enable the backup, drill, heartbeat and config-archive timers, take a manual
-   backup, and watch healthchecks go green.
+8. Enable the backup, drill, heartbeat and config-archive timers, start one
+   backup and then one drill per league and check `Result=success` (see
+   Backups), and watch healthchecks go green.
 
 ## Origin CA fallback (if the tunnel cannot be used)
 

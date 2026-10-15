@@ -7,8 +7,10 @@
 #   config-archive.sh
 #
 # Runs as root from ggd2l-config-archive.service, because those directories are
-# root-only. The plaintext never touches disk: tar | gzip | age -R straight into
-# config/config-<UTC stamp>.tar.gz.age, readable only with Tim's offline key.
+# root-only; under the unit's ProtectSystem=strict it writes only its output
+# folder, /var/backups/ggd2l/config. The plaintext never touches disk:
+# tar | gzip | age -R straight into config/config-<UTC stamp>.tar.gz.age,
+# readable only with Tim's offline key.
 # The copy goes to <remote>/config/<date>/ through rclone, or waits locally
 # under the same 48 h offsite-pending rule as the league backups. Local copies
 # are kept 14 days once uploaded. Pings HC_PING_CONFIG when configured.
