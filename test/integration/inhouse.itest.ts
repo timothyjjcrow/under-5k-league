@@ -1698,6 +1698,30 @@ describe("inhouse — discord announcements", () => {
     expect(queuePings()).toBe(1);
   });
 
+  it("waits an hour after a queue ping before the next one", async () => {
+    const players = await enqueue(INHOUSE.QUEUE_PING_AT, () => 3000);
+    expect(queuePings()).toBe(1);
+    const recross = async () => {
+      await leaveQueue(players[0].session);
+      await joinQueue(players[0].session, 3000);
+    };
+    const pingedAgo = (minutes: number) =>
+      setSetting(
+        SETTING_KEYS.INHOUSE_QUEUE_PING_AT,
+        new Date(Date.now() - minutes * 60_000).toISOString(),
+      );
+
+    // Half an hour on, a dip and rejoin crosses the line again: still quiet.
+    await pingedAgo(30);
+    await recross();
+    expect(queuePings()).toBe(1);
+
+    // Past the hour, the next crossing pings.
+    await pingedAgo(61);
+    await recross();
+    expect(queuePings()).toBe(2);
+  });
+
   it("stays quiet below the milestone", async () => {
     await enqueue(INHOUSE.QUEUE_PING_AT - 1, () => 3000);
     expect(queuePings()).toBe(0);
