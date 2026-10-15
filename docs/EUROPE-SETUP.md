@@ -9,7 +9,10 @@ The site is [GGD2L Europe](https://eu.ggd2l.com) at `https://eu.ggd2l.com`.
 **Status: planned.** Europe moves there from Vercel and Neon on the cutover
 day, about two hours after the US ([DECISIONS](DECISIONS.md#hosting)); until
 then it runs at `https://ggd2l-europe.vercel.app`, which afterwards redirects
-to the new origin (307 for 14 days, then 308). Season 1 is open
+to the new origin (307 for 14 days, then 308). Until Europe has moved, run
+its scheduler pause, resume and rollback deploys from a checkout of 33a1f348:
+the `wrangler.europe*.jsonc` on `main` already target `https://eu.ggd2l.com`,
+which doesn't serve the league until the move. Season 1 is open
 for signups with **match night to be announced**, no draft date and no first
 match date. Europe now connects to the existing US Dota worker, Steam account
 and relay with explicit US/EU region support. Ticket IDs remain unset pending
@@ -45,7 +48,9 @@ refusing the build. Run parity **before** it, since it changes a row Neon
 still holds at the old value. The Discord OAuth redirect
 `https://eu.ggd2l.com/api/auth/discord/callback` is added in the Discord
 developer portal before the move; keep the old one for the 14 days the old
-origin redirects. The full cutover runbook is `ops/selfhost/README.md`.
+origin redirects. The cutover runbook itself is kept outside the repository;
+`ops/selfhost/README.md` (Cutover helpers) covers the Neon dump and the
+redirect deployments.
 
 ## Launch record — 5 September 2026 (on Vercel)
 
@@ -95,7 +100,8 @@ unannounced; no dates or Europe ticket IDs have been invented.
 ## Project and configuration
 
 On the box, Europe is one slot pair, one database and one environment file
-beside the US; `install-kit.sh` provisions them (`ops/selfhost/README.md`).
+beside the US; `install-kit.sh` provisions them (`ops/selfhost/README.md`,
+Rebuild from zero).
 
 1. Europe's database is `ggd2l_eu`, with its own owner and app roles that
    can't connect to the US database. Its `DATABASE_URL` and `DIRECT_URL` are
@@ -325,9 +331,10 @@ ticketed hosting remains pending.
 
 On the box, Europe's secrets live only in its root-only files under
 `/etc/ggd2l/` (`eu.env`, `eu-migrate.env`, `backup-eu.env`), and each hourly
-dump goes to R2 under `eu/`, encrypted to Tim's offline key; the daily
-encrypted config archive there holds the files a rebuild needs. Never copy
-these secrets into the US files.
+dump goes to R2 under `eu/`, encrypted to Tim's offline key. A daily
+encrypted config archive of these files, for a rebuild, is not yet scheduled
+(no unit runs `config-archive.sh`). Never copy these secrets into the US
+files.
 
 Before the cutover, private Europe configuration is retained outside the
 repository under `~/.config/ggd2l-europe`, and the cutover's final Neon dump

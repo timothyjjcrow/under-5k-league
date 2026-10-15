@@ -783,9 +783,14 @@ or absent `Content-Length` by the measured body, require one JSON object, and
 fail before authentication/database work on malformed input. Their canonical
 same-origin proof compares the `Origin` with `publicOrigin(req)`
 (`src/lib/public-origin.ts`): `APP_URL` when `LEAGUE_DEPLOY_ENV` is declared
-(the box, where Next builds `req.url` from the bind address 127.0.0.1), else
-the request's own origin. Every route-handler redirect builds on it too, never
-on `req.url` (`src/app/route-redirect-origin.test.ts`). Scalar-only
+(the box, where Next builds `req.url` from the local bind address,
+`https://localhost:<port>`, never the public hostname), else the request's
+own origin. Every route-handler redirect builds on it too, never on `req.url`
+(`src/app/route-redirect-origin.test.ts`). The Steam `return_to` and `realm`
+and the Discord `redirect_uri` build on `providerReturnBase(req)` instead:
+the canonical origin when declared, else `APP_URL` or the request's origin
+(the pre-box rule, so a request on another host still hands the provider its
+registered callback); don't replace it with `publicOrigin`. Scalar-only
 Server Actions have a 64 KB raw multipart ceiling; the app has no file upload.
 `/api/sync` and
 calendar are viewer-independent and carry short `vercel-cdn-cache-control`
@@ -1294,7 +1299,10 @@ remote connection, and the browser fixture never touches `dev.db`.
 **Status: planned.** Production is one self-hosted box, `ggd2l-1`; both
 leagues move there from Vercel and Neon on the cutover day
 ([DECISIONS](DECISIONS.md#hosting)). Until then they run on Vercel and Neon
-as before and nothing is released. This section describes the box.
+as before and nothing is released; until a league has moved, its scheduler
+pause, resume and rollback deploys run from a checkout of 33a1f348, because
+the `wrangler*.jsonc` on `main` already target the box's origins. This
+section describes the box.
 
 **Ingress and runtime.** Each league's hostname is a proxied Cloudflare CNAME
 to a Cloudflare Tunnel; `cloudflared` on the box hands requests to Caddy on
@@ -1317,16 +1325,19 @@ runbook.
 
 **Deploy marker.** `LEAGUE_DEPLOY_ENV` (`leagueDeployEnv`,
 `src/lib/deploy-env.ts`) is `production` or `staging` on the box and absent
-everywhere else. Declared, it makes `publicOrigin(req)` answer `APP_URL` (the
-same-origin guard and every redirect) and opens Discord writes only for
-`production` (`discordMutationsAllowed`); absent, both behave as they always
-did, and Vercel previews stay closed. Every box unit runs the env contract
-(`ops/selfhost/agent/env-contract.mjs`) before it starts and refuses an
-environment without a valid marker, with any `VERCEL*` or Neon key, with an
-`APP_URL` other than the league's canonical origin, or with database URLs
-that aren't the league's app role on 127.0.0.1. `/api/health/release` reports
-`site` and `deployEnv`, so a release can see a build baked with the wrong
-origin or a staging environment serving production.
+everywhere else. Declared, it makes `publicOrigin(req)` (the same-origin
+guard and every redirect) and `providerReturnBase(req)` (the Steam and
+Discord callbacks) answer `APP_URL`, and opens Discord writes only for
+`production` (`discordMutationsAllowed`); absent, all three behave as they
+always did, and Vercel previews stay closed. Every box unit runs the env
+contract (`ops/selfhost/agent/env-contract.mjs`) before it starts and refuses
+an environment without a valid marker, with any `VERCEL*` or Neon key, with a
+`NEXT_PUBLIC_LEAGUE_REGION` other than its league, with an `APP_URL` that
+isn't a bare origin (in production, exactly the league's canonical origin),
+or with database URLs that aren't the league's app role on 127.0.0.1.
+`/api/health/release` reports `site` and `deployEnv`, so a release can see a
+build baked with the wrong origin or a staging environment serving
+production.
 
 **Environment gate.** `scripts/validate-prod-env.mjs` runs first for a
 production build (on the box, `scripts/vercel-build.mjs` with

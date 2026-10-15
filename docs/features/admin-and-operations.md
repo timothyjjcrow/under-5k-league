@@ -362,8 +362,14 @@ respect there:
   A candidate is checked only by `ops/selfhost/smoke/smoke.mjs`; add a check
   there, not a probe elsewhere.
 - **Build redirects and origin checks on `publicOrigin(req)`.** Behind the
-  tunnel Next sees `req.url` at 127.0.0.1; `src/app/route-redirect-origin.test.ts`
-  fails on a redirect built from `req.url` or `request.url`.
+  tunnel Next builds `req.url` from the local bind address
+  (`https://localhost:<port>`), never the public hostname;
+  `src/app/route-redirect-origin.test.ts` fails on a redirect built from
+  `req.url` or `request.url`. The Steam `return_to` and `realm` and the
+  Discord `redirect_uri` stay on `providerReturnBase(req)`: the canonical
+  origin when declared, else `APP_URL` or the request's origin, so a Vercel
+  or local request on another host still hands the provider its registered
+  callback. Never swap it for `publicOrigin`.
 - **Keep `after()` work short.** A stopping slot gets 60 seconds
   (`TimeoutStopSec`), which covers the cron's 45-second budget and the
   `after()` drain; route `maxDuration` exports do nothing on the box.

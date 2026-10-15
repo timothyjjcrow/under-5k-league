@@ -12,11 +12,18 @@ or bearer header in this record.
 > on the cutover day ([DECISIONS](DECISIONS.md#hosting)); until then they run
 > on Vercel and Neon as before and nothing is released. The procedure this
 > page replaced is at `git show 33a1f348:docs/PRODUCTION-OPERATIONS.md`.
+> **Until a league has moved, run its scheduler pause, resume and rollback
+> deploys from a checkout of 33a1f348.** The `wrangler*.jsonc` on `main`
+> already point the Workers at `https://us.ggd2l.com` and
+> `https://eu.ggd2l.com`; deployed for a league still on Vercel, they would aim
+> its only clock at an origin that answers only the maintenance page (or
+> doesn't resolve yet), and its automation would stop.
 
 The agent calls below use the helper from [RELEASING](RELEASING.md#how-the-box-serves-a-league):
 `box_agent <verb> <args>` runs `/usr/local/sbin/ggd2l-agent` on the box over
-SSH and prints one JSON object. Every verb, its arguments and its answer are in
-`ops/selfhost/README.md`.
+SSH and prints one JSON object. Every verb and its arguments are in the
+agent's `VERBS` table (`ops/selfhost/agent/ggd2l-agent.mjs`); any other verb
+exits 2, and a refusal is `{ok:false, code, message}`.
 
 ## Release stop rule
 
@@ -38,8 +45,9 @@ receives its runtime environment and must remain side-effect-free. Without
 `NODE_ENV=production` both gates skip silently, which is why the agent
 requires their pass lines in the build output.
 In development the build performs no database gate or migration mutation. The
-box has no Previews: staging is the on-demand slot in `ops/selfhost/README.md`,
-on a scrubbed copy of the database.
+box has no Previews: staging is the on-demand slot on a scrubbed copy of the
+database ([DECISIONS](DECISIONS.md#hosting)), which is designed but not yet
+built (no unit or agent verb runs it).
 
 Schema-neutral UI and application releases require neither a fresh backup nor a
 scheduler pause. A strict classification requires full CI and review, but does
@@ -225,8 +233,9 @@ Complete every field selected by an impact flag before changing that subsystem.
    one. A live release that can't be identified blocks the fast path.
 3. Record each league's previous known-good release. First exercise the change
    away from production: on a fixture server (`npm run fixture:*`) or the
-   on-demand staging slot (`ops/selfhost/README.md`, a scrubbed copy of the
-   database reached through `ssh -L`). Check the probes and endpoint
+   on-demand staging slot (a scrubbed copy of the database reached through
+   `ssh -L`; [DECISIONS](DECISIONS.md#hosting), designed but not yet built).
+   Check the probes and endpoint
    contracts, an appropriate database-backed page, focused desktop/mobile
    browser verification for UI changes, affected API/auth/actor checks for
    application changes, and the error output. This rehearsal may include a
@@ -584,7 +593,8 @@ the rate limiter keys on that header alone; a forged `X-Forwarded-For` or
 `x-vercel-forwarded-for` is ignored and a missing header falls into the shared
 `unknown` bucket. With `LEAGUE_DEPLOY_ENV` declared, `publicOrigin(req)`
 answers `APP_URL`, so the same-origin guard accepts only the canonical origin
-and redirects never point at 127.0.0.1. Caddy's JSON access log redacts
+and redirects never point at the local bind address, and
+`providerReturnBase(req)` hands Steam and Discord the same origin. Caddy's JSON access log redacts
 `Authorization` and `Cookie`, so the cron bearer never reaches a log. Verify
 on the live site that a forged header doesn't move a request out of its
 bucket, and record the result; do not infer client identity from a header sent
@@ -832,9 +842,10 @@ not to deploy a speculative fix.
 The freeze must be rehearsed before launch (the rehearsal's `maintenance` and
 `allowlist` modes are that rehearsal). Its evidence belongs in the private
 launch record, not in the repository. **A promote writes the mode file too**,
-`proxy` unless told otherwise, so a promote or a `rollback` (a promote of the
-previous release) lifts a freeze. While frozen, put a release back with
-`box_agent promote <lg> <id> --mode allowlist`, never `rollback`.
+`proxy` unless given `--mode`, so a bare promote lifts a freeze. `rollback`
+refuses while the league is in `maintenance` and otherwise keeps its current
+mode. While frozen, put a release back with
+`box_agent promote <lg> <id> --mode allowlist`.
 
 ## Code/config rollback
 
@@ -872,30 +883,51 @@ lost unless they can be carried over by hand.
    the recovery target (which dump) and the accepted data-loss window. Take a
    dump of the current state first (`box_agent backup <lg>`) and keep it as
    incident evidence.
-2. Restore the chosen dump into a disposable database, never over the
-   original during investigation. `box_agent drill <lg>` restores the newest
-   local dump into the scratch `ld2l_restore_test`. An older or offsite dump
-   is decrypted on Tim's Mac with his offline key (the box can't decrypt its
-   own offsite copies), checked against its SHA-256 and copied to the box with
-   `scp -p`.
-3. Run migration baseline as appropriate, migration preflight, isolated
-   migration deploy, current postflight, and representative counts/invariants
-   for users, seasons, registrations, teams, matches, games, draft state,
-   inhouse history, the retained Cred ledger, announcements, and admin actions.
-4. Confirm reads and a disposable transactional write/rollback through the
-   app role. Exercise the actor/phase smoke checklist.
-5. Compare the restore point with the private restoration-replay register.
+2. Restore the chosen dump into a scratch database that persists, never over
+   the original. The box's drill can't host an investigation:
+   `box_agent drill <lg>` restores only the newest local dump, and
+   `ld2l_restore_test` is dropped when it exits, pass or fail. Restore into a
+   scratch PostgreSQL 18 on the Mac instead (the box's major: its dumps may
+   not load into an older server), as in Tim's quarterly decrypt drill
+   (`ops/selfhost/README.md`, Restore): copy a local dump from
+   `/var/backups/ggd2l/<lg>/local/` file to file, or decrypt an offsite one on
+   the Mac with Tim's offline key (the box can't decrypt its own offsite
+   copies), check it against its `.sha256`, then run
+   `npm run db:backup:rehearse -- <file>` with `PG_RESTORE_TEST_URL` on the
+   Mac's `ld2l_restore_test`. That database stays until the next rehearsal
+   replaces it.
+3. On the clone, run migration baseline as appropriate, migration preflight,
+   isolated migration deploy, current postflight, and representative
+   counts/invariants for users, seasons, registrations, teams, matches, games,
+   draft state, inhouse history, the retained Cred ledger, announcements, and
+   admin actions, and confirm reads and a disposable transactional
+   write/rollback.
+4. Compare the restore point with the private restoration-replay register.
    Reapply every later approved data correction or de-identification on the
-   clone, verify its subject-specific postflight, and obtain data-correction-owner and
-   database-owner approval that the recovered data will not resurrect it.
-6. Obtain database-owner and release-owner approval for cutover. Then
+   clone, verify its subject-specific postflight, and obtain
+   data-correction-owner and database-owner approval that the recovered data
+   will not resurrect it.
+5. Dump the corrected clone, so the corrections travel with it: on the Mac,
+   `DIRECT_URL=<the scratch URL> BACKUP_DIR=<a 0700 folder> npm run db:backup`
+   writes `backup-<stamp>.sql` with its `.sha256`. Copy both file to file
+   into `/var/backups/ggd2l/cutover/<lg>/` on the box: `box_agent import`
+   reads only a `.sql` file in that folder, beside its `.sha256` sidecar.
+   Importing the chosen dump itself instead would bring back everything the
+   register removed; if you must, reapply every register entry to the
+   restored database behind the freeze and verify each postflight before
+   step 7.
+6. Obtain database-owner and release-owner approval for cutover. Put the
+   league in maintenance (`box_agent mode <lg> maintenance`): `import`
+   refuses in any other mode, `allowlist` included. Then
    `box_agent import <lg> <file>`: it checks the dump against its SHA-256
    sidecar, stops both slots, drops and recreates the league's database,
    restores as the owner role, grants the app role and analyzes. Run
-   `box_agent preflight <lg> <live sha>` and `box_agent grants-check <lg>`,
-   start and check the live release (`box_agent start`, `box_agent check`),
-   promote it with `--mode allowlist`, verify, then deploy the sole Cloudflare
-   trigger and observe two clean passes.
+   `box_agent preflight <lg> <live sha>` and `box_agent grants-check <lg>`
+   (0 problems: the app role's grants), start and check the live release
+   (`box_agent start`, `box_agent check`), promote it with `--mode allowlist`,
+   and from your allowed IP verify a database-backed read, the actor/phase
+   smoke checklist and the register's postflights. Then deploy the sole
+   Cloudflare trigger and observe two clean passes.
 7. Lift the traffic freeze (`box_agent mode <lg> proxy`) only after monitoring
    and player-visible state are verified. Preserve the incident dump and
    artifacts according to the recorded case-retention decisions; do not keep
@@ -937,15 +969,17 @@ of errors) or release again.
 - An SSH key: remove it from `~ggd2l/.ssh/authorized_keys` on the box.
 
 For every compromise, review provider and SSH access logs, revoke leaked
-copies, check backups (the daily R2 config archive holds `/etc/ggd2l`) and CI
-artifacts, communicate impact through the incident owner, and record only
+copies, check backups (once the config archive is scheduled, R2 holds copies
+of `/etc/ggd2l`) and CI artifacts, communicate impact through the incident owner, and record only
 timestamps/credential identifiers—not values.
 
 ## Box operations
 
 What runs on the box, and the upkeep it needs. `ops/selfhost/README.md` is the
-kit's own runbook: install, every agent verb, the cutover and the Origin CA
-fallback for the tunnel.
+kit's condensed runbook: the layout, daily operations, backups, restore, a
+rebuild from zero (the install), the Origin CA fallback for the tunnel and the
+cutover helpers. The agent's verbs are its `VERBS` table
+(`ops/selfhost/agent/ggd2l-agent.mjs`).
 
 **What runs.** `ggd2l-1` is a DigitalOcean droplet (NYC3, Ubuntu 24.04, 1
 vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
@@ -964,8 +998,9 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 `box_agent status` reports the units, each league's live release, slots,
 disk, memory, swap, the last backup and drill, a pending reboot and the 5xx
 count of the last 24 hours. Every unit refuses to start without a valid
-environment (the env contract: `LEAGUE_DEPLOY_ENV`, the canonical origin, the
-app role's local URL, no Vercel or Neon keys).
+environment (the env contract: `LEAGUE_DEPLOY_ENV`, the league's region, the
+canonical origin in production, the app role's local URL, no Vercel or Neon
+keys).
 
 **The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
 PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
@@ -1004,9 +1039,12 @@ alias `ggd2l-1` pins the host key. Review `authorized_keys` monthly.
 
 **Backups and drills.** Each league is dumped hourly as the app role,
 verified, gzipped, age-encrypted to Tim's offline key and copied to R2
-(`ggd2l-backups`); a daily encrypted archive of `/etc/ggd2l`,
-`/etc/cloudflared` and `/etc/caddy` goes there too, so a rebuild can recover
-the secrets. The weekly drill restores the newest dump on the box. Quarterly,
+(`ggd2l-backups`). **Not yet scheduled:** a daily encrypted archive of
+`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` to R2, so a rebuild can
+recover the secrets. The kit has the script
+(`ops/selfhost/backup/config-archive.sh`), but no unit runs it yet: until a
+`ggd2l-config-archive` timer lands and is enabled, there is no config
+archive. The weekly drill restores the newest dump on the box. Quarterly,
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
 
@@ -1017,8 +1055,12 @@ decrypt drill.
 
 **Rebuild from zero (about an hour).** Create a new droplet, run
 `ops/selfhost/provision-base.sh` and then `install-kit.sh <live sha>` from a
-verified clone. Tim decrypts the newest config archive and dumps on the Mac
-and copies them over. Then `box_agent import` each league (and
-`box_agent identity <lg>` only if a dump predates the cutover's identity
-markers), build, start and promote each league at the live commit, and run
-the tunnel with the restored credentials.
+verified clone. Tim decrypts the newest dumps on the Mac, and they are
+copied with their `.sha256` into `/var/backups/ggd2l/cutover/<lg>/`. Restore
+`/etc/ggd2l` and `/etc/cloudflared` from the newest config archive once one
+is scheduled; until then regenerate or supply again every file in them, a
+new tunnel included (Tim's `cloudflared tunnel login`). Then
+`box_agent import` each league (a fresh install leaves every site in
+maintenance, which `import` requires; run `box_agent identity <lg>` only if
+a dump predates the cutover's identity markers), build, start and promote
+each league at the live commit, and start the tunnel.

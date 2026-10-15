@@ -11,9 +11,14 @@ govern them.
 > **Status: planned.** Both leagues move from Vercel and Neon to the box on the
 > cutover day ([DECISIONS](DECISIONS.md#hosting)). Until then they run on
 > Vercel and Neon as before and **nothing is released**: the kit commit never
-> goes to Vercel. The cutover itself follows `ops/selfhost/README.md`, not
-> this page. An emergency on Vercel before the cutover uses the procedure this
-> page replaced: `git show 33a1f348:docs/RELEASING.md`.
+> goes to Vercel. This page doesn't cover the cutover: that one-time
+> procedure has its own runbook, kept outside the repository, and
+> `ops/selfhost/README.md` (Cutover helpers) covers the kit's parts of it,
+> the Neon dump and the redirect deployments. An emergency on Vercel before
+> the cutover uses the procedure this page replaced:
+> `git show 33a1f348:docs/RELEASING.md`. Until a league has moved, its
+> scheduler pause, resume and rollback deploys also run from a checkout of
+> 33a1f348: the `wrangler*.jsonc` on `main` already target the box's origins.
 
 ## How the box serves a league
 
@@ -90,9 +95,11 @@ step 3. There are no Previews. See a UI change on a fixture server
 (`npm run fixture:signups`, `fixture:regular`, `fixture:playoffs`,
 `fixture:complete`) on desktop and mobile, and exercise the affected API,
 sign-in and player, captain or admin flows there. For a change a fixture
-can't show, use the on-demand staging slot (`ops/selfhost/README.md`): the
-production build against a scrubbed copy of the database, reached only
-through `ssh -L`.
+can't show, use the on-demand staging slot
+([DECISIONS](DECISIONS.md#hosting)): the production build against a scrubbed
+copy of the database, reached only through `ssh -L`. It is designed, not
+built: no unit or agent verb runs it yet, so build it before the first change
+that needs it.
 
 ### 3. Release
 
@@ -230,7 +237,8 @@ the scheduler and log gates in
 
 - **Previews** and the **Prepare both leagues** workflow
   (`.github/workflows/release.yml`, deleted): the box has no Previews. Its
-  staging is the on-demand slot in `ops/selfhost/README.md`.
+  staging is the on-demand slot ([DECISIONS](DECISIONS.md#hosting)), designed
+  but not yet built.
 - **The hosted migration job** (`scripts/hosted-migration-release.mjs`):
   migrations run on the box through the agent (Appendix B).
 - **Staging a Vercel candidate and promoting it** (`--stage-only`,
@@ -377,8 +385,9 @@ the README. Their scheduler commands are the US ones; for Europe use
   checks and error-log scans in steps 3 and 6 are yours.
 - [Box operations](PRODUCTION-OPERATIONS.md#box-operations) — the box itself:
   units, alerts, backups, drills, the monthly hour and a rebuild from zero.
-- `ops/selfhost/README.md` — the box kit, its install and the cutover
-  runbook.
+- `ops/selfhost/README.md` — the kit's condensed runbook: layout, daily
+  operations, backups, restore, a rebuild from zero (the install), the Origin
+  CA fallback and the cutover helpers.
 - [Hosting and release setup](../README.md#hosting-and-release-setup) —
   environment variables, the release classifier, the migration commands,
   legacy baseline adoption and the scheduler.

@@ -362,6 +362,11 @@ index is [docs/README.md](docs/README.md).
 > the cutover day ([DECISIONS](docs/DECISIONS.md#hosting)); until then they
 > run on Vercel and Neon as before and nothing is released. The Vercel and
 > Neon setup this section replaced is at `git show 33a1f348:README.md`.
+> **Until a league has moved, run its scheduler pause, resume and rollback
+> deploys (`npm run scheduler:*`) from a checkout of 33a1f348.** The
+> `wrangler*.jsonc` on `main` already point the Workers at the box's origins,
+> which don't serve a league until it moves, so deploying them from `main`
+> would stop a Vercel league's automation.
 
 Both leagues run on one DigitalOcean droplet, `ggd2l-1` (Ubuntu 24.04, 1
 vCPU, 2 GB RAM plus 4 GB swap):
@@ -377,7 +382,7 @@ ggd2l-1   cloudflared ─> Caddy 127.0.0.1:8080
           PostgreSQL 18 on 127.0.0.1:5432 (ggd2l_us, ggd2l_eu)
           lobby bot on 127.0.0.1:8090 ─WSS─> the Cloudflare relay
 Cloudflare Workers: the one-minute schedulers -> https://{us,eu}.ggd2l.com/api/cron/automation
-R2 bucket ggd2l-backups: age-encrypted dumps and config archives
+R2 bucket ggd2l-backups: age-encrypted dumps (config archives: not yet scheduled)
 Vercel: ggd2l.vercel.app, ggd2l-europe.vercel.app redirect to the new origins
 ```
 
@@ -420,7 +425,7 @@ used by every CI job.
    leagues' roles and databases, the systemd units (disabled), Caddy with
    every site in maintenance, cloudflared and the agent. Kit changes reach the
    box only this way, as a separate recorded operation, never with an app
-   release. `ops/selfhost/README.md` has every step.
+   release. `ops/selfhost/README.md` (Rebuild from zero) has the steps.
 
    Each league has two database roles. The **owner**
    (`ggd2l_<lg>_owner`) owns every relation and function and is used only to
@@ -470,6 +475,7 @@ used by every CI job.
    | `STEAM_API_KEY`                               | your **rotated** Steam Web API key                                   |
    | `APP_URL`                                     | `https://us.ggd2l.com` or `https://eu.ggd2l.com`                     |
    | `NEXT_PUBLIC_SITE_URL`                        | the same canonical HTTPS origin as `APP_URL`                         |
+   | `NEXT_PUBLIC_LEAGUE_REGION`                   | `us` or `eu`: the file's own league                                  |
    | `LEAGUE_DEPLOY_ENV`                           | `production` (`staging` for the rehearsal and the staging slot)      |
    | `CLIENT_IP_HEADER`                            | `cf-connecting-ip`                                                   |
    | `ADMIN_STEAM_IDS`                             | one or more valid, unique SteamID64s, comma-separated                |
@@ -482,10 +488,12 @@ used by every CI job.
    the file. The env contract (`box_agent envcheck <lg>`, also run before
    every build and every slot start) refuses the file, naming only the
    offending keys, when `LEAGUE_DEPLOY_ENV` is missing or not exactly
-   `production` or `staging`, `APP_URL` isn't the league's canonical origin,
-   the two database URLs differ or point anywhere but the app role on
-   127.0.0.1, the action key isn't 32 bytes, a Vercel or Neon key is present,
-   or a staging file carries a Discord or lobby-bot credential.
+   `production` or `staging`, `NEXT_PUBLIC_LEAGUE_REGION` isn't the file's
+   league, `APP_URL` isn't a bare origin equal to `NEXT_PUBLIC_SITE_URL` (in
+   production, exactly the league's canonical origin), the two database URLs
+   differ or point anywhere but the app role on 127.0.0.1, the action key
+   isn't 32 bytes, a Vercel or Neon key is present, or a staging file carries
+   a Discord or lobby-bot credential.
 
    Leave `ALLOW_DEV_LOGIN` unset or set it exactly to `false`. Production does
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already

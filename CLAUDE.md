@@ -12,7 +12,9 @@ and a Europe league, each with its own database, Discord server and settings.
 > **Hosting:** production is one self-hosted box (SSH alias `ggd2l-1`) behind
 > a Cloudflare Tunnel. **Status: planned.** Both leagues move there from Vercel
 > and Neon on the cutover day ([decisions](docs/DECISIONS.md#hosting)); until
-> then they run as before and nothing is released.
+> then they run as before and nothing is released. Until a league has moved,
+> run its scheduler pause, resume and rollback deploys from a checkout of
+> 33a1f348: the `wrangler*.jsonc` on `main` already target the box's origins.
 
 [docs/DECISIONS.md](docs/DECISIONS.md) lists settled decisions and deferrals,
 one line each: check it before proposing a change. Where it disagrees with this
@@ -241,9 +243,12 @@ seams: [concurrency-and-testing](docs/features/concurrency-and-testing.md).
   (`test:release` and `test:provisioning` for the release and Europe scripts).
   `test:release` also runs the box agent's and the shared smoke's tests
   (`ops/selfhost/agent/*.test.mjs`, `ops/selfhost/smoke/*.test.mjs`): run it
-  after touching `ops/selfhost/` or `scripts/release-box.mjs`. CI's Postgres
-  job boots the built site the way the box runs it and runs the smoke against
-  it (the step "Boot the built site the way the box runs it").
+  after touching `ops/selfhost/` or `scripts/release-box.mjs`. The kit's
+  other tests (units, Caddy, Postgres, SQL, backup scripts, the cutover dump)
+  run in no npm script or CI job, so also run
+  `node --test 'ops/selfhost/**/*.test.mjs'` (quoted: Node expands the glob).
+  CI's Postgres job boots the built site the way the box runs it and runs the
+  smoke against it (the step "Boot the built site the way the box runs it").
 - **Browser:** `npm run test:e2e` (signup, draft, inhouse), `test:e2e:mid` (a
   regular season), `test:e2e:postseason` (playoffs, finished seasons). Each
   seeds its own database but builds into `.next` like `npm run dev`, and Next
@@ -383,8 +388,13 @@ and `ops/selfhost/README.md`.
 
 - **Build redirects and origin checks in route handlers on
   `publicOrigin(req)`** (`src/lib/public-origin.ts`), never on `req.url` or
-  `request.url`: behind the tunnel Next sees the bind address, 127.0.0.1.
+  `request.url`: behind the tunnel Next sees the local bind address
+  (`https://localhost:<port>`), never the public hostname.
   `src/app/route-redirect-origin.test.ts` fails on `new URL(…, req.url)`.
+  The Steam `return_to` and `realm` and the Discord `redirect_uri` use
+  `providerReturnBase(req)` instead, and must keep it: undeclared (Vercel,
+  dev) it falls back to `APP_URL` before the request's origin, so a request
+  on another host still hands the provider its registered callback.
 - **Never run `test:pg`, `pg:up`, the test suites or `db:push` on the box;**
   its localhost Postgres is production. Production databases (`ggd2l_us`,
   `ggd2l_eu`) never take a test name (`ld2l_test`, `ld2l_pgtest`,
