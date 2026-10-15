@@ -24,6 +24,10 @@ blob-report/
 # Independently hosted services; never upload Steam sessions to the website.
 ops/dota-lobby-bot/
 ops/dota-lobby-relay/
+# The self-hosting kit (installed on the box by install-kit.sh) and the
+# legacy-origin redirect deployments, which deploy from their own folders.
+ops/selfhost/
+ops/vercel-redirect/
 
 # Release evidence is local or a CI artifact, never an application upload.
 output/

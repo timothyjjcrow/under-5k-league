@@ -310,12 +310,15 @@ test("the CI mutation job matches the release gate and the nightly verify runs t
   const steps = (text) => text.slice(text.indexOf("\n    steps:\n")).trimEnd();
   assert.equal(steps(nightly), steps(job));
   // release:both may accept these runs' shards for a later commit, so the
-  // listed workflows and their shard names must be the real ones, and the
-  // release workflow must be allowed to read them.
+  // listed workflows and their shard names must be the real ones. The release
+  // runs from the operator's machine (scripts/release-box.mjs over SSH), so no
+  // workflow prepares or starts one.
   assert.deepEqual(MUTATION_COVERAGE_WORKFLOWS.map((w) => w.workflow), ["ci.yml", "mutation-nightly.yml"]);
   assert.match(nightly, /\n    name: nightly mutation guard \$\{\{ matrix\.shard \}\}\/4\n/);
   assert.equal(MUTATION_COVERAGE_WORKFLOWS[1].shardPrefix, "nightly ");
-  assert.match(read("release.yml"), /\npermissions:\n  contents: read\n  actions: read\n/);
+  const workflows = readdirSync(new URL("../.github/workflows/", import.meta.url)).filter((file) => /\.ya?ml$/.test(file));
+  assert.ok(!workflows.includes("release.yml"));
+  for (const file of workflows) assert.doesNotMatch(read(file), /npm run release:both|node scripts\/release-(?:both|box)\.mjs/, file);
 });
 // Docker Hub limits anonymous pulls per IP, and hosted runners share IPs: on
 // 2026-10-09 all five Postgres jobs on main failed to pull postgres:16 and the
