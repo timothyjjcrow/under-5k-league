@@ -95,3 +95,64 @@ describe("clientIp", () => {
     ).toBe("unknown");
   });
 });
+
+describe("clientIp behind the self-hosted Cloudflare tunnel", () => {
+  const req = (h: Record<string, string>) => ({
+    headers: { get: (n: string) => h[n.toLowerCase()] ?? null },
+  });
+  const BOX = { CLIENT_IP_HEADER: "cf-connecting-ip" };
+
+  it("reads only cf-connecting-ip once the box opts in", () => {
+    expect(clientIp(req({ "cf-connecting-ip": "2001:DB8::7" }), BOX)).toBe(
+      "2001:db8::7",
+    );
+  });
+  it("ignores a forged Vercel or proxy header", () => {
+    expect(
+      clientIp(
+        req({
+          "cf-connecting-ip": "203.0.113.5",
+          "x-vercel-forwarded-for": "198.51.100.1",
+          "x-forwarded-for": "198.51.100.2",
+          "x-real-ip": "198.51.100.3",
+        }),
+        BOX,
+      ),
+    ).toBe("203.0.113.5");
+  });
+  it("gives one shared unknown bucket when the header is missing or invalid", () => {
+    expect(
+      clientIp(
+        req({
+          "x-vercel-forwarded-for": "198.51.100.1",
+          "x-forwarded-for": "198.51.100.2",
+          "x-real-ip": "198.51.100.3",
+        }),
+        BOX,
+      ),
+    ).toBe("unknown");
+    expect(
+      clientIp(
+        req({ "cf-connecting-ip": "forged", "x-forwarded-for": "198.51.100.2" }),
+        BOX,
+      ),
+    ).toBe("unknown");
+  });
+  it("ignores cf-connecting-ip without the exact opt-in", () => {
+    const headers = {
+      "cf-connecting-ip": "203.0.113.5",
+      "x-forwarded-for": "198.51.100.2",
+    };
+    for (const env of [
+      {},
+      { CLIENT_IP_HEADER: "" },
+      { CLIENT_IP_HEADER: "CF-Connecting-IP" },
+      { CLIENT_IP_HEADER: "x-forwarded-for" },
+    ]) {
+      expect(clientIp(req(headers), env)).toBe("198.51.100.2");
+      expect(clientIp(req({ "cf-connecting-ip": "203.0.113.5" }), env)).toBe(
+        "unknown",
+      );
+    }
+  });
+});
