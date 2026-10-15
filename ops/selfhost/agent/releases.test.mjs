@@ -71,12 +71,14 @@ test("promote restarts the target clean, swaps the mode file, reloads Caddy, the
   assert.deepEqual(steps, [
     "systemctl restart ggd2l-us@b.service",
     "chown root:caddy " + box.layout.modeFile("us") + ".new",
-    `caddy validate --config ${box.layout.caddyfile} --adapter caddyfile`,
+    `runuser -u caddy -- /usr/bin/env HOME=/var/lib/caddy /usr/bin/caddy validate --config ${box.layout.caddyfile} --adapter caddyfile`,
     "systemctl reload caddy.service",
     "systemctl enable ggd2l-us@b.service",
     "systemctl disable ggd2l-us@a.service",
   ]);
   assert.deepEqual(readMode(read(box.layout.modeFile("us"))), { mode: "proxy", port: 3002 });
+  const validate = box.calls.slice(before).find((call) => isCaddyValidate(call.command, call.args));
+  assert.equal(validate.cwd, "/", "validated from a directory caddy can read");
   const live = liveJson(box);
   assert.equal(live.id, NEW);
   assert.equal(live.slot, "b");
@@ -156,6 +158,28 @@ test("start uses the idle slot and waits for live; it refuses inside the warm ov
   await assert.rejects(startRelease(box.ctx, "us", NEWER), { code: "start_timeout" });
 });
 
+test("deployment reports the release record, its build log hash and its slot", async () => {
+  const box = liveBox();
+  await goLive(box);
+  const file = path.join(box.layout.release(OLD), "release.json");
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(read(file)), buildLogSha256: "d".repeat(64) }));
+  assert.deepEqual(describeRelease(box.ctx, OLD), {
+    id: OLD,
+    sha: JSON.parse(read(file)).sha,
+    region: "us",
+    state: "READY",
+    role: "live",
+    node: "v22.23.3",
+    buildLogSha256: "d".repeat(64),
+    slot: "a",
+    port: 3001,
+  });
+  // A release built before the field existed, or a malformed one, says null.
+  assert.equal(describeRelease(box.ctx, NEW).buildLogSha256, null);
+  writeFileSync(file, JSON.stringify({ ...JSON.parse(read(file)), buildLogSha256: "../../etc" }));
+  assert.equal(describeRelease(box.ctx, OLD).buildLogSha256, null);
+});
+
 test("retire refuses the live id and anything within 90 s of a promote", async () => {
   const box = liveBox();
   await goLive(box);
@@ -212,7 +236,8 @@ test("prune keeps live, previous and the newest build, and every slot's release"
   await promoteRelease(box.ctx, "us", NEW);
   // Point slot a back at the old release explicitly: still referenced.
   const result = pruneLeague(box.ctx, "us");
-  assert.deepEqual(result.removed.releases.sort(), [ancient, failed].sort());
+  assert.deepEqual([...result.removed].sort(), [ancient, failed].sort());
+  assert.equal(result.ok, true);
   for (const id of [OLD, NEW, newest]) assert.ok(existsSync(box.layout.release(id)), id);
   for (const id of [ancient, failed]) assert.ok(!existsSync(box.layout.release(id)), id);
 });
@@ -229,7 +254,7 @@ test("prune keeps the previous release for rollback even when no slot points at 
   // The next candidate takes slot a, so the previous release is on no slot.
   await startRelease(box.ctx, "us", NEWER);
   assert.equal(liveJson(box).previous, OLD);
-  assert.deepEqual(pruneLeague(box.ctx, "us").removed.releases, [ancient]);
+  assert.deepEqual(pruneLeague(box.ctx, "us").removed, [ancient]);
   for (const id of [OLD, NEW, NEWER]) assert.ok(existsSync(box.layout.release(id)), id);
 });
 
@@ -251,11 +276,16 @@ test("prune removes static files older than 14 days unless a kept release still 
   }
   symlinkSync("111111111111", box.layout.toolsCurrent);
   const result = pruneLeague(box.ctx, "us");
-  assert.equal(result.removed.staticFiles, 1);
+  assert.equal(result.staticFilesRemoved, 1);
   assert.ok(existsSync(path.join(root, "chunks/app.js")), "shipped by the live release");
   assert.ok(existsSync(path.join(root, "chunks/recent.js")));
   assert.ok(!existsSync(path.join(root, "chunks/gone.js")));
-  assert.deepEqual(result.removed.tools, [], "two newest plus current are all kept");
+  assert.deepEqual(result.removed, [], "two newest plus current are all kept");
+  // A fourth, older clone goes, by its tools/ name; current stays however old.
+  mkdirSync(path.join(box.layout.tools, "000000000000"));
+  utimesSync(path.join(box.layout.tools, "000000000000"), (T0 - 9000) / 1000, (T0 - 9000) / 1000);
+  assert.deepEqual(pruneLeague(box.ctx, "us").removed, ["tools/000000000000"]);
+  assert.ok(existsSync(path.join(box.layout.tools, "111111111111")));
 });
 
 test("the fetch-cache assertion finds gate and result-sync tags", () => {

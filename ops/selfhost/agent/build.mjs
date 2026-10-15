@@ -5,20 +5,11 @@
 // I/O and OOM priority. The league env reaches the build only through
 // `-p EnvironmentFile=`; the build log is written with every env value of 8 or
 // more characters replaced by [redacted].
-import { createHash } from "node:crypto";
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readdirSync,
-  writeFileSync,
-  writeSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { loadLeagueEnv, writeJsonAtomic } from "./context.mjs";
+import { loadLeagueEnv, openRedactedLog, writeJsonAtomic } from "./context.mjs";
 import { AgentError, BIN, MIN_BUILD_FREE_BYTES, USERS, makeReleaseId } from "./layout.mjs";
-import { asUser, createRedactor, must, systemdRunArgs } from "./runner.mjs";
+import { asUser, must, systemdRunArgs } from "./runner.mjs";
 
 export const ENV_GATE_LINE = "Production environment validation passed.";
 export const SCHEMA_GATE_LINE = "Production schema attestation passed";
@@ -59,6 +50,14 @@ export async function buildUserEnv(ctx) {
     await must(runner, "install_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0750", dir]);
   return { HOME: layout.buildHome, npm_config_cache: layout.npmCache };
 }
+
+/**
+ * The dotenv files Next (@next/env, in any mode) and Prisma (the root and
+ * prisma/) load by themselves, which would quietly add to or override the env
+ * systemd hands the build. The repo's tracked examples (.env.example,
+ * .env.europe.example) are never loaded, so they stay.
+ */
+export const AUTOLOADED_DOTENV_RE = /^\.env(?:\.local|\.(?:production|development|test)(?:\.local)?)?$/;
 
 /** git as the repo's owner; safe.directory because root also reads these clones. */
 function git(args) {
@@ -110,7 +109,7 @@ export async function cloneAt(ctx, dir, commit) {
     } catch {
       // No such folder.
     }
-    if (names.some((name) => name.startsWith(".env"))) throw new AgentError("dotenv_present");
+    if (names.some((name) => AUTOLOADED_DOTENV_RE.test(name))) throw new AgentError("dotenv_present");
   }
 }
 
@@ -120,26 +119,6 @@ export function parseMemoryPeak(line) {
   if (!match) return null;
   const scale = { B: 1 / 1024 ** 2, K: 1 / 1024, M: 1, G: 1024, T: 1024 ** 2 }[match[2]];
   return Math.round(Number(match[1]) * scale);
-}
-
-function openBuildLog(ctx, id, env) {
-  mkdirSync(ctx.layout.buildLogs, { recursive: true });
-  const file = ctx.layout.buildLog(id);
-  const fd = openSync(file, "w", 0o640);
-  const redact = createRedactor([env]);
-  const hash = createHash("sha256");
-  return {
-    file,
-    write(line) {
-      const text = `${redact(line)}\n`;
-      hash.update(text);
-      writeSync(fd, text);
-    },
-    close() {
-      closeSync(fd);
-      return hash.digest("hex");
-    },
-  };
 }
 
 export async function buildRelease(ctx, lg, commit) {
@@ -157,7 +136,7 @@ export async function buildRelease(ctx, lg, commit) {
   const id = makeReleaseId(lg, commit, startedAt);
   const dir = layout.release(id);
   mkdirSync(layout.releases(lg), { recursive: true });
-  const log = openBuildLog(ctx, id, env);
+  const log = openRedactedLog(ctx, layout.buildLog(id), [env]);
   let logSha256 = null;
   const record = {
     id,
@@ -256,12 +235,12 @@ export async function buildRelease(ctx, lg, commit) {
 
     // 10. Record.
     writeFileSync(path.join(dir, ".release.env"), `LEAGUE_RELEASE_SHA=${commit}\n`, { mode: 0o644 });
-    logSha256 = log.close();
+    logSha256 = await log.close();
     Object.assign(record, { state: "BUILT", builtAt: new Date(ctx.now()).toISOString(), buildLogSha256: logSha256 });
     writeJsonAtomic(path.join(dir, "release.json"), record);
     return { id, buildSeconds: record.buildSeconds, peakRssMb: record.peakRssMb };
   } catch (error) {
-    if (logSha256 === null) logSha256 = log.close();
+    if (logSha256 === null) logSha256 = await log.close();
     // Leave the folder for inspection; prune removes a FAILED release.
     if (existsSync(dir)) {
       try {
@@ -271,7 +250,5 @@ export async function buildRelease(ctx, lg, commit) {
       }
     }
     throw error;
-  } finally {
-    await runner.run(BIN.chown, ["root:ggd2l", log.file]);
   }
 }

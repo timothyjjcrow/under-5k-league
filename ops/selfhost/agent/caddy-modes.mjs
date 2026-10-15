@@ -9,8 +9,10 @@
 // Every change follows one path: write <file>.new, keep <file>.prev, mv the new
 // file into place, `caddy validate`; on failure mv .prev back. Only a
 // validated file is ever reloaded.
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync, renameSync, rmSync, writeFileSync, copyFileSync } from "node:fs";
-import { AgentError, BIN } from "./layout.mjs";
+import path from "node:path";
+import { AgentError, BIN, LEAGUES, USERS } from "./layout.mjs";
 
 export const MODES = Object.freeze(["proxy", "allowlist", "maintenance"]);
 const HEADER = "# Written by ggd2l-agent. Change it with `ggd2l-agent mode`, never by hand.";
@@ -32,10 +34,19 @@ function proxyBlock(port, indent) {
   ];
 }
 
+// The same block as ops/selfhost/caddy/mode-maintenance.caddy, which
+// install-kit.sh writes for a new league (caddy-modes.test.mjs compares them).
+// file_server answers only GET and HEAD, so every other method (a form post, a
+// queue join) gets the same 503 as plain text instead of a 405.
+export const MAINTENANCE_TEXT = "GGD2L is under maintenance. Check the league Discord for updates.";
+
 function maintenanceBlock(indent, wwwRoot) {
   return [
     `${indent}header Retry-After 600`,
     `${indent}header Cache-Control no-store`,
+    `${indent}header X-Robots-Tag "noindex, nofollow"`,
+    `${indent}@write not method GET HEAD`,
+    `${indent}respond @write "${MAINTENANCE_TEXT}" 503`,
     `${indent}root * ${wwwRoot}`,
     `${indent}rewrite * /maintenance.html`,
     `${indent}file_server {`,
@@ -95,6 +106,45 @@ export function readModeFile(file) {
 }
 
 /**
+ * One sha256 over the configuration Caddy serves: the Caddyfile, each
+ * league's mode file and allow.caddy, each named and length-prefixed so no
+ * two configurations hash alike. A missing mode or allow file is part of the
+ * configuration too; without a readable Caddyfile there is none (null).
+ */
+export function caddyConfigSha256(layout) {
+  const files = [layout.caddyfile, ...LEAGUES.map((lg) => layout.modeFile(lg)), layout.allowFile];
+  const hash = createHash("sha256");
+  for (const [index, file] of files.entries()) {
+    let content = null;
+    try {
+      content = readFileSync(file);
+    } catch {
+      if (index === 0) return null;
+    }
+    const name = path.basename(file);
+    if (content === null) hash.update(`${name} missing\n`);
+    else {
+      hash.update(`${name} ${content.length}\n`);
+      hash.update(content);
+    }
+  }
+  return hash.digest("hex");
+}
+
+/**
+ * `caddy validate` as the caddy user, from /, the way install-kit.sh runs it.
+ * Validation opens the access logs and creates a missing one: as root, the
+ * reloaded Caddy (user caddy) could not open it and every later change would
+ * fail with caddy_reload_failed. The mode and allow files are root:caddy 0640.
+ */
+export function caddyValidateCommand(caddyfile) {
+  return [
+    BIN.runuser,
+    ["-u", USERS.caddy, "--", BIN.env, "HOME=/var/lib/caddy", BIN.caddy, "validate", "--config", caddyfile, "--adapter", "caddyfile"],
+  ];
+}
+
+/**
  * Swap one Caddy file and make Caddy load it, or leave everything as it was.
  * Resolves only once the reload succeeded; otherwise the old file is back in
  * place (re-reloaded if a reload had been attempted) and it throws.
@@ -118,7 +168,8 @@ export async function applyCaddyFile({ runner, file, text, caddyfile }) {
     else rmSync(file, { force: true });
   };
 
-  const validated = await runner.run(BIN.caddy, ["validate", "--config", caddyfile, "--adapter", "caddyfile"]);
+  const [validateCommand, validateArgs] = caddyValidateCommand(caddyfile);
+  const validated = await runner.run(validateCommand, validateArgs, { cwd: "/" });
   if (validated.code !== 0) {
     restore();
     throw new AgentError("caddy_invalid");

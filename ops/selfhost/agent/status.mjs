@@ -1,12 +1,10 @@
 // `status`: the monthly one-liner (design §5.2). Read-only.
 import { existsSync, readFileSync, statfsSync } from "node:fs";
-import path from "node:path";
-import { readModeFile } from "./caddy-modes.mjs";
-import { readJson } from "./context.mjs";
+import { caddyConfigSha256, readModeFile } from "./caddy-modes.mjs";
 import { BIN, LEAGUES, SLOTS, unitName } from "./layout.mjs";
 import { serverErrorCount } from "./logs.mjs";
 import { readLive, slotTarget } from "./releases.mjs";
-import { newestDump } from "./tools.mjs";
+import { newestDump, readBackupRecord } from "./tools.mjs";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -70,7 +68,7 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
   const leagues = {};
   for (const lg of LEAGUES) {
     const live = readLive(ctx, lg);
-    const backup = readJson(path.join(layout.backupDir(lg), "last-backup.json"));
+    const backup = readBackupRecord(ctx, lg);
     const dump = newestDump(ctx, lg);
     const drillUnit = units[`ggd2l-drill@${lg}.service`];
     leagues[lg] = {
@@ -112,6 +110,7 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     leagues,
     disk,
     memory,
+    caddyConfigSha256: caddyConfigSha256(layout),
     pendingReboot: existsSync(layout.rebootRequired),
     failedUnits,
     serverErrors24h: serverErrorCount({ layout, sinceMs: ctx.now() - DAY_MS }),

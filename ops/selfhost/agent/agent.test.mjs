@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -9,6 +9,7 @@ import { renderMode } from "./caddy-modes.mjs";
 import { changedRows, resolveDump } from "./database.mjs";
 import { VERBS, main, parseCommand } from "./ggd2l-agent.mjs";
 import { ENV_GATE_LINE, SCHEMA_GATE_LINE } from "./build.mjs";
+import { parseEnvFile } from "./env-contract.mjs";
 import { AgentError } from "./layout.mjs";
 import { SHA, addRelease, makeBox, secretsOf } from "./harness.test.mjs";
 import { createRedactor, createRunner, pgEnv, secretValues } from "./runner.mjs";
@@ -222,9 +223,98 @@ test("no env value ever appears in a spawned command line", async () => {
   const attestCall = box.calls.find((call) => call.args.includes("scripts/validate-prod-env.mjs"));
   assert.ok(attestCall.args.includes(`EnvironmentFile=${box.layout.leagueEnv("us")}`));
   const migrateCall = box.calls.find((call) => call.args.includes("scripts/release-migrations.mjs"));
-  assert.ok(migrateCall.args.includes(`EnvironmentFile=${box.layout.migrateEnv("us")}`));
+  // validate-prod-env.mjs (the script's first step) needs the whole league
+  // env; the migrate env comes second so its owner URLs win.
+  assert.deepEqual(
+    migrateCall.args.filter((arg) => arg.startsWith("EnvironmentFile=")),
+    [`EnvironmentFile=${box.layout.leagueEnv("us")}`, `EnvironmentFile=${box.layout.migrateEnv("us")}`],
+  );
   assert.ok(migrateCall.args.includes("VERCEL_ENV=production"));
+  assert.deepEqual(migrateCall.args.slice(-4), ["/usr/bin/node", "scripts/release-migrations.mjs", "--apply", SHA]);
+  // Preflight needs only the owner URL.
+  const preflightCall = box.calls.find((call) => call.args.includes("scripts/migration-preflight.mjs"));
+  assert.deepEqual(preflightCall.args.filter((arg) => arg.startsWith("EnvironmentFile=")), [`EnvironmentFile=${box.layout.migrateEnv("us")}`]);
   assert.ok(box.calls.some((call) => call.env?.PGPASSWORD && secrets.includes(call.env.PGPASSWORD)));
+});
+
+test("migrate refuses a league env that breaks the contract before running anything", async () => {
+  const { box } = secretBox();
+  const { migrate } = await import("./tools.mjs");
+  writeFileSync(box.layout.leagueEnv("us"), "VERCEL_ENV=production\n");
+  const before = box.calls.length;
+  await assert.rejects(migrate(box.ctx, "us", SHA), { code: "env_contract" });
+  assert.equal(box.calls.length, before);
+});
+
+test("attest, preflight, migrate and the sha drill each leave a redacted log", async () => {
+  const { box } = secretBox();
+  const { attest, preflight, migrate, drill } = await import("./tools.mjs");
+  const valuesOf = (file) => Object.values(parseEnvFile(readFileSync(file, "utf8")).env);
+  // Each unit echoes every value of every env file it reads, the way a stack
+  // trace or a verbose client might, then fails.
+  const echoed = new Map();
+  box.on((command, args) => {
+    if (!command.endsWith("/systemd-run") || args.includes("ci")) return undefined;
+    const values = args.filter((arg) => arg.startsWith("EnvironmentFile=")).flatMap((arg) => valuesOf(arg.slice("EnvironmentFile=".length)));
+    const script = args.find((arg) => arg.startsWith("scripts/") || arg.endsWith("drill-league.sh"));
+    echoed.set(script, values);
+    return { code: 1, lines: values.map((value) => `value ${value} end`) };
+  });
+  await assert.rejects(attest(box.ctx, "us", SHA), { code: "attest_failed" });
+  await assert.rejects(preflight(box.ctx, "us", SHA), { code: "preflight_failed" });
+  await assert.rejects(migrate(box.ctx, "us", SHA), { code: "migrate_failed" });
+  await assert.rejects(drill(box.ctx, "us", SHA), { code: "drill_failed" });
+  assert.equal(echoed.size, 4);
+
+  const folder = path.dirname(box.layout.toolLog("x"));
+  const logs = readdirSync(folder).sort();
+  assert.deepEqual(
+    logs.map((name) => name.replace(/-\d{8}T\d{6}Z-/, "-<stamp>-")),
+    ["attest", "drill", "migrate", "preflight"].map((verb) => `${verb}-us-<stamp>-${SHA.slice(0, 12)}.log`),
+  );
+  const all = [...echoed.values()].flat().filter((value) => value.length >= 8);
+  for (const name of logs) {
+    const text = readFileSync(path.join(folder, name), "utf8");
+    assert.match(text, /value \[redacted\] end/, name);
+    assert.match(text, /== exit 1/, name);
+    for (const value of all) assert.ok(!text.includes(value), `an env value reached ${name}`);
+    // The passwords inside the URLs are gone too.
+    for (const password of ["9e".repeat(32), "4c".repeat(32), "7a".repeat(32)]) assert.ok(!text.includes(password), name);
+    assert.ok(box.calls.some((call) => call.command.endsWith("/chown") && call.args.join(" ") === `root:ggd2l ${path.join(folder, name)}`), name);
+  }
+  // The JSON error is unchanged: a fixed code and message, never a path or a line.
+  let output = "";
+  await main(["preflight", "us", SHA], { write: (text) => (output += text), uid: () => 0, context: () => box.ctx, lock: () => () => {} });
+  assert.deepEqual(JSON.parse(output), { ok: false, code: "preflight_failed", message: "migration preflight failed" });
+});
+
+test("lease reads the automation lease row as the app role, read-only, and says only set or null", async () => {
+  const box = makeBox();
+  box.writeEnv("us");
+  const { readLease } = await import("./database.mjs");
+  for (const [answer, expected] of [
+    ["set|set\n", { leaseOwner: "set", leaseExpiresAt: "set" }],
+    ["null|set\n", { leaseOwner: null, leaseExpiresAt: "set" }],
+    ["set|null\n", { leaseOwner: "set", leaseExpiresAt: null }],
+    ["null|null\n", { leaseOwner: null, leaseExpiresAt: null }],
+    // No row: nothing has ever held the lease.
+    ["", { leaseOwner: null, leaseExpiresAt: null }],
+  ]) {
+    box.on((command) => (command.endsWith("/psql") ? { stdout: answer } : undefined));
+    assert.deepEqual(await readLease(box.ctx, "us"), expected, JSON.stringify(answer));
+  }
+  const call = box.calls.at(-1);
+  assert.ok(call.command.endsWith("/psql"));
+  assert.ok(call.input.includes('FROM "AutomationRunState"'));
+  assert.ok(call.input.includes('"leaseOwner"') && call.input.includes('"leaseExpiresAt"'));
+  assert.equal(call.env.PGOPTIONS, "-c default_transaction_read_only=on");
+  assert.equal(call.env.PGUSER, "ggd2l_us_app");
+  assert.equal(call.env.PGDATABASE, "ggd2l_us");
+  // The row key is the app's AUTOMATION_RUN_KEY, read from the source so a rename fails here.
+  const service = readFileSync(fileURLToPath(new URL("../../../src/lib/automation-service.ts", import.meta.url)), "utf8");
+  const key = /export const AUTOMATION_RUN_KEY = "([^"]+)";/.exec(service)?.[1];
+  assert.equal(key, "league-maintenance");
+  assert.ok(call.input.includes(`WHERE key = '${key}'`));
 });
 
 test("identity requires exactly the expected rows, and import only behind maintenance", async () => {

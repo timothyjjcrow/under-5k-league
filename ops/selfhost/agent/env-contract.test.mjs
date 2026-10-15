@@ -116,13 +116,44 @@ test("APP_URL must equal NEXT_PUBLIC_SITE_URL", () => {
   refuses(without(VALID_US, "APP_URL"), "APP_URL");
 });
 
-test("in production APP_URL must be the league's canonical origin", () => {
-  for (const url of ["https://eu.ggd2l.com", "http://us.ggd2l.com", "https://ggd2l.vercel.app", "https://us.ggd2l.com/"])
-    refuses({ ...VALID_US, APP_URL: url, NEXT_PUBLIC_SITE_URL: url }, "APP_URL");
-  // Staging may use another origin (the on-demand ssh -L copy).
-  const local = { ...STAGING_SAFE, APP_URL: "http://localhost:3190", NEXT_PUBLIC_SITE_URL: "http://localhost:3190" };
-  assert.deepEqual(problemsFor(local), []);
-  refuses({ ...local, APP_URL: "http://localhost:3190/x", NEXT_PUBLIC_SITE_URL: "http://localhost:3190/x" }, "APP_URL");
+test("APP_URL is the league's own https origin in production and in staging", () => {
+  const wrong = [
+    "https://eu.ggd2l.com",
+    "http://us.ggd2l.com",
+    "ftp://us.ggd2l.com",
+    "https://ggd2l.vercel.app",
+    "https://us.ggd2l.com/",
+    "https://us.ggd2l.com:443",
+    "https://US.ggd2l.com",
+    "https://us.ggd2l.com/path",
+    "http://127.0.0.1:3001",
+    "https://127.0.0.1:3001",
+    "https://localhost:3001",
+    "http://localhost:3190",
+    "https://[::1]:3001",
+    "",
+  ];
+  // NEXT_PUBLIC_SITE_URL agrees in every case, so only the APP_URL rule can refuse.
+  for (const base of [VALID_US, STAGING_SAFE])
+    for (const url of wrong) {
+      const problems = problemsFor({ ...base, APP_URL: url, NEXT_PUBLIC_SITE_URL: url });
+      assert.deepEqual(problems, ["APP_URL: must be exactly https://us.ggd2l.com"], `${base.LEAGUE_DEPLOY_ENV} ${url}`);
+    }
+  // EU's own origin is right for EU and wrong for US, in both modes.
+  const eu = {
+    ...STAGING_SAFE,
+    DATABASE_URL: DB.replaceAll("ggd2l_us", "ggd2l_eu"),
+    DIRECT_URL: DB.replaceAll("ggd2l_us", "ggd2l_eu"),
+    APP_URL: "https://eu.ggd2l.com",
+    NEXT_PUBLIC_SITE_URL: "https://eu.ggd2l.com",
+    NEXT_PUBLIC_LEAGUE_REGION: "eu",
+  };
+  assert.deepEqual(problemsFor(eu, "eu"), []);
+  assert.deepEqual(problemsFor({ ...eu, APP_URL: "https://us.ggd2l.com", NEXT_PUBLIC_SITE_URL: "https://us.ggd2l.com" }, "eu"), [
+    "APP_URL: must be exactly https://eu.ggd2l.com",
+  ]);
+  // A slot's ExecStartPre applies the same rule.
+  assert.ok(checkSlotEnv({ ...SLOT_US_A, LEAGUE_DEPLOY_ENV: "staging", DISCORD_BOT_TOKEN: undefined, DISCORD_CLIENT_SECRET: undefined, APP_URL: "http://127.0.0.1:3001", NEXT_PUBLIC_SITE_URL: "http://127.0.0.1:3001" }, "us", "a").includes("APP_URL: must be exactly https://us.ggd2l.com"));
 });
 
 test("DATABASE_URL must equal DIRECT_URL", () => {

@@ -255,6 +255,7 @@ export function describeRelease(ctx, id) {
     state: release.state,
     role: release.role,
     node: release.node,
+    buildLogSha256: /^[0-9a-f]{64}$/.test(release.buildLogSha256 ?? "") ? release.buildLogSha256 : null,
     slot,
     port: slot ? PORTS[lg][slot] : null,
   };
@@ -362,6 +363,9 @@ function removeEmptyDirs(root, relative = "") {
  * `prune <lg>`: keep the live, previous and newest built releases and anything
  * a slot points at; the 2 newest tools clones and tools/current; and static
  * files younger than 14 days or still shipped by a kept release.
+ *
+ * Resolves {removed: [release ids and "tools/<sha12>"], staticFilesRemoved};
+ * release-box.mjs counts `removed` as an array.
  */
 export function pruneLeague(ctx, lg) {
   const { layout } = ctx;
@@ -428,5 +432,9 @@ export function pruneLeague(ctx, lg) {
     }
   }
   if (existsSync(staticRoot)) removeEmptyDirs(staticRoot);
-  return { removed: { releases: removedReleases, tools: removedTools, staticFiles: removedStatic } };
+  return {
+    ok: true,
+    removed: [...removedReleases, ...removedTools.map((name) => `tools/${name}`)],
+    staticFilesRemoved: removedStatic,
+  };
 }

@@ -2,10 +2,12 @@
 // clock, HTTP probe), JSON state files written atomically, and env files read
 // as data. Reading an env file registers its secret values with the runner,
 // which then refuses any command line that contains one.
-import { readFileSync, renameSync, statfsSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statfsSync, writeFileSync, writeSync } from "node:fs";
+import path from "node:path";
 import { checkLeagueEnv, parseEnvFile } from "./env-contract.mjs";
-import { AgentError, createLayout } from "./layout.mjs";
-import { createRunner, httpGet, secretValues } from "./runner.mjs";
+import { AgentError, BIN, createLayout } from "./layout.mjs";
+import { createRedactor, createRunner, httpGet, secretValues } from "./runner.mjs";
 
 export function createContext(overrides = {}) {
   return {
@@ -36,6 +38,36 @@ export function writeJsonAtomic(file, value, mode = 0o644) {
   renameSync(temporary, file);
 }
 
+/**
+ * A log on the box (0640, group ggd2l once closed) that holds a child's
+ * output with every value of `envs` of 8 or more characters, and any URL
+ * password in them, replaced by [redacted]. Lines are hashed as written, so
+ * close() resolves the log's sha256.
+ */
+export function openRedactedLog(ctx, file, envs) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  const fd = openSync(file, "w", 0o640);
+  const redact = createRedactor(envs);
+  const hash = createHash("sha256");
+  let digest = null;
+  return {
+    file,
+    write(line) {
+      const text = `${redact(line)}\n`;
+      hash.update(text);
+      writeSync(fd, text);
+    },
+    async close() {
+      if (digest !== null) return digest;
+      closeSync(fd);
+      digest = hash.digest("hex");
+      // The admin user reads it without sudo; a failure leaves it root-only.
+      await ctx.runner.run(BIN.chown, ["root:ggd2l", file]);
+      return digest;
+    },
+  };
+}
+
 /** Parse an env file as data and register its secrets. Never returns raw text. */
 export function loadEnvFile(ctx, file) {
   let text;
@@ -57,10 +89,15 @@ export function loadLeagueEnv(ctx, lg) {
   return env;
 }
 
-/** The owner-role URL from <lg>-migrate.env (DATABASE_URL = DIRECT_URL). */
-export function loadOwnerUrl(ctx, lg) {
+/** <lg>-migrate.env: only DATABASE_URL = DIRECT_URL for the owner role. */
+export function loadMigrateEnv(ctx, lg) {
   const { env } = loadEnvFile(ctx, ctx.layout.migrateEnv(lg));
-  const url = env.DIRECT_URL || env.DATABASE_URL;
-  if (!url) throw new AgentError("env_missing");
-  return url;
+  if (!(env.DIRECT_URL || env.DATABASE_URL)) throw new AgentError("env_missing");
+  return env;
+}
+
+/** The owner-role URL from <lg>-migrate.env. */
+export function loadOwnerUrl(ctx, lg) {
+  const env = loadMigrateEnv(ctx, lg);
+  return env.DIRECT_URL || env.DATABASE_URL;
 }

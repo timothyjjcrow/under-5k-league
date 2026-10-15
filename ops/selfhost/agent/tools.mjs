@@ -2,14 +2,17 @@
 // prepare, attest, preflight, migrate, backup, drill, bot-deploy, bot-status.
 //
 // Each repo script runs as ggd2l-build from /srv/ggd2l/tools/<sha12> inside a
-// systemd-run unit that reads the env file itself (-p EnvironmentFile=), so
+// systemd-run unit that reads the env files itself (-p EnvironmentFile=), so
 // no secret is ever on a command line and the agent never holds it in a child.
+// Its output goes, redacted like the build log, to
+// /var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log; stdout and the error
+// JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { buildUserEnv, cloneAt, fetchMain, requireOnMain } from "./build.mjs";
-import { loadLeagueEnv, loadOwnerUrl, readJson } from "./context.mjs";
+import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
-import { AgentError, BIN, USERS } from "./layout.mjs";
+import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
 import { asUser, must, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
@@ -76,83 +79,153 @@ export async function prepareTools(ctx, commit) {
   return { dir };
 }
 
-/** Run one repo script from the tools clone; resolves its stdout lines. */
-async function runTool(ctx, { dir, envFile, setEnv = {}, script, args = [], code }) {
+/**
+ * One redacted log per verb run, /var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log,
+ * so a failure at a time-critical step can be read afterwards without
+ * re-running a script by hand. Seeded with every env file the unit reads.
+ */
+function openToolLog(ctx, verb, lg, commit, envs) {
+  const name = `${verb}-${lg}-${compactStamp(ctx.now())}-${commit.slice(0, 12)}`;
+  return openRedactedLog(ctx, ctx.layout.toolLog(name), envs);
+}
+
+/**
+ * Run one repo script from the tools clone; resolves its output lines. With
+ * several env files systemd reads them in order and a later file's value wins.
+ */
+async function runTool(ctx, { dir, envFiles, setEnv = {}, script, args = [], code, log }) {
   const unit = systemdRunArgs({
     user: USERS.build,
     cwd: dir,
-    envFiles: [envFile],
+    envFiles,
     properties: TOOLS_PROPERTIES,
     setEnv: { ...(await buildUserEnv(ctx)), ...setEnv },
     command: BIN.node,
     args: [script, ...args],
   });
   const lines = [];
-  const result = await ctx.runner.run(BIN.systemdRun, unit, { onLine: (line) => lines.push(line), capture: false });
+  log.write(`== ${script} (${new Date(ctx.now()).toISOString()})`);
+  const onLine = (line) => {
+    lines.push(line);
+    log.write(line);
+  };
+  const result = await ctx.runner.run(BIN.systemdRun, unit, { onLine, capture: false });
+  log.write(`== exit ${result.code}`);
   if (result.code !== 0) throw new AgentError(code);
   return lines;
 }
 
+/** Run `work(log)` with a tool log open, and close the log whatever happens. */
+async function withToolLog(ctx, verb, lg, commit, envs, work) {
+  const log = openToolLog(ctx, verb, lg, commit, envs);
+  try {
+    return await work(log);
+  } finally {
+    await log.close();
+  }
+}
+
 /** `attest <lg> <sha>`: both production gates against the league database. */
 export async function attest(ctx, lg, commit) {
-  loadLeagueEnv(ctx, lg);
+  const env = loadLeagueEnv(ctx, lg);
   const dir = await requireTools(ctx, commit);
-  const common = { dir, envFile: ctx.layout.leagueEnv(lg), setEnv: { NODE_ENV: "production" }, code: "attest_failed" };
-  const env = await runTool(ctx, { ...common, script: "scripts/validate-prod-env.mjs" });
-  if (!env.some((line) => line.includes("Production environment validation passed."))) throw new AgentError("attest_failed");
-  const schema = await runTool(ctx, { ...common, script: "scripts/production-schema-check.mjs" });
-  if (!schema.some((line) => line.includes("Production schema attestation passed"))) throw new AgentError("attest_failed");
-  return { ok: true };
+  return withToolLog(ctx, "attest", lg, commit, [env], async (log) => {
+    const common = { dir, envFiles: [ctx.layout.leagueEnv(lg)], setEnv: { NODE_ENV: "production" }, code: "attest_failed", log };
+    const gate = await runTool(ctx, { ...common, script: "scripts/validate-prod-env.mjs" });
+    if (!gate.some((line) => line.includes("Production environment validation passed."))) throw new AgentError("attest_failed");
+    const schema = await runTool(ctx, { ...common, script: "scripts/production-schema-check.mjs" });
+    if (!schema.some((line) => line.includes("Production schema attestation passed"))) throw new AgentError("attest_failed");
+    return { ok: true };
+  });
 }
 
 /** `preflight <lg> <sha>`: migration-preflight.mjs as the owner role. */
 export async function preflight(ctx, lg, commit) {
-  loadOwnerUrl(ctx, lg);
+  const owner = loadMigrateEnv(ctx, lg);
   const dir = await requireTools(ctx, commit);
-  const lines = await runTool(ctx, {
-    dir,
-    envFile: ctx.layout.migrateEnv(lg),
-    script: "scripts/migration-preflight.mjs",
-    code: "preflight_failed",
+  return withToolLog(ctx, "preflight", lg, commit, [owner], async (log) => {
+    const lines = await runTool(ctx, {
+      dir,
+      envFiles: [ctx.layout.migrateEnv(lg)],
+      script: "scripts/migration-preflight.mjs",
+      code: "preflight_failed",
+      log,
+    });
+    if (!lines.some((line) => line.includes("Migration data preflight passed."))) throw new AgentError("preflight_failed");
+    return { ok: true };
   });
-  if (!lines.some((line) => line.includes("Migration data preflight passed."))) throw new AgentError("preflight_failed");
-  return { ok: true };
 }
 
 /**
  * `migrate <lg> <sha>`: release-migrations.mjs as the owner, with
  * VERCEL_ENV=production set only in that child (design D16), then the grant
  * check. The drill and backups then use these tools.
+ *
+ * The script's first step is validate-prod-env.mjs, which in production needs
+ * the whole league env (secrets, APP_URL, ADMIN_STEAM_IDS...), and its
+ * postflight attests the instance identity from APP_URL and the region. So
+ * the unit reads the league env first and the migrate env second: systemd
+ * lets the later file win, and only the owner's DATABASE_URL and DIRECT_URL
+ * replace the app role's.
  */
 export async function migrate(ctx, lg, commit) {
-  loadOwnerUrl(ctx, lg);
+  const env = loadLeagueEnv(ctx, lg);
+  const owner = loadMigrateEnv(ctx, lg);
   const dir = await requireTools(ctx, commit);
-  const lines = await runTool(ctx, {
-    dir,
-    envFile: ctx.layout.migrateEnv(lg),
-    setEnv: { VERCEL_ENV: "production" },
-    script: "scripts/release-migrations.mjs",
-    args: ["--apply", commit],
-    code: "migrate_failed",
+  await withToolLog(ctx, "migrate", lg, commit, [env, owner], async (log) => {
+    const lines = await runTool(ctx, {
+      dir,
+      envFiles: [ctx.layout.leagueEnv(lg), ctx.layout.migrateEnv(lg)],
+      setEnv: { VERCEL_ENV: "production" },
+      script: "scripts/release-migrations.mjs",
+      args: ["--apply", commit],
+      code: "migrate_failed",
+      log,
+    });
+    if (!lines.some((line) => line.includes(`Migration release completed for ${commit}.`)))
+      throw new AgentError("migrate_failed");
   });
-  if (!lines.some((line) => line.includes(`Migration release completed for ${commit}.`)))
-    throw new AgentError("migrate_failed");
   await grantsCheck(ctx, lg);
   linkAtomically(ctx.layout.toolsCurrent, path.basename(dir));
   return { ok: true };
 }
 
 /**
- * `backup <lg>`: run the backup unit and wait. backup-league.sh records its
- * result in /var/backups/ggd2l/<lg>/last-backup.json
- * ({file, sha256, offsiteKey, finishedAt}); without it, the newest dump and
- * its sidecar answer, with no offsite key.
+ * The record backup-league.sh writes after a good run:
+ * /var/backups/ggd2l/<lg>/state/last-backup.json, {ok, league, file, sha256,
+ * offsiteKey, finishedAt, ...}, and possibly a copy beside state/. Only a
+ * record for this league that says ok and carries a sha256 counts; of two,
+ * the later finishedAt answers (state/ on a tie).
+ */
+export function readBackupRecord(ctx, lg) {
+  const folder = ctx.layout.backupDir(lg);
+  let best = null;
+  for (const file of [path.join(folder, "state", "last-backup.json"), path.join(folder, "last-backup.json")]) {
+    const record = readJson(file);
+    const finishedAt = Date.parse(record?.finishedAt ?? "");
+    if (
+      record?.ok === true &&
+      record.league === lg &&
+      /^[0-9a-f]{64}$/.test(record.sha256 ?? "") &&
+      Number.isFinite(finishedAt) &&
+      (!best || finishedAt > Date.parse(best.finishedAt))
+    )
+      best = record;
+  }
+  return best;
+}
+
+/**
+ * `backup <lg>`: run the backup unit and wait, then report the record it
+ * wrote (with the R2 key). Without a fresh record, the newest dump and its
+ * sidecar answer, with no offsite key.
  */
 export async function backup(ctx, lg) {
   const started = ctx.now();
   await runUnit(ctx, `ggd2l-backup@${lg}.service`, "backup_failed");
-  const record = readJson(path.join(ctx.layout.backupDir(lg), "last-backup.json"));
-  if (record && Date.parse(record.finishedAt) >= started - 1000 && /^[0-9a-f]{64}$/.test(record.sha256 ?? ""))
+  const record = readBackupRecord(ctx, lg);
+  // finishedAt has whole seconds; a run that started in the same second counts.
+  if (record && Date.parse(record.finishedAt) >= started - 1000)
     return { file: path.basename(String(record.file)), sha256: record.sha256, offsiteKey: record.offsiteKey ?? null };
   const latest = newestDump(ctx, lg);
   if (!latest || latest.mtimeMs < started - 1000) throw new AgentError("backup_failed");
@@ -186,7 +259,13 @@ export function newestDump(ctx, lg) {
  * `drill <lg> [sha]`: the newest local dump restored into ld2l_restore_test by
  * rehearse-backup-restore.mjs as ggd2l_rehearsal, then dropped. Without a sha
  * this is the weekly drill unit; with one, the same helper runs against that
- * sha's tools clone (design §2.5 step 4).
+ * sha's tools clone (design §2.5 step 4), so the new migrations are
+ * rehearsed before `migrate` applies them.
+ *
+ * drill-league.sh takes the sha as its second argument (usage
+ * `drill-league.sh us|eu [<40-hex sha>]`) and drills tools/<sha12>; without
+ * one it drills tools/current, the live commit. GGD2L_TOOLS_DIR names the same
+ * clone for a helper that reads it, and must agree with the sha.
  */
 export async function drill(ctx, lg, commit) {
   if (!commit) {
@@ -195,16 +274,22 @@ export async function drill(ctx, lg, commit) {
   }
   const dir = await requireTools(ctx, commit);
   if (!existsSync(ctx.layout.drillEnv)) throw new AgentError("env_missing");
+  const { env } = loadEnvFile(ctx, ctx.layout.drillEnv);
   const unit = systemdRunArgs({
     user: USERS.ops,
     envFiles: [ctx.layout.drillEnv],
     properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },
     command: BIN.bash,
-    args: [ctx.layout.helper("drill-league.sh"), lg],
+    args: [ctx.layout.helper("drill-league.sh"), lg, commit],
   });
-  await must(ctx.runner, "drill_failed", BIN.systemdRun, unit, { capture: false });
-  return { ok: true };
+  return withToolLog(ctx, "drill", lg, commit, [env], async (log) => {
+    log.write(`== drill-league.sh ${lg} ${commit} (${new Date(ctx.now()).toISOString()})`);
+    const result = await ctx.runner.run(BIN.systemdRun, unit, { onLine: log.write, capture: false });
+    log.write(`== exit ${result.code}`);
+    if (result.code !== 0) throw new AgentError("drill_failed");
+    return { ok: true };
+  });
 }
 
 /**

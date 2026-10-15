@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease, parseMemoryPeak } from "./build.mjs";
-import { SHA, T0, leagueEnv, makeBox } from "./harness.test.mjs";
+import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease, parseMemoryPeak } from "./build.mjs";
+import { SHA, T0, TRACKED_DOTENV_EXAMPLES, leagueEnv, makeBox } from "./harness.test.mjs";
+import { describeRelease } from "./releases.mjs";
 
 const ID = "us-20261016T150000Z-0123456789ab";
 
 /** A box whose git, npm and build behave like the real ones, as files. */
-function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = false } = {}) {
+function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = null } = {}) {
   const box = makeBox();
   const env = box.writeEnv("us");
   const dir = box.layout.release(ID);
@@ -34,7 +36,9 @@ function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, d
     if (command.endsWith("/runuser") && args.includes("checkout")) {
       mkdirSync(path.join(dir, "prisma"), { recursive: true });
       writeFileSync(path.join(dir, "package.json"), "{}");
-      if (dotenv) writeFileSync(path.join(dir, ".env.local"), "X=1");
+      // Every real checkout holds the tracked examples beside package.json.
+      for (const name of TRACKED_DOTENV_EXAMPLES) writeFileSync(path.join(dir, name), "APP_URL=\n");
+      if (dotenv) writeFileSync(path.join(dir, dotenv), "X=1");
       return { code: 0 };
     }
     if (command.endsWith("/systemd-run") && args.includes("scripts/vercel-build.mjs")) {
@@ -101,6 +105,10 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   assert.equal(record.sha, SHA);
   assert.equal(record.role, "candidate");
   assert.match(record.buildLogSha256, /^[0-9a-f]{64}$/);
+  // The hash is of the log as written, and `deployment` hands it to release-box.
+  assert.equal(record.buildLogSha256, createHash("sha256").update(readFileSync(box.layout.buildLog(ID))).digest("hex"));
+  assert.equal(describeRelease(box.ctx, ID).buildLogSha256, record.buildLogSha256);
+  for (const name of TRACKED_DOTENV_EXAMPLES) assert.ok(existsSync(path.join(dir, name)), `${name} is part of a real checkout`);
   assert.equal(readFileSync(path.join(dir, ".release.env"), "utf8"), `LEAGUE_RELEASE_SHA=${SHA}\n`);
 
   const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
@@ -146,9 +154,19 @@ test("build refuses a sha that is not on origin/main, before cloning", async () 
   assert.ok(!box.calls.some((call) => call.args.includes("clone")));
 });
 
-test("build refuses a checkout holding a .env file", async () => {
-  const { box } = buildBox({ dotenv: true });
-  await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "dotenv_present" });
+test("build refuses a checkout holding a dotenv file Next or Prisma would load", async () => {
+  for (const name of [".env", ".env.local", ".env.production", ".env.production.local", ".env.development", ".env.test.local", "prisma/.env"]) {
+    const { box } = buildBox({ dotenv: name });
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "dotenv_present" }, name);
+    assert.ok(!box.calls.some((call) => call.args.includes("ci")), `${name}: nothing installed`);
+  }
+});
+
+test("only the dotenv names Next and Prisma load are refused", () => {
+  for (const name of [".env", ".env.local", ".env.production", ".env.development", ".env.test", ".env.production.local", ".env.development.local", ".env.test.local"])
+    assert.ok(AUTOLOADED_DOTENV_RE.test(name), name);
+  for (const name of [...TRACKED_DOTENV_EXAMPLES, ".env.europe.discord.local", ".envrc", "env", ".env.production.bak", ".env.staging"])
+    assert.ok(!AUTOLOADED_DOTENV_RE.test(name), name);
 });
 
 test("build refuses an env file that breaks the contract, and low disk, before any command", async () => {

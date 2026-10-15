@@ -36,6 +36,7 @@ export const BIN = Object.freeze({
   caddy: "/usr/bin/caddy",
   chmod: "/usr/bin/chmod",
   chown: "/usr/bin/chown",
+  env: "/usr/bin/env",
   flock: "/usr/bin/flock",
   git: "/usr/bin/git",
   install: "/usr/bin/install",
@@ -52,6 +53,7 @@ export const BIN = Object.freeze({
 
 export const USERS = Object.freeze({
   build: "ggd2l-build",
+  caddy: "caddy",
   ops: "ggd2l-ops",
   bot: "ggd2l-bot",
   league: (lg) => `ggd2l-${lg}`,
@@ -88,6 +90,8 @@ export function createLayout(root = "/") {
     liveJson: (lg) => at("var/lib/ggd2l", lg, "live.json"),
     buildLogs: at("var/log/ggd2l/builds"),
     buildLog: (id) => at("var/log/ggd2l/builds", `${id}.log`),
+    // One redacted log per attest, preflight, migrate or sha drill run.
+    toolLog: (name) => at("var/log/ggd2l/tools", `${name}.log`),
     caddyLogs: at("var/log/caddy"),
     backupDir: (lg) => at("var/backups/ggd2l", lg),
     cutoverDir: (lg) => at("var/backups/ggd2l/cutover", lg),
@@ -125,7 +129,7 @@ export const ERRORS = Object.freeze({
   clone_failed: "cloning the release failed",
   clone_mismatch: "the clone is not at the requested sha",
   dirty_checkout: "the checkout has changed or untracked files",
-  dotenv_present: "the checkout contains a .env file",
+  dotenv_present: "the checkout contains a dotenv file Next or Prisma would load",
   install_failed: "npm ci failed",
   build_failed: "the build unit failed",
   gate_line_missing: "the build output lacks a production gate line",
@@ -207,7 +211,11 @@ export function ipAddress(value) {
   return value;
 }
 
+/** 2026-10-16T15:00:00.123Z -> 20261016T150000Z */
+export function compactStamp(at) {
+  return new Date(at).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
+}
+
 export function makeReleaseId(lg, commit, at) {
-  const stamp = new Date(at).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-  return releaseId(`${lg}-${stamp}-${commit.slice(0, 12)}`);
+  return releaseId(`${lg}-${compactStamp(at)}-${commit.slice(0, 12)}`);
 }

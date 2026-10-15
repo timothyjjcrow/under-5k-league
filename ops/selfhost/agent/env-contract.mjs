@@ -11,7 +11,7 @@
 // present and right.
 import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
-import { PORTS } from "./layout.mjs";
+import { PORTS, PUBLIC_HOST } from "./layout.mjs";
 
 const FORBIDDEN_KEYS = new Set([
   "BUILD_DB_DRY_RUN",
@@ -86,15 +86,6 @@ export function parseEnvFile(text) {
   return { env, problems };
 }
 
-function bareOrigin(value) {
-  try {
-    const url = new URL(value);
-    return url.origin === value ? url : null;
-  } catch {
-    return null;
-  }
-}
-
 function strictBase64Of32Bytes(value) {
   if (typeof value !== "string" || !/^[A-Za-z0-9+/]+={0,2}$/.test(value)) return false;
   const bytes = Buffer.from(value, "base64");
@@ -156,12 +147,15 @@ export function checkLeagueEnv(env, lg, { mode = "file" } = {}) {
   if (env.NEXT_PUBLIC_LEAGUE_REGION !== lg)
     problems.push(`NEXT_PUBLIC_LEAGUE_REGION: must be ${lg}`);
 
+  // A declared deployment builds every redirect, the same-origin guard and the
+  // Steam and Discord return URLs from APP_URL (src/lib/public-origin.ts), so
+  // in production and in the rehearsal alike it is the league's own https
+  // origin: never http, another scheme, the bind address or the other league.
+  const origin = `https://${PUBLIC_HOST[lg]}`;
   if (!has("APP_URL")) problems.push("APP_URL: missing");
-  else if (!bareOrigin(env.APP_URL)) problems.push("APP_URL: must be a bare origin");
+  else if (env.APP_URL !== origin) problems.push(`APP_URL: must be exactly ${origin}`);
   if (env.NEXT_PUBLIC_SITE_URL !== env.APP_URL)
     problems.push("NEXT_PUBLIC_SITE_URL: must equal APP_URL");
-  if (deployEnv === "production" && env.APP_URL !== `https://${lg}.ggd2l.com`)
-    problems.push(`APP_URL: must be https://${lg}.ggd2l.com in production`);
 
   problems.push(...databaseUrlProblems(env, lg));
 

@@ -129,6 +129,10 @@ export function makeBox() {
   return box;
 }
 
+// What every real checkout of the repo holds at its root besides package.json:
+// the tracked examples, which no tool loads (git ls-files | grep .env).
+export const TRACKED_DOTENV_EXAMPLES = Object.freeze([".env.example", ".env.europe.example"]);
+
 /** A finished release folder, as build leaves it. */
 export function addRelease(box, id, { state = "BUILT", sha = SHA, staticFiles = ["chunks/app.js"] } = {}) {
   const dir = box.layout.release(id);
@@ -143,5 +147,7 @@ export function addRelease(box, id, { state = "BUILT", sha = SHA, staticFiles = 
   return dir;
 }
 
-export const isCaddyValidate = (command, args) => command.endsWith("/caddy") && args[0] === "validate";
+// caddy validate runs as caddy: runuser -u caddy -- env HOME=... caddy validate ...
+export const isCaddyValidate = (command, args) =>
+  command.endsWith("/runuser") && args.some((arg) => arg.endsWith("/caddy")) && args.includes("validate");
 export const isReload = (command, args) => command.endsWith("/systemctl") && args[0] === "reload";
