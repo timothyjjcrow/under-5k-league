@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { publicOrigin } from "./public-origin";
 
 type GuardFailure = NextResponse<{ error: string }>;
 type JsonObject = Record<string, unknown>;
@@ -30,8 +31,16 @@ export function requireJsonContentType(req: NextRequest): GuardFailure | null {
  * Require a browser-proven same-origin mutation. `same-site` is deliberately
  * insufficient: an unrelated sibling subdomain must not be able to act with
  * the league session cookie. Missing/opaque/malformed origins fail closed.
+ *
+ * "Same origin" is `publicOrigin(req)`: the request's own origin, as before,
+ * unless the deployment is declared (`LEAGUE_DEPLOY_ENV`). Then ONLY the
+ * canonical `APP_URL` origin passes: on the box the request's own origin is
+ * the 127.0.0.1 bind address, which no browser should ever be on.
  */
-export function requireSameOrigin(req: NextRequest): GuardFailure | null {
+export function requireSameOrigin(
+  req: NextRequest,
+  env: Record<string, string | undefined> = process.env,
+): GuardFailure | null {
   const rawOrigin = req.headers.get("origin");
   if (!rawOrigin || rawOrigin === "null") {
     return NextResponse.json(
@@ -54,7 +63,7 @@ export function requireSameOrigin(req: NextRequest): GuardFailure | null {
 
   const fetchSite = req.headers.get("sec-fetch-site");
   if (
-    origin !== req.nextUrl.origin ||
+    origin !== publicOrigin(req, env) ||
     (fetchSite && fetchSite !== "same-origin")
   ) {
     return NextResponse.json(
@@ -65,8 +74,11 @@ export function requireSameOrigin(req: NextRequest): GuardFailure | null {
   return null;
 }
 
-export function guardJsonMutation(req: NextRequest): GuardFailure | null {
-  return requireJsonContentType(req) ?? requireSameOrigin(req);
+export function guardJsonMutation(
+  req: NextRequest,
+  env: Record<string, string | undefined> = process.env,
+): GuardFailure | null {
+  return requireJsonContentType(req) ?? requireSameOrigin(req, env);
 }
 
 function bodyFailure(error: string, status: 400 | 413): JsonObjectReadResult {
