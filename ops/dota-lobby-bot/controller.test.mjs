@@ -640,23 +640,50 @@ test("a launch whose lobby is provably gone is freed once it has settled", (t) =
   d.now = () => d.data.jobs[spec.key].changedAt + LAUNCH_SETTLE_MS;
   assert.equal(d.tick(), false);
   assert.equal(d.data.active, spec.key);
-  // Nor for a lobby that never launched: it waits for a deliberate release.
-  const { controller: e } = setup(t);
-  e.request("create", spec);
-  e.snapshot(snapshot());
-  e.departed();
-  e.now = () => e.data.jobs[spec.key].changedAt + IDLE_RELEASE_MS;
-  assert.equal(e.tick(), false);
-  assert.equal(e.data.active, spec.key);
 });
-test("the clock never acts with no lobby, and never throws", (t) => {
-  const { controller: c, calls } = setup(t);
+test("a Create Dota never answers is freed two minutes later, so the next Create works", (t) => {
+  const { controller: c, calls, options } = setup(t);
   c.request("create", spec);
   const at = c.data.jobs[spec.key].changedAt;
-  c.now = () => at + IDLE_RELEASE_MS;
+  // No lobby ever arrives: "Lobby needs attention" after 30 s...
+  c.now = () => at + 31_000;
   assert.equal(c.status(spec.key).state, "blocked");
   assert.equal(c.tick(), false);
+  assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+  c.now = () => at + LAUNCH_SETTLE_MS - 1;
+  assert.equal(c.tick(), false);
+  // ...and freed at two minutes, with nothing to leave and the state saved.
+  c.now = () => at + LAUNCH_SETTLE_MS;
+  assert.equal(c.tick(), true);
   assert.deepEqual(calls, ["create"]);
+  assert.equal(c.data.active, null);
+  assert.equal(new LobbyController(options).data.active, null);
+  assert.equal(c.status(spec.key).state, "released");
+  // The same game, or any other, can create again.
+  assert.equal(c.request("create", spec).state, "creating");
+  assert.deepEqual(calls, ["create", "create"]);
+});
+test("a lobby that vanishes before any launch is freed, but never while it might exist", (t) => {
+  // Dota removed it: the bot's absence is proven, so the claim frees.
+  const { controller: c } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.departed();
+  assert.equal(c.data.active, spec.key);
+  c.now = () => c.data.jobs[spec.key].changedAt + LAUNCH_SETTLE_MS;
+  assert.equal(c.tick(), true);
+  assert.equal(c.data.active, null);
+  assert.equal(c.status(spec.key).state, "released");
+  // A lobby the bot was in but whose absence is unproven (dropped mid-cache)
+  // is never freed by the clock.
+  const { controller: d } = setup(t);
+  d.request("create", spec);
+  d.snapshot(snapshot());
+  d.lobby = null;
+  d.absenceConfirmed = false;
+  d.now = () => d.data.jobs[spec.key].changedAt + IDLE_RELEASE_MS;
+  assert.equal(d.tick(), false);
+  assert.equal(d.data.active, spec.key);
 });
 test("a launch stuck setting up a server is released ten minutes after Start", (t) => {
   for (const state of [1, 4, 5, 6]) {
