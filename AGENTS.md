@@ -14,6 +14,12 @@ US and Europe ship the same application commit from `main`. Make feature and
 schema changes once; use `src/lib/league-config.ts` for regional presentation.
 Keep databases, Discord integrations and runtime settings isolated. Follow
 `docs/RELEASING.md` and the impact-selected production operations procedure.
-Release both projects through `npm run release:both`; do not deploy one
-regional feature branch independently. Run browser coverage for both league
-configurations when changing shared behavior.
+Release both leagues through `npm run release:both`, which builds and promotes
+them on the self-hosted box at one commit; do not deploy one regional feature
+branch independently. Run browser coverage for both league configurations when
+changing shared behavior.
+
+The one exception is the cutover day (planned; `docs/DECISIONS.md` has it):
+between the US move and Europe's, the US runs the kit commit on the box while
+Europe still runs its last Vercel release. Nothing is released to either
+league until both have moved.
