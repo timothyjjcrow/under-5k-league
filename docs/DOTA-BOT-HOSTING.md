@@ -1,8 +1,8 @@
 # Dota bot hosting options
 
-Prices checked September 4, 2026, in USD before tax, optional backups and overages.
+The bot runs on the league's own box (`ggd2l-1`, the DigitalOcean droplet that serves both sites) as `ggd2l-bot.service`, and connects to the sites through the Cloudflare relay as before. **Status: planned:** it moves there from this Mac after both leagues have moved to the box ([DOTA-LOBBY-BOT: On the box](DOTA-LOBBY-BOT.md#on-the-box)); until then it runs on the Mac. The box costs nothing extra for the bot, so no separate VM is needed.
 
-The current setup runs one bot on this Mac and connects it to the site through the Cloudflare relay. It hosts the in-house games one Dota lobby at a time (it leaves each game once it is running, so two can run at once), with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
+One bot hosts the in-house games one Dota lobby at a time (it leaves each game once it is running, so two can run at once), with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
 
 The approved Europe plan can share this same worker and relay, with one lobby
 at a time across both leagues. Set `DOTA_GAME_SERVER_REGIONS="2,3"` only after
@@ -10,9 +10,9 @@ deploying the namespace-aware relay and worker changes; Europe's requests then
 use Europe West and its own ticket. Keep a single process and the existing
 Steam state. See [shared setup and activation order](DOTA-LOBBY-BOT.md#sharing-the-existing-bot-between-us-and-europe).
 
-## Recommendation
+## Options considered (September 2026)
 
-Use the Mac for the first sessions. For dependable access when this Mac is asleep, traveling, or offline, move the same worker to a **$6/month DigitalOcean Basic VM with 1 GiB RAM**. The website and relay configuration can stay the same. Do not buy a second gaming computer for this bot.
+Prices checked September 4, 2026, in USD before tax, optional backups and overages. The recommendation then was the Mac for the first sessions and a **$6/month DigitalOcean Basic VM with 1 GiB RAM** for dependable access; the move to the league's box (2026-10-15) gives the same dependability on the droplet the sites already use. Do not buy a second gaming computer for this bot.
 
 | Host | Monthly cost | Practical tradeoff |
 | --- | ---: | --- |
@@ -29,7 +29,7 @@ The relay is small enough to be expected to fit Cloudflare's free tier: SQLite D
 
 ## Running on this Mac
 
-The LaunchAgent starts at user login and continues after ChatGPT closes. The installed keep-awake option prevents idle system sleep while the bot runs. Keep the Mac connected to power, online and open; screen lock/display-off is fine. Closing the lid, logging out or shutting down interrupts availability. Apple's [Mac sleep settings](https://support.apple.com/en-gb/guide/mac-help/mchle41a6ccd/mac) describe the power controls.
+This is how the bot runs until it moves to the box. The LaunchAgent starts at user login and continues after ChatGPT closes. The installed keep-awake option prevents idle system sleep while the bot runs. Keep the Mac connected to power, online and open; screen lock/display-off is fine. Closing the lid, logging out or shutting down interrupts availability. Apple's [Mac sleep settings](https://support.apple.com/en-gb/guide/mac-help/mchle41a6ccd/mac) describe the power controls.
 
 From `ops/dota-lobby-bot`:
 
@@ -45,6 +45,8 @@ Stopping the bot does not disable the website's ordinary in-house queue or manua
 
 ## Moving to a cloud host
 
+The move to the league's box follows [DOTA-LOBBY-BOT: On the box](DOTA-LOBBY-BOT.md#on-the-box). For any other host:
+
 1. Provision a small x86 Linux VM with normal IPv4 connectivity, Node 22 and `util-linux`. On Railway, use a persistent service and volume, one replica, and disable sleeping/serverless mode.
 2. Copy the worker source and install with `npm ci`. Keep credentials out of image builds and Git.
 3. Finish/release the current Dota lobby and stop the Mac service. Start only one copy of this account.
@@ -56,4 +58,4 @@ Persistent disks are included in the listed VM bundles. Optional backups cost ex
 
 Lightsail's cheaper 1 GB $5 bundle is IPv6-only; use the $7 IPv4 bundle for the straightforward Steam setup. Railway supplies outbound IPv4, but fixed outbound IPs require Pro and are not needed by this relay design. [Railway networking](https://docs.railway.com/networking/outbound-networking), [Railway sleeping behavior](https://docs.railway.com/deployments/serverless).
 
-Cloud hosting removes the dependency on home power, Wi-Fi and sleep settings. Steam/Dota outages, occasional Steam reauthentication and software updates still apply. Buying a cloud plan has not been done as part of the Mac rollout.
+Cloud hosting removes the dependency on home power, Wi-Fi and sleep settings. Steam/Dota outages, occasional Steam reauthentication and software updates still apply. A first sign-in from a datacenter IP may need Steam Guard again.

@@ -61,7 +61,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     resolver, Discord or OpenDota, so spectators never advance a lobby. Room
     polls never scan OpenDota: the worker owns the automatic scan.
 - **Each server instance serves the room from one snapshot, checked against
-  the room version on every poll** (`src/lib/inhouse-room-cache.ts`). The
+  the room version on every poll** (`src/lib/inhouse-room-cache.ts`). On the
+  box one process serves each league, but two do for the 90 seconds of every
+  release's overlap (and Vercel ran many), so every rule here holds. The
   snapshot is `loadInhouseRoomRows`: the queue, live games, games marked over,
   the last `LAST_RESULT_WINDOW_MS` of results with their `eloDeltas`, and the
   signup-roles batch. Its label is the `inhouseRoomVersion` Setting
@@ -124,7 +126,7 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   - **Writers that never publish show within the 15s max age:** admin
     display edits, the worker's rank refresh and profile writes outside the
     room's flows, such as a relinked Dota account's medal (`docs/DECISIONS.md`).
-    So does a lost publish, and during a rolling deploy an old instance's
+    So does a lost publish, and during a release's overlap the old slot's
     writes. A new writer the room waits on publishes.
 - **Give every new lobby or queue clock a wake-up in
   `src/lib/automation-gate.ts`,** which schedules the worker for accept, vote
@@ -592,10 +594,11 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **The bot panel re-reads the bot every 5s only while it sets a lobby up**
   (`lobbyPanelPollMs` in `src/lib/dota-lobby.ts`, source-guarded in the
   panel): once a minute once Dota reports the game "started", never with no
-  bot lobby. Each read is a function call that also asks the bot through the
-  relay, and the panel stays mounted for the whole game for its players and
-  admins: on 2026-10-13 ten players' panels at 5s made a fifth of the US
-  site's Active CPU. The first "started" answer, read at 5s, is the one that
+  bot lobby. Each read is a request to the site that also asks the bot
+  through the relay, and the panel stays mounted for the whole game for its
+  players and admins: on 2026-10-13, on Vercel, ten players' panels at 5s made
+  a fifth of the US site's Active CPU. On the box the same reads are server
+  work and relay traffic that buy nothing once the game runs. The first "started" answer, read at 5s, is the one that
   stamps the lobby IN_PROGRESS; the minute read is its safety net.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
@@ -719,11 +722,13 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **Cadence comes only from pure `inhousePollCadence`** (`src/lib/room-poll.ts`,
   sharing `roomPollCadence` with the draft room). A source guard fails if an
   `INHOUSE.POLL_*` rate reappears in the room.
-  - **Every poll is a function call on the Vercel Hobby plan both leagues
-    share** (four hours of Active CPU a month). On 2026-10-11 five /inhouse
-    tabs polling every 10s made 79% of the US site's calls, and the plan ran
-    out. Poll fast only where seconds decide something; every long wait is
-    slow.
+  - **Every poll is a request to the one box both leagues share,** with the
+    session and room-version reads behind it, on one vCPU beside Postgres
+    and the lobby bot. The rates were set on Vercel's Hobby plan (on
+    2026-10-11 five /inhouse tabs polling every 10s made 79% of the US site's
+    calls, and its four hours of Active CPU ran out) and stay until Tim asks
+    (`docs/DECISIONS.md`). Poll fast only where seconds decide something;
+    every long wait is slow.
   - Fast (`pollMs`, 1500) only for the clocked stages: ready check, vote and
     draft. Game setup (READY until the scan window opens,
     `inhouseReadyInPlay`, after which a hand-hosted game polls like

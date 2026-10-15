@@ -6,13 +6,13 @@ The default rollout is **one bot for the league's in-house games**, using **Capt
 
 Lobby creation uses a Steam client session and the Dota Game Coordinator (GC). The existing Steam Web API key/OpenID login cannot supply that session, and signing into the desktop Steam app does not sign in the worker. The web app sends authenticated requests through `ops/dota-lobby-relay` on Cloudflare to the separate Node 22 service in `ops/dota-lobby-bot`. The bot opens an outbound WebSocket to the relay and stays logged in to Steam. Its host needs no public IP, inbound firewall port, domain, or temporary tunnel.
 
-The worker runs on macOS or Linux with Node 22 and persistent private storage. It does not need the Steam desktop app, the Dota download, a GPU, or ChatGPT to remain open. A Mac running the bot can coexist with a PC playing Dota on a different Steam account. Windows would require a Linux environment such as WSL; that path has not been tested.
+The worker runs on macOS or Linux with Node 22 and persistent private storage. It runs on the league's own box beside both sites ([On the box](#on-the-box)). **Status: planned:** it moves there from the Mac after both leagues have moved, and runs on the Mac until then. It does not need the Steam desktop app, the Dota download, a GPU, or ChatGPT to remain open. A Mac running the bot can coexist with a PC playing Dota on a different Steam account. Windows would require a Linux environment such as WSL; that path has not been tested.
 
 ```mermaid
 flowchart LR
-  Captain[Captain or admin] --> Site[Vercel site]
+  Captain[Captain or admin] --> Site["GGD2L site (the box)"]
   Site -->|Authenticated HTTPS| Relay[Cloudflare relay]
-  Bot[Mac or Linux bot] -->|Outbound authenticated WSS| Relay
+  Bot["Lobby bot (the box; the Mac before the move)"] -->|Outbound authenticated WSS| Relay
   Bot --> Steam[Steam / Dota coordinator]
 ```
 
@@ -63,7 +63,7 @@ npm start
 
 Retain the entire private state directory, including `steam-auth.json`, `steam/`, and the lobby JSON. Steam may require a new `npm run login` after account/security changes or token expiry. Stop the worker before signing in again. Username/password environment variables remain an optional fallback when no saved session exists; saved sessions take priority. Do not enable verbose `DEBUG` logs in production: upstream debug output can contain session/lobby data.
 
-For a Linux service, adapt `ld2l-dota-bot.service` to your checkout and Node 22 binary. Create the `ld2l-bot` OS user, `/var/lib/ld2l-dota-bot` owned by that user, and a private `/etc/ld2l-dota-bot.env` containing the worker variables with `DOTA_BOT_STATE_DIR=/var/lib/ld2l-dota-bot`. Perform the interactive first login as that OS user with those same variables. Install and enable the unit only after login works.
+On the league's box the bot is `ggd2l-bot.service` ([On the box](#on-the-box)). For another Linux host, adapt `ld2l-dota-bot.service` to your checkout and Node 22 binary. Create the `ld2l-bot` OS user, `/var/lib/ld2l-dota-bot` owned by that user, and a private `/etc/ld2l-dota-bot.env` containing the worker variables with `DOTA_BOT_STATE_DIR=/var/lib/ld2l-dota-bot`. Perform the interactive first login as that OS user with those same variables. Install and enable the unit only after login works.
 
 The control server binds to `127.0.0.1:8090` for local diagnostics. For the deployed site, use the [relay setup](../ops/dota-lobby-relay/README.md). The relay is deployed at `https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`. Its two separate secrets authorize site requests and bot connections. Steam session tokens stay on the bot host. WebSocket requests expire after ten seconds and are never replayed by the relay; the controller retains its own durable idempotency checks. An idle connection uses Cloudflare WebSocket hibernation.
 
@@ -85,7 +85,7 @@ DOTA_INHOUSE_LEAGUE_ID="<numeric in-house ticket ID>"
 DOTA_SEASON_LOBBY_BOT_ENABLED="false"
 ```
 
-Do not put `STEAM_BOT_USERNAME` or `STEAM_BOT_PASSWORD` in Vercel. Local web development can use `http://127.0.0.1:8090`; production requires HTTPS. Restart/redeploy the app after setting its environment. No database migration is needed.
+Do not put `STEAM_BOT_USERNAME` or `STEAM_BOT_PASSWORD` in the web app's environment (`/etc/ggd2l/<lg>.env` on the box). Local web development can use `http://127.0.0.1:8090`; production requires HTTPS, so the site reaches the bot through the relay even when both run on the box. Restart the league's live slot or release again after changing its environment. No database migration is needed.
 
 ## Sharing the existing bot between US and Europe
 
@@ -151,6 +151,24 @@ The installed LaunchAgent `com.ggd2l.dota-lobby-bot` starts at Mac user login an
 
 Use `node macos-service.mjs stop` before signing in again or moving the bot to another host; `start` brings it back. `stop` returns only once launchd has unloaded the bot, so `start` can follow it straight away ([details](DOTA-BOT-HOSTING.md#running-on-this-mac)). `uninstall` removes the LaunchAgent without deleting private Steam state. Logs are private files under `state/logs/`. A Node runtime upgrade that removes the installed Node path requires reinstalling the service.
 
+## On the box
+
+**Status: planned.** The bot moves to the league's box after both leagues have moved there, when Tim is present and no lobby is active, never between 20:00 and 04:00 UTC. Until then it runs on the Mac under the LaunchAgent above. The box runbook is `ops/selfhost/README.md`.
+
+`ggd2l-bot.service` runs the worker as the `ggd2l-bot` user from `/srv/ggd2l/bot/current/ops/dota-lobby-bot`, with its environment in `/etc/ggd2l/bot.env` (0600) and its private state in `/var/lib/ggd2l-bot` (0700), on 127.0.0.1:8090. It restarts on failure after 30 seconds, under a 300 MB memory cap; the healthchecks `bot` check alerts while it is down. `bot.env` keeps the Mac's `DOTA_LOBBY_BOT_SECRET`, `DOTA_RELAY_WORKER_SECRET`, `DOTA_LOBBY_RELAY_URL` and `DOTA_GAME_SERVER_REGIONS="2,3"`, and adds `DOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot`, `HOST=127.0.0.1` and `PORT=8090`. The relay, the sites' bot settings and the Steam account don't change.
+
+The move, in order:
+
+1. **Prepare** (any time): `box_agent bot-deploy <sha>` installs the bot code at that commit (`npm ci --omit=dev`) and links `current`; the unit is installed disabled. `bot.env` is built file to file from the Mac's `ops/dota-lobby-bot/.env`.
+2. **Check** that `lobbies.json` shows no active job and no inhouse game is live on either site.
+3. **Stop the Mac bot** (Tim's yes): `node macos-service.mjs stop`, and confirm the process is gone. One Steam account must never run in two places.
+4. **Copy the state**: `steam-auth.json`, `lobbies.json` and `steam/` into `/var/lib/ggd2l-bot/` (files 0600, owned by `ggd2l-bot`). **Never copy `worker.lock`, `worker.os-lock` or the logs.**
+5. **Start it**: `sudo systemctl enable --now ggd2l-bot`, then watch `journalctl -u ggd2l-bot` for two minutes.
+6. **If Steam asks for Steam Guard** (the saved session remembers the IP that issued it): stop the unit at once. Tim, in his own terminal, signs the bot in as its own user with its own environment, `ssh -t ggd2l-1 'sudo systemd-run --pty --wait -p User=ggd2l-bot -p EnvironmentFile=/etc/ggd2l/bot.env -p WorkingDirectory=/srv/ggd2l/bot/current/ops/dota-lobby-bot /usr/bin/node login.mjs'`, approves with the bot account's Steam Guard, and starts the unit again. Nobody else sees or types any part of the login.
+7. **Verify**: /admin's **Check bot connection** shows online, then (Tim's yes) a private create and release, which briefly makes a real Dota lobby.
+8. **Roll back** until a real game has run on the box: stop and disable the unit, copy `/var/lib/ggd2l-bot/steam-auth.json` back to the Mac (the box may have renewed the session), then `node macos-service.mjs start`.
+9. After one real inhouse game on the box (Tim's yes): `node macos-service.mjs uninstall` on the Mac.
+
 ## Match-night flow
 
 1. In-house controls appear once teams are drafted; either in-house captain or an admin clicks **Create Dota lobby**. Any live in-house game with locked teams can create/start a lobby; with two live, the second waits (`BUSY`) until the first game is running. The bot applies that league's in-house ticket, Captains Mode, its configured server region, a password, no cheats, no AI players, and a two-minute DotaTV delay. Each game has a unique name suffix.
@@ -192,7 +210,7 @@ The full request and reply shapes are in the [relay README](../ops/dota-lobby-re
 Ship the three parts in this order, each only once the one before it is live:
 
 1. **Relay** (`npm run deploy` from `ops/dota-lobby-relay`, the shared relay both leagues use). An older relay rejects `invite` with `400 INVALID` and turns any reply carrying `players` or `invited` into `409 STATE`, so nothing that sends either may go first.
-2. **Bot**: update the worker code in the service's checkout and restart it (`node macos-service.mjs stop`, then `start`). Restart it while it holds no lobby: a lobby the old bot set up has no `autoInvitedAt`, so the restarted bot sends it one automatic round when it next sees it ready. From here the bot invites on every new lobby, whichever site is live; the old panel's name/password line is still right as the fallback.
+2. **Bot**: update the worker code and restart it: on the box `box_agent bot-deploy <sha>`, then `sudo systemctl restart ggd2l-bot` ([On the box](#on-the-box)); on the Mac before the move, in the service's checkout, `node macos-service.mjs stop`, then `start`. Restart it while it holds no lobby: a lobby the old bot set up has no `autoInvitedAt`, so the restarted bot sends it one automatic round when it next sees it ready. From here the bot invites on every new lobby, whichever site is live; the old panel's name/password line is still right as the fallback.
 3. **Site**, through [RELEASING](RELEASING.md) to both leagues (no migration). It is the only part that sends `withPlayers` or `invite`.
 
 Roll back in reverse: site first, then bot, then relay. Rolling back the site or the bot alone is safe (an older bot ignores `withPlayers`; an older site never sends it). Never run an older relay while the new site and the new bot are both live: the bot's `players` would turn every panel read and action on a ready lobby into `409 STATE`, and a Start that really launched would read as failed.
@@ -259,7 +277,7 @@ For live acceptance: create an in-house lobby, verify Captains Mode/US East/tick
 
 Live verification on September 4, 2026: Steam Guard sign-in succeeded; the Mac LaunchAgent connected to Steam, Dota and the deployed Cloudflare relay. Through the authenticated HTTPS relay, the bot created Dota lobby `30007027938516500`; the GC confirmed Captains Mode (2), US East (2), and league 20004. The bot released that test lobby and returned to available. Authenticated control returned HTTP 200 and unauthenticated control returned HTTP 401. No players were invited and no game was launched. A complete ten-player start and result import still require a real in-house game.
 
-The Vercel production deployment `dpl_EkWgUF7sQm5xJihbZAa1VVa8SsKT` was built from commit `a218bfa` and promoted to `https://ggd2l.vercel.app`. Its build and production schema attestation passed without database changes. The signed-in admin browser on `/inhouse` displayed **Bot online** and the connected Steam account; the manual connection check used the live site API and relay. Anonymous recovery requests returned HTTP 401. Final focused verification passed 40 site/API integration tests, 33 worker tests and 12 relay tests, plus TypeScript and scoped ESLint.
+The Vercel production deployment `dpl_EkWgUF7sQm5xJihbZAa1VVa8SsKT` was built from commit `a218bfa` and promoted to the US site. Its build and production schema attestation passed without database changes. The signed-in admin browser on `/inhouse` displayed **Bot online** and the connected Steam account; the manual connection check used the live site API and relay. Anonymous recovery requests returned HTTP 401. Final focused verification passed 40 site/API integration tests, 33 worker tests and 12 relay tests, plus TypeScript and scoped ESLint.
 
 Shared-worker activation on September 5, 2026: the existing relay was deployed
 as version `1445c2cb-19a4-4852-9d09-09e2c027c8b0`, retaining its encrypted
