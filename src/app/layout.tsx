@@ -13,6 +13,7 @@ import { Toaster } from "@/components/toaster";
 import { ResultSyncPing } from "@/components/result-sync-ping";
 import { NavigationContextTracker } from "@/components/context-back-link";
 import { SiteAnalytics } from "@/components/site-analytics";
+import { siteAnalyticsEnabled } from "@/lib/site-analytics";
 import { SessionRefresh } from "@/components/session-refresh";
 import { getSessionRefreshDue, getSessionUser } from "@/lib/auth";
 import { getActiveSeason } from "@/lib/season";
@@ -219,7 +220,7 @@ export default async function RootLayout({
         {/* Keeps an active player signed in: one call a week at most. */}
         {sessionRefreshDue ? <SessionRefresh /> : null}
         {/* The SDK counts navigation, not room polling or server refreshes. */}
-        {process.env.VERCEL_ENV === "production" ? <SiteAnalytics /> : null}
+        {siteAnalyticsEnabled() ? <SiteAnalytics /> : null}
       </body>
     </html>
   );

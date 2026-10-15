@@ -11,7 +11,11 @@ const VERCEL_PROJECT: Record<LeagueRegion, string> = {
   eu: "ggd2l-europe",
 };
 
-/** This deployment's Vercel Web Analytics dashboard. */
+/**
+ * This deployment's Vercel Web Analytics dashboard. /admin links to it only
+ * where `siteAnalyticsEnabled()` holds (Vercel production): no other
+ * deployment sends it data.
+ */
 export function webAnalyticsUrl(region: LeagueRegion): string {
   return `https://vercel.com/${VERCEL_SCOPE}/${VERCEL_PROJECT[region]}/analytics`;
 }
