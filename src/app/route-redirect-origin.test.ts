@@ -7,16 +7,21 @@ import {
 /**
  * Route handlers build every redirect on `publicOrigin(req)`
  * (src/lib/public-origin.ts), never on the request's own URL. On the league
- * box `next start` binds 127.0.0.1 behind Caddy, so `req.url` and
- * `req.nextUrl` name the bind address: a `new URL(path, req.url)` redirect
- * sends every player to `http://127.0.0.1:3001/...`. Nothing fails on Vercel,
- * in development or in e2e, where the request URL is the public one, so this
- * reads every route handler's source instead.
+ * box `next start` binds 127.0.0.1 behind Caddy, and Next reports that bind
+ * address as `https://localhost:<port>` in both `req.url` (which is
+ * `req.nextUrl.toString()`) and `req.nextUrl`: a `new URL(path, req.url)`
+ * redirect sends every player to `https://localhost:3001/...`. Nothing fails
+ * on Vercel, in development or in e2e, where the request URL is the public
+ * one, so this reads every route handler's source instead.
  *
  * Refused in `src/app/**\/route.ts`:
  * - `new URL(<anything>, <request>.url | <request>.nextUrl…)`;
  * - `NextResponse.redirect(<request>.url | <request>.nextUrl…)`;
- * - `<request>.nextUrl.origin`, the old same-origin and OAuth base.
+ * - `<request>.nextUrl.origin`, the old same-origin and OAuth base;
+ * - binding the request's URL to a local first (`const here = req.url`,
+ *   `const { nextUrl } = req`, `const { origin } = req.nextUrl`), which would
+ *   carry it past the checks above. Reading `.searchParams`, `.search` or
+ *   `.pathname` off it stays allowed.
  */
 
 /** A `new URL` base read off the request: `req.url`, `String(request.nextUrl)`. */
@@ -25,6 +30,15 @@ const BASE_FROM_REQUEST = /\.(?:url|nextUrl)\b/;
 const TARGET_IS_REQUEST =
   /^(?:String\(\s*|`\$\{\s*)?[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*?\??\.(?:url|nextUrl)\b/;
 const REQUEST_ORIGIN = /\.nextUrl\??\.origin\b/g;
+/** `const here = req.url`, `= String(request.nextUrl)`: an alias of the URL (destructures below). */
+const URL_BINDING =
+  /(?<![=!<>])(?<!\}\s*)=\s*(?:String\(\s*)?[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*?\??\.(?:url|nextUrl)\b(?!\??\.(?:searchParams|search|pathname)\b)/g;
+/** `const { url } = req`, `const { nextUrl: u } = request`. */
+const URL_DESTRUCTURE =
+  /\{[^{}]*\b(?:url|nextUrl)\b[^{}]*\}\s*=\s*[A-Za-z_$][\w$]*(?:\??\.(?:req|request))?\s*(?:[;,)\n]|$)/g;
+/** `const { origin } = req.nextUrl`, `const { href } = request.nextUrl`. */
+const ORIGIN_DESTRUCTURE =
+  /\{[^{}]*\b(?:origin|href|host)\b[^{}]*\}\s*=\s*[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*?\??\.nextUrl\b/g;
 
 /**
  * The top-level arguments of the call whose `(` is at `open`, or null when it
@@ -87,7 +101,9 @@ function violations(text: string): string[] {
       found.push(`redirect(${args.join(", ")})`);
     }
   }
-  for (const match of code.matchAll(REQUEST_ORIGIN)) found.push(match[0]);
+  for (const pattern of [REQUEST_ORIGIN, URL_BINDING, URL_DESTRUCTURE, ORIGIN_DESTRUCTURE]) {
+    for (const match of code.matchAll(pattern)) found.push(match[0].trim());
+  }
   return found;
 }
 
@@ -108,6 +124,14 @@ describe("route-handler redirect origin", () => {
       "new URL(next, ctx.request.url)",
       "const base = process.env.APP_URL || req.nextUrl.origin;",
       "`${process.env.APP_URL || req.nextUrl.origin}/api/auth/discord/callback`",
+      "const here = req.url;\nconst target = new URL(\"/login\", here);",
+      "const base = String(request.nextUrl);",
+      "let u;\nu = ctx.req.nextUrl;",
+      "const { nextUrl } = req;\nreturn NextResponse.redirect(new URL(p, nextUrl));",
+      "const { url } = request;",
+      "const { nextUrl: n, method } = req\n",
+      "const { origin } = req.nextUrl;",
+      "const { href, pathname } = request.nextUrl;",
     ]) {
       expect(violations(refused), refused).not.toEqual([]);
     }
@@ -121,6 +145,15 @@ describe("route-handler redirect origin", () => {
       "NextResponse.redirect(new URL(req.nextUrl.pathname, publicOrigin(req)))",
       "process.env.APP_URL",
       "// never new URL(path, req.url): that names the bind address",
+      'const values = request.nextUrl.searchParams.getAll("season");',
+      "const q = req.nextUrl.searchParams;",
+      "const path = req.nextUrl.pathname;",
+      "if (a === req.url) return;",
+      "const { searchParams } = req.nextUrl;",
+      "const { pathname, search } = request.nextUrl;",
+      "const { id } = await params;",
+      "const { url } = await fetchThing();",
+      "const { origin } = LEAGUE_CONFIG;",
     ]) {
       expect(violations(allowed), allowed).toEqual([]);
     }
