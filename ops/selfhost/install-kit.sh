@@ -14,9 +14,8 @@
 # Idempotent, and safe on a live box. It:
 #   - creates the service users and the directory tree with its modes (§1.1-1.2)
 #   - installs the agent, the env contract, the SQL files and the shell helpers
-#     into a fresh /usr/local/lib/ggd2l-kit/<sha12>.<stamp>, then points the
-#     /usr/local/lib/ggd2l symlink at it in one rename; the entry point is
-#     /usr/local/sbin/ggd2l-agent
+#     into a fresh folder, then swaps it in as /usr/local/lib/ggd2l (a real
+#     directory, never a symlink); the entry point is /usr/local/sbin/ggd2l-agent
 #   - installs the systemd units and timers, and NEVER enables, disables,
 #     starts, stops or restarts any of them
 #   - installs the Caddyfile; a league with no mode file yet gets the
@@ -34,7 +33,6 @@ ADMIN_USER="${ADMIN_USER:-ggd2l}"
 PG_MAJOR=18
 LEAGUES="us eu"
 REPO_URL="${GGD2L_REPO_URL:-https://github.com/timothyjjcrow/under-5k-league.git}"
-LIB_ROOT=/usr/local/lib/ggd2l-kit
 LIB=/usr/local/lib/ggd2l
 AGENT_BIN=/usr/local/sbin/ggd2l-agent
 UNIT_DIR=/etc/systemd/system
@@ -204,9 +202,8 @@ write_slot_env eu b 3012
 
 log "Agent and helpers (/usr/local/lib/ggd2l)"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-KIT_NAME="${SHA12}.${STAMP}"
-ensure_dir 0755 root:root "${LIB_ROOT}"
-STAGE="$(mktemp -d "${LIB_ROOT}/.stage.XXXXXX")"
+# Staged beside the live folder (same filesystem) so the swap is two renames.
+STAGE="$(mktemp -d "${LIB}.stage.XXXXXX")"
 trap 'rm -rf "${STAGE}"' EXIT
 # The agent's modules keep their relative layout; its tests and fixtures stay
 # in the repo.
@@ -229,14 +226,20 @@ printf '{"sha":"%s","installedAt":"%s"}\n' "$SHA" "$STAMP" > "${STAGE}/kit.json"
 chmod 0644 "${STAGE}/kit.json"
 chown -R root:root "${STAGE}"
 chmod 0755 "${STAGE}"
-mv "${STAGE}" "${LIB_ROOT}/${KIT_NAME}"
-trap - EXIT
-if [[ -e "${LIB}" && ! -L "${LIB}" ]]; then
-  mv "${LIB}" "${LIB_ROOT}/preexisting.${STAMP}"
-  note "moved a plain ${LIB} directory aside to ${LIB_ROOT}/preexisting.${STAMP}"
+# A real directory, not a symlink to a versioned one: Node resolves symlinks
+# in import.meta.url but not in process.argv[1], so a module's "am I the main
+# module" check fails through a symlink and env-contract.mjs in ExecStartPre
+# would exit 0 without checking anything. The swap is two renames under the
+# agent's lock; a slot starting in between fails once and restarts.
+rm -rf "${LIB}.old"
+if [[ -L "${LIB}" ]]; then
+  rm -f "${LIB}"
+elif [[ -e "${LIB}" ]]; then
+  mv -T "${LIB}" "${LIB}.old"
 fi
-ln -sfn "ggd2l-kit/${KIT_NAME}" "${LIB}.new"
-mv -T "${LIB}.new" "${LIB}"
+mv -T "${STAGE}" "${LIB}"
+trap - EXIT
+rm -rf "${LIB}.old"
 cat > "${AGENT_BIN}.new" <<'EOF'
 #!/bin/sh
 # Installed by ops/selfhost/install-kit.sh: the GGD2L release agent.
@@ -244,13 +247,7 @@ exec /usr/bin/node /usr/local/lib/ggd2l/ggd2l-agent.mjs "$@"
 EOF
 chmod 0755 "${AGENT_BIN}.new"
 mv -f "${AGENT_BIN}.new" "${AGENT_BIN}"
-note "${LIB} -> ggd2l-kit/${KIT_NAME}"
-# Keep the live kit and the two newest others.
-current="$(readlink "${LIB}")"
-others="$(ls -1t "${LIB_ROOT}" | grep -vxF "${current#ggd2l-kit/}" || true)"
-for old in $(printf '%s\n' "$others" | tail -n +3); do
-  rm -rf "${LIB_ROOT:?}/${old}"
-done
+note "${LIB} now holds the kit at ${SHA12}"
 
 log "Maintenance page"
 install -m 0644 "${SELFHOST}/caddy/maintenance.html" /srv/ggd2l/www/maintenance.html.new
@@ -427,7 +424,7 @@ fi
 note "origin ${REPO_URL}"
 
 log "Record"
-printf '{"sha":"%s","installedAt":"%s","lib":"%s"}\n' "$SHA" "$STAMP" "ggd2l-kit/${KIT_NAME}" > /var/lib/ggd2l/kit.json.new
+printf '{"sha":"%s","installedAt":"%s"}\n' "$SHA" "$STAMP" > /var/lib/ggd2l/kit.json.new
 chmod 0644 /var/lib/ggd2l/kit.json.new
 mv -f /var/lib/ggd2l/kit.json.new /var/lib/ggd2l/kit.json
 printf '%s %s %s\n' "$STAMP" "$SHA" "${SUDO_USER:-root}" >> /var/log/ggd2l/kit-installs.log

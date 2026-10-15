@@ -287,3 +287,12 @@ test("every helper a unit runs is installed under /usr/local/lib/ggd2l by instal
   for (const source of Object.values(sources))
     assert.ok(installKit.includes(`\n${source}\n`), `install-kit.sh REQUIRED lists ${source}`);
 });
+
+test("the agent and the env contract run from a real directory, never through a symlink", () => {
+  // Node resolves symlinks in import.meta.url but not in process.argv[1], so a
+  // module's main-module check is false through a symlinked path: ExecStartPre
+  // would run env-contract.mjs and exit 0 without checking the env.
+  assert.doesNotMatch(installKit, /ln -s[^\n]*\$\{LIB\}/);
+  assert.match(installKit, /\nmv -T "\$\{STAGE\}" "\$\{LIB\}"\n/);
+  assert.match(installKit, /\nexec \/usr\/bin\/node \/usr\/local\/lib\/ggd2l\/ggd2l-agent\.mjs "\$@"\n/);
+});
