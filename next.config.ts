@@ -46,6 +46,14 @@ if (!/^\.next(?:-[a-z0-9-]+)?$/.test(distDir)) {
 
 const nextConfig: NextConfig = {
   distDir,
+  // The self-host box builds only an exact SHA whose CI run already passed
+  // `tsc --noEmit` and two full `next build`s, so its build skips Next's own
+  // TypeScript pass: 2.2 of its 3.6 minutes on one vCPU, and the step that
+  // ran out of heap. Only exactly "1" skips it; every other build, Vercel's
+  // included, still type-checks (next-config.test.ts).
+  typescript: {
+    ignoreBuildErrors: process.env.GGD2L_SKIP_BUILD_TYPECHECK === "1",
+  },
   experimental: {
     serverActions: {
       // Every action in this app accepts scalar form fields; there are no file
