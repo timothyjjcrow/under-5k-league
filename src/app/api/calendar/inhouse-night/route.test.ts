@@ -39,7 +39,7 @@ describe("GET /api/calendar/inhouse-night", () => {
     expect(res.headers.get("content-disposition")).toMatch(/^attachment; filename="[a-z0-9-]+-inhouse-night\.ics"$/);
     expect(res.headers.get("cache-control")).toBe("no-store");
     const body = await res.text();
-    expect(body).toContain("UID:inhouse-night-night-7@league.example");
+    expect(body).toContain("UID:inhouse-night-night-7@ggd2l.vercel.app");
     expect(body).toContain("SEQUENCE:2");
     expect(body).toContain("DTSTART:20301010T030000Z");
     expect(body).toContain("DTSTAMP:20301001T120000Z");

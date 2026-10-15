@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { sourceFiles } from "../../test/support/source-files";
 import {
   oauthLandingPath,
@@ -8,6 +8,7 @@ import {
 } from "./discord-oauth";
 import { safeReturnPath } from "./return-path";
 import { signInHref } from "./sign-in";
+import { resolveSiteUrl } from "./site-url";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
   INHOUSE_NIGHT_LENGTH_MS,
@@ -410,7 +411,7 @@ describe("the night elsewhere", () => {
 
     const event = inhouseNightCalendarEvent(n, SITE, "GGD2L");
     expect(event).toMatchObject({
-      uid: "inhouse-night-night-1@ggd2l.example",
+      uid: "inhouse-night-night-1@ggd2l.vercel.app",
       sequence: n.revision,
       durationMinutes: INHOUSE_NIGHT_LENGTH_MS / 60_000,
       summary: "GGD2L inhouse night",
@@ -419,4 +420,37 @@ describe("the night elsewhere", () => {
     expect(event.stamp.getTime()).toBe(n.createdAtMs);
     expect(event.start.getTime()).toBe(n.startsAtMs);
   });
+});
+
+// A calendar app matches a re-imported night by its UID, so the UID host is
+// pinned per league: the site moving off vercel.app to the league's own
+// domain must not change it. The event's link follows the site.
+describe("the night's calendar UID when the site URL changes", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  it.each([
+    ["us", "https://ggd2l.vercel.app", "https://us.ggd2l.com", "ggd2l.vercel.app"],
+    ["eu", "https://ggd2l-europe.vercel.app", "https://eu.ggd2l.com", "ggd2l-europe.vercel.app"],
+  ] as const)(
+    "keeps the %s league's UID from %s at %s",
+    async (region, before, after, uidHost) => {
+      vi.stubEnv("NEXT_PUBLIC_LEAGUE_REGION", region);
+      vi.resetModules();
+      const { inhouseNightCalendarEvent: build } = await import("./inhouse-night");
+      const events = [before, after].map((siteUrl) => {
+        // The route passes resolveSiteUrl(), which reads NEXT_PUBLIC_SITE_URL.
+        vi.stubEnv("NEXT_PUBLIC_SITE_URL", siteUrl);
+        return build(night(), resolveSiteUrl(), "GGD2L");
+      });
+
+      expect(events.map((e) => e.uid)).toEqual([
+        `inhouse-night-night-1@${uidHost}`,
+        `inhouse-night-night-1@${uidHost}`,
+      ]);
+      expect(events.map((e) => e.url)).toEqual([`${before}/inhouse`, `${after}/inhouse`]);
+    },
+  );
 });
