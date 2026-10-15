@@ -26,7 +26,7 @@ umask 077
 export LC_ALL=C
 
 usage() { echo "usage: drill-league.sh us|eu [<40-hex sha>]" >&2; exit 2; }
-[ "$#" -ge 1 ] && [ "$#" -le 2 ] || usage
+if [ "$#" -lt 1 ] || [ "$#" -gt 2 ]; then usage; fi
 lg="$1"
 case "${lg}" in us) LG_UPPER=US ;; eu) LG_UPPER=EU ;; *) usage ;; esac
 sha="${2:-}"

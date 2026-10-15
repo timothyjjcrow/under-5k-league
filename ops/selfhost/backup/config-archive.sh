@@ -176,9 +176,10 @@ if [ "${OFFSITE}" = uploaded ]; then
     n="$(basename "${f}")"
     stamp="${n#config-}"
     key="config/${stamp:0:4}-${stamp:4:2}-${stamp:6:2}/${n}"
-    rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}" "${OFFSITE_REMOTE}/${key}" &&
-      rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}.sha256" "${OFFSITE_REMOTE}/${key}.sha256" ||
+    if ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}" "${OFFSITE_REMOTE}/${key}" ||
+      ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}.sha256" "${OFFSITE_REMOTE}/${key}.sha256"; then
       fail upload "could not upload ${n}"
+    fi
     printf '%s\n' "${OFFSITE_REMOTE}/${key}" > "${f}.uploaded"
     log "uploaded ${n} to ${OFFSITE_REMOTE}/${key}"
   done
