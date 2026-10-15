@@ -206,11 +206,11 @@ A launch that ends without a played game releases the bot: the job reads `releas
 - **It comes back to the lobby screen** after Dota showed it (the lobby left the lobby screen after Start, or the lobby-screen snapshot carries the launch's match id). That covers a failed load (Dota runs the game, then puts the lobby back) and a server that never starts.
 - **Dota ends it as not scored** (`matchOutcome` 64 to 69: poor network, a leaver, a server crash, never started, cancelled), even at postgame.
 - **It never shows:** still on the lobby screen two minutes after Start (`LAUNCH_SETTLE_MS`), or its lobby gone and the bot provably in none by then.
-- **It stalls:** still assigning or setting up a server ten minutes after Start (`LAUNCH_STALL_MS`). Dota does either in seconds.
+- **It stalls:** still assigning or setting up a server ten minutes after Start (`LAUNCH_STALL_MS`), or ten minutes after the lobby left the lobby screen when a player who took the lead after a reconnect launched it. Dota does either in seconds.
 
 **Release bot** works in every one of those cases, as soon as it counts as over. The stale lobby-screen snapshot right after Start still authorizes nothing.
 
-**Played games are kept:** when Dota names a winner (`matchOutcome` 2 to 13), or showed the postgame without calling it not scored, the bot leaves with the job `started` and its match id kept for the result, even if a drop hid everything until the lobby was back on the lobby screen. A launch given up too soon (a Dota update arriving after the settle clock) becomes a game again if Dota then shows it running.
+**Played games are kept:** when Dota names a winner (`matchOutcome` 2 to 13), or showed the postgame without calling it not scored, the bot leaves with the job `started` and its match id kept for the result, even if a drop hid everything until the lobby was back on the lobby screen. A launch given up too soon (a Dota update arriving after the settle clock, or a Leave Dota ignored) becomes a game again if Dota then shows it running, at a scored postgame, or with a winner, and goes back to the normal path with its match id. That includes one a reconnect gave up on before the lobby's own details arrived: the bot claims it back and follows it as usual.
 
 **A lobby nobody starts** (ready, or blocked before any launch) is released after 30 minutes on the lobby screen with nobody joining, leaving or changing sides (`IDLE_RELEASE_MS`). So a game given up during setup, or cancelled on the site, can't hold the one bot for good, and a lobby still filling never times out.
 

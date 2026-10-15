@@ -147,12 +147,15 @@ function launchOver(lobby, job, now) {
   );
 }
 
-/** A launch stuck assigning or setting up a server long after Start. */
+/** A launch stuck assigning or setting up a server long after it began:
+ * the bot's Start, or the moment the lobby left the lobby screen when a
+ * player who took the lead launched it. */
 function launchStalled(lobby, job, now) {
+  const since = job.launchRequested ? job.changedAt : job.leftLobbyAt;
   return (
     [1, 4, 5, 6].includes(lobby.state) &&
-    !!job.launchRequested &&
-    now - job.changedAt >= LAUNCH_STALL_MS
+    since != null &&
+    now - since >= LAUNCH_STALL_MS
   );
 }
 
@@ -182,15 +185,22 @@ function launchFailedNow(lobby, job, now) {
   );
 }
 
-/** The lobby of a job the bot is done with: launched, or released. */
-function finishedJobLobby(jobs, lobby) {
-  return Object.values(jobs).some(
+/** The job the bot is done with (launched, or released) that this lobby is. */
+function finishedJob(jobs, lobby) {
+  return Object.values(jobs).find(
     (job) =>
       ["started", "released"].includes(job.state) &&
       lobby.gameName === job.spec.name &&
       lobby.passKey === job.spec.password,
   );
 }
+
+/** Dota shows a game: running, at a postgame it didn't call not scored, or
+ * with a winner. */
+const showsGame = (lobby) =>
+  lobby.state === 2 ||
+  (lobby.state === 3 && !notScored(lobby.matchOutcome)) ||
+  won(lobby.matchOutcome);
 
 /** Single account, single active lobby. Persist intent BEFORE any GC command.
  * No replay of ambiguous create/start after timeouts or process restarts.
@@ -402,14 +412,22 @@ export class LobbyController {
   snapshot(lobby) {
     this.lobby = lobby;
     this.absenceConfirmed = false;
-    const job = this.data.jobs[this.data.active];
+    let job = this.data.jobs[this.data.active];
     if (!job) {
       // No claim, yet the bot is in a lobby: a finished job's, whose cache
       // turned up after a reconnect had already settled its departure. Leave
       // it, or it answers BUSY to every Create with nothing left to release.
       // Any other lobby stays untouched.
-      if (finishedJobLobby(this.data.jobs, lobby)) this.transport.leave();
-      return;
+      const done = finishedJob(this.data.jobs, lobby);
+      if (!done) return;
+      if (!(done.launchFailed && showsGame(lobby))) {
+        this.transport.leave();
+        return;
+      }
+      // That reconnect gave up on a launch Dota now shows as a game: claim it
+      // back and follow it as usual, so its match id reaches the site.
+      this.data.active = done.spec.key;
+      job = done;
     }
     if (
       lobby.gameName !== job.spec.name ||
@@ -423,17 +441,20 @@ export class LobbyController {
     // What Dota has shown of the launch, so a later lobby-screen snapshot can
     // be told from the stale one right after Start (launchOver, played).
     if (job.launchRequested && lobby.state !== 0) job.launchSeen = true;
+    // When this time off the lobby screen began, for a launch the bot didn't
+    // start (launchStalled).
+    if (lobby.state === 0) delete job.leftLobbyAt;
+    else job.leftLobbyAt ??= this.now();
     if (lobby.state === 3) {
       job.postgameSeen = true;
       job.postgameOutcome = lobby.matchOutcome;
     }
     // Given up too soon (a Dota update late past the settle clock): a game
-    // Dota now shows running, or played, is a game after all.
-    if (
-      job.launchFailed &&
-      (lobby.state === 2 || (lobby.state === 3 && !notScored(lobby.matchOutcome)))
-    ) {
+    // Dota now shows running, or played, is a game after all, back on the
+    // normal path (the bot leaves it as it would any running game).
+    if (job.launchFailed && showsGame(lobby)) {
       delete job.launchFailed;
+      delete job.releasing;
       if (job.failedMatchId) job.matchId = job.failedMatchId;
     }
     // Anyone joining, leaving or changing sides restarts the idle clock.

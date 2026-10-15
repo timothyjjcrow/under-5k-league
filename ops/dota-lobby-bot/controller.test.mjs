@@ -503,8 +503,10 @@ test("the idle clock never acts off the lobby screen, as when a player relaunche
   c.snapshot(snapshot({ leaderId: ids[0] }));
   assert.equal(c.status(spec.key).state, "blocked");
   const at = c.data.jobs[spec.key].changedAt;
-  c.snapshot(snapshot({ leaderId: ids[0], state: 6 }));
+  // Long past the idle clock, a minute into the player's server setup.
   c.now = () => at + 2 * IDLE_RELEASE_MS;
+  c.snapshot(snapshot({ leaderId: ids[0], state: 6 }));
+  c.now = () => at + 2 * IDLE_RELEASE_MS + 60_000;
   assert.equal(c.tick(), false);
   assert.deepEqual(calls, ["create"]);
 });
@@ -521,6 +523,92 @@ test("a launch given up too soon that Dota then shows running is a game after al
   // Then Dota's late update: the game is running, with its match id.
   c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
   assert.equal(c.data.jobs[spec.key].state, "started");
+  c.departed();
+  assert.equal(c.data.active, null);
+  assert.deepEqual(c.status(spec.key), { state: "started", lobbyId: "123456789012345678", matchId: "8123456789" });
+});
+test("a launch given up too soon is undone by a winner on the lobby screen, keeping its match id", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot({ state: 6 }));
+  const at = c.data.jobs[spec.key].changedAt;
+  c.now = () => at + LAUNCH_STALL_MS;
+  assert.equal(c.tick(), true);
+  // Dota ignored that Leave, the game was played, and a drop hid it all.
+  assert.equal(welcome(c, [snapshot({ state: 0, matchId: "8123456789", matchOutcome: 2 })]), false);
+  assert.equal(c.data.jobs[spec.key].state, "started");
+  assert.equal(c.data.jobs[spec.key].launchFailed, undefined);
+  c.departed();
+  assert.deepEqual(c.status(spec.key), { state: "started", lobbyId: "123456789012345678", matchId: "8123456789" });
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+});
+test("an undone launch goes back to the normal path, so a real failure after it is still caught", (t) => {
+  const { controller: c } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  // A failed load gives up on it with the attempt's match id...
+  c.snapshot(snapshot({ state: 0, matchId: "8123456789" }));
+  assert.equal(c.data.jobs[spec.key].failedMatchId, "8123456789");
+  // ...then Dota shows it running after all, before any match id: undone,
+  // with the launch's id restored and no release pending.
+  c.snapshot(snapshot({ state: 2 }));
+  assert.equal(c.data.jobs[spec.key].matchId, "8123456789");
+  assert.equal(c.data.jobs[spec.key].releasing, undefined);
+  assert.equal(c.data.jobs[spec.key].state, "started");
+  // And when it then really fails, that is released for a retry.
+  assert.equal(c.snapshot(snapshot({ state: 0, matchId: "8123456789", matchOutcome: 67 })), true);
+  c.departed();
+  assert.equal(c.status(spec.key).state, "released");
+});
+test("a launch a player started after taking the lead is released if it stalls", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  // A reconnect hands the lead to a player, who launches from Dota.
+  c.snapshot(snapshot({ leaderId: ids[0] }));
+  const at = c.data.jobs[spec.key].changedAt + IDLE_RELEASE_MS;
+  c.now = () => at;
+  c.snapshot(snapshot({ leaderId: ids[0], state: 6 }));
+  c.now = () => at + LAUNCH_STALL_MS - 1;
+  assert.equal(c.tick(), false);
+  assert.throws(() => c.request("release", spec), /STATE/);
+  c.now = () => at + LAUNCH_STALL_MS;
+  assert.equal(c.request("release", spec).state, "blocked");
+  assert.deepEqual(calls, ["create", "leave"]);
+  c.departed();
+  assert.equal(c.status(spec.key).state, "released");
+  // Back on the lobby screen, its next launch gets its own ten minutes.
+  const { controller: d } = setup(t);
+  d.request("create", spec);
+  d.snapshot(snapshot({ leaderId: ids[0] }));
+  d.snapshot(snapshot({ leaderId: ids[0], state: 6 }));
+  d.now = () => 100 + LAUNCH_STALL_MS;
+  d.snapshot(snapshot({ leaderId: ids[0] }));
+  assert.equal(d.snapshot(snapshot({ leaderId: ids[0], state: 6 })), false);
+  assert.equal(d.tick(), false);
+  assert.equal(d.data.jobs[spec.key].releasing, undefined);
+});
+test("a launch a reconnect gave up on is claimed back when its lobby then shows the game", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot({ state: 6 }));
+  c.snapshot(snapshot({ state: 1 }));
+  // A full welcome with no lobby in it: the launch Dota showed is over...
+  assert.equal(welcome(c), true);
+  assert.equal(c.status(spec.key).state, "released");
+  // ...until the lobby's own cache arrives with the game loading.
+  c.snapshot(snapshot({ state: 2 }));
+  assert.equal(c.data.active, spec.key);
+  assert.equal(c.data.jobs[spec.key].state, "started");
+  assert.deepEqual(calls, ["create", "start"]);
+  // Followed as usual: the bot leaves once Dota gives it a match id.
+  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  assert.deepEqual(calls, ["create", "start", "leave"]);
   c.departed();
   assert.equal(c.data.active, null);
   assert.deepEqual(c.status(spec.key), { state: "started", lobbyId: "123456789012345678", matchId: "8123456789" });
