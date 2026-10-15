@@ -82,9 +82,13 @@ export const INVITE_MAX_PER_PLAYER = 5;
 // screen. A launched lobby still on the lobby screen this long after Start
 // never launched, so it is over and may be released.
 export const LAUNCH_SETTLE_MS = 2 * 60_000;
-// A lobby nobody starts is released this long after Create, so a game given
-// up during setup (or cancelled on the site) can't hold the one bot for good.
+// A lobby nobody starts is released once it has sat this long on the lobby
+// screen with nobody joining, leaving or changing sides, so a game given up
+// during setup (or cancelled on the site) can't hold the one bot for good.
 export const IDLE_RELEASE_MS = 30 * 60_000;
+// A launch still assigning or setting up a server this long after Start is
+// dead: Dota does either in seconds. Leaving then can't cost a real game.
+export const LAUNCH_STALL_MS = 10 * 60_000;
 
 /** Named invite targets must be on the request's own roster. */
 export function validInviteTargets(spec) {
@@ -119,7 +123,8 @@ function safeToLeave(lobby, job, now) {
   return (
     [2, 3].includes(lobby.state) ||
     (lobby.state === 0 && !job.launchRequested && job.state !== "starting") ||
-    launchOver(lobby, job, now)
+    launchOver(lobby, job, now) ||
+    launchStalled(lobby, job, now)
   );
 }
 
@@ -142,12 +147,38 @@ function launchOver(lobby, job, now) {
   );
 }
 
-/** The game was played: Dota showed its postgame, or a winner. A launch that
- * comes back without either failed to load or never started. */
+/** A launch stuck assigning or setting up a server long after Start. */
+function launchStalled(lobby, job, now) {
+  return (
+    [1, 4, 5, 6].includes(lobby.state) &&
+    !!job.launchRequested &&
+    now - job.changedAt >= LAUNCH_STALL_MS
+  );
+}
+
+// EMatchOutcome: 2 to 13 name a winner; 64 to 69 are Dota's "not scored"
+// (poor network, a leaver, a server crash, never started, cancelled).
+const won = (outcome) => outcome >= 2 && outcome <= 13;
+const notScored = (outcome) => outcome >= 64 && outcome <= 69;
+
+/** The game was played: Dota names a winner, or showed its postgame without
+ * calling it not scored. Anything else that comes back failed to load, or
+ * never started. */
 function played(lobby, job) {
   return (
-    job.postgameSeen === true ||
-    (lobby.matchOutcome >= 2 && lobby.matchOutcome <= 13)
+    won(lobby.matchOutcome) ||
+    (job.postgameSeen === true && !notScored(job.postgameOutcome))
+  );
+}
+
+/** The launch is over without a game: back on the lobby screen, stuck before
+ * the game runs, or ended by Dota as not scored. */
+function launchFailedNow(lobby, job, now) {
+  return (
+    !played(lobby, job) &&
+    (launchOver(lobby, job, now) ||
+      launchStalled(lobby, job, now) ||
+      (lobby.state === 3 && notScored(lobby.matchOutcome)))
   );
 }
 
@@ -392,12 +423,34 @@ export class LobbyController {
     // What Dota has shown of the launch, so a later lobby-screen snapshot can
     // be told from the stale one right after Start (launchOver, played).
     if (job.launchRequested && lobby.state !== 0) job.launchSeen = true;
-    if (lobby.state === 3) job.postgameSeen = true;
+    if (lobby.state === 3) {
+      job.postgameSeen = true;
+      job.postgameOutcome = lobby.matchOutcome;
+    }
+    // Given up too soon (a Dota update late past the settle clock): a game
+    // Dota now shows running, or played, is a game after all.
+    if (
+      job.launchFailed &&
+      (lobby.state === 2 || (lobby.state === 3 && !notScored(lobby.matchOutcome)))
+    ) {
+      delete job.launchFailed;
+      if (job.failedMatchId) job.matchId = job.failedMatchId;
+    }
+    // Anyone joining, leaving or changing sides restarts the idle clock.
+    const members = currentMembers(lobby)
+      .map((m) => `${m.id}:${m.team}`)
+      .sort()
+      .join(",");
+    if (members !== job.members) {
+      job.members = members;
+      job.activeAt = this.now();
+    }
     // A failed launch's match id never becomes a game: the site must not
     // wait on it, and a retry brings its own.
     if (hasMatchId(lobby) && !job.launchFailed) job.matchId = lobby.matchId;
     let due = [];
-    if (lobby.state === 2 || lobby.state === 3) job.state = "started";
+    if ((lobby.state === 2 || lobby.state === 3) && !job.launchFailed)
+      job.state = "started";
     else if (
       lobby.state === 0 &&
       !["starting", "started"].includes(job.state)
@@ -420,14 +473,15 @@ export class LobbyController {
         due = this.dueInvites(job, roster(job.spec));
       }
     }
-    // A launch that came back to the lobby screen without a played game
-    // (someone failed to load, the server never started): release the bot so
-    // captains can create the lobby again, and nothing holds Game over back.
-    const failed =
-      !job.releasing &&
-      launchOver(lobby, job, this.now()) &&
-      !played(lobby, job);
+    // A launch that is over without a game (someone failed to load, the
+    // server never started): release the bot so captains can create the
+    // lobby again, and nothing holds Game over back. One that was played is
+    // started even if a drop hid its running and postgame snapshots, so its
+    // departure frees the claim and the site reads its match id.
+    const failed = !job.releasing && launchFailedNow(lobby, job, this.now());
     if (failed) this.failLaunch(job);
+    else if (launchOver(lobby, job, this.now()) && played(lobby, job))
+      job.state = "started";
     this.save();
     if (due.length) this.sendInvites(job, due);
     // A running game no longer needs its nonplaying bot. Once Dota has given
@@ -455,21 +509,38 @@ export class LobbyController {
     job.state = "blocked";
     job.releasing = true;
   }
-  /** The clocks no GC message drives: a Launch Dota never showed, and a lobby
-   * nobody starts. Only ever this job's own lobby; server.mjs calls it every
-   * 30 s. True when it released one. */
+  /** The clocks no GC message drives: a Launch Dota never showed or that
+   * stalls, and a lobby nobody starts. Only ever this job's own lobby;
+   * server.mjs calls it every 30 s. True when it released one. */
   tick() {
     const job = this.data.jobs[this.data.active];
     const lobby = this.lobby;
-    if (!this.online || !job || job.releasing || !lobby) return false;
+    if (!this.online || !job || job.releasing) return false;
+    const now = this.now();
+    if (!lobby) {
+      // A launch whose lobby is provably gone (a complete welcome found the
+      // bot in none) is over once it has settled: nothing to leave, so free
+      // the claim. Any other job without a lobby waits for a deliberate
+      // release, as before.
+      if (
+        !this.absenceConfirmed ||
+        !job.launchRequested ||
+        job.state === "started" ||
+        now - job.changedAt < LAUNCH_SETTLE_MS
+      )
+        return false;
+      this.failLaunch(job);
+      this.departed();
+      return true;
+    }
     if (lobby.gameName !== job.spec.name || lobby.passKey !== job.spec.password)
       return false;
-    const now = this.now();
-    if (launchOver(lobby, job, now) && !played(lobby, job)) this.failLaunch(job);
+    if (launchFailedNow(lobby, job, now)) this.failLaunch(job);
     else if (
+      lobby.state === 0 &&
       !job.launchRequested &&
       ["ready", "blocked"].includes(job.state) &&
-      now - job.changedAt >= IDLE_RELEASE_MS
+      now - Math.max(job.changedAt, job.activeAt ?? 0) >= IDLE_RELEASE_MS
     )
       job.releasing = true;
     else return false;
@@ -490,7 +561,7 @@ export class LobbyController {
     // deliberate release.
     if (
       !this.absenceConfirmed ||
-      !(job?.state === "started" || job?.releasing)
+      !(job?.state === "started" || job?.releasing || job?.launchSeen)
     )
       return false;
     this.departed();
@@ -499,6 +570,10 @@ export class LobbyController {
   departed() {
     const job = this.data.jobs[this.data.active];
     if (job) {
+      // A launch Dota showed, whose lobby then went away before it ran, is
+      // over: it reads released, like any failed launch.
+      if (job.state !== "started" && job.launchSeen && !job.releasing)
+        this.failLaunch(job);
       if (job.state !== "started")
         job.state = job.releasing ? "released" : "blocked";
       // An unexplained missing lobby never authorizes a replay. Keep the

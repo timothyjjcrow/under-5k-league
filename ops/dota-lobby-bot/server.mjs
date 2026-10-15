@@ -290,8 +290,13 @@ relay.start();
 // A Launch Dota never shows, and a lobby nobody starts, are released on a
 // clock (controller.tick), so neither can hold the one bot for good.
 setInterval(() => {
-  if (controller.tick())
-    console.log("[dota-bot] Released a lobby that was not going to start");
+  try {
+    if (controller.tick())
+      console.log("[dota-bot] Released a lobby that was not going to start");
+  } catch {
+    // A send that throws (Steam dropping) must never kill the worker.
+    console.error("[dota-bot] Lobby clock check failed; trying again in 30 seconds");
+  }
 }, 30_000).unref();
 // A dropped Steam connection that never recovers leaves a live, silent, offline
 // process. Exit non-zero so launchd/systemd start a fresh one (see watchdog.mjs).

@@ -201,16 +201,30 @@ Roll back in reverse: site first, then bot, then relay. Rolling back the site or
 
 Tim's call after the night of October 14, 2026, when one player failed to connect, the game crashed for others, and the bot then held the dead lobby for two hours: whatever goes wrong at launch, the bot must never stay stuck, and the game's own players must be able to try again or scrap it and requeue.
 
-- **Back on the lobby screen without a game:** once Dota has shown the launch (the lobby left the lobby screen after Start, or the lobby-screen snapshot carries the launch's match id) and the lobby is back on the lobby screen, the bot leaves and releases the job. That covers a failed load (Dota runs the game, then puts the lobby back) and a server that never starts (assignment or setup, then back). The dead attempt's match id moves to `failedMatchId`, so the site never waits two hours on it, and the job reads `released` once Dota confirms the departure.
-- **A launch Dota never shows** (the lobby never leaves the lobby screen) is released two minutes after Start (`LAUNCH_SETTLE_MS`), and **Release bot** works from then on. The stale lobby-screen snapshot right after Start still authorizes nothing.
-- **Played games are kept:** a lobby back on the lobby screen after Dota showed its postgame, or a winner (`matchOutcome` 2 to 13), is left with the job still `started` and its match id kept for the result.
-- **A lobby nobody starts** (ready, or blocked before any launch) is released 30 minutes after Create (`IDLE_RELEASE_MS`), so a game given up during setup, or cancelled on the site, can't hold the one bot for good.
-- The two clocks run in `tick()` every 30 seconds, only online and only on the job's own lobby. Every release is logged with a fixed line.
+A launch that ends without a played game releases the bot: the job reads `released` once Dota confirms the departure, and the dead attempt's match id moves to `failedMatchId`, so the site never waits two hours on it. A launch counts as over without a game when:
+
+- **It comes back to the lobby screen** after Dota showed it (the lobby left the lobby screen after Start, or the lobby-screen snapshot carries the launch's match id). That covers a failed load (Dota runs the game, then puts the lobby back) and a server that never starts.
+- **Dota ends it as not scored** (`matchOutcome` 64 to 69: poor network, a leaver, a server crash, never started, cancelled), even at postgame.
+- **It never shows:** still on the lobby screen two minutes after Start (`LAUNCH_SETTLE_MS`), or its lobby gone and the bot provably in none by then.
+- **It stalls:** still assigning or setting up a server ten minutes after Start (`LAUNCH_STALL_MS`). Dota does either in seconds.
+
+**Release bot** works in every one of those cases, as soon as it counts as over. The stale lobby-screen snapshot right after Start still authorizes nothing.
+
+**Played games are kept:** when Dota names a winner (`matchOutcome` 2 to 13), or showed the postgame without calling it not scored, the bot leaves with the job `started` and its match id kept for the result, even if a drop hid everything until the lobby was back on the lobby screen. A launch given up too soon (a Dota update arriving after the settle clock) becomes a game again if Dota then shows it running.
+
+**A lobby nobody starts** (ready, or blocked before any launch) is released after 30 minutes on the lobby screen with nobody joining, leaving or changing sides (`IDLE_RELEASE_MS`). So a game given up during setup, or cancelled on the site, can't hold the one bot for good, and a lobby still filling never times out.
+
+The clocks run in `tick()` every 30 seconds, only online and only on the job's own lobby. A throw there is logged and never stops the worker. Every release is logged with a fixed line.
 
 What the players do then, all with the site already live:
 
-- **Try again:** the captains' panel shows **Create Dota lobby** again within a minute (it re-reads the bot once a minute while a game runs). The bot makes a fresh lobby and invites the ten; **Start game with bot** launches it, and the result is read from the new match id. The game keeps its slot and its teams.
-- **Scrap it and requeue:** **Game over — queue again** (any of its players) frees the ten at once, since a released or blocked bot never holds that press back. The game records nothing and is given up on after six hours, or an admin gives up on it, or cancels it (which requeues everyone).
+- **Try again:** the captains' panel shows **Create Dota lobby** again within a minute (it re-reads the bot once a minute while a game runs). The bot makes a fresh lobby and invites the ten; **Start game with bot** launches it, and the result is read from the new match id. The game keeps its slot and its teams. A panel that already read `released` stops polling, so the other captain may need **Refresh bot status**; the bot's invites pop up in Dota either way.
+- **Scrap it and requeue:** **Game over — queue again** (any of its players) frees the ten, since a released or blocked bot never holds that press back. It opens with the result scan's window, at most 15 minutes after the game formed. The game records nothing and is given up on after six hours, or an admin gives up on it, or cancels it (which requeues everyone).
+
+Limits:
+
+- **Try again needs the bot in the lobby when the launch fails.** It leaves once the game runs with a match id, so a game that dies after that keeps its job `started`. Its players use **Game over — queue again**, and the site waits up to two hours on that match id before scanning their histories.
+- **A Create that Dota never answers** still holds the bot until the worker restarts and a complete welcome proves it is in no lobby ([Recovery and limits](#recovery-and-limits)).
 
 ## Recovery and limits
 
