@@ -390,6 +390,9 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       targets: changed, bases: report.bases, candidates: report.candidates, readLive, record,
       promote: async (target, id) => {
         log(`Promoting ${target.region} to ${id}.`);
+        // Set before the call too: a promote whose answer is lost may still
+        // have swapped, and the retire window must cover it.
+        lastPromoteAt = now();
         const result = await agent("promote", target.region, id);
         lastPromoteAt = promotedAt[target.region] = now();
         if (result.id !== id) throw new Error(`${target.region}: the box did not confirm the promotion`);
