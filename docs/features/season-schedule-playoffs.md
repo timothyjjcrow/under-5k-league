@@ -195,8 +195,20 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   subscriptions carry over. `?team=<id>` is that team's fixtures in its own
   season (unknown id: 404). It lists every fixture with a kickoff, played ones
   too; duration `bestOf × 60 + 30` minutes.
-- **Never change the event UID** (`<matchId>@<host>`): calendar apps key on it.
-  SEQUENCE is `scheduleRevision`, so a retime replaces the event.
+- **Never change the event UID** (`<matchId>@<host>`): calendar apps key on it,
+  and a new UID gives every subscriber a duplicate of each match. SEQUENCE is
+  `scheduleRevision`, so a retime replaces the event.
+- **The UID host is pinned, never the site's.** `LEAGUE_CONFIG.calendarUidHost`
+  is each league's first public host (`ggd2l.vercel.app`,
+  `ggd2l-europe.vercel.app`), so moving the site to its own domain
+  (`us.ggd2l.com`, `eu.ggd2l.com`) leaves every UID as it was: a subscription
+  taken before the move (the old host redirects it), archived `?team=` feeds
+  included, updates its events instead of doubling them. The inhouse night
+  and Play later `.ics` downloads (`inhouse-night.ts`, `inhouse-times.ts`) use
+  the same host. Event `URL`s still follow `resolveSiteUrl()`. Never build a
+  UID host from the site URL, and never change the pin; the three builders'
+  tests pin it for both leagues with `NEXT_PUBLIC_SITE_URL` on the old and
+  the new origin.
 - **Offer the subscription.** `<AddToCalendar>` (`calendarFeedLinks`) on
   /schedule and active-season team pages gives a download (a one-off copy that
   never updates), a webcal subscription and a Google "add by URL" link.
