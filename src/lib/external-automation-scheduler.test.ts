@@ -17,7 +17,12 @@ function response(
 }
 
 describe("Cloudflare automation scheduler", () => {
-  it("owns the only configured one-minute production trigger", () => {
+  // Each league's self-hosted origin. These configs deploy only at each
+  // league's cutover; until then the live Workers keep the Vercel origins.
+  it.each([
+    ["", "https://us.ggd2l.com/api/cron/automation"],
+    [".europe", "https://eu.ggd2l.com/api/cron/automation"],
+  ])("owns the only configured one-minute production trigger (%s)", (region, target) => {
     const vercel = JSON.parse(
       readFileSync(path.resolve(process.cwd(), "vercel.json"), "utf8"),
     ) as { crons?: unknown };
@@ -25,7 +30,7 @@ describe("Cloudflare automation scheduler", () => {
       readFileSync(
         path.resolve(
           process.cwd(),
-          "ops/cloudflare-automation-worker/wrangler.jsonc",
+          `ops/cloudflare-automation-worker/wrangler${region}.jsonc`,
         ),
         "utf8",
       ),
@@ -38,9 +43,7 @@ describe("Cloudflare automation scheduler", () => {
 
     expect(vercel.crons).toBeUndefined();
     expect(cloudflare.workers_dev).toBe(false);
-    expect(cloudflare.vars?.AUTOMATION_URL).toBe(
-      "https://ggd2l.vercel.app/api/cron/automation",
-    );
+    expect(cloudflare.vars?.AUTOMATION_URL).toBe(target);
     expect(cloudflare.triggers?.crons).toEqual(["* * * * *"]);
     expect(cloudflare.secrets?.required).toEqual(["AUTOMATION_SECRET"]);
   });
@@ -92,10 +95,13 @@ describe("Cloudflare automation scheduler", () => {
       method: "GET",
       cache: "no-store",
       redirect: "manual",
-      headers: {
-        authorization: `Bearer ${SECRET}`,
-        accept: "application/json",
-      },
+    });
+    // Exactly these headers: the named user agent keeps Cloudflare's Browser
+    // Integrity Check from challenging the tick, and nothing else rides along.
+    expect(init?.headers).toEqual({
+      authorization: `Bearer ${SECRET}`,
+      accept: "application/json",
+      "user-agent": "ggd2l-automation-scheduler",
     });
     expect(init?.signal).toBeInstanceOf(AbortSignal);
   });

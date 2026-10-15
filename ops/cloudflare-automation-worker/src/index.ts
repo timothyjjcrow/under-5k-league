@@ -1,6 +1,11 @@
 const AUTOMATION_PATH = "/api/cron/automation";
 const REQUEST_TIMEOUT_MS = 65_000;
 const MAX_RESPONSE_BYTES = 2_048;
+// The target sits behind a proxied Cloudflare zone, whose Browser Integrity
+// Check may challenge a request without a User-Agent; a challenged tick is a
+// failed pass. A fixed name also lets access logs tell scheduler passes apart
+// from people.
+const USER_AGENT = "ggd2l-automation-scheduler";
 
 export type SchedulerEnv = {
   AUTOMATION_URL: string;
@@ -115,6 +120,7 @@ export async function invokeAutomation(
       headers: {
         authorization: `Bearer ${secret}`,
         accept: "application/json",
+        "user-agent": USER_AGENT,
       },
       cache: "no-store",
       redirect: "manual",
