@@ -20,6 +20,7 @@ import { BOX_TARGETS, RELEASE_ID, releaseIdMatches } from "./box-targets.mjs";
 // failed and, for an agent refusal, its fixed code.
 
 const SHA = /^[0-9a-f]{40}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 export const AGENT = "/usr/local/sbin/ggd2l-agent";
 export const DEFAULT_BOX_SSH = "ggd2l-1";
 // A host alias from ~/.ssh/config (which pins the host key) or user@host.
@@ -195,6 +196,11 @@ function parseOptions(argv) {
     } else throw new Error(`Unknown release option: ${key}`);
   }
   if (options["--check"] && options["--apply"]) throw new Error("Choose --check or --apply, not both");
+  // Without --apply the run only plans, so a maintenance file would be
+  // neither read nor used: a paused scheduler would wait on a release that
+  // never happens.
+  if (options["--maintenance-file"] && !options["--apply"])
+    throw new Error("--maintenance-file is used only by a release: npm run release:both -- --apply --maintenance-file <file>");
   return options;
 }
 
@@ -253,7 +259,11 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     assertBoxRelease(target, JSON.parse(text), expected);
     return text;
   };
-  const started = [];
+  // Regions whose candidate slot may be running. A region joins before
+  // `start` (a start that times out or loses its answer may still have
+  // started the idle slot) and before `promote` (which restarts the slot
+  // clean), and leaves once its candidate is retired.
+  const running = new Set();
   let lastPromoteAt = null;
   const settleRetireWindow = async () => {
     const wait = lastPromoteAt === null ? 0 : lastPromoteAt + RETIRE_AFTER_MS - now();
@@ -280,6 +290,17 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       record({ region: target.region, action: "quiet-window-verified", message: `no scheduler request since ${iso(since)}; no lease` });
     }
   };
+  // The agent's promote, and the rollback's, write the proxy mode file, so a
+  // release would open a league held in allowlist mode (a cutover gate) or
+  // close maintenance mode. A release never changes who can reach a league.
+  const requireProxyMode = async (targets) => {
+    const status = await agent("status");
+    for (const target of targets) {
+      if (status.leagues?.[target.region]?.mode !== "proxy")
+        throw new Error(`${target.region}: the box is not serving the league in proxy mode; release:both never changes who can reach a league`);
+    }
+    record({ action: "proxy-mode-verified", message: targets.map((target) => target.region).join(", ") });
+  };
 
   try {
     for (const target of BOX_TARGETS) {
@@ -304,6 +325,7 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       report.status = "already-current"; report.completedAt = iso(); await write("plan.json", report); await save();
       return report;
     }
+    await requireProxyMode(changed);
 
     let ciRunId = env.CI_RUN_ID;
     if (!ciRunId) {
@@ -344,7 +366,10 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     report.maintenanceRegions = changed.filter((t) => report.classifications[t.region].needs_db_release || paused(t)).map((t) => t.region);
     report.status = "planned";
     await write("plan.json", report); await save();
-    if (!options["--apply"]) return report;
+    if (!options["--apply"]) {
+      log("Planned only; nothing on the box changed. To release: npm run release:both -- --apply");
+      return report;
+    }
 
     if (!releaseWindowOpen(now()) && !options["--outside-window"])
       throw new Error("Releases run 07:00-19:00 UTC, never during a match night, inhouse night or draft; pass --outside-window only for a reviewed emergency");
@@ -354,8 +379,14 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     if (maintenance) report.maintenance = maintenance;
     await requireQuietWindows(changed.filter(paused));
 
-    // Build every changed league before starting any candidate, so at most
-    // three Next processes run at once on the 2 GB box.
+    // Memory on the 2 GB box: every changed league is built before any
+    // candidate starts, and each checked candidate is stopped before the next
+    // league's starts (the agent's promote restarts it clean anyway), so until
+    // the promotions at most three Next processes run: the two live slots and
+    // one candidate. From the Europe promote until the old slots retire, each
+    // league's previous slot stays warm for in-flight requests (the agent
+    // refuses retire for 90 s after a promote), so four run then, two of them
+    // idle.
     report.status = "building"; await save();
     for (const target of changed) {
       log(`Building ${target.region} at ${sha.slice(0, 12)} on the box.`);
@@ -364,25 +395,32 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       const deployment = await agent("deployment", built.id);
       if (deployment.id !== built.id || deployment.sha !== sha || deployment.region !== target.region || deployment.state !== "BUILT")
         throw new Error(`${target.region}: the built release does not match the reviewed commit`);
+      // The agent's `deployment` answer carries no build-log hash yet; the
+      // manifest records one only when the agent sends it.
       report.candidates[target.region] = { id: built.id, sha, buildSeconds: built.buildSeconds ?? null, peakRssMb: built.peakRssMb ?? null,
-        node: deployment.node ?? null, buildLogSha256: deployment.buildLogSha256 ?? null };
+        node: deployment.node ?? null, buildLogSha256: SHA256.test(deployment.buildLogSha256 ?? "") ? deployment.buildLogSha256 : null };
       record({ region: target.region, action: "built", deploymentId: built.id });
       await save();
     }
     report.status = "checking-candidates"; await save();
     for (const target of changed) {
       const candidate = report.candidates[target.region];
+      running.add(target.region);
       const slot = await agent("start", target.region, candidate.id);
-      started.push(target);
       if (!Object.hasOwn(target.slots, slot.slot ?? "") || target.slots[slot.slot] !== slot.port || slot.slot === report.bases[target.region].slot)
         throw new Error(`${target.region}: the candidate did not start in the idle slot`);
       Object.assign(candidate, { slot: slot.slot, port: slot.port });
       const checked = await agent("check", target.region, candidate.id, "--expect", "production");
       if (checked.ok !== true) throw new Error(`${target.region}: the candidate failed the box smoke check`);
       record({ region: target.region, action: "candidate-checked", deploymentId: candidate.id });
+      // Legal before any promote: `start` already refused the warm window.
+      await agent("retire", target.region, candidate.id);
+      running.delete(target.region);
+      record({ region: target.region, action: "candidate-stopped", deploymentId: candidate.id });
       await save();
     }
     await requireQuietWindows(changed.filter(paused));
+    await requireProxyMode(changed);
 
     report.status = "promoting"; await save();
     const promotedAt = {};
@@ -391,7 +429,9 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       promote: async (target, id) => {
         log(`Promoting ${target.region} to ${id}.`);
         // Set before the call too: a promote whose answer is lost may still
-        // have swapped, and the retire window must cover it.
+        // have swapped and restarted the slot, and the retire window and the
+        // failure path's cleanup must cover it.
+        running.add(target.region);
         lastPromoteAt = now();
         const result = await agent("promote", target.region, id);
         lastPromoteAt = promotedAt[target.region] = now();
@@ -433,15 +473,19 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     for (const target of changed) {
       try {
         const pruned = await agent("prune", target.region);
-        record({ region: target.region, action: "pruned", message: `${Array.isArray(pruned.removed) ? pruned.removed.length : 0} removed` });
+        const removed = Array.isArray(pruned.removed?.releases) ? pruned.removed.releases.length : null;
+        record({ region: target.region, action: "pruned",
+          message: removed === null ? "removed releases not reported" : `${removed} old release${removed === 1 ? "" : "s"} removed` });
       } catch (error) {
         report.cleanupProblems.push(`${target.region}: prune (${error.message})`);
       }
     }
+    // The agent's `status` answer carries no Caddy config hash yet; the
+    // manifest records one only when the agent sends it.
     let caddyConfigSha256 = null;
     try {
       const status = await agent("status");
-      if (/^[0-9a-f]{64}$/.test(status.caddyConfigSha256 ?? "")) caddyConfigSha256 = status.caddyConfigSha256;
+      if (SHA256.test(status.caddyConfigSha256 ?? "")) caddyConfigSha256 = status.caddyConfigSha256;
     } catch (error) {
       report.cleanupProblems.push(`status (${error.message})`);
     }
@@ -456,9 +500,10 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
     // A candidate that is not live would hold about 0.4 GB on the 2 GB box.
     // Stop it, once any promote's warm window has passed; the journal keeps
     // its logs. A live candidate (a rollback that did not land) stays.
-    if (started.length) {
+    const left = BOX_TARGETS.filter((target) => running.has(target.region));
+    if (left.length) {
       await settleRetireWindow();
-      for (const target of started) {
+      for (const target of left) {
         const id = report.candidates[target.region].id;
         try {
           if ((await readLive(target)).id !== id) await retire(target, id);
