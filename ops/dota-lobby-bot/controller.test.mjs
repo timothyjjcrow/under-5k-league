@@ -354,6 +354,37 @@ test("a restarted worker leaves a launched game's lobby it finds back on the lob
   resumed.request("create", { ...spec, key: "inhouse:next:1" });
   assert.deepEqual(calls, ["create", "start", "leave", "leave", "create"]);
 });
+test("a finished job's lobby that turns up after its claim was freed is left", (t) => {
+  const { controller: c, calls } = setup(t);
+  const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  // A full welcome with no lobby in it frees the launched game's claim...
+  assert.equal(welcome(c), true);
+  assert.equal(c.data.active, null);
+  // ...and then the lobby's own cache arrives, back on the lobby screen.
+  c.snapshot(snapshot({ state: 0, matchId: "8123456789" }));
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+  assert.throws(() => c.request("create", next), /BUSY/);
+  c.departed();
+  assert.equal(c.request("create", next).state, "creating");
+  assert.equal(c.status(spec.key).state, "started");
+  assert.deepEqual(calls, ["create", "start", "leave", "leave", "create"]);
+});
+test("with no claim, the bot never leaves a lobby that isn't a finished job's", (t) => {
+  const { controller: c, calls } = setup(t);
+  // An unlaunched job's lobby that no claim covers (blocked jobs keep their
+  // claim, so this is only a guard), and a stranger's lobby.
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.data.active = null;
+  c.data.jobs[spec.key].state = "blocked";
+  c.snapshot(snapshot());
+  c.snapshot(snapshot({ gameName: "Someone else's lobby" }));
+  assert.deepEqual(calls, ["create"]);
+});
 test("a reconnect outside a released lobby finishes the release", (t) => {
   const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
   // A ready lobby, and one Dota left blocked (here a wrong ticket).

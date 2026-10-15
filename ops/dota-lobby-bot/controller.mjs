@@ -125,6 +125,16 @@ function backInLobby(lobby, job) {
   return lobby.state === 0 && job.state === "started";
 }
 
+/** The lobby of a job the bot is done with: launched, or released. */
+function finishedJobLobby(jobs, lobby) {
+  return Object.values(jobs).some(
+    (job) =>
+      ["started", "released"].includes(job.state) &&
+      lobby.gameName === job.spec.name &&
+      lobby.passKey === job.spec.password,
+  );
+}
+
 /** Single account, single active lobby. Persist intent BEFORE any GC command.
  * No replay of ambiguous create/start after timeouts or process restarts.
  * Reconcile only the unique name/password on the account's actual GC snapshot.
@@ -336,7 +346,14 @@ export class LobbyController {
     this.lobby = lobby;
     this.absenceConfirmed = false;
     const job = this.data.jobs[this.data.active];
-    if (!job) return;
+    if (!job) {
+      // No claim, yet the bot is in a lobby: a finished job's, whose cache
+      // turned up after a reconnect had already settled its departure. Leave
+      // it, or it answers BUSY to every Create with nothing left to release.
+      // Any other lobby stays untouched.
+      if (finishedJobLobby(this.data.jobs, lobby)) this.transport.leave();
+      return;
+    }
     if (
       lobby.gameName !== job.spec.name ||
       lobby.passKey !== job.spec.password
