@@ -4,6 +4,7 @@ import { prisma } from "@/lib/prisma";
 import { getActiveSeason } from "@/lib/season";
 import { recapDestination } from "@/lib/recap";
 import { singleSearchParam } from "@/lib/search-params";
+import { publicOrigin } from "@/lib/public-origin";
 
 // A finished season's recap (champion, bracket, stat strip, awards) lives on
 // its own season page, /seasons/<id>. This route only redirects, so every old
@@ -38,5 +39,5 @@ export async function GET(request: NextRequest) {
     ]);
     destination = recapDestination({ requested: null, active, lastArchived });
   }
-  return NextResponse.redirect(new URL(destination, request.url));
+  return NextResponse.redirect(new URL(destination, publicOrigin(request)));
 }

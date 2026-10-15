@@ -44,12 +44,14 @@ function callbackRequest({
   state = OAUTH_STATE,
   code = "discord-code",
   cookieUserId = USER!.id,
+  origin = "https://league.example",
 }: {
   state?: string | null;
   code?: string | null;
   cookieUserId?: string;
+  origin?: string;
 } = {}) {
-  const url = new URL("https://league.example/api/auth/discord/callback");
+  const url = new URL("/api/auth/discord/callback", origin);
   if (state !== null) url.searchParams.set("state", state);
   if (code !== null) url.searchParams.set("code", code);
   const cookie = packOauthCookie(OAUTH_STATE, OAUTH_VERIFIER, cookieUserId);
@@ -175,4 +177,61 @@ describe("Discord OAuth callback boundary", () => {
       );
     },
   );
+});
+
+describe("Discord OAuth callback origin", () => {
+  describe("on a self-hosted league", () => {
+    // Next hands the handler the 127.0.0.1 bind address behind Caddy.
+    const atBindAddress = () =>
+      callbackRequest({ origin: "https://127.0.0.1:3001" });
+
+    beforeEach(() => {
+      vi.stubEnv("LEAGUE_DEPLOY_ENV", "production");
+      vi.stubEnv("APP_URL", "https://us.ggd2l.com");
+    });
+
+    it("exchanges with the canonical callback and lands on the canonical profile", async () => {
+      const res = await GET(atBindAddress());
+
+      expect(handle).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          redirectUri: "https://us.ggd2l.com/api/auth/discord/callback",
+        }),
+      );
+      expect(res.headers.get("location")).toBe(
+        "https://us.ggd2l.com/me?discord=linked",
+      );
+    });
+
+    it("lands an oversized or rate-limited callback on the canonical profile", async () => {
+      const oversized = atBindAddress();
+      oversized.nextUrl.searchParams.set("padding", "x".repeat(5_000));
+      expect((await GET(oversized)).headers.get("location")).toBe(
+        "https://us.ggd2l.com/me?discord=error",
+      );
+
+      limit.mockReturnValue({ allowed: false, retryAfterMs: 60_000 });
+      expect((await GET(atBindAddress())).headers.get("location")).toBe(
+        "https://us.ggd2l.com/me?discord=error",
+      );
+    });
+  });
+
+  describe("when the deployment is undeclared", () => {
+    it("exchanges with APP_URL's callback and redirects on the request's origin", async () => {
+      vi.stubEnv("APP_URL", "https://ggd2l.example");
+      const res = await GET(callbackRequest());
+
+      expect(handle).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({
+          redirectUri: "https://ggd2l.example/api/auth/discord/callback",
+        }),
+      );
+      expect(res.headers.get("location")).toBe(
+        "https://league.example/me?discord=linked",
+      );
+    });
+  });
 });

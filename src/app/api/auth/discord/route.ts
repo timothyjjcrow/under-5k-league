@@ -12,6 +12,7 @@ import {
 } from "@/lib/discord-oauth";
 import { getGuildConfig } from "@/lib/discord-roles";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
+import { providerReturnBase, publicOrigin } from "@/lib/public-origin";
 
 // Kicks off Discord account LINKING (not login — a session is required, so
 // the callback knows exactly which site account the proven Discord identity
@@ -20,15 +21,19 @@ import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 export async function GET(req: NextRequest) {
   const user = await getSessionUser();
   if (!user) {
-    return NextResponse.redirect(new URL("/login?next=/me", req.url));
+    return NextResponse.redirect(
+      new URL("/login?next=/me", publicOrigin(req)),
+    );
   }
 
   const clientId = process.env.DISCORD_CLIENT_ID;
   if (!clientId || !discordLinkingConfigured()) {
-    return NextResponse.redirect(new URL("/me?discord=unconfigured", req.url));
+    return NextResponse.redirect(
+      new URL("/me?discord=unconfigured", publicOrigin(req)),
+    );
   }
 
-  const base = process.env.APP_URL || req.nextUrl.origin;
+  const base = providerReturnBase(req);
   const state = randomOauthValue();
   const verifier = randomOauthValue();
   // Where to land AFTER a fully successful link — validated here and again at

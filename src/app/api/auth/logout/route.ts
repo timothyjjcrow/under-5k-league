@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { destroySession } from "@/lib/auth";
 import { requireSameOrigin } from "@/lib/json-mutation";
+import { publicOrigin } from "@/lib/public-origin";
 
 // Logging out is a state change, so it must NOT be triggerable by a cross-site
 // GET (<img src=".../logout">, link prefetch) — hence POST-only — nor by a
@@ -11,5 +12,8 @@ export async function POST(req: NextRequest) {
   const invalidOrigin = requireSameOrigin(req);
   if (invalidOrigin) return invalidOrigin;
   await destroySession();
-  return NextResponse.redirect(new URL("/login?signedOut=1", req.url), 303);
+  return NextResponse.redirect(
+    new URL("/login?signedOut=1", publicOrigin(req)),
+    303,
+  );
 }
