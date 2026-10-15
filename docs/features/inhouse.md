@@ -235,7 +235,10 @@ launch, so it never sees the end.
   every other game. "Blocked" doesn't hold it back: an offline bot reports
   it too, when its Release can't work either. Bot recovery
   (`recoverableInhouseBotLobby`) treats AWAITING_RESULT as closed, so an admin
-  releases it later.
+  releases it later. A launch that fails (someone can't load, the server never
+  starts) releases the bot itself, so the press works right away, and the
+  captains can instead press "Create Dota lobby" to try again
+  ([DOTA-LOBBY-BOT: Failed launches](../DOTA-LOBBY-BOT.md#failed-launches)).
 - **The claim:** `updateMany({ id, status in PLAYING })` behind the seam
   `inhouse.finishGame.beforeClaim`; it loses to a result, a cancel or the
   abandon sweep. Lost to a result or another press, the presser still

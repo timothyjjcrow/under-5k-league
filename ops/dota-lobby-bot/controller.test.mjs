@@ -3,7 +3,13 @@ import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { LobbyController, rosterMatches, validSpec } from "./controller.mjs";
+import {
+  IDLE_RELEASE_MS,
+  LAUNCH_SETTLE_MS,
+  LobbyController,
+  rosterMatches,
+  validSpec,
+} from "./controller.mjs";
 
 const bot = "76561198000000099";
 const ids = Array.from({ length: 10 }, (_, i) => `765611980000000${10 + i}`);
@@ -290,69 +296,163 @@ test("a reconnect still inside the launched game's lobby leaves it again", (t) =
   assert.equal(c.data.active, spec.key);
   assert.throws(() => c.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
 });
-test("a launched game's lobby back on the lobby screen sheds the bot", (t) => {
+test("a launch that fails to load comes back to the lobby screen and releases the bot for a retry", (t) => {
   const { controller: c, calls } = setup(t);
   const next = { ...spec, key: "inhouse:next:1", name: "GGD2L Inhouse next" };
   c.request("create", spec);
   c.snapshot(snapshot());
   c.request("start", spec);
-  // Running, but no match id came before the game failed to load and Dota
-  // put the lobby back on the lobby screen, with the bot still its leader.
-  c.snapshot(snapshot({ state: 2 }));
+  // Running, no match id yet; then someone fails to load and Dota puts the
+  // lobby back on the lobby screen with the dead attempt's match id.
+  assert.equal(c.snapshot(snapshot({ state: 2 })), false);
   assert.deepEqual(calls, ["create", "start"]);
-  c.snapshot(snapshot({ state: 0, matchId: "8123456789" }));
+  assert.equal(c.snapshot(snapshot({ state: 0, matchId: "8123456789", matchOutcome: 67 })), true);
   assert.deepEqual(calls, ["create", "start", "leave"]);
-  // Every later snapshot (a player joining it) repeats the Leave.
-  c.snapshot(snapshot({ state: 0, matchId: "8123456789" }));
-  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
-  // The claim holds until Dota confirms the departure, then frees.
+  // Until Dota confirms the departure the claim holds, Game over isn't held
+  // back (blocked is not "unlaunched"), and the dead id is nobody's result.
+  assert.deepEqual(c.status(spec.key), { state: "blocked", lobbyId: "123456789012345678", matchId: undefined });
   assert.throws(() => c.request("create", next), /BUSY/);
+  assert.throws(() => c.request("start", spec), /STATE/);
+  // Later snapshots repeat the Leave, never the release or the dead id.
+  assert.equal(c.snapshot(snapshot({ state: 0, matchId: "8123456789" })), false);
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+  assert.equal(c.data.jobs[spec.key].matchId, undefined);
+  assert.equal(c.data.jobs[spec.key].failedMatchId, "8123456789");
   c.departed();
-  assert.deepEqual(c.status(spec.key), {
-    state: "started",
-    lobbyId: "123456789012345678",
-    matchId: "8123456789",
-  });
-  assert.equal(c.request("create", next).state, "creating");
-  // The launched job is never replayed.
-  assert.equal(c.request("create", spec).state, "started");
+  assert.equal(c.data.active, null);
+  assert.deepEqual(c.status(spec.key), { state: "released", lobbyId: "123456789012345678", matchId: undefined });
+  // The captains can create this game's lobby again: a retry, invited afresh.
+  assert.equal(c.request("create", spec).state, "creating");
   assert.deepEqual(calls, ["create", "start", "leave", "leave", "create"]);
 });
-test("a captain or admin can release a launched game's lobby back on the lobby screen", (t) => {
+test("a launch that falls back before the game runs releases the bot", (t) => {
   const { controller: c, calls } = setup(t);
   c.request("create", spec);
   c.snapshot(snapshot());
   c.request("start", spec);
-  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
+  // Server assignment and setup, then back to the lobby screen with no match.
+  c.snapshot(snapshot({ state: 6 }));
+  c.snapshot(snapshot({ state: 1 }));
+  assert.deepEqual(calls, ["create", "start"]);
+  assert.equal(c.snapshot(snapshot({ state: 0 })), true);
   assert.deepEqual(calls, ["create", "start", "leave"]);
-  // That Leave went unanswered, and the lobby came back to the lobby screen.
-  c.snapshot(snapshot({ state: 0, matchId: "8123456789" }));
-  assert.equal(c.request("release", spec).state, "started");
-  assert.deepEqual(calls, ["create", "start", "leave", "leave", "leave"]);
-  assert.equal(c.data.jobs[spec.key].releasing, true);
   c.departed();
-  assert.equal(c.data.active, null);
-  assert.equal(c.status(spec.key).state, "started");
+  assert.equal(c.status(spec.key).state, "released");
+  assert.equal(c.request("create", { ...spec, key: "inhouse:next:1" }).state, "creating");
 });
-test("a restarted worker leaves a launched game's lobby it finds back on the lobby screen", (t) => {
+test("a reconnect that finds a failed launch back on the lobby screen releases it", (t) => {
   const { controller: c, calls, options } = setup(t);
   c.request("create", spec);
   c.snapshot(snapshot());
   c.request("start", spec);
-  c.snapshot(snapshot({ state: 2, matchId: "8123456789" }));
-  // The state an older worker left behind: launched, never departed.
+  // The worker restarts during the load; Dota sends the lobby back meanwhile.
   const resumed = new LobbyController(options);
-  assert.equal(resumed.data.jobs[spec.key].state, "started");
-  assert.equal(resumed.data.jobs[spec.key].launchRequested, true);
-  const back = snapshot({ state: 0, matchId: "8123456789" });
-  assert.equal(welcome(resumed, [back]), false);
+  assert.equal(welcome(resumed, [snapshot({ state: 0, matchId: "8123456789" })]), false);
   resumed.online = true;
-  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
-  assert.throws(() => resumed.request("create", { ...spec, key: "inhouse:next:1" }), /BUSY/);
+  assert.deepEqual(calls, ["create", "start", "leave"]);
   resumed.departed();
   assert.equal(new LobbyController(options).data.active, null);
-  resumed.request("create", { ...spec, key: "inhouse:next:1" });
-  assert.deepEqual(calls, ["create", "start", "leave", "leave", "create"]);
+  assert.equal(resumed.status(spec.key).state, "released");
+});
+test("a launch Dota never shows is released two minutes after Start", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  // The stale lobby-screen snapshot right after Start authorizes nothing.
+  c.snapshot(snapshot());
+  assert.equal(c.tick(), false);
+  assert.throws(() => c.request("release", spec), /STATE/);
+  const at = c.data.jobs[spec.key].changedAt;
+  c.now = () => at + LAUNCH_SETTLE_MS - 1;
+  assert.equal(c.tick(), false);
+  assert.throws(() => c.request("release", spec), /STATE/);
+  c.now = () => at + LAUNCH_SETTLE_MS;
+  assert.equal(c.tick(), true);
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+  assert.equal(c.tick(), false);
+  c.departed();
+  assert.equal(c.status(spec.key).state, "released");
+  // Never while offline, nor in someone else's lobby.
+  for (const blocker of ["offline", "foreign"]) {
+    const { controller: d, calls: dc } = setup(t);
+    d.request("create", spec);
+    d.snapshot(snapshot());
+    d.request("start", spec);
+    const start = d.data.jobs[spec.key].changedAt;
+    d.now = () => start + LAUNCH_SETTLE_MS;
+    if (blocker === "offline") d.online = false;
+    else d.lobby = snapshot({ gameName: "Someone else's lobby" });
+    assert.equal(d.tick(), false);
+    assert.deepEqual(dc, ["create", "start"]);
+  }
+});
+test("a captain or admin can release a launch that never showed, once it has settled", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  c.request("start", spec);
+  c.snapshot(snapshot());
+  const at = c.data.jobs[spec.key].changedAt;
+  c.now = () => at + LAUNCH_SETTLE_MS;
+  assert.equal(c.request("release", spec).state, "blocked");
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+  c.departed();
+  assert.equal(c.status(spec.key).state, "released");
+});
+test("a played game's lobby back on the lobby screen keeps its match id", (t) => {
+  // Seen through its postgame, or replayed after a drop with a winner.
+  for (const path of ["postgame", "winner"]) {
+    const { controller: c, calls } = setup(t);
+    c.request("create", spec);
+    c.snapshot(snapshot());
+    c.request("start", spec);
+    c.snapshot(snapshot({ state: 2 }));
+    if (path === "postgame") {
+      c.snapshot(snapshot({ state: 3, matchId: "8123456789" }));
+      assert.deepEqual(calls, ["create", "start", "leave"]);
+      // That Leave went unanswered and the lobby came back: leave again.
+      assert.equal(c.snapshot(snapshot({ state: 0, matchId: "8123456789" })), false);
+      assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+    } else {
+      assert.equal(welcome(c, [snapshot({ state: 0, matchId: "8123456789", matchOutcome: 2 })]), false);
+      assert.deepEqual(calls, ["create", "start", "leave"]);
+    }
+    assert.equal(c.data.jobs[spec.key].releasing, undefined);
+    c.departed();
+    assert.deepEqual(c.status(spec.key), {
+      state: "started",
+      lobbyId: "123456789012345678",
+      matchId: "8123456789",
+    });
+    // A played game is never re-created.
+    assert.equal(c.request("create", spec).state, "started");
+  }
+});
+test("a lobby nobody starts is released 30 minutes after Create", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", spec);
+  c.snapshot(snapshot());
+  const at = c.data.jobs[spec.key].changedAt;
+  c.now = () => at + IDLE_RELEASE_MS - 1;
+  assert.equal(c.tick(), false);
+  c.now = () => at + IDLE_RELEASE_MS;
+  assert.equal(c.tick(), true);
+  assert.deepEqual(calls, ["create", "leave"]);
+  c.departed();
+  assert.equal(c.status(spec.key).state, "released");
+  // A game that is running, or launching, never counts as idle.
+  for (const lobby of [snapshot({ state: 2 }), snapshot({ state: 1 })]) {
+    const { controller: d, calls: dc } = setup(t);
+    d.request("create", spec);
+    d.snapshot(snapshot());
+    d.request("start", spec);
+    d.snapshot(lobby);
+    const start = d.data.jobs[spec.key].changedAt;
+    d.now = () => start + IDLE_RELEASE_MS;
+    assert.equal(d.tick(), false);
+    assert.deepEqual(dc, ["create", "start"]);
+  }
 });
 test("a finished job's lobby that turns up after its claim was freed is left", (t) => {
   const { controller: c, calls } = setup(t);

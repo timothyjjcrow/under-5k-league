@@ -121,8 +121,11 @@ function saveRefreshToken(refreshToken, steamId, accountName) {
   }
 }
 function objectUpdate(obj) {
-  if (obj.typeId === LOBBY_TYPE_ID)
-    controller.snapshot(CSODOTALobby.decode(obj.objectData));
+  if (
+    obj.typeId === LOBBY_TYPE_ID &&
+    controller.snapshot(CSODOTALobby.decode(obj.objectData))
+  )
+    console.log("[dota-bot] Launch came back to the lobby screen without a game; releasing the bot");
 }
 function subscribed(cache) {
   for (const object of cache.objects ?? []) {
@@ -284,6 +287,12 @@ server.listen(
   () => console.log("[dota-bot] Control service listening"),
 );
 relay.start();
+// A Launch Dota never shows, and a lobby nobody starts, are released on a
+// clock (controller.tick), so neither can hold the one bot for good.
+setInterval(() => {
+  if (controller.tick())
+    console.log("[dota-bot] Released a lobby that was not going to start");
+}, 30_000).unref();
 // A dropped Steam connection that never recovers leaves a live, silent, offline
 // process. Exit non-zero so launchd/systemd start a fresh one (see watchdog.mjs).
 const offlineTooLong = offlineWatchdog();

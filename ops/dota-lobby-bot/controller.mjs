@@ -78,6 +78,13 @@ function roster(spec) {
 // so a repeated or retried press can't flood a player with invites.
 export const INVITE_RESEND_MS = 30_000;
 export const INVITE_MAX_PER_PLAYER = 5;
+// Dota shows a Launch it accepted within seconds: the lobby leaves the lobby
+// screen. A launched lobby still on the lobby screen this long after Start
+// never launched, so it is over and may be released.
+export const LAUNCH_SETTLE_MS = 2 * 60_000;
+// A lobby nobody starts is released this long after Create, so a game given
+// up during setup (or cancelled on the site) can't hold the one bot for good.
+export const IDLE_RELEASE_MS = 30 * 60_000;
 
 /** Named invite targets must be on the request's own roster. */
 export function validInviteTargets(spec) {
@@ -108,21 +115,40 @@ export function rosterMatches(lobby, spec) {
   );
 }
 
-function safeToLeave(lobby, job) {
+function safeToLeave(lobby, job, now) {
   return (
     [2, 3].includes(lobby.state) ||
     (lobby.state === 0 && !job.launchRequested && job.state !== "starting") ||
-    backInLobby(lobby, job)
+    launchOver(lobby, job, now)
   );
 }
 
-/** A launched game's lobby back on Dota's lobby screen: the game failed to
- * load, or ended and returned. Never the stale UI snapshot right after Launch:
- * "started" needs a running or postgame snapshot of this lobby first. Only the
- * bot, its leader, could launch it again, and the site never will (the job
- * has launched), so holding it would answer BUSY to every next Create. */
-function backInLobby(lobby, job) {
-  return lobby.state === 0 && job.state === "started";
+const hasMatchId = (lobby) => !!lobby.matchId && lobby.matchId !== "0";
+
+/** A launched job's lobby back on Dota's lobby screen, its launch over: Dota
+ * showed it (the lobby ran, set a server up, or carries the launch's match
+ * id), or Start was long enough ago that it never launched at all. Never the
+ * stale UI snapshot right after Launch, which shows none of those. Only the
+ * bot, its leader, could launch it again, so holding it would answer BUSY to
+ * every next Create. */
+function launchOver(lobby, job, now) {
+  return (
+    lobby.state === 0 &&
+    (job.state === "started" ||
+      (!!job.launchRequested &&
+        (job.launchSeen === true ||
+          hasMatchId(lobby) ||
+          now - job.changedAt >= LAUNCH_SETTLE_MS)))
+  );
+}
+
+/** The game was played: Dota showed its postgame, or a winner. A launch that
+ * comes back without either failed to load or never started. */
+function played(lobby, job) {
+  return (
+    job.postgameSeen === true ||
+    (lobby.matchOutcome >= 2 && lobby.matchOutcome <= 13)
+  );
 }
 
 /** The lobby of a job the bot is done with: launched, or released. */
@@ -306,7 +332,7 @@ export class LobbyController {
           throw new BotError("STATE");
         // Immediately after Launch, the last snapshot can still say UI.
         // Its stale state cannot authorize Leave during server allocation.
-        if (this.lobby && !safeToLeave(this.lobby, job))
+        if (this.lobby && !safeToLeave(this.lobby, job, this.now()))
           throw new BotError("STATE");
         if (!this.lobby && !this.absenceConfirmed) throw new BotError("STATE");
         // Retain the active claim until the GC confirms departure. A second
@@ -363,7 +389,13 @@ export class LobbyController {
       return;
     }
     job.lobbyId = lobby.lobbyId;
-    if (lobby.matchId && lobby.matchId !== "0") job.matchId = lobby.matchId;
+    // What Dota has shown of the launch, so a later lobby-screen snapshot can
+    // be told from the stale one right after Start (launchOver, played).
+    if (job.launchRequested && lobby.state !== 0) job.launchSeen = true;
+    if (lobby.state === 3) job.postgameSeen = true;
+    // A failed launch's match id never becomes a game: the site must not
+    // wait on it, and a retry brings its own.
+    if (hasMatchId(lobby) && !job.launchFailed) job.matchId = lobby.matchId;
     let due = [];
     if (lobby.state === 2 || lobby.state === 3) job.state = "started";
     else if (
@@ -388,6 +420,14 @@ export class LobbyController {
         due = this.dueInvites(job, roster(job.spec));
       }
     }
+    // A launch that came back to the lobby screen without a played game
+    // (someone failed to load, the server never started): release the bot so
+    // captains can create the lobby again, and nothing holds Game over back.
+    const failed =
+      !job.releasing &&
+      launchOver(lobby, job, this.now()) &&
+      !played(lobby, job);
+    if (failed) this.failLaunch(job);
     this.save();
     if (due.length) this.sendInvites(job, due);
     // A running game no longer needs its nonplaying bot. Once Dota has given
@@ -399,10 +439,43 @@ export class LobbyController {
     if (
       lobby.state === 3 ||
       (lobby.state === 2 && job.matchId) ||
-      backInLobby(lobby, job) ||
-      (job.releasing && safeToLeave(lobby, job))
+      launchOver(lobby, job, this.now()) ||
+      (job.releasing && safeToLeave(lobby, job, this.now()))
     )
       this.transport.leave();
+    return failed;
+  }
+  /** Release a launch that is over without a game. Its claim holds until Dota
+   * confirms the departure, which then reads released: Create works again for
+   * this game (a retry, with fresh invites) and for every other. */
+  failLaunch(job) {
+    job.launchFailed = true;
+    if (job.matchId) job.failedMatchId = job.matchId;
+    delete job.matchId;
+    job.state = "blocked";
+    job.releasing = true;
+  }
+  /** The clocks no GC message drives: a Launch Dota never showed, and a lobby
+   * nobody starts. Only ever this job's own lobby; server.mjs calls it every
+   * 30 s. True when it released one. */
+  tick() {
+    const job = this.data.jobs[this.data.active];
+    const lobby = this.lobby;
+    if (!this.online || !job || job.releasing || !lobby) return false;
+    if (lobby.gameName !== job.spec.name || lobby.passKey !== job.spec.password)
+      return false;
+    const now = this.now();
+    if (launchOver(lobby, job, now) && !played(lobby, job)) this.failLaunch(job);
+    else if (
+      !job.launchRequested &&
+      ["ready", "blocked"].includes(job.state) &&
+      now - job.changedAt >= IDLE_RELEASE_MS
+    )
+      job.releasing = true;
+    else return false;
+    this.save();
+    this.transport.leave();
+    return true;
   }
   /** Settle a GC welcome once its out-of-date caches have replayed as
    * snapshots. Only a welcome that resent every cache (`complete`) and held
