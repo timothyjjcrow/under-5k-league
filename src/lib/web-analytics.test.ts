@@ -27,6 +27,20 @@ describe("webAnalyticsUrl", () => {
   });
 });
 
+/**
+ * Whether the text before a call ends inside the true branch of
+ * `{siteAnalyticsEnabled() ? (`: the nearest gate is opened by `{` (so not
+ * negated), its `?` is followed by `(`, and no `) : …` has closed the branch.
+ */
+function insideEnabledBranch(before: string): boolean {
+  const gate = before.lastIndexOf("siteAnalyticsEnabled()");
+  if (gate < 0) return false;
+  if (!before.slice(0, gate).trimEnd().endsWith("{")) return false;
+  const branch = before.slice(gate);
+  if (!/^siteAnalyticsEnabled\(\)\s*\?\s*\(/.test(branch)) return false;
+  return !/\)\s*:/.test(branch);
+}
+
 describe("the admin Website traffic link", () => {
   // Every file that renders a link to the dashboard, wherever it moves.
   const callers = filesContaining(
@@ -43,18 +57,31 @@ describe("the admin Website traffic link", () => {
 
   it("renders only inside a siteAnalyticsEnabled() branch", () => {
     // Only Vercel production sends the dashboard data; the self-hosted box
-    // and previews show no link. Each call must sit after the gate's `?` and
-    // before that branch closes.
+    // and previews show no link. Each call must sit in the TRUE branch of an
+    // un-negated `{siteAnalyticsEnabled() ? (` and before that branch closes.
     let calls = 0;
     for (const file of callers) {
       for (const match of file.text.matchAll(/webAnalyticsUrl\(/g)) {
         calls += 1;
-        const before = file.text.slice(0, match.index);
-        const gate = before.lastIndexOf("siteAnalyticsEnabled() ?");
-        expect(gate, file.path).toBeGreaterThanOrEqual(0);
-        expect(before.slice(gate), file.path).not.toMatch(/\)\s*:\s*null\s*\}/);
+        expect(insideEnabledBranch(file.text.slice(0, match.index)), file.path).toBe(true);
       }
     }
     expect(calls).toBeGreaterThan(0);
+  });
+
+  it("the gate check refuses a negated or inverted gate", () => {
+    const call = "<p><a href={webAnalyticsUrl(r)}>x</a></p>";
+    const before = (jsx: string) => jsx.slice(0, jsx.indexOf("webAnalyticsUrl("));
+    expect(insideEnabledBranch(before(`{siteAnalyticsEnabled() ? (\n  ${call}\n) : null}`))).toBe(true);
+    for (const refused of [
+      `{!siteAnalyticsEnabled() ? (\n  ${call}\n) : null}`,
+      `{siteAnalyticsEnabled() ? null : (\n  ${call}\n)}`,
+      `{siteAnalyticsEnabled() ? (\n  <p/>\n) : (\n  ${call}\n)}`,
+      `{siteAnalyticsEnabled() ? (\n  <p/>\n) : null}\n${call}`,
+      `{siteAnalyticsEnabled() || (\n  ${call}\n)}`,
+      call,
+    ]) {
+      expect(insideEnabledBranch(before(refused)), refused).toBe(false);
+    }
   });
 });
