@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { heroSearchDestination } from "@/lib/heroes";
 import { singleSearchParam } from "@/lib/search-params";
+import { publicOrigin } from "@/lib/public-origin";
 
 // The hero search's form target when scripts haven't run (HeroSearch): GET
 // /meta/find?q=jugg[&season=<id>] redirects to the best match's hero page, or
@@ -13,6 +14,9 @@ export function GET(request: NextRequest) {
     return singleSearchParam(values.length > 1 ? values : values[0]) ?? undefined;
   };
   return NextResponse.redirect(
-    new URL(heroSearchDestination(read("q") ?? "", read("season")), request.url),
+    new URL(
+      heroSearchDestination(read("q") ?? "", read("season")),
+      publicOrigin(request),
+    ),
   );
 }
