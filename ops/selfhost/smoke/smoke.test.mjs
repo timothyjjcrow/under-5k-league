@@ -533,6 +533,8 @@ test("CI boots the built site like the box and runs this smoke with --expect sta
     [...step.matchAll(/^ {10}([A-Z_]+): "?(.*?)"?$/gm)].map((match) => [match[1], match[2]]),
   );
   assert.equal(env.VERCEL_ENV, undefined);
+  // Not in `env:` and not exported inside `run:` either.
+  assert.doesNotMatch(step, /VERCEL_ENV/);
   assert.equal(env.LEAGUE_DEPLOY_ENV, "staging");
   assert.equal(env.CLIENT_IP_HEADER, "cf-connecting-ip");
   assert.equal(env.LEAGUE_RELEASE_SHA, "${{ github.sha }}");
@@ -554,4 +556,10 @@ test("CI boots the built site like the box and runs this smoke with --expect sta
   assert.equal(env.NEXT_PUBLIC_SITE_URL, options.origin);
   assert.match(step, /if \[ "\$\{status\}" != 143 \]; then/);
   assert.match(step, /\n {12}sleep 15 &\n[\s\S]*\n {12}kill -KILL "\$\{server\}"\n {10}\) > \/dev\/null 2>&1 &\n/);
+  // The step's exit status IS the smoke's: its run block ends by exiting with
+  // it, and nothing after the smoke resets it.
+  const runLines = step.split("\n").filter((line) => /^ {10}\S/.test(line));
+  assert.equal(runLines.at(-1), '          exit "${smoke}"', "the step ends with exit \"${smoke}\"");
+  const afterSmoke = step.slice(step.indexOf("|| smoke=$?") + "|| smoke=$?".length);
+  assert.doesNotMatch(afterSmoke, /\bsmoke=/, "nothing after the smoke reassigns its status");
 });
