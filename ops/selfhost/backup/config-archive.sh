@@ -123,7 +123,9 @@ now="$(now_epoch)"
 name="config-$(fmt_epoch "${now}" %Y%m%dT%H%M%SZ).tar.gz.age"
 file="${OUT_DIR}/${name}"
 TMP_AGE="${OUT_DIR}/.${name}.tmp.$$"
-tar -C / --numeric-owner -cf - "$@" | gzip -9 -n | age -R "${RECIPIENTS}" -o "${TMP_AGE}" ||
+# Owners are stored by name, so a rebuilt box whose service users got other
+# uids still restores them correctly.
+tar -C / -cf - "$@" | gzip -9 -n | age -R "${RECIPIENTS}" -o "${TMP_AGE}" ||
   fail encrypt "tar | gzip | age failed"
 [ -s "${TMP_AGE}" ] || fail encrypt "age wrote an empty file"
 sha="$(sha256_of "${TMP_AGE}")"
