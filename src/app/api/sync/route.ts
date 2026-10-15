@@ -21,6 +21,11 @@ export async function GET() {
         // for 30 seconds: a CDN hit is no function call, on a hosting budget
         // both leagues share. Parked tabs ping at most once a minute, so a
         // result reaches them within about a minute and a half.
+        // On the self-hosted box no edge caches this route: only Vercel reads
+        // `vercel-cdn-cache-control`, and Cloudflare caches no dynamic route
+        // without a Cache Rule, which the zone deliberately lacks
+        // (docs/DECISIONS.md). Every ping reaches the box, a small read there;
+        // the header is kept as is for a Vercel deployment.
         "cache-control": "public, max-age=0, must-revalidate",
         "vercel-cdn-cache-control":
           "public, max-age=30, stale-while-revalidate=30",

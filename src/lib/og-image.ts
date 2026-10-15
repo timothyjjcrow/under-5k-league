@@ -20,6 +20,11 @@ export const OG_SIZE = { width: 1200, height: 630 } as const;
  * the kickoff to the live score to the result, so it must not be pinned for
  * the year next/og would otherwise give it. Past the five minutes a stale
  * copy may serve once while a fresh one renders.
+ *
+ * On the self-hosted box no edge honours `s-maxage`: Cloudflare caches no
+ * dynamic route without a Cache Rule, which the zone deliberately lacks
+ * (docs/DECISIONS.md), so every request a browser or unfurler has not cached
+ * reaches the box. The value is kept as is for a Vercel deployment.
  */
 export const OG_CACHE_CONTROL =
   "public, max-age=300, s-maxage=300, stale-while-revalidate=600";

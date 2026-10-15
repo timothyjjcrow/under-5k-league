@@ -7,6 +7,14 @@
 // plan (docs/DECISIONS.md): Vercel's CDN keeps each answer, so the page is
 // drawn once per deployment and each version of the data once, however many
 // times OBS asks.
+//
+// On the self-hosted box no edge keeps them: only Vercel reads
+// `vercel-cdn-cache-control`, and Cloudflare caches no dynamic route without
+// a Cache Rule, which the zone deliberately lacks (docs/DECISIONS.md). Each
+// OBS request reaches the box, where the page is a string built from files
+// read once per process and the data a small database read; the data's
+// browser `cache-control` still spares repeats of one version. The CDN
+// headers are kept as they are for a Vercel deployment.
 
 /** A match id the overlay accepts: Prisma's cuids, and nothing that could
  *  leave its path segment. */
@@ -43,7 +51,7 @@ export function overlayPath(
   return `/overlay/${encodeURIComponent(matchId)}${query ? `?${query}` : ""}`;
 }
 
-/** A day: a new deployment starts the CDN afresh anyway. */
+/** A day: a new deployment starts the CDN afresh anyway (Vercel only). */
 const CDN_KEEP_SECONDS = 86_400;
 
 /**
