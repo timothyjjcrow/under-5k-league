@@ -18,13 +18,14 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `next/link`** (`app-link.test.ts` fails on a direct import). Next prefetches
   each link that scrolls into view, and the root `loading.tsx` makes every
   dynamic page prefetchable: each visible link was a server render of the
-  root layout, repeated on every navigation. On 2026-10-11 one page view sent
-  15 to 27 of them, 114 of the US site's 125 page requests in an hour were
-  prefetches, and the bursts started the cold instances behind most of a
-  quiet day's CPU, on the Vercel Hobby plan both leagues share. A click now
-  waits for the server's first streamed chunk (the loading skeleton). Pass
+  root layout, with its database reads, repeated on every navigation. On
+  2026-10-11, on Vercel, one page view sent 15 to 27 of them, 114 of the US
+  site's 125 page requests in an hour were prefetches, and the bursts started
+  the cold instances behind most of a quiet day's CPU. On the box each one is
+  a server render on the one vCPU both leagues share. A click now waits for
+  the server's first streamed chunk (the loading skeleton). Pass
   `prefetch={null}` (Next's default) only for a link where an instant
-  skeleton is worth a function call per view.
+  skeleton is worth a server render per view.
 - **`src/lib/site-nav.ts` is the one page list** behind the header, Explore,
   the phone tab bar and the footer: one label, one group, one visibility rule
   per page. It is pure so client, server and tests share it. Never add a second
@@ -1038,17 +1039,19 @@ the league is already draftable and many visitors have joined. Write for both.
   browser. The match page lists the three layouts with the source size each
   is drawn at, folded at its foot (`stream-overlay-links.tsx`, active season
   only), each with Copy link and Preview.
-- **It must cost Vercel next to nothing** (the Hobby plan, DECISIONS.md).
-  Twitch viewers never load it; only the caster's OBS does, and even that is
-  served from the CDN. The page route reads no database and the CDN keeps it
-  a day. The data route (`/api/overlay/[id]/[rev]`) carries its version in
+- **It must cost the server next to nothing** (built for Vercel's Hobby
+  plan, DECISIONS.md; the box shares one vCPU between both leagues).
+  Twitch viewers never load it; only the caster's OBS does. The page route
+  reads no database and carries a day-long edge lifetime. The data route
+  (`/api/overlay/[id]/[rev]`) carries its version in
   the path: the result cursor `/api/sync` publishes and, until the series is
   decided, a 10-minute bucket (`overlayRevision`) that catches a late standin
-  or a retimed kickoff. Each version is one function call for everyone. The
-  page reads `/api/sync` (a 30-second CDN copy) every 30 seconds, asks for data
-  only when the version moves, and asks for nothing while OBS hides the
-  source. Never add a per-poll function call, a cookie, or anything that
-  differs by viewer to either route.
+  or a retimed kickoff, so each version could be cached once for everyone.
+  On the box no edge caches them (the zone has no Cache Rules), and an open
+  overlay's few requests are cheap. The page reads `/api/sync` every 30
+  seconds, asks for data only when the version moves, and asks for nothing
+  while OBS hides the source. Never add a per-poll database read, a cookie, or
+  anything that differs by viewer to either route.
 - **It sits outside the site's layout on purpose.** A route handler returns
   the whole page (`overlayPageHtml` in `stream-overlay-page.ts`): no header,
   footer, analytics or session read, a transparent background, Oswald's latin
