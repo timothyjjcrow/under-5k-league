@@ -109,15 +109,19 @@ const SCHEDULER_PREFIXES = [
 const SCHEDULER_LIBRARY =
   /^src\/lib\/(?:automation(?:-|\.)|cron(?:-|\.)|external-automation-scheduler(?:\.|$))/;
 // Everything under ops/ is scheduler plumbing unless it is named here. These
-// services are hosted independently of the website and its scheduler (they
-// are the ops/ entries .vercelignore keeps out of the website upload), so they
-// stay strict for review through STRICT_PREFIXES without selecting a scheduler
-// pause. The list is an exemption, not an allowlist: a new ops/ folder, such as
-// a second scheduler worker, selects scheduler controls until someone adds it
-// here on purpose.
+// are hosted or installed independently of the website release and its
+// scheduler (they are the ops/ entries .vercelignore keeps out of the website
+// upload), so they stay strict for review through STRICT_PREFIXES without
+// selecting a scheduler pause. The self-hosting kit reaches the box only
+// through install-kit.sh at a verified commit, a separate recorded operation,
+// and the legacy-origin redirects deploy on their own. The list is an
+// exemption, not an allowlist: a new ops/ folder, such as a second scheduler
+// worker, selects scheduler controls until someone adds it here on purpose.
 export const INDEPENDENT_OPS_PREFIXES = [
   "ops/dota-lobby-bot/",
   "ops/dota-lobby-relay/",
+  "ops/selfhost/",
+  "ops/vercel-redirect/",
 ];
 
 function isSchedulerPath(path) {
