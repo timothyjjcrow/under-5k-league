@@ -111,8 +111,18 @@ export function rosterMatches(lobby, spec) {
 function safeToLeave(lobby, job) {
   return (
     [2, 3].includes(lobby.state) ||
-    (lobby.state === 0 && !job.launchRequested && job.state !== "starting")
+    (lobby.state === 0 && !job.launchRequested && job.state !== "starting") ||
+    backInLobby(lobby, job)
   );
+}
+
+/** A launched game's lobby back on Dota's lobby screen: the game failed to
+ * load, or ended and returned. Never the stale UI snapshot right after Launch:
+ * "started" needs a running or postgame snapshot of this lobby first. Only the
+ * bot, its leader, could launch it again, and the site never will (the job
+ * has launched), so holding it would answer BUSY to every next Create. */
+function backInLobby(lobby, job) {
+  return lobby.state === 0 && job.state === "started";
 }
 
 /** Single account, single active lobby. Persist intent BEFORE any GC command.
@@ -367,9 +377,12 @@ export class LobbyController {
     // it a match id, leave on our own: the game plays on Valve's server, the
     // job keeps the id for the site's result lookup, and departure frees the
     // bot to set up the next lobby, so two in-house games can run at once.
+    // A launched game whose lobby went back to the lobby screen is done with
+    // the bot too.
     if (
       lobby.state === 3 ||
       (lobby.state === 2 && job.matchId) ||
+      backInLobby(lobby, job) ||
       (job.releasing && safeToLeave(lobby, job))
     )
       this.transport.leave();
