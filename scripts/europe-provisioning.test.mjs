@@ -72,6 +72,23 @@ test("Europe refuses every US origin, legacy or self-hosted, in either origin va
   }
 });
 
+test("the env examples keep Europe's identity valid and the box-only variables documented but unset", () => {
+  const text = (name) => readFileSync(new URL(`../${name}`, import.meta.url), "utf8");
+  const parse = (name) => Object.fromEntries(text(name).split("\n")
+    .map((line) => /^([A-Z][A-Z0-9_]*)="(.*)"$/.exec(line)).filter(Boolean).map((m) => [m[1], m[2]]));
+  const eu = parse(".env.europe.example");
+  assert.deepEqual(validateLeagueDeploymentEnv(eu), []);
+  assert.equal(eu.APP_URL, VALID.APP_URL);
+  assert.equal(eu.NEXT_PUBLIC_SITE_URL, VALID.APP_URL);
+  // Copying an example must never declare the box marker: even "" fails closed.
+  for (const name of [".env.example", ".env.europe.example"]) {
+    for (const key of ["LEAGUE_DEPLOY_ENV", "CLIENT_IP_HEADER", "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]) {
+      assert.equal(key in parse(name), false, `${name} sets ${key}`);
+      assert.match(text(name), new RegExp(`^# ${key}=`, "m"), `${name} documents ${key}`);
+    }
+  }
+});
+
 test("existing US deployments require no new configuration", () => {
   for (const origin of ["https://ggd2l.vercel.app", "https://us.ggd2l.com"]) {
     const env = { ...VALID, NEXT_PUBLIC_LEAGUE_REGION: undefined, NEXT_PUBLIC_APP_NAME: undefined,
