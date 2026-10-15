@@ -50,6 +50,7 @@ export function buildPartial(lg, mode, {
   read = readFileSync,
   exists = existsSync,
   webhooks = false,
+  withoutBot = false,
 } = {}) {
   if (!/^(us|eu)$/.test(lg)) throw new Error("league must be us or eu");
   if (!/^(staging|production)$/.test(mode)) throw new Error("mode must be staging or production");
@@ -75,12 +76,18 @@ export function buildPartial(lg, mode, {
     set("DOTA_INHOUSE_LEAGUE_ID", local.DOTA_INHOUSE_LEAGUE_ID);
     if (mode === "production") {
       const bot = loadEnv(path.join(repo, "ops/dota-lobby-bot/.env"), read, exists);
-      const tokenFile = path.join(home, "ggd2l-secrets/us-discord-bot-token");
-      if (!exists(tokenFile)) throw new Error(`missing input file ${tokenFile}`);
       set("DISCORD_CLIENT_ID", dotenv.DISCORD_CLIENT_ID);
       set("DISCORD_CLIENT_SECRET", dotenv.DISCORD_CLIENT_SECRET);
-      set("DISCORD_GUILD_ID", US_DISCORD_GUILD_ID);
-      set("DISCORD_BOT_TOKEN", read(tokenFile, "utf8"));
+      // --without-bot: the first production pass. The US bot token is reset
+      // only after the site opens to everyone (the old Vercel deployment keeps
+      // the token it was built with, so a reset before then breaks every
+      // rollback); the guild id goes with it, as validate-prod-env pairs them.
+      if (!withoutBot) {
+        const tokenFile = path.join(home, "ggd2l-secrets/us-discord-bot-token");
+        if (!exists(tokenFile)) throw new Error(`missing input file ${tokenFile}`);
+        set("DISCORD_GUILD_ID", US_DISCORD_GUILD_ID);
+        set("DISCORD_BOT_TOKEN", read(tokenFile, "utf8"));
+      }
       set("DOTA_LOBBY_BOT_URL", bot.DOTA_LOBBY_RELAY_URL);
       set("DOTA_LOBBY_BOT_SECRET", bot.DOTA_LOBBY_BOT_SECRET);
       set("DOTA_SEASON_LOBBY_BOT_ENABLED", env.GGD2L_SEASON_LOBBY_BOT || local.DOTA_SEASON_LOBBY_BOT_ENABLED || "false");
@@ -124,7 +131,7 @@ export function pushPartial(lg, text, { host = process.env.GGD2L_BOX_SSH || "ggd
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [lg, mode, ...flags] = process.argv.slice(2);
   try {
-    const text = buildPartial(lg, mode, { webhooks: flags.includes("--webhooks") });
+    const text = buildPartial(lg, mode, { webhooks: flags.includes("--webhooks"), withoutBot: flags.includes("--without-bot") });
     const keys = text.trim().split("\n").map((line) => line.split("=")[0]);
     const target = pushPartial(lg, text);
     console.log(`env-partial: ${target} installed with ${keys.length} keys: ${keys.join(", ")}`);

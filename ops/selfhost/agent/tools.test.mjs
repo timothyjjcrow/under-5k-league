@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdirSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { caddyConfigSha256, renderMode } from "./caddy-modes.mjs";
@@ -154,8 +154,24 @@ test("bot-deploy archives the bot folder, installs production dependencies and l
   const lines = box.calls.map((call) => call.args.join(" "));
   assert.ok(lines.some((line) => line.includes(`archive --format=tar --output=${dir}/.source.tar ${SHA} ops/dota-lobby-bot`)));
   assert.ok(lines.some((line) => line.includes("ci --omit=dev")));
-  assert.ok(lines.includes(`-R root:ggd2l-bot ${dir}`));
+  assert.ok(lines.includes(`-R -P -h root:ggd2l-bot ${dir}`));
+  assert.ok(lines.includes(`-R g+rX,g-w,o-rwx ${dir}`));
   assert.equal(readlinkSync(box.layout.botCurrent), path.join("releases", SHA.slice(0, 12)));
+});
+
+test("bot-deploy refuses a tree with a link npm planted outside it", async () => {
+  const box = gitBox();
+  const dir = path.join(box.layout.botReleases, SHA.slice(0, 12));
+  box.on((command, args) => {
+    if (command.endsWith("/systemd-run") && args.includes("--omit=dev")) {
+      mkdirSync(path.join(dir, "ops/dota-lobby-bot"), { recursive: true });
+      symlinkSync("/etc/ggd2l", path.join(dir, "ops/dota-lobby-bot/leak"));
+      return { code: 0 };
+    }
+    return undefined;
+  });
+  await assert.rejects(botDeploy(box.ctx, SHA), { code: "link_escapes" });
+  assert.ok(!box.calls.some((call) => call.args.includes("g+rX,g-w,o-rwx")), "no chmod follows the refusal");
 });
 
 test("bot-status reports the unit and whether a lobby is held, never its contents", async () => {

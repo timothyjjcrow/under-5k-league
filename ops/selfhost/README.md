@@ -141,11 +141,27 @@ folder above it, that a user other than root could change.
 - **A bad migration:** follow "Fully rolled-back failed migration" in
   PRODUCTION-OPERATIONS; the restore point is the dump taken just before it
   (see Restore below).
-- **Back to Vercel** (only until the 14-day retirement, and only if the box is
-  unusable): maintenance mode, dump the box, restore into a new Neon branch,
-  repoint the Vercel env, promote the recorded base deployment. Writes since the
-  cutover are carried over by hand. **Never use "Instant Rollback" on a GGD2L
-  Vercel project:** it would put the old app back in front of players.
+- **Back to Vercel during the cutover** (up to the moment the site opens to
+  everyone): promote the recorded base deployment and reset Neon's
+  `default_transaction_read_only`. That works only because nothing has been
+  written to the box yet and the base deployment still holds its own env
+  snapshot (Vercel never applies env changes to an existing deployment). For
+  the same reason the US Discord bot token is reset only after the site opens:
+  a reset earlier would leave the promoted base with a dead token.
+- **After the site has opened, there is no promote back to Vercel.** A promoted
+  base deployment would serve the frozen, read-only Neon copy, and a fresh
+  Vercel build fails the identity attestation against a database the box has
+  marked for its new origin. If the box is unusable, follow "Rebuild from zero"
+  below (about an hour, from the R2 dumps and the config archive). Returning to
+  Vercel would instead mean: maintenance; dump the box; restore it into a new
+  Neon branch as the owner and grant the runtime role; reset the identity
+  markers for the Vercel origin (US: delete `deploymentRegion` and
+  `deploymentOrigin`; Europe: set `deploymentOrigin` back to
+  `https://ggd2l-europe.vercel.app`); re-add every production env var the
+  post-cutover scrub removed, pointing at the new branch; run a NEW production
+  build of the live SHA; promote it. The box dump already holds every write.
+- **Never use "Instant Rollback" on a GGD2L Vercel project:** it would put the
+  old app back in front of players.
 
 ## Backups
 
@@ -314,9 +330,12 @@ written after the dump is lost, so say so in the incident record):
    That restores `/etc/ggd2l` (env files, passwords, rclone and healthchecks
    settings), `/etc/cloudflared` (the tunnel's credentials) and `/etc/caddy`.
    Re-run `install-kit.sh` so modes and owners match the new users.
-5. Tim decrypts the newest dump per league; copy each into
+5. The restored Caddy mode files are the old box's (usually `proxy`), and
+   `agent import` runs only in maintenance: first `agent mode <lg> maintenance`
+   for each league. Tim decrypts the newest dump per league; copy each into
    `/var/backups/ggd2l/cutover/<lg>/` and run `agent import <lg> <file>`, then
-   `grants-check` and `preflight`.
+   `grants-check` and `preflight`. Skip `identity`: a box dump already carries
+   the markers.
 6. `agent prepare <live sha>`, then per league `agent build`, `start`, `check`
    and `promote` at the live SHA.
 7. `sudo systemctl enable --now cloudflared-ggd2l`. The tunnel id and DNS are
@@ -380,6 +399,31 @@ fresh 0600 copy instead. Copy the dump and its sidecars with `scp -p` into a
 for `agent import`. After the import and parity check, encrypt the Mac's
 plaintext copy to Tim's age key (`age -R <recipients file> -o <dump>.age <dump>`)
 and delete the plaintext.
+
+**`cutover/env-partial.mjs` and `cutover/compose-env.sh`** build a league's
+`/etc/ggd2l/<lg>.env` file to file. On the Mac,
+`GGD2L_REPO=<main checkout> node ops/selfhost/cutover/env-partial.mjs <lg> staging|production [--without-bot] [--webhooks]`
+reads the local secret files and installs the partial on the box through ssh's
+stdin (it prints only key names). Then on the box,
+`sudo bash /root/ggd2l-kit/ops/selfhost/cutover/compose-env.sh <lg> [--keep-secrets]`
+adds the app-role database URL and fresh AUTH, CRON and BACKUP_RECEIPT secrets
+(or, with `--keep-secrets`, the current ones), keeps the server-action key, and
+replaces the file only if the env contract passes. Staging carries no Discord
+credential, webhook or lobby bot. The US production env is built twice: first
+`--without-bot` (W9), then, after the site opens and Tim resets the bot token
+into `~/ggd2l-secrets/us-discord-bot-token`, again with the token and
+`--keep-secrets`, followed by `start` and `promote` of the same release on the
+idle slot (the live slot is never restarted in place). Europe's production env
+needs `--webhooks`: its webhook URLs live in its env, not in its database.
+
+**`cutover/neon-parity.mjs <lg>`** runs `sql/db-parity.sql` on Neon from the
+Mac (owner URL in memory, libpq fields only) and `agent parity <lg>` on the box,
+and prints which tables differ. Exit 0 only when identical. During a rehearsal
+Neon is live, so busy tables (the inhouse queue, `Setting`) differ; after the
+freeze any difference stops the cutover.
+
+**First opening on a fresh box:** `agent mode <lg> allowlist` needs a live
+release, so the first opening is `agent promote <lg> <id> --mode allowlist`.
 
 **`ops/vercel-redirect/{us,eu}`** are the old origins' replacement: no functions,
 no build, one 307 redirect from every path to `https://<lg>.ggd2l.com`, keeping

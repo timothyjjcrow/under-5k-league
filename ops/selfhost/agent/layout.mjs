@@ -135,6 +135,7 @@ export const ERRORS = Object.freeze({
   gate_line_missing: "the build output lacks a production gate line",
   artifact_missing: "the built release lacks a required file",
   lockdown_failed: "locking down the release failed",
+  link_escapes: "a symlink in the release points outside it",
   publish_failed: "publishing static files failed",
   release_missing: "no such release on the box",
   release_not_built: "the release did not finish building",

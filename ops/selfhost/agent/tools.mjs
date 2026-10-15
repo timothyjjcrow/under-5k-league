@@ -9,7 +9,7 @@
 // JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { buildUserEnv, cloneAt, fetchMain, requireOnMain } from "./build.mjs";
+import { buildUserEnv, cloneAt, fetchMain, lockDownTree, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
@@ -316,8 +316,7 @@ export async function botDeploy(ctx, commit) {
       await must(runner, "bot_deploy_failed", command, args);
     rmSync(archive, { force: true });
     await npmCi(ctx, botDir, ["--omit=dev"], "bot_deploy_failed");
-    await must(runner, "bot_deploy_failed", BIN.chown, ["-R", `root:${USERS.bot}`, dir]);
-    await must(runner, "bot_deploy_failed", BIN.chmod, ["-R", "g-w,o-rwx", dir]);
+    await lockDownTree(runner, dir, USERS.bot, "bot_deploy_failed");
   }
   mkdirSync(path.dirname(layout.botCurrent), { recursive: true });
   linkAtomically(layout.botCurrent, path.join("releases", short));

@@ -5,7 +5,7 @@
 // I/O and OOM priority. The league env reaches the build only through
 // `-p EnvironmentFile=`; the build log is written with every env value of 8 or
 // more characters replaced by [redacted].
-import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadLeagueEnv, openRedactedLog, writeJsonAtomic } from "./context.mjs";
 import { AgentError, BIN, MIN_BUILD_FREE_BYTES, USERS, makeReleaseId } from "./layout.mjs";
@@ -113,6 +113,42 @@ export async function cloneAt(ctx, dir, commit) {
   }
 }
 
+/**
+ * Every symlink under `dir` must point inside `dir`. npm ci and the build run
+ * third-party code as ggd2l-build, and root then chowns, chmods and publishes
+ * the tree: a planted link (say .next/static -> /etc/ggd2l) would otherwise
+ * make root copy or re-own files outside the release. Checked lexically, link
+ * by link, so a chain of inside links stays inside and a dangling one inside
+ * is allowed. Run it after the build user's units have exited and the tree is
+ * root's, so nothing can change it between the check and the use.
+ */
+export function assertLinksContained(dir, code = "link_escapes") {
+  const root = path.resolve(dir);
+  const stack = [root];
+  while (stack.length) {
+    const current = stack.pop();
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = path.join(current, entry.name);
+      if (entry.isSymbolicLink()) {
+        const target = path.resolve(path.dirname(full), readlinkSync(full));
+        if (target !== root && !target.startsWith(root + path.sep)) throw new AgentError(code);
+      } else if (entry.isDirectory()) {
+        stack.push(full);
+      }
+    }
+  }
+}
+
+/**
+ * Take a tree the build user wrote: root owns it (never following a link),
+ * no link escapes it, then the group can read it and others nothing.
+ */
+export async function lockDownTree(runner, dir, group, code) {
+  await must(runner, code, BIN.chown, ["-R", "-P", "-h", `root:${group}`, dir]);
+  assertLinksContained(dir);
+  await must(runner, code, BIN.chmod, ["-R", "g+rX,g-w,o-rwx", dir]);
+}
+
 /** systemd-run's own summary: "Memory peak: 1.5G" (systemd 255), in MB. */
 export function parseMemoryPeak(line) {
   const match = /Memory peak:\s*([\d.]+)([BKMGT])/.exec(line);
@@ -154,6 +190,8 @@ export async function buildRelease(ctx, lg, commit) {
   try {
     // 3. Clone as ggd2l-build.
     await cloneAt(ctx, dir, commit);
+    // The build writes the server-action key into .next: nobody else reads it.
+    await must(runner, "clone_failed", BIN.chmod, ["0700", dir]);
     writeJsonAtomic(path.join(dir, "release.json"), record);
 
     // 4. Install with devDependencies (typescript, tailwind): NODE_ENV unset.
@@ -209,23 +247,32 @@ export async function buildRelease(ctx, lg, commit) {
       throw new AgentError("dirty_checkout");
 
     // 7. What a linux runtime needs must be there.
+    // .next/static is read here and published by root below: never through a link.
+    const staticDir = path.join(dir, ".next/static");
+    let staticStat = null;
+    try {
+      staticStat = lstatSync(staticDir);
+    } catch {
+      // Missing: the artifact check below reports it.
+    }
+    if (staticStat && !staticStat.isDirectory()) throw new AgentError("link_escapes");
     for (const artifact of REQUIRED_ARTIFACTS)
       if (!existsSync(path.join(dir, artifact))) throw new AgentError("artifact_missing");
-    if (readdirSync(path.join(dir, ".next/static")).length === 0) throw new AgentError("artifact_missing");
+    if (readdirSync(staticDir).length === 0) throw new AgentError("artifact_missing");
 
     // 8. Root owns the release; the league user can read it and write only .next/cache.
     const leagueUser = USERS.league(lg);
     const cache = path.join(dir, ".next/cache");
-    await must(runner, "lockdown_failed", BIN.chown, ["-R", `root:${leagueUser}`, dir]);
-    await must(runner, "lockdown_failed", BIN.chmod, ["-R", "g-w,o-rwx", dir]);
+    await lockDownTree(runner, dir, leagueUser, "lockdown_failed");
     await must(runner, "lockdown_failed", BIN.install, ["-d", "-o", leagueUser, "-g", leagueUser, "-m", "0700", cache]);
-    await must(runner, "lockdown_failed", BIN.chown, ["-R", `${leagueUser}:${leagueUser}`, cache]);
+    await must(runner, "lockdown_failed", BIN.chown, ["-R", "-P", "-h", `${leagueUser}:${leagueUser}`, cache]);
 
     // 9. Add (never replace) this build's chunks to the union dir Caddy serves.
     // World-readable: Caddy runs as caddy, and these files are public anyway.
     mkdirSync(layout.staticDir(lg), { recursive: true });
     await must(runner, "publish_failed", BIN.rsync, [
       "-a",
+      "--no-links",
       "--no-owner",
       "--no-group",
       "--chmod=D0755,F0644",

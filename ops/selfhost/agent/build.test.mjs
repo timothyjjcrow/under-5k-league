@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease, parseMemoryPeak } from "./build.mjs";
@@ -10,7 +10,7 @@ import { describeRelease } from "./releases.mjs";
 const ID = "us-20261016T150000Z-0123456789ab";
 
 /** A box whose git, npm and build behave like the real ones, as files. */
-function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = null } = {}) {
+function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = null, plant = null } = {}) {
   const box = makeBox();
   const env = box.writeEnv("us");
   const dir = box.layout.release(ID);
@@ -53,6 +53,10 @@ function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, d
         mkdirSync(path.join(dir, ".next/static/chunks"), { recursive: true });
         writeFileSync(path.join(dir, ".next/static/chunks/app.js"), "x");
       }
+      // A normal npm tree links inside itself.
+      mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
+      symlinkSync("../next/dist/bin/next", path.join(dir, "node_modules/.bin/next"));
+      if (plant) plant(dir);
       return { lines };
     }
     if (command.endsWith("/systemd-run") && args.includes("ci")) return { lines: [`npm: cache ${box.layout.npmCache}`] };
@@ -112,10 +116,11 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   assert.equal(readFileSync(path.join(dir, ".release.env"), "utf8"), `LEAGUE_RELEASE_SHA=${SHA}\n`);
 
   const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
-  assert.ok(commands.includes(`chown -R root:ggd2l-us ${dir}`));
-  assert.ok(commands.includes(`chmod -R g-w,o-rwx ${dir}`));
+  assert.ok(commands.includes(`chmod 0700 ${dir}`), "nobody else reads the tree while the build writes the action key");
+  assert.ok(commands.includes(`chown -R -P -h root:ggd2l-us ${dir}`));
+  assert.ok(commands.includes(`chmod -R g+rX,g-w,o-rwx ${dir}`));
   assert.ok(commands.includes(`install -d -o ggd2l-us -g ggd2l-us -m 0700 ${dir}/.next/cache`));
-  assert.ok(commands.includes(`rsync -a --no-owner --no-group --chmod=D0755,F0644 ${dir}/.next/static/ ${box.layout.staticDir("us")}/`));
+  assert.ok(commands.includes(`rsync -a --no-links --no-owner --no-group --chmod=D0755,F0644 ${dir}/.next/static/ ${box.layout.staticDir("us")}/`));
   assert.ok(commands.some((line) => line.includes("merge-base --is-ancestor " + SHA)));
 });
 
@@ -189,4 +194,21 @@ test("systemd's memory summary parses to MB", () => {
   assert.equal(parseMemoryPeak("Memory peak: 1.5G"), 1536);
   assert.equal(parseMemoryPeak("Memory peak: 812.4M"), 812);
   assert.equal(parseMemoryPeak("nothing here"), null);
+});
+
+test("a link the build planted outside the release stops the lockdown before root uses it", async () => {
+  for (const plant of [
+    (dir) => symlinkSync("/etc/ggd2l", path.join(dir, ".next/static/chunks/leak")),
+    (dir) => symlinkSync("../../../../../etc", path.join(dir, "node_modules/escape")),
+    (dir) => {
+      rmSync(path.join(dir, ".next/static"), { recursive: true, force: true });
+      symlinkSync("/etc/ggd2l", path.join(dir, ".next/static"));
+    },
+  ]) {
+    const { box } = buildBox({ plant });
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), (error) => error.code === "link_escapes");
+    const commands = box.calls.map((call) => path.basename(call.command));
+    assert.ok(!commands.includes("rsync"), "nothing is published");
+    assert.ok(!box.calls.some((call) => call.args.includes("g+rX,g-w,o-rwx")), "no chmod follows the refusal");
+  }
 });

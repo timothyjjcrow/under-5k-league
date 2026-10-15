@@ -68,3 +68,13 @@ test("the push sends values on stdin only", () => {
   assert.deepEqual(calls[0].opts.stdio.slice(1), ["ignore", "ignore"]);
   assert.throws(() => pushPartial("us", "X=1\n", { host: "box", spawn: () => ({ status: 255 }) }), /could not install/);
 });
+
+test("--without-bot leaves the US bot token and guild out of the first production pass", () => {
+  const files = { ...FILES };
+  delete files["/home/ggd2l-secrets/us-discord-bot-token"];
+  const env = keys(buildPartial("us", "production", { ...io, read: fakeFs(files), exists: (file) => file in files, withoutBot: true }));
+  assert.equal(env.DISCORD_BOT_TOKEN, undefined);
+  assert.equal(env.DISCORD_GUILD_ID, undefined);
+  assert.equal(env.DISCORD_CLIENT_SECRET, `${SECRET}-oauth`);
+  assert.throws(() => buildPartial("us", "production", { ...io, read: fakeFs(files), exists: (file) => file in files }), /us-discord-bot-token/);
+});
