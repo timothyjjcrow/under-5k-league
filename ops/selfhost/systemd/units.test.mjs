@@ -5,7 +5,7 @@
 // word.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -81,6 +81,8 @@ function parseUnit(text, name) {
 }
 
 const all = (unit, section, key) => (unit.get(section) ?? []).filter(([k]) => k === key).map(([, v]) => v);
+/** Every path a service may write under ProtectSystem=strict, one per entry. */
+const writable = (unit) => all(unit, "Service", "ReadWritePaths").flatMap((v) => v.split(/\s+/));
 const one = (unit, section, key) => {
   const values = all(unit, section, key);
   assert.equal(values.length, 1, `expected exactly one ${key}= in [${section}], found ${values.length}`);
@@ -107,6 +109,8 @@ test("the kit ships exactly the units the design names", () => {
     "ggd2l-backup@.service",
     "ggd2l-backup@.timer",
     "ggd2l-bot.service",
+    "ggd2l-config-archive.service",
+    "ggd2l-config-archive.timer",
     "ggd2l-drill@.service",
     "ggd2l-drill@.timer",
     "ggd2l-eu@.service",
@@ -133,7 +137,9 @@ test("every unit parses, describes itself, and runs an absolute command", () => 
       assert.equal(one(unit, "Service", "ProtectSystem"), "strict", name);
       assert.equal(one(unit, "Service", "ProtectHome"), "yes", name);
       assert.equal(one(unit, "Service", "PrivateTmp"), "yes", name);
-      assert.match(one(unit, "Service", "User"), /^(ggd2l-%j|ggd2l-ops|ggd2l-bot|cloudflared)$/, name);
+      // Only the config archive runs as root: it reads root-only directories.
+      assert.match(one(unit, "Service", "User"),
+        name === "ggd2l-config-archive.service" ? /^root$/ : /^(ggd2l-%j|ggd2l-ops|ggd2l-bot|cloudflared)$/, name);
       assert.ok(one(unit, "Service", "MemoryMax"), name);
     }
   }
@@ -212,7 +218,9 @@ test("backups run hourly at :17 as ggd2l-ops, with only their own env (§5.1)", 
   assert.equal(resolve(one(unit, "Service", "WorkingDirectory"), "ggd2l-backup@eu.service"), "/var/backups/ggd2l/eu");
   assert.equal(resolve(one(unit, "Service", "ExecStart"), "ggd2l-backup@eu.service"), "/usr/local/lib/ggd2l/backup-league.sh eu");
   assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["/etc/ggd2l/backup-%i.env", "-/etc/ggd2l/healthchecks.env"]);
-  assert.deepEqual(all(unit, "Service", "ReadWritePaths"), ["/var/backups/ggd2l/%i"]);
+  // The league folder only: everything the script writes, its lock included,
+  // must live there (checked against the script below).
+  assert.deepEqual(writable(unit), ["/var/backups/ggd2l/%i"]);
   assert.ok(!unit.has("Install"), "started by its timer only");
 });
 
@@ -229,8 +237,70 @@ test("restore drills run weekly, US Sunday 10:30Z and Europe 11:30Z (§5.1)", ()
   assert.equal(one(unit, "Service", "MemoryMax"), "700M");
   assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["/etc/ggd2l/drill.env", "-/etc/ggd2l/healthchecks.env"]);
   assert.equal(resolve(one(unit, "Service", "ExecStart"), "ggd2l-drill@us.service"), "/usr/local/lib/ggd2l/drill-league.sh us");
+  // drill-league.sh refuses a league folder it cannot write (state/,
+  // last-drill.json): without this every drill fails at "config".
+  assert.deepEqual(writable(unit), ["/var/backups/ggd2l/%i"]);
   assert.ok(!unit.has("Install"));
 });
+
+test("the configuration archive runs daily as root and writes only its own folder (§5.1)", () => {
+  const timer = units.get("ggd2l-config-archive.timer");
+  assert.equal(one(timer, "Timer", "OnCalendar"), "*-*-* 04:47:00 UTC");
+  assert.equal(one(timer, "Timer", "Persistent"), "true");
+  assert.equal(one(timer, "Install", "WantedBy"), "timers.target");
+  const unit = units.get("ggd2l-config-archive.service");
+  assert.equal(one(unit, "Service", "Type"), "oneshot");
+  assert.equal(one(unit, "Service", "User"), "root");
+  assert.equal(one(unit, "Service", "ExecStart"), "/usr/local/lib/ggd2l/config-archive.sh");
+  // No database URL and no league env: only the healthchecks ping URL.
+  assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["-/etc/ggd2l/healthchecks.env"]);
+  assert.deepEqual(writable(unit), ["/var/backups/ggd2l/config"]);
+  assert.ok(!unit.has("Install"), "started by its timer only");
+});
+
+test("install-kit.sh creates every backup folder a unit is given to write", () => {
+  // systemd fails a unit whose ReadWritePaths= names a missing directory.
+  assert.match(installKit, /\n {2}ensure_dir 0700 ggd2l-ops:ggd2l-ops "\/var\/backups\/ggd2l\/\$\{lg\}"\n/);
+  assert.match(installKit, /\nensure_dir 0700 root:root \/var\/backups\/ggd2l\/config\n/);
+});
+
+// Every folder or file a oneshot's script writes, its lock included, must lie
+// inside the unit's ReadWritePaths=: ProtectSystem=strict makes the rest of the
+// file system, /run included, read-only (EROFS on the box). Read from the
+// scripts themselves: their top-level assignments with the GGD2L_* test hooks
+// at their box defaults and the league as %i, the folders they work in, and
+// every file they open for writing with exec. The scripts belong to the
+// backup package and sit beside these units only once both are merged.
+function scriptWrites(text, workDirs) {
+  const vars = new Map([["lg", "%i"]]);
+  const expand = (value) => value
+    .replace(/\$\{GGD2L_[A-Z_]+:-([^}]*)\}/g, "$1")
+    .replace(/\$\{([A-Za-z_]+)\}/g, (whole, name) => vars.get(name) ?? whole);
+  for (const [, name, value] of text.matchAll(/^([A-Z_]+)="([^"]*)"$/gm)) vars.set(name, expand(value));
+  const targets = workDirs.map((name) => {
+    assert.ok(vars.has(name), `the script sets ${name}`);
+    return vars.get(name);
+  });
+  for (const [, target] of text.matchAll(/^\s*exec \d+>>?"([^"]+)"/gm)) targets.push(expand(target));
+  for (const target of targets) assert.match(target, /^\/[^$]*$/, `resolved ${target} to an absolute path`);
+  return targets;
+}
+const SCRIPT_WRITES = [
+  ["ggd2l-backup@.service", "backup/backup-league.sh", ["LEAGUE_DIR", "STATE_DIR"]],
+  ["ggd2l-drill@.service", "backup/drill-league.sh", ["LEAGUE_DIR", "STATE_DIR"]],
+  ["ggd2l-config-archive.service", "backup/config-archive.sh", ["OUT_DIR"]],
+];
+const haveScripts = SCRIPT_WRITES.every(([, script]) => existsSync(path.join(SELFHOST, script)));
+
+test("every path a oneshot's script writes, its lock included, is writable in its unit",
+  { skip: !haveScripts && "the backup scripts are not on this branch" }, () => {
+    for (const [name, script, workDirs] of SCRIPT_WRITES) {
+      const allowed = writable(units.get(name));
+      for (const target of scriptWrites(read(script), workDirs))
+        assert.ok(allowed.some((dir) => target === dir || target.startsWith(`${dir}/`)),
+          `${name} must let ${script} write ${target} (it allows ${allowed.join(" ")})`);
+    }
+  });
 
 test("the heartbeat runs every 5 minutes as ggd2l-ops (§5.2)", () => {
   assert.equal(one(units.get("ggd2l-heartbeat.timer"), "Timer", "OnCalendar"), "*-*-* *:00/5:00 UTC");
@@ -238,6 +308,7 @@ test("the heartbeat runs every 5 minutes as ggd2l-ops (§5.2)", () => {
   assert.equal(one(unit, "Service", "Type"), "oneshot");
   assert.equal(one(unit, "Service", "User"), "ggd2l-ops");
   assert.equal(one(unit, "Service", "ExecStart"), "/usr/local/lib/ggd2l/heartbeat.sh");
+  assert.deepEqual(writable(unit), [], "the heartbeat only reads and pings");
   assert.ok(!unit.has("Install"));
 });
 
@@ -266,9 +337,10 @@ test("the tunnel and the bot run as the design says (§1.5, §7)", () => {
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {
   for (const file of [...UNIT_FILES, ...DROP_INS])
     assert.doesNotMatch(read(`systemd/${file}`).replace(/^#.*$/gm, ""), /cron\/automation/, file);
-  // Timers start only the backup, drill and heartbeat oneshots, never a slot.
+  // Timers start only the backup, config archive, drill and heartbeat
+  // oneshots, never a slot.
   assert.deepEqual(UNIT_FILES.filter((f) => f.endsWith(".timer")).map((f) => f.replace(".timer", ".service"))
-    .map((service) => one(units.get(service), "Service", "Type")), ["oneshot", "oneshot", "oneshot"]);
+    .map((service) => one(units.get(service), "Service", "Type")), ["oneshot", "oneshot", "oneshot", "oneshot"]);
 });
 
 test("every helper a unit runs is installed under /usr/local/lib/ggd2l by install-kit.sh", () => {
@@ -277,6 +349,7 @@ test("every helper a unit runs is installed under /usr/local/lib/ggd2l by instal
     "backup-league.sh": "backup/backup-league.sh",
     "drill-league.sh": "backup/drill-league.sh",
     "heartbeat.sh": "backup/heartbeat.sh",
+    "config-archive.sh": "backup/config-archive.sh",
   };
   const used = new Set();
   for (const unit of units.values())

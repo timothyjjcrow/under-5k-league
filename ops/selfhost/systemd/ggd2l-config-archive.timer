@@ -1,0 +1,12 @@
+# Daily at 04:47 UTC (design §5.1): after both leagues' evenings, half an hour
+# clear of the hourly backups at :17, and well before the 09:00Z reboot.
+# Persistent: a day missed while the box was down runs at boot.
+[Unit]
+Description=GGD2L daily configuration archive
+
+[Timer]
+OnCalendar=*-*-* 04:47:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

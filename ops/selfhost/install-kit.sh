@@ -1,15 +1,21 @@
 #!/usr/bin/env bash
 # Install, or re-install, the GGD2L league layer on the box (design §1, §2.6,
 # §6.0 P2) from a clone checked out at exactly <sha>. Run as root, after
-# provision-base.sh:
+# provision-base.sh, from root's own clone:
 #
 #   git clone https://github.com/timothyjjcrow/under-5k-league.git /root/ggd2l-kit
 #   git -C /root/ggd2l-kit checkout --detach <sha>
 #   bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <sha>
 #
-# A later kit change can run from the tools clone `ggd2l-agent prepare <sha>`
-# made. Kit changes reach the box only this way, as their own recorded step,
-# never with an app release.
+# A later kit change runs the same way: `git -C /root/ggd2l-kit fetch origin`,
+# check out the new <sha>, run the same line. Kit changes reach the box only
+# this way, as their own recorded step, never with an app release.
+#
+# Never run it from a clone another user owns or can write, such as a tools
+# clone the build user made (npm runs package scripts as that user): root would
+# run that user's git config (core.fsmonitor runs on `git status`) and install
+# files rewritten behind a clean-looking index. It refuses such a clone before
+# it runs git or anything else from it.
 #
 # Idempotent, and safe on a live box. It:
 #   - creates the service users and the directory tree with its modes (§1.1-1.2)
@@ -42,19 +48,45 @@ log() { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
 die() { echo "install-kit: $*" >&2; exit 1; }
 
+# kit_untrusted <dir>: print the first path that someone other than root could
+# use to change what root runs from <dir>, or nothing. Every entry under <dir>
+# must be root's and writable by no group or other user (a symlink's own mode
+# means nothing), and every directory above it root's and not writable by
+# others unless sticky, so nobody can swap the clone out. "Root" means root or
+# whoever runs this; the script then requires that to be root. The same
+# function is in provision-ggd2l.sh.
+kit_untrusted() {
+  local me dir found
+  me="$(id -u)"
+  found="$(find "$1" \( \( ! -uid 0 ! -uid "$me" \) -o \( ! -type l \( -perm -020 -o -perm -002 \) \) \) -print -quit)" || return 2
+  if [[ -n "$found" ]]; then printf '%s\n' "$found"; return 0; fi
+  dir="$1"
+  while [[ "$dir" != / ]]; do
+    dir="$(dirname "$dir")"
+    found="$(find "$dir" -maxdepth 0 \( \( ! -uid 0 ! -uid "$me" \) -o \( ! -perm -1000 \( -perm -020 -o -perm -002 \) \) \) -print)" || return 2
+    if [[ -n "$found" ]]; then printf '%s\n' "$found"; return 0; fi
+  done
+}
+
 [[ $# -eq 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || { echo "usage: install-kit.sh <40-hex commit sha>" >&2; exit 2; }
 SHA="$1"
 SHA12="${SHA:0:12}"
+KIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+SELFHOST="${KIT_ROOT}/ops/selfhost"
+# Before git or anything else runs from the clone.
+untrusted="$(kit_untrusted "${KIT_ROOT}")" || die "could not inspect the kit clone ${KIT_ROOT}"
+[[ -z "$untrusted" ]] \
+  || die "${untrusted} is owned or writable by a user other than root; run this only from root's own clone (see the header)"
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 . /etc/os-release
 [[ "${ID}" == "ubuntu" && "${VERSION_CODENAME}" == "noble" ]] || die "expected Ubuntu 24.04 (noble), found ${PRETTY_NAME}"
 
-KIT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd -P)"
-SELFHOST="${KIT_ROOT}/ops/selfhost"
 # Every path below is absolute. Working from / keeps the service users'
 # commands (git, psql, caddy) from failing on a cwd they cannot read.
 cd /
-git_kit() { git -c safe.directory="${KIT_ROOT}" -C "${KIT_ROOT}" "$@"; }
+# The clone is root's (checked above), so git needs no safe.directory
+# exception; it still runs no fsmonitor or hook from the clone's config.
+git_kit() { git -c core.fsmonitor=false -c core.hooksPath=/dev/null -C "${KIT_ROOT}" "$@"; }
 
 log "Kit clone ${KIT_ROOT} at ${SHA12}"
 head="$(git_kit rev-parse HEAD)"
@@ -70,6 +102,7 @@ agent/env-contract.mjs
 backup/backup-league.sh
 backup/drill-league.sh
 backup/heartbeat.sh
+backup/config-archive.sh
 postgres/provision-league-db.sh
 postgres/90-ggd2l.conf
 postgres/pg_hba.snippet
@@ -92,6 +125,8 @@ systemd/ggd2l-drill@.timer
 systemd/ggd2l-drill@eu.timer.d/10-schedule.conf
 systemd/ggd2l-heartbeat.service
 systemd/ggd2l-heartbeat.timer
+systemd/ggd2l-config-archive.service
+systemd/ggd2l-config-archive.timer
 systemd/ggd2l-bot.service
 "
 for f in $REQUIRED; do
@@ -168,6 +203,8 @@ ensure_dir 0750 "root:${ADMIN_USER}" /var/log/ggd2l/builds
 ensure_dir 0750 caddy:caddy /var/log/caddy
 ensure_dir 0750 root:ggd2l-ops /var/backups/ggd2l
 ensure_dir 0700 root:root /var/backups/ggd2l/cutover
+# The daily config archive's output (ggd2l-config-archive.service, as root).
+ensure_dir 0700 root:root /var/backups/ggd2l/config
 # /etc/ggd2l is root's, but ggd2l-ops may traverse it to open the two files
 # made for it (rclone.conf 0600 ggd2l-ops, backup-recipients.txt 0644).
 ensure_dir 0710 root:ggd2l-ops /etc/ggd2l
@@ -436,7 +473,8 @@ Check (as root):
   systemd-analyze verify ggd2l-us@a.service ggd2l-us@b.service ggd2l-eu@a.service ggd2l-eu@b.service \\
     cloudflared-ggd2l.service ggd2l-bot.service ggd2l-heartbeat.service ggd2l-heartbeat.timer \\
     ggd2l-backup@us.service ggd2l-backup@us.timer ggd2l-backup@eu.timer \\
-    ggd2l-drill@us.service ggd2l-drill@us.timer ggd2l-drill@eu.timer
+    ggd2l-drill@us.service ggd2l-drill@us.timer ggd2l-drill@eu.timer \\
+    ggd2l-config-archive.service ggd2l-config-archive.timer
   runuser -u caddy -- env HOME=/var/lib/caddy caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
   ggd2l-agent status
 EOF

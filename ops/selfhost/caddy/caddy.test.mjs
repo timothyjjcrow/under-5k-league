@@ -5,9 +5,9 @@
 // from drifting apart.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SELFHOST = path.resolve(DIR, "..");
@@ -143,6 +143,22 @@ test("allowlist mode proxies only allow.caddy's addresses and shows everyone els
   assert.deepEqual(allowlist.slice(3, 3 + PROXY_BLOCK.length), PROXY_BLOCK);
   assert.deepEqual(allowlist.slice(3 + PROXY_BLOCK.length), ["}", "handle {", ...maintenance, "}"]);
 });
+
+// install-kit.sh seeds a new league with mode-maintenance.caddy, and from then
+// on the release agent renders the mode files, so the two must agree line for
+// line (comments aside). The agent belongs to another package and sits beside
+// these files only once both are merged.
+const AGENT_MODES = path.join(SELFHOST, "agent", "caddy-modes.mjs");
+
+test("the release agent renders exactly these mode files",
+  { skip: !existsSync(AGENT_MODES) && "the release agent is not on this branch" }, async () => {
+    const { renderMode } = await import(pathToFileURL(AGENT_MODES).href);
+    const port = 3011;
+    const withPort = (lines) => lines.map((line) => line.replaceAll("__PORT__", String(port)));
+    assert.deepEqual(directives(renderMode("maintenance"), "maintenance render"), maintenance);
+    assert.deepEqual(directives(renderMode("proxy", { port }), "proxy render"), withPort(proxy));
+    assert.deepEqual(directives(renderMode("allowlist", { port }), "allowlist render"), withPort(allowlist));
+  });
 
 test("the tunnel routes exactly Caddy's four hostnames to 127.0.0.1:8080 with their own Host", () => {
   const template = read("cloudflared/config.yml.template");

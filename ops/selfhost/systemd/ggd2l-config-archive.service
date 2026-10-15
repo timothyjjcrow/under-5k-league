@@ -1,0 +1,30 @@
+# Daily encrypted archive of the box's configuration (design §5.1): /etc/ggd2l
+# (env files, database passwords, rclone and healthchecks settings),
+# /etc/cloudflared (the tunnel's credentials) and /etc/caddy go through tar,
+# gzip and age to Tim's offline key, then to R2 under config/. The plaintext
+# never touches disk. A box rebuilt from zero gets every secret back from this
+# archive (provision-ggd2l.sh prints the steps).
+#
+# Runs as root because those directories are root-only; the only path it may
+# write is its own output folder. config-archive.sh takes no lock.
+[Unit]
+Description=GGD2L configuration archive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+EnvironmentFile=-/etc/ggd2l/healthchecks.env
+ExecStart=/usr/local/lib/ggd2l/config-archive.sh
+TimeoutStartSec=15min
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/backups/ggd2l/config

@@ -28,4 +28,7 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# The one writable path. ProtectSystem=strict leaves everything else read-only,
+# /run and /run/lock included, so everything backup-league.sh writes, its lock
+# included, stays in the league folder (units.test.mjs checks the script).
 ReadWritePaths=/var/backups/ggd2l/%i
