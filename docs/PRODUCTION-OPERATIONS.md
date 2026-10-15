@@ -668,8 +668,9 @@ outside this runbook rather than improvising against production data.
    captaincy, bids, stand-ins, availability, reschedules, predictions and fantasy
    data; inhouse night "I'm in" rows (current night only); game and inhouse JSON; the retained Cred balances and relationless
    ledger (Cred betting was removed on 2026-09-27, but its rows remain); news,
-   admin actions and announcement outboxes; the box's logs (journald, and the
-   Caddy access logs, which hold player IP addresses); database backups (local
+   admin actions and announcement outboxes; the box's application logs
+   (journald) and Caddy access logs, which hold player IP addresses; database
+   backups (local
    dumps, the R2 copies and DigitalOcean's droplet backups); delivered Discord
    messages and roles; and source
    copies held by Steam, OpenDota, or Discord. Mark each source as found, not
