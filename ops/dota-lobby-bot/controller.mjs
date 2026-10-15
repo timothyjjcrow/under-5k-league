@@ -539,18 +539,19 @@ export class LobbyController {
     if (!this.online || !job || job.releasing) return false;
     const now = this.now();
     if (!lobby) {
-      // A launch whose lobby is provably gone (a complete welcome found the
-      // bot in none) is over once it has settled: nothing to leave, so free
-      // the claim. Any other job without a lobby waits for a deliberate
-      // release, as before.
+      // Nothing to leave. A job whose lobby is gone (a complete welcome or
+      // Dota's departure found the bot in none), or never came (Dota never
+      // answered the Create), is over once it has settled: free the claim so
+      // the next Create works. A started game is never in this state.
+      const neverCame = !job.launchRequested && job.lobbyId === undefined;
       if (
-        !this.absenceConfirmed ||
-        !job.launchRequested ||
         job.state === "started" ||
-        now - job.changedAt < LAUNCH_SETTLE_MS
+        now - job.changedAt < LAUNCH_SETTLE_MS ||
+        !(this.absenceConfirmed || neverCame)
       )
         return false;
-      this.failLaunch(job);
+      if (job.launchRequested) this.failLaunch(job);
+      else job.releasing = true;
       this.departed();
       return true;
     }
