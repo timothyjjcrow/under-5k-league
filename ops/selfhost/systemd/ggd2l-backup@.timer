@@ -1,0 +1,11 @@
+# Hourly at :17 (design §5.1). Persistent: a run missed while the box was
+# down (the 09:00Z reboot) happens at boot.
+[Unit]
+Description=GGD2L %i hourly database backup
+
+[Timer]
+OnCalendar=*-*-* *:17:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,51 @@
+# One GGD2L league web server, one blue/green slot (design §1.5, D3, D4).
+#
+# ggd2l-us@.service and ggd2l-eu@.service are byte-identical copies, not
+# symlinks: %j is the league (the part of the unit name after the last dash)
+# and %i is the slot, a or b. ggd2l-us@a serves us.ggd2l.com from
+# 127.0.0.1:3001 when Caddy points there. Only the live slot is enabled, so a
+# reboot brings back exactly the live slot; the release agent enables,
+# disables, starts and stops slots, never this file.
+#
+# Runs `next start` from the release the slot symlink names, as the league's
+# own unprivileged user, which can write nothing but the release's .next/cache.
+[Unit]
+Description=GGD2L %j web, slot %i
+After=network-online.target postgresql@18-main.service
+Wants=network-online.target postgresql@18-main.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ggd2l-%j
+Group=ggd2l-%j
+WorkingDirectory=/srv/ggd2l/%j/slots/%i
+# Build and runtime env (secrets), then PORT, then LEAGUE_RELEASE_SHA.
+EnvironmentFile=/etc/ggd2l/%j.env
+EnvironmentFile=/etc/ggd2l/%j-slot-%i.env
+EnvironmentFile=/srv/ggd2l/%j/slots/%i/.release.env
+Environment=NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 MALLOC_ARENA_MAX=2 NODE_OPTIONS=--max-old-space-size=640
+# Refuse to start on an env that breaks the contract (names only, never
+# values), then drop cached fetches: tag state lives only in memory, so a
+# restarted process must not trust entries an earlier one wrote (D5).
+ExecStartPre=/usr/bin/node /usr/local/lib/ggd2l/env-contract.mjs --league %j --slot %i
+ExecStartPre=/usr/bin/rm -rf .next/cache/fetch-cache
+ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p ${PORT} --keepAliveTimeout 75000
+KillSignal=SIGTERM
+# Covers the automation pass's 45 s budget and the after() drain.
+TimeoutStopSec=60
+SuccessExitStatus=143
+Restart=on-failure
+RestartSec=5
+MemoryHigh=700M
+MemoryMax=900M
+UMask=0027
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/srv/ggd2l/%j/slots/%i/.next/cache
+
+[Install]
+WantedBy=multi-user.target

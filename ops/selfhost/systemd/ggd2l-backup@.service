@@ -1,0 +1,31 @@
+# Hourly backup of one league database (design §5.1, D18): dump as the app
+# role (so receipts keep matching), verify, gzip, age-encrypt to Tim's offline
+# key, upload to R2, prune, ping healthchecks. %i is the league, us or eu.
+#
+# The env file holds only DIRECT_URL (app role) and BACKUP_DIR, never
+# BACKUP_RECEIPT_SECRET. The working directory has no .env for the backup
+# script to pick up.
+[Unit]
+Description=GGD2L %i database backup
+After=network-online.target postgresql@18-main.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ggd2l-ops
+Group=ggd2l-ops
+WorkingDirectory=/var/backups/ggd2l/%i
+EnvironmentFile=/etc/ggd2l/backup-%i.env
+EnvironmentFile=-/etc/ggd2l/healthchecks.env
+ExecStart=/usr/local/lib/ggd2l/backup-league.sh %i
+# A hung run must not block the next hour's.
+TimeoutStartSec=45min
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=256M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/backups/ggd2l/%i
