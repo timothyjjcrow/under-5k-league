@@ -1,0 +1,35 @@
+# Weekly restore drill (design §5.1, D18): restore the league's newest local
+# dump into the scratch database ld2l_restore_test as ggd2l_rehearsal, migrate
+# it with the current tools, check it, drop it, ping healthchecks. %i is the
+# league. drill.env holds only PG_RESTORE_TEST_URL; the drill never sees a
+# league role's password.
+[Unit]
+Description=GGD2L %i backup restore drill
+After=network-online.target postgresql@18-main.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ggd2l-ops
+Group=ggd2l-ops
+WorkingDirectory=/var/backups/ggd2l/%i
+EnvironmentFile=/etc/ggd2l/drill.env
+EnvironmentFile=-/etc/ggd2l/healthchecks.env
+# Prisma (the drill migrates the restored copy) must not phone home.
+Environment=CHECKPOINT_DISABLE=1
+ExecStart=/usr/local/lib/ggd2l/drill-league.sh %i
+TimeoutStartSec=2h
+Nice=10
+IOSchedulingClass=idle
+MemoryMax=700M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# The one writable path: drill-league.sh refuses a league folder it cannot
+# write (state/, last-drill.json). ProtectSystem=strict leaves everything else
+# read-only, /run and /run/lock included, so the lock both leagues' drills
+# share (they share the scratch database) must need no write outside it
+# (units.test.mjs checks the script).
+ReadWritePaths=/var/backups/ggd2l/%i

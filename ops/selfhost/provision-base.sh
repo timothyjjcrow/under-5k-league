@@ -5,9 +5,9 @@
 # Idempotent: every step checks before it changes, so a re-run is safe.
 #
 # This installs the operating-system layer only: security updates, swap, the
-# firewall, an admin user, Node 22, PostgreSQL 18 and Caddy. It creates no
-# league database, service, credential or web route; the league layer is
-# provisioned separately (see ops/selfhost/README.md).
+# firewall, an admin user, Node 22, PostgreSQL 18, Caddy, cloudflared and
+# rclone. It creates no league database, service, credential or web route;
+# install-kit.sh installs the league layer (see ops/selfhost/README.md).
 set -euo pipefail
 
 ADMIN_USER="${ADMIN_USER:-ggd2l}"
@@ -28,7 +28,7 @@ log "Packages: update and base tools"
 apt-get update -q
 apt-get -y -q -o Dpkg::Options::=--force-confold upgrade
 apt-get install -y -q ca-certificates curl gnupg ufw unattended-upgrades \
-  apt-listchanges rsync jq git age logrotate needrestart
+  apt-listchanges rsync jq git age logrotate needrestart rclone
 
 log "Swap: ${SWAP_SIZE_GB} GiB (builds need more than 2 GiB of memory)"
 if ! swapon --show=NAME --noheadings | grep -q '^/swapfile$'; then
@@ -68,6 +68,28 @@ Unattended-Upgrade::Automatic-Reboot "true";
 Unattended-Upgrade::Automatic-Reboot-Time "09:00";
 Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
 Unattended-Upgrade::Remove-Unused-Dependencies "true";
+// The runtimes' own repositories too (design D25), matched on the Release
+// metadata each one publishes, so a fix to PostgreSQL, Node, Caddy or the
+// tunnel lands in the same window. A new major never arrives this way: the
+// PostgreSQL major is part of the package name (postgresql-18), NodeSource's
+// repository carries one Node major, and 90-ggd2l-majors pins nodejs and caddy.
+Unattended-Upgrade::Origins-Pattern {
+	"origin=apt.postgresql.org,codename=noble-pgdg";
+	"site=deb.nodesource.com,codename=nodistro";
+	"origin=cloudsmith/caddy/stable,codename=any-version";
+	"origin=cloudflared,codename=any";
+};
+EOF
+cat > /etc/apt/preferences.d/90-ggd2l-majors <<'EOF'
+# A runtime's major version changes only by hand. (The PostgreSQL major is in
+# its package name, postgresql-18.)
+Package: nodejs
+Pin: version 22.*
+Pin-Priority: 1001
+
+Package: caddy
+Pin: version 2.*
+Pin-Priority: 1001
 EOF
 systemctl enable --now unattended-upgrades >/dev/null
 
@@ -133,8 +155,17 @@ if [[ ! -f /etc/apt/sources.list.d/caddy-stable.list ]]; then
     > /etc/apt/sources.list.d/caddy-stable.list
 fi
 
+log "cloudflared (Cloudflare apt repository, signed)"
+if [[ ! -f /etc/apt/sources.list.d/cloudflared.list ]]; then
+  # Cloudflare publishes this keyring already dearmored.
+  curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg -o /usr/share/keyrings/cloudflare-main.gpg
+  chmod 644 /usr/share/keyrings/cloudflare-main.gpg
+  echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+    > /etc/apt/sources.list.d/cloudflared.list
+fi
+
 apt-get update -q
-apt-get install -y -q nodejs "postgresql-${PG_MAJOR}" "postgresql-client-${PG_MAJOR}" caddy
+apt-get install -y -q nodejs "postgresql-${PG_MAJOR}" "postgresql-client-${PG_MAJOR}" caddy cloudflared
 
 log "PostgreSQL: localhost only"
 PG_CONF="/etc/postgresql/${PG_MAJOR}/main/postgresql.conf"
@@ -151,6 +182,8 @@ node --version
 npm --version
 psql --version
 caddy version
+cloudflared --version
+rclone --version | sed -n 1p
 age --version
 swapon --show
 free -m

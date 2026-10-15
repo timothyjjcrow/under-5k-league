@@ -1,0 +1,27 @@
+# GGD2L Cloudflare Tunnel (design §1.8, D1). A locally-managed tunnel: this
+# file is the whole routing table. install-kit.sh renders it to
+# /etc/cloudflared/config.yml (0400 cloudflared) once the tunnel exists,
+# replacing <TUNNEL_UUID> with the id of the one credentials file
+# /etc/cloudflared/<uuid>.json. The uuid is not a secret; the JSON is.
+#
+# Every hostname goes to Caddy on 127.0.0.1:8080 with its own Host header;
+# Caddy routes by host. Anything else gets a 404 from cloudflared itself.
+tunnel: <TUNNEL_UUID>
+credentials-file: /etc/cloudflared/<TUNNEL_UUID>.json
+originRequest:
+  connectTimeout: 10s
+  keepAliveTimeout: 60s
+ingress:
+  - hostname: us.ggd2l.com
+    service: http://127.0.0.1:8080
+    originRequest: { httpHostHeader: us.ggd2l.com }
+  - hostname: eu.ggd2l.com
+    service: http://127.0.0.1:8080
+    originRequest: { httpHostHeader: eu.ggd2l.com }
+  - hostname: ggd2l.com
+    service: http://127.0.0.1:8080
+    originRequest: { httpHostHeader: ggd2l.com }
+  - hostname: www.ggd2l.com
+    service: http://127.0.0.1:8080
+    originRequest: { httpHostHeader: www.ggd2l.com }
+  - service: http_status:404

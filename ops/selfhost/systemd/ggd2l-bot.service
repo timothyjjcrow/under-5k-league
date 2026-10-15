@@ -1,0 +1,34 @@
+# The Steam Dota lobby bot on the box (design §7), adapted from
+# ops/dota-lobby-bot/ld2l-dota-bot.service. Code comes from `ggd2l-agent
+# bot-deploy <sha>`; state (steam-auth.json, lobbies.json, steam/) lives in
+# /var/lib/ggd2l-bot. Installed disabled; enabled only at the bot move, after
+# the Mac's bot is stopped (both must never run on one Steam account).
+[Unit]
+Description=GGD2L Steam Dota lobby bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ggd2l-bot
+Group=ggd2l-bot
+WorkingDirectory=/srv/ggd2l/bot/current/ops/dota-lobby-bot
+# Fixed, non-secret settings first; bot.env (secrets) is read after them.
+Environment=NODE_ENV=production DOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot HOST=127.0.0.1 PORT=8090
+EnvironmentFile=/etc/ggd2l/bot.env
+ExecStart=/usr/bin/node server.mjs
+# The offline watchdog exits 1 to get a fresh Steam session: restart it.
+Restart=on-failure
+RestartSec=30
+# server.mjs exits within 3 s of SIGTERM.
+TimeoutStopSec=15
+MemoryMax=300M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/ggd2l-bot
+
+[Install]
+WantedBy=multi-user.target
