@@ -1,29 +1,67 @@
 # GGD2L Europe setup
 
-Both leagues run the same source code. Europe uses its own Vercel project,
-PostgreSQL database, scheduler and Discord server. Players
-use Steam to sign in separately on each site; profiles, admins, registrations,
-seasons, drafts, matches, records and inhouses are separate.
+Both leagues run the same source code from the same self-hosted box. Europe
+has its own database, environment, origin, scheduler and Discord server.
+Players use Steam to sign in separately on each site; profiles, admins,
+registrations, seasons, drafts, matches, records and inhouses are separate.
 
-The live site is [GGD2L Europe](https://ggd2l-europe.vercel.app). Season 1 is open
+The site is [GGD2L Europe](https://eu.ggd2l.com) at `https://eu.ggd2l.com`.
+**Status: planned.** Europe moves there from Vercel and Neon on the cutover
+day, about two hours after the US ([DECISIONS](DECISIONS.md#hosting)); until
+then it runs at `https://ggd2l-europe.vercel.app`, which afterwards redirects
+to the new origin (307 for 14 days, then 308). Season 1 is open
 for signups with **match night to be announced**, no draft date and no first
 match date. Europe now connects to the existing US Dota worker, Steam account
 and relay with explicit US/EU region support. Ticket IDs remain unset pending
 the event date range and Valve registration. Do not install a second Steam
 session for this shared setup.
 
-## Deployment status — 5 September 2026
+## On the box
 
-The current canonical deployment is `dpl_Dt3DDP2mCa3kZSiMV1abiYar6AQL`, built
+| Component | Setup |
+| --- | --- |
+| Website | `https://eu.ggd2l.com`: slots `ggd2l-eu@a` and `ggd2l-eu@b` on 127.0.0.1:3011 and 3012 behind Caddy and the Cloudflare Tunnel, released with the US at one commit ([RELEASING](RELEASING.md)) |
+| Database | `ggd2l_eu` on the box's PostgreSQL 18; owner role `ggd2l_eu_owner` (restore and migrations only), app role `ggd2l_eu_app` (the site) |
+| Environment | `/etc/ggd2l/eu.env` (build and runtime), `eu-migrate.env` (the owner URL), `backup-eu.env`; all root-only |
+| Identity | `deploymentRegion=eu` and `deploymentOrigin=https://eu.ggd2l.com`; timezone `Europe/Berlin` |
+| Scheduler | `ggd2l-europe-automation-scheduler`, targeting `https://eu.ggd2l.com/api/cron/automation` |
+| Backups | Hourly `ggd2l-backup@eu.timer` to R2 under `eu/`; weekly `ggd2l-drill@eu.timer`, Sundays 11:30 UTC |
+| Calendar | Event UIDs keep the host `ggd2l-europe.vercel.app` (`LEAGUE_CONFIG.calendarUidHost`), so subscribed calendars never duplicate events |
+
+**The origin change at the cutover.** The production build attests the
+database's `deploymentOrigin` against `APP_URL`, so the restored Europe
+database must name the new origin before its first box build. After the
+restore and the parity check against Neon, `box_agent identity eu` runs one
+guarded update:
+
+```sql
+UPDATE "Setting" SET value = 'https://eu.ggd2l.com'
+WHERE key = 'deploymentOrigin' AND value = 'https://ggd2l-europe.vercel.app'
+  AND EXISTS (SELECT 1 FROM "Setting" WHERE key = 'deploymentRegion' AND value = 'eu');
+```
+
+It must change exactly one row, or the step aborts and the attestation keeps
+refusing the build. Run parity **before** it, since it changes a row Neon
+still holds at the old value. The Discord OAuth redirect
+`https://eu.ggd2l.com/api/auth/discord/callback` is added in the Discord
+developer portal before the move; keep the old one for the 14 days the old
+origin redirects. The full cutover runbook is `ops/selfhost/README.md`.
+
+## Launch record — 5 September 2026 (on Vercel)
+
+Kept as history: how Europe launched on Vercel and Neon, before the move to
+the box. The checks and identifiers below describe that deployment.
+
+The canonical deployment was `dpl_Dt3DDP2mCa3kZSiMV1abiYar6AQL`, built
 from commit `7bed06e` and promoted to the Europe origin, with the final board
 copy update. The runtime region was reverified as `fra1`, and the promoted
 site's readiness probe returned HTTP 200. The initial public
 checks below were performed at 09:24–09:27 UTC; final Discord, board and backup
 verification was completed by 09:45 UTC.
 
-| Component | Current setup |
+| Component | Setup at launch |
 | --- | --- |
-| Website | Vercel project `ggd2l-europe`, region `fra1`, public origin `https://ggd2l-europe.vercel.app` |
+| Website | Vercel project `ggd2l-europe`, region `fra1`, on its Vercel origin (a redirect to `https://eu.ggd2l.com` after the cutover) |
 | Database | Dedicated Neon project `ggd2l-europe-db`, Frankfurt (`eu-central-1`), PostgreSQL 18; reviewed migrations and empty-instance bootstrap completed |
 | Season | `GGD2L Europe Season 1`, active `SIGNUPS`, zero registrations and matches; match night and draft date unset |
 | Identity | Database markers are `deploymentRegion=eu` and the Europe site origin; timezone is `Europe/Berlin` |
@@ -34,9 +72,7 @@ verification was completed by 09:45 UTC.
 | Backup | Fresh PostgreSQL 18 full SQL backup, checksum and signed Europe database receipt verified at `2026-09-05T09:45:14.945Z`; private files retained outside the repository |
 
 Read-only checks returned HTTP 200 with `cache-control: no-store` from
-[`/api/health/live`](https://ggd2l-europe.vercel.app/api/health/live),
-[`/api/health/ready`](https://ggd2l-europe.vercel.app/api/health/ready) and
-[`/api/health/automation`](https://ggd2l-europe.vercel.app/api/health/automation),
+`/api/health/live`, `/api/health/ready` and `/api/health/automation`,
 reporting `live`, `ready` and `healthy`. The home, schedule, teams, players,
 seasons, features, inhouse, news and login pages loaded successfully with no
 links to the US site origin or US Discord invite. The manifest names Europe,
@@ -58,29 +94,34 @@ unannounced; no dates or Europe ticket IDs have been invented.
 
 ## Project and configuration
 
-1. Create/link the separate `ggd2l-europe` Vercel project from the same Git repo.
-   Check `.vercel/project.json` before every environment change or deploy. The
-   US project continues to use its existing link, variables and database.
-2. Provision a dedicated PostgreSQL database, preferably in a European region.
-   Its pooled `DATABASE_URL` and direct `DIRECT_URL` must target the same logical
-   database/schema/user. Preview deployments require a separate disposable
-   database; do not give them either league's production database.
-3. Configure the Europe project's Production environment from
-   [`.env.europe.example`](../.env.europe.example). Generate independent
-   `AUTH_SECRET`, `CRON_SECRET` and `BACKUP_RECEIPT_SECRET` values. The approved
+On the box, Europe is one slot pair, one database and one environment file
+beside the US; `install-kit.sh` provisions them (`ops/selfhost/README.md`).
+
+1. Europe's database is `ggd2l_eu`, with its own owner and app roles that
+   can't connect to the US database. Its `DATABASE_URL` and `DIRECT_URL` are
+   the same local URL for the app role. Staging, when it runs, uses a scrubbed
+   copy; never give it either league's production database.
+2. Write `/etc/ggd2l/eu.env` from
+   [`.env.europe.example`](../.env.europe.example), file to file. Generate
+   independent `AUTH_SECRET`, `CRON_SECRET`, `BACKUP_RECEIPT_SECRET` and
+   `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` values on the box; set
+   `APP_URL=NEXT_PUBLIC_SITE_URL=https://eu.ggd2l.com`,
+   `LEAGUE_DEPLOY_ENV=production` and `CLIENT_IP_HEADER=cf-connecting-ip`.
+   `box_agent envcheck eu` reports problems by name only. The approved
    shared lobby bot uses the existing relay's app credential as described below.
    Set `ADMIN_STEAM_IDS` to the trusted Europe admins. A verified Steam login
    creates the account and applies that allowlist; there is no fabricated admin
    account or first-visitor production bootstrap.
-4. Keep `NEXT_PUBLIC_MATCH_DAY` and `NEXT_PUBLIC_MATCH_TIME` empty until the
+3. Keep `NEXT_PUBLIC_MATCH_DAY` and `NEXT_PUBLIC_MATCH_TIME` empty until the
    organizers announce the schedule. `Europe/Berlin` is the initial league
    timezone. Date-specific kickoff times display in the viewer's local time.
-5. Set the Steam API configuration for the Europe hostname and, when enabling
+4. Set the Steam API configuration for the Europe hostname and, when enabling
    Discord, register the Europe callback URL below. Public `NEXT_PUBLIC_*`
-   values are bundled at build time: rebuild after changing them.
+   values are bundled at build time: release again after changing them.
 
-The production validator rejects an EU build pointed at the US public origin
-or default US Discord invite. An empty EU invite disables the invite links;
+The production validator rejects an EU build pointed at any US origin (the
+old `https://ggd2l.vercel.app`, `https://us.ggd2l.com`, `https://ggd2l.com`
+or `https://www.ggd2l.com`) or the default US Discord invite. An empty EU invite disables the invite links;
 it never falls back to the US server. Fresh database identity markers also
 prevent an EU build using an unmarked or differently identified database.
 These checks do not infer ownership of arbitrary bot tokens or webhooks:
@@ -88,9 +129,11 @@ provision those in the Europe server and verify the actual channel destinations.
 
 ## Initialize the fresh database
 
-This initialization has already completed for the live Europe database. The
+This initialization has already completed for the live Europe database, and
+the box restores it from Neon at the cutover rather than starting empty. The
 commands below document how to provision a replacement empty instance; do not
-repeat bootstrap against the live season.
+repeat bootstrap against the live season. A box rebuilt after a loss restores
+the newest dump instead (`box_agent import eu`).
 
 Use the existing reviewed release process from
 [PRODUCTION-OPERATIONS.md](PRODUCTION-OPERATIONS.md). Migration releases run in
@@ -100,7 +143,7 @@ file. Supply credentials through the trusted process environment and set
 
 ```bash
 npm run db:migrate:release -- --apply <40-character-current-HEAD-sha>
-npm run db:bootstrap:europe -- --apply https://ggd2l-europe.vercel.app
+npm run db:bootstrap:europe -- --apply https://eu.ggd2l.com
 ```
 
 The migration command recognizes an empty schema and applies the baseline and
@@ -121,16 +164,18 @@ Repeating bootstrap fails without modifying existing data. If a command's
 completion was uncertain, inspect the database before taking further action.
 The production build attests the region/origin markers after its normal schema
 checks. Migrations themselves do not require the markers, so migration precedes
-bootstrap. When changing the Europe domain later, update the database's
+bootstrap. When changing the Europe domain, update the database's
 `deploymentOrigin` deliberately along with app URLs, callback URLs and scheduler
-target before rebuilding; the mismatch guard otherwise blocks the build.
+target before rebuilding; the mismatch guard otherwise blocks the build. The
+move to `https://eu.ggd2l.com` does exactly that ([On the box](#on-the-box)).
 
 ## Discord
 
 The Europe bot is installed in guild `1545717985342267435`. The OAuth redirect
-is `https://ggd2l-europe.vercel.app/api/auth/discord/callback`; a live owner
-account completed linking successfully. The invite is
-`https://discord.gg/tJH7eKJxFE`.
+on the box is `https://eu.ggd2l.com/api/auth/discord/callback`; the Vercel-era
+`https://ggd2l-europe.vercel.app/api/auth/discord/callback`, where a live owner
+account completed linking, stays registered for the 14 days the old origin
+redirects. The invite is `https://discord.gg/tJH7eKJxFE`.
 
 | Purpose | Europe channel or role |
 | --- | --- |
@@ -162,7 +207,9 @@ together and repeat the real linking/role checks.
 
 The EU worker configs target a separate Cloudflare worker named
 `ggd2l-europe-automation-scheduler`. Its only target is the Europe automation
-endpoint. The existing US worker configs are unchanged.
+endpoint, `https://eu.ggd2l.com/api/cron/automation` in the committed configs
+(it goes live with the cutover's scheduler deploy). The US worker configs
+target the US origin only.
 
 The one-minute Europe trigger is already active. The commands below are the
 reviewed validation, rebuild and pause controls, rather than outstanding setup.
@@ -172,11 +219,13 @@ npm run scheduler:europe:check:paused
 npm run scheduler:europe:check
 ```
 
-Store the Europe app's `CRON_SECRET` as this worker's encrypted
-`AUTOMATION_SECRET`, using the Europe configuration explicitly:
+Store the `CRON_SECRET` from `/etc/ggd2l/eu.env` as this worker's encrypted
+`AUTOMATION_SECRET`, using the Europe configuration explicitly. Copy the value
+from the box to a 0600 file on the Mac (`scp -p`), feed it through stdin, and
+shred the file:
 
 ```bash
-npx --yes wrangler@4.118.0 secret put AUTOMATION_SECRET --config ops/cloudflare-automation-worker/wrangler.europe.paused.jsonc
+npx --yes wrangler@4.118.0 secret put AUTOMATION_SECRET --config ops/cloudflare-automation-worker/wrangler.europe.paused.jsonc < <0600 file>
 npm run scheduler:europe:pause
 ```
 
@@ -188,8 +237,8 @@ and integration checks are complete. Then enable the one-minute trigger:
 npm run scheduler:europe:deploy
 ```
 
-Verify a successful Europe automation run in Admin and Cloudflare invocation
-logs. To pause only Europe, run `npm run scheduler:europe:pause`. Do not use the
+Verify a successful Europe automation run in Admin, the Caddy log
+(`box_agent logs eu <epoch ms>`) and Cloudflare invocation logs. To pause only Europe, run `npm run scheduler:europe:pause`. Do not use the
 unqualified US `scheduler:deploy` or `scheduler:pause` commands for Europe.
 
 ## Dota lobby automation
@@ -199,6 +248,11 @@ Steam account. Both sites now use that relay's origin and the same app-to-bot
 secret; database/session/Discord/scheduler secrets remain separate. There is
 **one shared active lobby**: a request from either league receives `BUSY` while
 the other owns the worker. This does not merge any league data or seasons.
+
+The worker runs on the Mac until the bot moves to the box
+(`ggd2l-bot.service`, [DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md#on-the-box)); the
+move keeps the same Steam account, state, relay and regions, so nothing here
+changes for Europe.
 
 The shared relay is deployed as version
 `1445c2cb-19a4-4852-9d09-09e2c027c8b0`. The existing idle Mac service was safely
@@ -216,7 +270,7 @@ shared-protocol upgrades, then perform step 5 once Europe tickets exist:
 3. Set `DOTA_GAME_SERVER_REGIONS="2,3"` for that worker. This explicit allowlist
    takes precedence over the singular `DOTA_GAME_SERVER_REGION`; it permits
    US East (`2`) and Europe West (`3`) on the same process/account/state.
-4. Point the Europe project's `DOTA_LOBBY_BOT_URL` and
+4. Point Europe's `DOTA_LOBBY_BOT_URL` and
    `DOTA_LOBBY_BOT_SECRET` at the approved existing relay. Keep all US lobby
    identifiers unchanged. Europe requests use an `eu:` identifier prefix;
    the shared worker rejects that namespace on US East and rejects unprefixed
@@ -224,8 +278,8 @@ shared-protocol upgrades, then perform step 5 once Europe tickets exist:
 5. Verify the Europe game-server region and ticket in an actual hosted lobby,
    then check that US hosting and cross-region `BUSY` behavior still work.
 
-Do not start `.env.eu`, install a second macOS service or sign the shared Steam
-account into a second worker. The separate `ggd2l-europe-dota-lobby-relay` Worker
+Do not start `.env.eu`, install a second macOS service or box unit, or sign
+the shared Steam account into a second worker. The separate `ggd2l-europe-dota-lobby-relay` Worker
 already exists but is unused by this shared plan. Independent relay/service
 templates remain available for a future decision to provision a second account;
 see [relay deployment](../ops/dota-lobby-relay/README.md#independent-europe-relay).
@@ -269,18 +323,27 @@ ticketed hosting remains pending.
 
 ## Europe recovery configuration
 
-Private Europe configuration is retained outside the repository under
-`~/.config/ggd2l-europe`. Do not print, commit or copy these secrets into the US
-project. Supply the Europe database URLs and receipt key explicitly when using
-the existing backup/verification commands, with a separate Europe backup folder.
+On the box, Europe's secrets live only in its root-only files under
+`/etc/ggd2l/` (`eu.env`, `eu-migrate.env`, `backup-eu.env`), and each hourly
+dump goes to R2 under `eu/`, encrypted to Tim's offline key; the daily
+encrypted config archive there holds the files a rebuild needs. Never copy
+these secrets into the US files.
 
-The Neon database runs PostgreSQL 18. On this Mac, prepend
+Before the cutover, private Europe configuration is retained outside the
+repository under `~/.config/ggd2l-europe`, and the cutover's final Neon dump
+reads Europe's `DIRECT_URL` from there in memory. Do not print, commit or copy
+these secrets into the US configuration. Supply the Europe database URLs and
+receipt key explicitly when using the existing backup/verification commands,
+with a separate Europe backup folder.
+
+Both the box and Neon run PostgreSQL 18. On this Mac, prepend
 `/opt/homebrew/opt/postgresql@18/bin` to the command's `PATH` so `pg_dump` and
 `pg_restore` use the compatible client; an older Homebrew client can reject the
 server version.
 
-After queue-board creation, the existing `db:backup` and `db:backup:verify`
-scripts created and verified the 67,303-byte full SQL artifact
+From the Vercel launch: after queue-board creation, the existing `db:backup`
+and `db:backup:verify` scripts created and verified the 67,303-byte full SQL
+artifact
 `backup-2026-09-05T09-44-54-426-57404.sql`. It and its checksum, metadata and
 signed receipt are stored under `~/.config/ggd2l-europe/backups`, with directory
 mode 0700 and artifact mode 0600. Creation completed at
@@ -311,6 +374,6 @@ and result import. Verify US signup/season, Discord and automation still point
 to their original services. Run the full lifecycle rehearsal on disposable
 data rather than populating the new production season with fixture players.
 
-Both projects can track the same reviewed code releases; environment values
-choose their regional identity. Keep per-project backups, restore receipts and
+Both leagues run the same reviewed commit; their environment files choose
+their regional identity. Keep per-league backups, restore receipts and
 scheduler recovery procedures independent.
