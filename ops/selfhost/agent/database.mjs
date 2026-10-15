@@ -164,7 +164,7 @@ export async function importDump(ctx, lg, value) {
   const sha256 = await verifySidecar(file);
 
   for (const slot of SLOTS) await must(ctx.runner, "systemctl_failed", BIN.systemctl, ["stop", unitName(lg, slot)]);
-  await must(ctx.runner, "provision_failed", ctx.layout.helper("provision-league-db.sh"), [lg, "--recreate"]);
+  await must(ctx.runner, "provision_failed", BIN.bash, [ctx.layout.helper("provision-league-db.sh"), lg, "--recreate"]);
 
   const database = `ggd2l_${lg}`;
   const owner = `ggd2l_${lg}_owner`;

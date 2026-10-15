@@ -91,6 +91,9 @@ export function makeBox() {
         return { code: result.code ?? 0, stdout: result.stdout ?? "", stderr: result.stderr ?? "" };
       }
     }
+    // A oneshot unit the test did not script finished successfully.
+    if (command.endsWith("/systemctl") && args[0] === "show" && args.includes("--property=Result"))
+      return { code: 0, stdout: "success\n", stderr: "" };
     return { code: 0, stdout: "", stderr: "" };
   };
   const clock = { t: T0 };

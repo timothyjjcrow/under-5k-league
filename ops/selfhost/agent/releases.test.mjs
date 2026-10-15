@@ -217,6 +217,22 @@ test("prune keeps live, previous and the newest build, and every slot's release"
   for (const id of [ancient, failed]) assert.ok(!existsSync(box.layout.release(id)), id);
 });
 
+test("prune keeps the previous release for rollback even when no slot points at it", async () => {
+  const box = liveBox();
+  const ancient = "us-20261001T000000Z-aaaaaaaaaaaa";
+  addRelease(box, ancient);
+  addRelease(box, NEWER);
+  await goLive(box);
+  await startRelease(box.ctx, "us", NEW);
+  await promoteRelease(box.ctx, "us", NEW);
+  box.clock.t += 91_000;
+  // The next candidate takes slot a, so the previous release is on no slot.
+  await startRelease(box.ctx, "us", NEWER);
+  assert.equal(liveJson(box).previous, OLD);
+  assert.deepEqual(pruneLeague(box.ctx, "us").removed.releases, [ancient]);
+  for (const id of [OLD, NEW, NEWER]) assert.ok(existsSync(box.layout.release(id)), id);
+});
+
 test("prune removes static files older than 14 days unless a kept release still ships them", async () => {
   const box = liveBox();
   await goLive(box);

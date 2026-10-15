@@ -48,6 +48,18 @@ export const REQUIRED_ARTIFACTS = Object.freeze([
   "src/app/overlay/overlay-client.js",
 ]);
 
+/**
+ * The build user's home and npm cache. ggd2l-build has no login home, and npm,
+ * Prisma and Next each write a little under $HOME, so every unit that runs
+ * repo code as ggd2l-build gets this one. Created here, idempotently.
+ */
+export async function buildUserEnv(ctx) {
+  const { layout, runner } = ctx;
+  for (const dir of [layout.buildHome, layout.npmCache])
+    await must(runner, "install_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0750", dir]);
+  return { HOME: layout.buildHome, npm_config_cache: layout.npmCache };
+}
+
 /** git as the repo's owner; safe.directory because root also reads these clones. */
 function git(args) {
   return asUser(USERS.build, BIN.git, ["-c", "safe.directory=*", ...args]);
@@ -171,7 +183,7 @@ export async function buildRelease(ctx, lg, commit) {
       cwd: dir,
       unsetEnv: ["NODE_ENV"],
       properties: INSTALL_PROPERTIES,
-      setEnv: { npm_config_cache: layout.npmCache },
+      setEnv: await buildUserEnv(ctx),
       command: BIN.npm,
       args: ["ci", "--include=dev", "--no-audit", "--no-fund", "--prefer-offline"],
     });
@@ -194,6 +206,7 @@ export async function buildRelease(ctx, lg, commit) {
       envFiles: [layout.leagueEnv(lg)],
       properties: BUILD_PROPERTIES,
       setEnv: {
+        ...(await buildUserEnv(ctx)),
         NODE_ENV: "production",
         LEAGUE_RELEASE_SHA: commit,
         GGD2L_SKIP_BUILD_TYPECHECK: "1",

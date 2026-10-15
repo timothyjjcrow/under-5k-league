@@ -32,6 +32,7 @@ export const STATIC_RETENTION_MS = 14 * 24 * 60 * 60_000;
 export const TOOLS_KEPT = 2;
 
 export const BIN = Object.freeze({
+  bash: "/usr/bin/bash",
   caddy: "/usr/bin/caddy",
   chmod: "/usr/bin/chmod",
   chown: "/usr/bin/chown",
@@ -90,6 +91,7 @@ export function createLayout(root = "/") {
     caddyLogs: at("var/log/caddy"),
     backupDir: (lg) => at("var/backups/ggd2l", lg),
     cutoverDir: (lg) => at("var/backups/ggd2l/cutover", lg),
+    buildHome: at("var/cache/ggd2l-build"),
     npmCache: at("var/cache/ggd2l-build/npm"),
     lock: at("run/ggd2l-agent.lock"),
     rebootRequired: at("var/run/reboot-required"),

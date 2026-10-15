@@ -6,7 +6,7 @@
 // no secret is ever on a command line and the agent never holds it in a child.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { cloneAt, fetchMain, requireOnMain } from "./build.mjs";
+import { buildUserEnv, cloneAt, fetchMain, requireOnMain } from "./build.mjs";
 import { loadLeagueEnv, loadOwnerUrl, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS } from "./layout.mjs";
@@ -46,11 +46,18 @@ async function npmCi(ctx, dir, args, code) {
     cwd: dir,
     unsetEnv: ["NODE_ENV"],
     properties: TOOLS_PROPERTIES,
-    setEnv: { npm_config_cache: ctx.layout.npmCache },
+    setEnv: await buildUserEnv(ctx),
     command: BIN.npm,
     args: ["ci", ...args, "--no-audit", "--no-fund", "--prefer-offline"],
   });
   await must(ctx.runner, code, BIN.systemdRun, install, { capture: false });
+}
+
+/** Start a oneshot unit, wait for it to finish, and require Result=success. */
+async function runUnit(ctx, unit, code) {
+  await must(ctx.runner, code, BIN.systemctl, ["start", "--wait", unit]);
+  const result = await must(ctx.runner, code, BIN.systemctl, ["show", "--property=Result", "--value", unit]);
+  if (result.stdout.trim() !== "success") throw new AgentError(code);
 }
 
 /** `prepare <sha>`: the tools clone at the sha, with dev dependencies. */
@@ -76,7 +83,7 @@ async function runTool(ctx, { dir, envFile, setEnv = {}, script, args = [], code
     cwd: dir,
     envFiles: [envFile],
     properties: TOOLS_PROPERTIES,
-    setEnv,
+    setEnv: { ...(await buildUserEnv(ctx)), ...setEnv },
     command: BIN.node,
     args: [script, ...args],
   });
@@ -143,7 +150,7 @@ export async function migrate(ctx, lg, commit) {
  */
 export async function backup(ctx, lg) {
   const started = ctx.now();
-  await must(ctx.runner, "backup_failed", BIN.systemctl, ["start", "--wait", `ggd2l-backup@${lg}.service`]);
+  await runUnit(ctx, `ggd2l-backup@${lg}.service`, "backup_failed");
   const record = readJson(path.join(ctx.layout.backupDir(lg), "last-backup.json"));
   if (record && Date.parse(record.finishedAt) >= started - 1000 && /^[0-9a-f]{64}$/.test(record.sha256 ?? ""))
     return { file: path.basename(String(record.file)), sha256: record.sha256, offsiteKey: record.offsiteKey ?? null };
@@ -183,7 +190,7 @@ export function newestDump(ctx, lg) {
  */
 export async function drill(ctx, lg, commit) {
   if (!commit) {
-    await must(ctx.runner, "drill_failed", BIN.systemctl, ["start", "--wait", `ggd2l-drill@${lg}.service`]);
+    await runUnit(ctx, `ggd2l-drill@${lg}.service`, "drill_failed");
     return { ok: true };
   }
   const dir = await requireTools(ctx, commit);
@@ -193,8 +200,8 @@ export async function drill(ctx, lg, commit) {
     envFiles: [ctx.layout.drillEnv],
     properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },
-    command: ctx.layout.helper("drill-league.sh"),
-    args: [lg],
+    command: BIN.bash,
+    args: [ctx.layout.helper("drill-league.sh"), lg],
   });
   await must(ctx.runner, "drill_failed", BIN.systemdRun, unit, { capture: false });
   return { ok: true };

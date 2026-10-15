@@ -100,7 +100,10 @@ test("mutating verbs hold the agent lock; read-only verbs never take it", async 
   await run(["mode", "us", "maintenance"]);
   assert.deepEqual(locks, [box.layout.lock, "released"]);
   locks.length = 0;
-  await run(["envcheck", "us"]);
+  box.writeEnv("us");
+  assert.deepEqual((await run(["envcheck", "us"])).body, { ok: true, problems: [] });
+  assert.deepEqual((await run(["cron-requests", "us", "0"])).body, { ok: true, count: 0 });
+  assert.deepEqual((await run(["logs", "us", "0"])).body, []);
   await run(["cron-requests", "us", "0"]);
   assert.deepEqual(locks, []);
 
@@ -237,7 +240,7 @@ test("identity requires exactly the expected rows, and import only behind mainte
   writeFileSync(box.layout.modeFile("us"), renderMode("maintenance"));
   writeFileSync(dump, "tampered\n");
   await assert.rejects(importDump(box.ctx, "us", path.basename(dump)), { code: "checksum_mismatch" });
-  assert.ok(!box.calls.some((call) => call.command.endsWith("provision-league-db.sh")), "nothing dropped");
+  assert.ok(!box.calls.some((call) => call.args.some((arg) => arg.endsWith("provision-league-db.sh"))), "nothing dropped");
   assert.throws(() => resolveDump(box.layout, "us", "/tmp/backup.sql"), { code: "bad_file" });
   assert.equal(resolveDump(box.layout, "us", dump), dump);
 });

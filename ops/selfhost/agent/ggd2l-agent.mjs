@@ -181,7 +181,9 @@ export async function main(argv, {
     if (uid() !== 0) throw new AgentError("not_root");
     const ctx = context();
     if (command.verb.mutating) release = lock(ctx.layout.lock);
-    print(await command.verb.run(ctx, command.values, command.flags));
+    const result = await command.verb.run(ctx, command.values, command.flags);
+    // Objects always say ok:true first; `logs` is a bare array of rows.
+    print(Array.isArray(result) || Object.hasOwn(result, "ok") ? result : { ok: true, ...result });
     return 0;
   } catch (error) {
     print(errorBody(error instanceof AgentError ? error : new AgentError("internal")));

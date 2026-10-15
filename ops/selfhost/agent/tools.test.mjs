@@ -77,7 +77,9 @@ test("a backup older than the run never answers for it", async () => {
 test("drill without a sha is the drill unit; with one it runs the helper on that sha's tools", async () => {
   const box = gitBox();
   await drill(box.ctx, "us");
-  assert.deepEqual(box.calls.at(-1).args, ["start", "--wait", "ggd2l-drill@us.service"]);
+  assert.deepEqual(box.calls.at(-2).args, ["start", "--wait", "ggd2l-drill@us.service"]);
+  box.on((command, args) => (args.join(" ") === "show --property=Result --value ggd2l-drill@us.service" ? { stdout: "exit-code\n" } : undefined));
+  await assert.rejects(drill(box.ctx, "us"), { code: "drill_failed" });
   await prepareTools(box.ctx, SHA);
   writeFileSync(box.layout.drillEnv, "PG_RESTORE_TEST_URL=postgresql://x\n");
   await drill(box.ctx, "us", SHA);
@@ -85,7 +87,8 @@ test("drill without a sha is the drill unit; with one it runs the helper on that
   assert.ok(args.includes("User=ggd2l-ops"));
   assert.ok(args.includes(`EnvironmentFile=${box.layout.drillEnv}`));
   assert.ok(args.includes(`GGD2L_TOOLS_DIR=${box.layout.toolsDir(SHA)}`));
-  assert.deepEqual(args.slice(-2), [box.layout.helper("drill-league.sh"), "us"]);
+  assert.deepEqual(args.slice(-3), ["/usr/bin/bash", box.layout.helper("drill-league.sh"), "us"]);
+  assert.ok(args.includes(`HOME=${box.layout.buildHome}`) === false, "the drill runs as ggd2l-ops, not the build user");
 });
 
 test("bot-deploy archives the bot folder, installs production dependencies and links current", async () => {

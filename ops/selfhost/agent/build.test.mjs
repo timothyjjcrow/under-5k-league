@@ -71,6 +71,8 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   assert.ok(install.includes("UnsetEnvironment=NODE_ENV"));
   assert.ok(install.join(" ").endsWith("/usr/bin/npm ci --include=dev --no-audit --no-fund --prefer-offline"));
   assert.ok(!install.some((arg) => arg.startsWith("EnvironmentFile=") || arg.startsWith("NODE_ENV=")));
+  assert.ok(install.includes(`HOME=${box.layout.buildHome}`));
+  assert.ok(install.includes(`npm_config_cache=${box.layout.npmCache}`));
 
   const build = argsOf(box, /scripts\/vercel-build\.mjs/);
   for (const expected of [
@@ -88,6 +90,7 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
     "GGD2L_SKIP_BUILD_TYPECHECK=1",
     "NEXT_TELEMETRY_DISABLED=1",
     `NODE_OPTIONS=${BUILD_NODE_OPTIONS}`,
+    `HOME=${box.layout.buildHome}`,
   ])
     assert.ok(build.includes(expected), expected);
   assert.equal(BUILD_NODE_OPTIONS, "--max-old-space-size=3072");
