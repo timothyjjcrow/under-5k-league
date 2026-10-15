@@ -81,9 +81,12 @@ test("the env examples keep Europe's identity valid and the box-only variables d
   assert.equal(eu.APP_URL, VALID.APP_URL);
   assert.equal(eu.NEXT_PUBLIC_SITE_URL, VALID.APP_URL);
   // Copying an example must never declare the box marker: even "" fails closed.
+  // Match every line shape Next's dotenv loader reads (unquoted, single-quoted,
+  // `export`-prefixed, indented, `KEY: value`), not only the quoted form above.
   for (const name of [".env.example", ".env.europe.example"]) {
     for (const key of ["LEAGUE_DEPLOY_ENV", "CLIENT_IP_HEADER", "NEXT_SERVER_ACTIONS_ENCRYPTION_KEY"]) {
-      assert.equal(key in parse(name), false, `${name} sets ${key}`);
+      assert.doesNotMatch(text(name), new RegExp(`^[\\t ]*(?:export[\\t ]+)?${key}(?:[\\t ]*=|:[\\t ])`, "m"),
+        `${name} sets ${key}`);
       assert.match(text(name), new RegExp(`^# ${key}=`, "m"), `${name} documents ${key}`);
     }
   }

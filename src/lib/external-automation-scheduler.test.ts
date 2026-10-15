@@ -96,8 +96,9 @@ describe("Cloudflare automation scheduler", () => {
       cache: "no-store",
       redirect: "manual",
     });
-    // Exactly these headers: the named user agent keeps Cloudflare's Browser
-    // Integrity Check from challenging the tick, and nothing else rides along.
+    // Exactly these headers, nothing else riding along. The named user agent
+    // marks scheduler passes in access logs; it does not exempt them from
+    // Browser Integrity Check (the zone's BIC skip rule does that).
     expect(init?.headers).toEqual({
       authorization: `Bearer ${SECRET}`,
       accept: "application/json",

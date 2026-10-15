@@ -1,10 +1,13 @@
 const AUTOMATION_PATH = "/api/cron/automation";
 const REQUEST_TIMEOUT_MS = 65_000;
 const MAX_RESPONSE_BYTES = 2_048;
-// The target sits behind a proxied Cloudflare zone, whose Browser Integrity
-// Check may challenge a request without a User-Agent; a challenged tick is a
-// failed pass. A fixed name also lets access logs tell scheduler passes apart
-// from people.
+// A fixed name lets access logs tell scheduler passes apart from people. It
+// does NOT get a tick past the zone's Browser Integrity Check: BIC challenges
+// a missing AND a non-standard user agent, and a challenged tick is a 403, a
+// failed pass. The zone must skip BIC for this path (a WAF custom rule with a
+// Skip action; the bearer still guards the route), and a pre-cutover request
+// with this user agent must get the app's own 401, never `cf-mitigated:
+// challenge`.
 const USER_AGENT = "ggd2l-automation-scheduler";
 
 export type SchedulerEnv = {
