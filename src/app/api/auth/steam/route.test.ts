@@ -69,4 +69,31 @@ describe("Steam login kickoff return path", () => {
     });
     expect(new Date(cookie?.expires ?? 1).getTime()).toBe(0);
   });
+
+  it("hands Steam the canonical origin on a self-hosted league", async () => {
+    vi.stubEnv("LEAGUE_DEPLOY_ENV", "production");
+    vi.stubEnv("APP_URL", "https://us.ggd2l.com");
+    const res = await GET(
+      new NextRequest("https://127.0.0.1:3001/api/auth/steam?next=%2Fme"),
+    );
+
+    const steam = new URL(res.headers.get("location")!);
+    const returnTo = new URL(steam.searchParams.get("openid.return_to")!);
+    expect(returnTo.origin).toBe("https://us.ggd2l.com");
+    expect(returnTo.pathname).toBe("/api/auth/steam/callback");
+    expect(steam.searchParams.get("openid.realm")).toBe("https://us.ggd2l.com");
+  });
+
+  it("keeps APP_URL as Steam's return base when the deployment is undeclared", async () => {
+    vi.stubEnv("APP_URL", "https://ggd2l.example");
+    const res = await GET(
+      new NextRequest("https://league.example/api/auth/steam"),
+    );
+
+    const steam = new URL(res.headers.get("location")!);
+    expect(
+      new URL(steam.searchParams.get("openid.return_to")!).origin,
+    ).toBe("https://ggd2l.example");
+    expect(steam.searchParams.get("openid.realm")).toBe("https://ggd2l.example");
+  });
 });

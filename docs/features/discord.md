@@ -24,7 +24,16 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Put every Discord write behind `discordMutationsAllowed()`**
   (`discord-mutation-policy.ts`). Vercel previews may carry production
   credentials, so posts, edits, deletes, role changes, joins and outbox
-  enqueues refuse there; reads still work.
+  enqueues refuse there; reads still work. A declared `LEAGUE_DEPLOY_ENV`
+  (`leagueDeployEnv`, the box's marker) opens them only when it is exactly
+  `production`: the cutover rehearsal and the staging slot run `staging`
+  against a copy of a league's database, whose webhook rows and message ids
+  would otherwise post into the real server. Undeclared (Vercel production,
+  development, tests) behaves as before.
+  `test/integration/discord-deploy-env.itest.ts` pins that a staging send
+  makes no request. The staging env also carries no bot token, OAuth secret
+  or webhook (the env contract refuses them) and its database's webhook rows
+  are scrubbed: three locks, so a stray post needs all three to fail.
 - **Branch on `res.ok`, and on the body's `code` where a status is
   ambiguous.** Discord errors are valid JSON, so a parsed body proves nothing.
   `GET /guilds/{g}/members/@me` is not a route (400 "not snowflake"): a bot

@@ -1,0 +1,31 @@
+# The Cloudflare Tunnel that is the box's only public ingress (design §1.8, D1).
+# Outbound only: cloudflared dials Cloudflare, then hands each request for
+# us/eu/apex/www.ggd2l.com to Caddy on 127.0.0.1:8080. Nothing listens
+# publicly but SSH.
+#
+# Installed disabled; enabled once /etc/cloudflared/config.yml and the
+# tunnel's <uuid>.json credentials exist (install-kit.sh renders the config).
+[Unit]
+Description=GGD2L Cloudflare Tunnel to Caddy on 127.0.0.1:8080
+After=network-online.target caddy.service
+Wants=network-online.target
+# A tunnel that gives up after a burst of failures takes both sites down;
+# keep retrying for as long as it takes.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=cloudflared
+Group=cloudflared
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+Restart=always
+RestartSec=5
+MemoryMax=200M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

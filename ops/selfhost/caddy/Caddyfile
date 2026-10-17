@@ -1,0 +1,83 @@
+# GGD2L Caddy configuration (design §1.7). install-kit.sh installs this file
+# as /etc/caddy/Caddyfile; edit it here, never on the box.
+#
+# Caddy listens only on 127.0.0.1:8080 and is reached only by cloudflared, so
+# TLS ends at Cloudflare and CF-Connecting-IP is the client address (a tunnel
+# request cannot carry a forged one). Each league's routing lives in its mode
+# file, /etc/caddy/ggd2l/<lg>-mode.caddy, which the release agent rewrites:
+#   proxy        live: every request goes to the live slot
+#   allowlist    rehearsal and first look: only the addresses in
+#                /etc/caddy/ggd2l/allow.caddy reach the slot
+#   maintenance  everyone gets the 503 maintenance page
+# The reference copies of the three forms are beside this file.
+{
+	admin localhost:2019
+	auto_https off
+	servers {
+		trusted_proxies static 127.0.0.1/32 ::1/128
+		client_ip_headers CF-Connecting-IP
+	}
+}
+
+http://us.ggd2l.com:8080 {
+	bind 127.0.0.1
+	log {
+		output file /var/log/caddy/us.access.json {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+	# Every build's chunks, so a tab opened before a release still loads its
+	# own (D6). Only files that exist are cached for good.
+	handle /_next/static/* {
+		root * /srv/ggd2l/us/static
+		@exists file
+		header @exists Cache-Control "public, max-age=31536000, immutable"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+	handle {
+		import /etc/caddy/ggd2l/us-mode.caddy
+	}
+}
+
+http://eu.ggd2l.com:8080 {
+	bind 127.0.0.1
+	log {
+		output file /var/log/caddy/eu.access.json {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+	handle /_next/static/* {
+		root * /srv/ggd2l/eu/static
+		@exists file
+		header @exists Cache-Control "public, max-age=31536000, immutable"
+		header X-Content-Type-Options nosniff
+		file_server
+	}
+	handle {
+		import /etc/caddy/ggd2l/eu-mode.caddy
+	}
+}
+
+# The bare domain and www go to the US league, keeping path and query.
+http://ggd2l.com:8080, http://www.ggd2l.com:8080 {
+	bind 127.0.0.1
+	log {
+		output file /var/log/caddy/apex.access.json {
+			roll_size 10MiB
+			roll_keep 5
+		}
+		format json
+	}
+	redir https://us.ggd2l.com{uri} 302
+}
+
+# Any other Host (cloudflared sends only the four above): nothing to serve.
+http://:8080 {
+	bind 127.0.0.1
+	respond 404
+}

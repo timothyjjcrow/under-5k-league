@@ -108,7 +108,6 @@ export async function GET(req: NextRequest) {
 
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const site = resolveSiteUrl();
-  const host = new URL(site).host;
   const calName = selectedTeam
     ? `${selectedTeam.name} — ${season.name}`
     : `${season.name} schedule`;
@@ -116,10 +115,12 @@ export async function GET(req: NextRequest) {
   const cal = buildCalendar(
     calName,
     matches.map((m) => ({
-      uid: `${m.id}@${host}`,
+      uid: `${m.id}@${LEAGUE_CONFIG.calendarUidHost}`,
       stamp: m.createdAt,
       // The UID format must never change: calendar apps key events on it, so
       // a new format would give every subscriber a duplicate of each match.
+      // Its host is pinned (calendarUidHost), never the site's, so moving the
+      // site to a new domain leaves every UID as it was.
       // Every retime path bumps scheduleRevision, so a subscribed calendar
       // replaces its copy instead of keeping the old kickoff.
       sequence: m.scheduleRevision,

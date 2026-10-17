@@ -1,0 +1,17 @@
+# /etc/caddy/ggd2l/<lg>-mode.caddy in "maintenance" mode: every request gets
+# the 503 maintenance page. install-kit.sh writes this file for a league that
+# has no mode file yet, so a fresh box serves maintenance everywhere; the
+# release agent's maintenance mode writes the same thing.
+#
+# file_server answers only GET and HEAD, so other methods (a form post, a
+# queue join) get the same 503 as plain text instead of a 405.
+header Retry-After 600
+header Cache-Control no-store
+header X-Robots-Tag "noindex, nofollow"
+@write not method GET HEAD
+respond @write "GGD2L is under maintenance. Check the league Discord for updates." 503
+root * /srv/ggd2l/www
+rewrite * /maintenance.html
+file_server {
+	status 503
+}

@@ -57,6 +57,12 @@ export function createLeagueConfig(env: LeagueEnvironment) {
     region,
     name,
     footerNote,
+    // The host in every calendar event's UID (`<id>@<host>`): the league's
+    // first public host, pinned. Calendar apps key events on the UID, so it
+    // must not follow the site to a new domain (us.ggd2l.com, eu.ggd2l.com),
+    // or each subscriber gets a duplicate of every event. Links in the events
+    // still use the site URL.
+    calendarUidHost: europe ? "ggd2l-europe.vercel.app" : "ggd2l.vercel.app",
     merchUrl: "https://ggd2l-shop.fourthwall.com/",
     branding: {
       blendMode: europe ? "lighten" : "normal",

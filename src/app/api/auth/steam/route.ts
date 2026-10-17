@@ -7,13 +7,14 @@ import {
   safeReturnPath,
 } from "@/lib/return-path";
 import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
+import { providerReturnBase } from "@/lib/public-origin";
 
 // Kicks off Steam sign-in by redirecting to Steam's OpenID endpoint. A
 // validated ?next= (same-origin relative path) rides a short-lived httpOnly
 // cookie so the callback can land the user back where they clicked Sign in,
 // keeping the OpenID return_to canonical.
 export async function GET(req: NextRequest) {
-  const base = process.env.APP_URL || req.nextUrl.origin;
+  const base = providerReturnBase(req);
   const state = randomBytes(32).toString("base64url");
   const returnTo = new URL("/api/auth/steam/callback", base);
   returnTo.searchParams.set("state", state);

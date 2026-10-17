@@ -10,6 +10,7 @@ import {
 } from "@/lib/discord-oauth";
 import { handleDiscordCallback } from "@/lib/discord-link-service";
 import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
+import { providerReturnBase, publicOrigin } from "@/lib/public-origin";
 
 // Thin shell over handleDiscordCallback (all guards + branches live there,
 // integration-tested). Every exit clears the one-shot state cookie and lands
@@ -19,7 +20,9 @@ export async function GET(req: NextRequest) {
   // Provider callbacks are small. Reject an oversized URL before session/DB
   // work and never reflect any of it into logs or a redirect.
   if (req.nextUrl.search.length > 4096) {
-    return NextResponse.redirect(new URL("/me?discord=error", req.url));
+    return NextResponse.redirect(
+      new URL("/me?discord=error", publicOrigin(req)),
+    );
   }
 
   const user = await getSessionUser();
@@ -58,7 +61,7 @@ export async function GET(req: NextRequest) {
       ).allowed
     ) {
       const limited = NextResponse.redirect(
-        new URL("/me?discord=error", req.url),
+        new URL("/me?discord=error", publicOrigin(req)),
       );
       expireHttpOnlyCookie(limited.cookies, DISCORD_OAUTH_COOKIE);
       return limited;
@@ -73,10 +76,10 @@ export async function GET(req: NextRequest) {
     cookie,
     clientId: process.env.DISCORD_CLIENT_ID ?? "",
     clientSecret: process.env.DISCORD_CLIENT_SECRET ?? "",
-    redirectUri: `${process.env.APP_URL || req.nextUrl.origin}/api/auth/discord/callback`,
+    redirectUri: `${providerReturnBase(req)}/api/auth/discord/callback`,
   });
 
-  const res = NextResponse.redirect(new URL(redirect, req.url));
+  const res = NextResponse.redirect(new URL(redirect, publicOrigin(req)));
   // Consume the one-shot cookie only for a callback proven to belong to this
   // browser/user. An unsolicited or mismatched top-level GET must not cancel a
   // legitimate linking flow already open in another tab.

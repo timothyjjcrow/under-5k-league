@@ -1,5 +1,6 @@
 import { listPage } from "@/lib/list-page";
 import { webAnalyticsUrl } from "@/lib/web-analytics";
+import { siteAnalyticsEnabled } from "@/lib/site-analytics";
 import {
   adminSeasonCards,
   coverProblemMatchIds,
@@ -814,20 +815,24 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       ) : null}
 
       {/* One outbound link, so a footer line rather than a card. Each league
-          is its own Vercel project; the link follows this deployment's region. */}
-      <p className="border-t border-line-soft pt-4 text-xs text-muted">
-        Website traffic:{" "}
-        <a
-          href={webAnalyticsUrl(LEAGUE_CONFIG.region)}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={textLink()}
-        >
-          open {LEAGUE_CONFIG.name} in Vercel Web Analytics ↗
-        </a>{" "}
-        (needs access to the league&rsquo;s Vercel project; admin, account and
-        sign-in pages aren&rsquo;t counted).
-      </p>
+          is its own Vercel project; the link follows this deployment's region.
+          Only Vercel production counts traffic there: the self-hosted box
+          reads Cloudflare's zone analytics, so it shows no link. */}
+      {siteAnalyticsEnabled() ? (
+        <p className="border-t border-line-soft pt-4 text-xs text-muted">
+          Website traffic:{" "}
+          <a
+            href={webAnalyticsUrl(LEAGUE_CONFIG.region)}
+            target="_blank"
+            rel="noopener noreferrer"
+            className={textLink()}
+          >
+            open {LEAGUE_CONFIG.name} in Vercel Web Analytics ↗
+          </a>{" "}
+          (needs access to the league&rsquo;s Vercel project; admin, account and
+          sign-in pages aren&rsquo;t counted).
+        </p>
+      ) : null}
     </div>
   );
 }

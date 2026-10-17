@@ -1,0 +1,12 @@
+# Weekly restore drill (design §5.1): Sunday 10:30 UTC. Europe runs an hour
+# later through the ggd2l-drill@eu.timer.d drop-in, so the two drills never
+# share the scratch database or the CPU.
+[Unit]
+Description=GGD2L %i weekly restore drill
+
+[Timer]
+OnCalendar=Sun *-*-* 10:30:00 UTC
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -206,10 +206,11 @@ In the Captains & draft card on `/admin` and inside the room
   who act poll at the room's `pollMs` (2s, source-guarded); everyone else
   (spectators, players in the pool, drafted players) at
   `DRAFT_ROOM.POLL_WATCH_MS` (5s) live and `POLL_WATCH_IDLE_MS` in the
-  waiting room. Every poll is a function call on the Vercel Hobby plan both
-  leagues share: a two-hour auction with 10 captains and admins and 25
-  watchers was ~130,000 calls at the old 1.2s/2.5s, about 40 minutes of the
-  plan's four CPU hours a month, and these rates roughly halve it. A bid
+  waiting room. Every poll is a request to the one box both leagues share,
+  with database reads behind it. The rates were set on Vercel's Hobby plan,
+  where a two-hour auction with 10 captains and admins and 25 watchers was
+  ~130,000 calls at the old 1.2s/2.5s, about 40 minutes of its four CPU hours
+  a month; these rates roughly halve that load, and stay until Tim asks. A bid
   resets a 30s clock, so a captain sees it with most of the clock left and a
   watcher a few seconds on (`room-poll.test.ts` keeps the watch rate inside
   the clock). A hidden tab keeps polling only

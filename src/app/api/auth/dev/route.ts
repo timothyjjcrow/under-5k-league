@@ -5,6 +5,7 @@ import { upsertLeagueUser } from "@/lib/users";
 import { safeReturnPath } from "@/lib/return-path";
 import { steamProfileUrl } from "@/lib/steam";
 import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
+import { publicOrigin } from "@/lib/public-origin";
 
 // Mock login for local development and automated tests. Disabled unless
 // ALLOW_DEV_LOGIN=true, and hard-blocked in production regardless (defense in
@@ -34,5 +35,5 @@ export async function GET(req: NextRequest) {
   });
   invalidateAutomationGateBestEffort();
   await createSession(user.id);
-  return NextResponse.redirect(new URL(redirectTo, req.url));
+  return NextResponse.redirect(new URL(redirectTo, publicOrigin(req)));
 }
