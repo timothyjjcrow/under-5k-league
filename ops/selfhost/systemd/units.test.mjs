@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { RELEASE_WRITABLE_DIRS } from "../agent/layout.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SELFHOST = path.resolve(DIR, "..");
@@ -196,12 +197,31 @@ test("each slot resolves to its own league's user, files, cache and port", () =>
       `/etc/ggd2l/${lg}-slot-${slot}.env`,
       `/srv/ggd2l/${lg}/slots/${slot}/.release.env`,
     ]);
-    // The only writable path is this slot's own cache.
-    assert.deepEqual(all(unit, "Service", "ReadWritePaths").map((v) => resolve(v, name)),
-      [`/srv/ggd2l/${lg}/slots/${slot}/.next/cache`]);
+    // The only writable paths are this slot's own caches.
+    assert.deepEqual(writable(unit).map((v) => resolve(v, name)), [
+      `/srv/ggd2l/${lg}/slots/${slot}/.next/cache`,
+      `-/srv/ggd2l/${lg}/slots/${slot}/.next/server/route-cache`,
+    ]);
     assert.ok(installKit.includes(`write_slot_env ${lg} ${slot} ${port}\n`), `install-kit.sh writes PORT=${port} for ${lg}-${slot}`);
   }
   assert.equal(new Set(Object.values(ports)).size, 4);
+});
+
+test("a league slot can write exactly the release folders the build gives the league user", () => {
+  // ProtectSystem=strict makes the rest of the release read-only, so a folder
+  // `next start` writes that is missing here fails every write to it (the
+  // route-cache warnings of 2026-10-17), and one the build does not create
+  // fails the unit unless it is optional.
+  const unit = units.get("ggd2l-us@.service");
+  const slotDir = "/srv/ggd2l/%j/slots/%i";
+  assert.deepEqual(writable(unit).map((entry) => entry.replace(/^-/, "")),
+    RELEASE_WRITABLE_DIRS.map((relative) => `${slotDir}/${relative}`));
+  // Every build has made .next/cache. Only route-cache, which builds made
+  // before it was added lack, may be absent: a rollback to one must start.
+  assert.deepEqual(writable(unit).filter((entry) => entry.startsWith("-")), [`-${slotDir}/.next/server/route-cache`]);
+  // `rm -rf .next/cache/fetch-cache` wipes inside a writable folder.
+  for (const command of all(unit, "Service", "ExecStartPre").filter((c) => c.startsWith("/usr/bin/rm ")))
+    assert.ok(RELEASE_WRITABLE_DIRS.some((relative) => command.endsWith(` ${relative}/fetch-cache`)), command);
 });
 
 test("backups run hourly at :17 as ggd2l-ops, with only their own env (§5.1)", () => {

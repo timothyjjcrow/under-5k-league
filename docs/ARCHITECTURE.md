@@ -1317,7 +1317,10 @@ is enabled. Caddy removes `X-Vercel-Forwarded-For`, `X-Real-IP` and
 passes `Host` through. A promote restarts the target slot clean, swaps the
 league's Caddy mode file and reloads Caddy; a rollback is a promote of the
 previous release. Every slot start deletes `.next/cache/fetch-cache`, because
-Next keeps cache tag state only in a process's memory. One fixed
+Next keeps cache tag state only in a process's memory. A slot's user can write
+only `.next/cache` and `.next/server/route-cache` (Next's response cache for
+prerendered routes) of its release (`RELEASE_WRITABLE_DIRS`), and each process
+holds one Prisma pool (`src/lib/prisma.ts`). One fixed
 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` per league keeps action ids stable
 across releases. PostgreSQL 18 holds both leagues' databases on
 127.0.0.1:5432. `ops/selfhost/` is the kit, and `ops/selfhost/README.md` its
