@@ -40,7 +40,11 @@ umask 077
 
 # The box always uses /etc/ggd2l; the test points this at a scratch folder.
 ETC_DIR="${GGD2L_ETC_DIR:-/etc/ggd2l}"
-URL_PARAMS="schema=public&sslmode=disable&connection_limit=8&pool_timeout=10&connect_timeout=5"
+# connection_limit is per Prisma pool, and a long-lived `next start` process
+# holds two (separate module instances of src/lib/prisma.ts; measured on the
+# box 2026-10-17: 16 sockets per process at 8). 4 keeps four processes (the
+# brief EU-promote overlap) at 32 of the 47 usable connections.
+URL_PARAMS="schema=public&sslmode=disable&connection_limit=4&pool_timeout=10&connect_timeout=5"
 
 usage() { echo "usage: provision-league-db.sh us|eu [--recreate]" >&2; exit 2; }
 die() { echo "provision-league-db: $*" >&2; exit 1; }
