@@ -230,6 +230,13 @@ more, so a writer that skips Rule P still shows stale rows.
   production classification or an earlier main commit's passing shards for a
   mutation-neutral delta (README has the recovery). `mutation-nightly.yml` verifies
   everything daily at 07:00 UTC. Keep the job names; `release:both` reads them.
+- **CI's PostgreSQL starts from a step, never a `services:` container.** Each
+  Postgres job's "Start PostgreSQL 18" step (`scripts/ci-postgres.mjs`) runs
+  the official image for the job's `PG_TEST_URL`, pulled from mirror.gcr.io,
+  ECR Public or Docker Hub, whichever answers first, with no secret. Shared
+  runner IPs exhaust one registry's anonymous limit at a time, and a service
+  pulls from only one ([DECISIONS](../DECISIONS.md#code-and-schema)). Keep its
+  step identical in every job; `scripts/shared-release.test.mjs` checks them.
 - **The runner owns guarded files while it runs.** It mutates them in place; do
   not edit or interrupt it, and inspect the diff after any abnormal end.
 - **`--only` is a probe.** It never writes the baseline and is refused in verify
