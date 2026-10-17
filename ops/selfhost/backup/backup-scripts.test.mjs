@@ -10,10 +10,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync,
-  rmSync, statSync, symlinkSync, utimesSync, writeFileSync,
-} from "node:fs";
+import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -26,6 +23,7 @@ const APP_URL = (lg) =>
   `postgresql://ggd2l_${lg}_app:${APP_PASSWORD}@127.0.0.1:5432/ggd2l_${lg}?schema=public&sslmode=disable&connection_limit=8&pool_timeout=10&connect_timeout=5`;
 const REHEARSAL_PASSWORD = "f00dfacecafe0123";
 const REHEARSAL_URL = `postgresql://ggd2l_rehearsal:${REHEARSAL_PASSWORD}@127.0.0.1:5432/ld2l_restore_test`;
+const LIVE_TOOLS = "aaaaaaaaaaaa";
 const HC = {
   HC_PING_BACKUP_US: "https://hc-ping.com/11111111-backup-us",
   HC_PING_DRILL: "https://hc-ping.com/33333333-drill",
@@ -125,7 +123,13 @@ process.stdout.write(String(codes[url] ?? 200));
     mkdirSync(path.join(folder, "scripts"), { recursive: true });
     mkdirSync(path.join(folder, "src", "lib"), { recursive: true });
     copyFileSync(path.join(REPO_ROOT, "src/lib/postgres-cli-env.mjs"), path.join(folder, "src/lib/postgres-cli-env.mjs"));
+    // The real script runs its main block only when import.meta.url equals
+    // pathToFileURL(argv[1]); Node resolves symlinks for import.meta.url, so a
+    // run through tools/current (a symlink on the box) would do nothing and
+    // exit 0. The fake keeps that guard so the drill must use the real path.
     writeFileSync(path.join(folder, "scripts/rehearse-backup-restore.mjs"), `${record.replace("require(\"node:fs\")", "await import(\"node:fs\")")}
+const { pathToFileURL } = await import("node:url");
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
 record({ tool: "rehearse", tools: ${JSON.stringify(name)}, args, cwd: process.cwd(),
   receiptSecret: process.env.BACKUP_RECEIPT_SECRET ?? null, checkpointDisable: process.env.CHECKPOINT_DISABLE ?? null,
   restoreUrlSet: Boolean(process.env.PG_RESTORE_TEST_URL) });
@@ -133,9 +137,12 @@ console.log("Verified backup: " + args[0]);
 for (let i = 0; i < 50; i += 1) console.log("COPY " + i);
 if (flag("rehearse-fail")) { console.error("Restore rehearsal failed: boom"); process.exit(1); }
 console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 17 current migrations.");
+}
 `);
   };
-  for (const name of ["current", "0123456789ab"]) makeDrillTools(path.join(drillTools, name));
+  // As on the box: tools/current is a symlink to the live commit's clone.
+  for (const name of [LIVE_TOOLS, "0123456789ab"]) makeDrillTools(path.join(drillTools, name));
+  symlinkSync(LIVE_TOOLS, path.join(drillTools, "current"));
   // Tools for the backup: the real repository scripts.
   const backupTools = path.join(dir, "backup-tools");
   mkdirSync(backupTools);
@@ -433,7 +440,7 @@ test("the drill restores the newest dump with the rehearsal role, then drops the
     const newest = path.join(local, "backup-2026-10-16T14-17-00-000-1.sql");
     const rehearse = box.calls().find((call) => call.tool === "rehearse");
     assert.deepEqual(rehearse.args, [newest]);
-    assert.equal(rehearse.tools, "current");
+    assert.equal(rehearse.tools, LIVE_TOOLS, "tools/current is run through its real path");
     assert.equal(rehearse.receiptSecret, null);
     assert.equal(rehearse.checkpointDisable, "1");
     assert.equal(rehearse.restoreUrlSet, true);
@@ -533,7 +540,7 @@ test("the pre-migration drill restores with the tools GGD2L_TOOLS_DIR names, nev
     const result = box.drill(["us"], { GGD2L_TOOLS_DIR: named, HC_PING_DRILL: HC.HC_PING_DRILL });
     assert.equal(result.status, 0, result.stderr);
     assert.deepEqual(box.calls().filter((call) => call.tool === "rehearse").map((call) => call.tools), ["0123456789ab"]);
-    assert.equal(lastReport(result).tools, named);
+    assert.equal(lastReport(result).tools, realpathSync(named), "the report names the real tools folder");
     assert.match(result.stderr, /restoring backup-2026-10-16T14-17-00-000-1\.sql with .*\/0123456789ab\n/);
 
     // The SHA as an argument, alone or agreeing with the environment, also works.
