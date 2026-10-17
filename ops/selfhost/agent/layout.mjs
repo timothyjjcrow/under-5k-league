@@ -31,6 +31,15 @@ export const MIN_BUILD_FREE_BYTES = 5 * 1024 ** 3;
 export const STATIC_RETENTION_MS = 14 * 24 * 60 * 60_000;
 export const TOOLS_KEPT = 2;
 
+// Every folder of a release that `next start` (Next 16.3) writes at runtime:
+// .next/cache holds the data cache (fetch-cache) and the image cache, and
+// .next/server/route-cache the response cache for prerendered routes (Next
+// copies each build seed there on first read and writes every re-render).
+// Found in Next's file-system cache and image optimizer, and by booting a
+// build and listing what it wrote. The build gives the league user exactly
+// these, and the slot unit's ReadWritePaths= names the same list.
+export const RELEASE_WRITABLE_DIRS = Object.freeze([".next/cache", ".next/server/route-cache"]);
+
 export const BIN = Object.freeze({
   bash: "/usr/bin/bash",
   caddy: "/usr/bin/caddy",

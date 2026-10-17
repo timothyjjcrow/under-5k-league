@@ -189,7 +189,12 @@ describe("loadStreamOverlay", () => {
 
   it("sends display fields only", async () => {
     const { tonight } = await setUp();
-    const text = JSON.stringify(await loadStreamOverlay(tonight.id)).toLowerCase();
+    // Ids are random cuids, so one can spell "mmr" by chance (the likely cause
+    // of a red mutation shard, 2026-10-17): mask them, check everything else.
+    const text = JSON.stringify(
+      await loadStreamOverlay(tonight.id),
+      (key, value) => (key === "id" ? "<id>" : value),
+    ).toLowerCase();
     for (const word of ["mmr", "discord", "steamid", "pubstats", "accountid"]) {
       expect(text).not.toContain(word);
     }

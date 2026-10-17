@@ -333,6 +333,9 @@ jobs:
       # header) and run the smoke the box's agent runs before every promote:
       # it fails a site that judges origins by its bind address. Then SIGTERM
       # must stop it within 15 s with Next's 143, which the units expect.
+      # Last, every file the boot wrote must lie in a folder a box slot may
+      # write (RELEASE_WRITABLE_DIRS; the rest of a release is read-only), so
+      # a folder a Next upgrade starts writing fails here, not on the box.
       - name: Boot the built site the way the box runs it
         shell: bash
         env:
@@ -354,6 +357,11 @@ jobs:
         run: |
           set -euo pipefail
           log="${RUNNER_TEMP}/next-start.log"
+          # The agent's build creates these for the league user; so does this.
+          writable="$(node --input-type=module -e 'const { RELEASE_WRITABLE_DIRS } = await import("./ops/selfhost/agent/layout.mjs"); console.log(RELEASE_WRITABLE_DIRS.join(" "))')"
+          for dir in ${writable}; do mkdir -p "${dir}"; done
+          marker="${RUNNER_TEMP}/next-start.marker"
+          touch "${marker}"
           node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3100 \
             --keepAliveTimeout 75000 > "${log}" 2>&1 &
           server=$!
@@ -377,6 +385,15 @@ jobs:
           node ops/selfhost/smoke/smoke.mjs --base http://127.0.0.1:3100 \
             --host ci.ld2l.invalid --origin https://ci.ld2l.invalid --region us \
             --commit "${GITHUB_SHA}" --expect staging --public-dir public || smoke=$?
+          # The prerendered routes: Next copies each build seed into its
+          # response cache on the first read.
+          for route in /manifest.webmanifest /robots.txt; do
+            if ! curl -fs --max-time 10 -o /dev/null -H "Host: ci.ld2l.invalid" \
+              -H "X-Forwarded-Proto: https" "http://127.0.0.1:3100${route}"; then
+              echo "::error::${route} did not answer 200"
+              exit 1
+            fi
+          done
           started="${SECONDS}"
           if ! kill -TERM "${server}" 2>/dev/null; then
             echo "::error::next start had already exited"
@@ -406,6 +423,17 @@ jobs:
             exit 1
           fi
           echo "next start stopped with 143, $((SECONDS - started)) s after SIGTERM"
+          allowed="^\./($(printf '%s\n' ${writable} | sed 's/\./\\./g' | paste -sd '|' -))(/|$)"
+          outside="$(find . -path ./.git -prune -o -newer "${marker}" -print | grep -v '^\.$' | grep -Ev "${allowed}" || true)"
+          if [ -n "${outside}" ]; then
+            echo "::error::next start wrote outside the folders a box slot may write (RELEASE_WRITABLE_DIRS in ops/selfhost/agent/layout.mjs)"
+            echo "${outside}"
+            exit 1
+          fi
+          if ! find .next/server/route-cache -type f -name 'manifest.webmanifest.*' | grep -q .; then
+            echo "::error::next start kept no response cache in .next/server/route-cache"
+            exit 1
+          fi
           if [ "${smoke}" != 0 ]; then
             echo "::error::the self-host smoke failed (its JSON is above)"
           fi
