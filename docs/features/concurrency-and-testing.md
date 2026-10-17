@@ -232,13 +232,11 @@ more, so a writer that skips Rule P still shows stale rows.
   everything daily at 07:00 UTC. Keep the job names; `release:both` reads them.
 - **CI's PostgreSQL starts from a step, never a `services:` container.** Each
   Postgres job's "Start PostgreSQL 18" step (`scripts/ci-postgres.mjs`) runs
-  the official image for the job's `PG_TEST_URL`, signed in to Docker Hub with
-  the `DOCKERHUB_USERNAME` variable and `DOCKERHUB_TOKEN` secret where they
-  exist, else from ECR Public, and the other registry if one refuses. Shared
-  runner IPs exhaust both registries' anonymous limits, and a service can't
-  sign in without breaking a fork's pull request, which gets no secrets
-  ([DECISIONS](../DECISIONS.md#code-and-schema)). Keep its step identical in
-  every job; `scripts/shared-release.test.mjs` checks them.
+  the official image for the job's `PG_TEST_URL`, pulled from mirror.gcr.io,
+  ECR Public or Docker Hub, whichever answers first, with no secret. Shared
+  runner IPs exhaust one registry's anonymous limit at a time, and a service
+  pulls from only one ([DECISIONS](../DECISIONS.md#code-and-schema)). Keep its
+  step identical in every job; `scripts/shared-release.test.mjs` checks them.
 - **The runner owns guarded files while it runs.** It mutates them in place; do
   not edit or interrupt it, and inspect the diff after any abnormal end.
 - **`--only` is a probe.** It never writes the baseline and is refused in verify

@@ -9,7 +9,7 @@ import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCov
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
-import { DOCKER_HUB, ECR_PUBLIC, POSTGRES_MAJOR } from "./ci-postgres.mjs";
+import { POSTGRES_MAJOR, SOURCES } from "./ci-postgres.mjs";
 
 const sha = "a".repeat(40);
 const baseSha = "b".repeat(40);
@@ -326,34 +326,32 @@ function workflowJobs(text) {
   const jobs = text.slice(text.indexOf("\njobs:\n"));
   return [...jobs.matchAll(/^ {2}([\w-]+):\n((?:(?: {4}.*)?\n)*)/gm)].map((match) => [match[1], match[2]]);
 }
-// Anonymous pulls fail on GitHub's shared runner IPs at both registries that
-// carry the official image: Docker Hub's per-IP limit failed all five Postgres
-// jobs on main on 2026-10-09, and ECR Public's per-IP data limit failed six on
-// PR #78 on 2026-10-17. A service container can't sign in only where the token
-// exists (its `credentials` must be non-empty and its `image` can't read
-// secrets), so a fork's pull request would fail. Every Postgres job therefore
-// starts PostgreSQL 18, both leagues' major, from one step:
-// scripts/ci-postgres.mjs signs in to Docker Hub when it can and falls back to
-// ECR Public. The token reaches that step and nothing else.
-test("every Postgres job starts PostgreSQL 18 from the step that signs in to Docker Hub only where the token exists", () => {
+// Anonymous pulls fail on GitHub's shared runner IPs one registry at a time:
+// Docker Hub's per-IP limit failed all five Postgres jobs on main on
+// 2026-10-09, and ECR Public's anonymous data cap six on PR #78 on 2026-10-17.
+// A service container pulls from one registry, three times a few seconds
+// apart. Every Postgres job therefore starts PostgreSQL 18, both leagues'
+// major, from one step: scripts/ci-postgres.mjs falls back across three
+// registries that serve the official image to anyone, so no step needs a
+// secret and a fork's pull request pulls the same way.
+test("every Postgres job starts PostgreSQL 18 from the step that falls back across three registries", () => {
   assert.equal(POSTGRES_MAJOR, "18");
-  assert.equal(DOCKER_HUB.image, "docker.io/library/postgres:18");
-  assert.equal(ECR_PUBLIC.image, "public.ecr.aws/docker/library/postgres:18");
+  assert.deepEqual(SOURCES.map((source) => source.image), [
+    "mirror.gcr.io/library/postgres:18",
+    "public.ecr.aws/docker/library/postgres:18",
+    "docker.io/library/postgres:18",
+  ]);
   const start = [
     `      - name: Start PostgreSQL ${POSTGRES_MAJOR}`,
     "        timeout-minutes: 10",
-    "        env:",
-    "          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}",
-    "          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}",
     "        run: node scripts/ci-postgres.mjs",
   ].join("\n");
   const dir = new URL("../.github/workflows/", import.meta.url);
   const started = [];
   for (const file of readdirSync(dir).filter((name) => /\.ya?ml$/.test(name))) {
     const text = readFileSync(new URL(file, dir), "utf8");
-    // A service or job container is pulled anonymously before the first step.
+    // A service or job container is pulled before the first step, from one registry.
     assert.doesNotMatch(text, /^ +(?:services|image|credentials):/m, `${file} pulls no image before its steps`);
-    assert.equal(text.split("secrets.DOCKERHUB_TOKEN").length, text.split(start).length, `${file} hands the token only to the start step`);
     for (const [job, body] of workflowJobs(text)) {
       if (!body.includes("PG_TEST_URL")) continue;
       const steps = body.indexOf("\n    steps:\n");
