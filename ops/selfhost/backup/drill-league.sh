@@ -61,6 +61,11 @@ elif [ -n "${sha}" ]; then
 else
   TOOLS_DIR="${TOOLS_ROOT}/current"
 fi
+# tools/current is a symlink. Node resolves a script's own path through links,
+# so rehearse-backup-restore.mjs run as .../current/scripts/... sees
+# import.meta.url != argv[1], skips its main block and exits 0 having restored
+# nothing (found on the box 2026-10-17). Run every tool by its real path.
+if [ -e "${TOOLS_DIR}" ]; then TOOLS_DIR="$(readlink -f -- "${TOOLS_DIR}")"; fi
 BACKUP_ROOT="${GGD2L_BACKUP_ROOT:-/var/backups/ggd2l}"
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
 LEAGUE_DIR="${BACKUP_ROOT}/${lg}"
