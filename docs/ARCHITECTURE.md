@@ -1267,8 +1267,9 @@ Five layers (depth and the doctrine behind each in CLAUDE.md and
    repo directory.
 
 CI (`.github/workflows/ci.yml`) runs: types + unit + SQLite integration; the
-integration suite on a Postgres service container; the 4-shard mutation
-matrix; and all three Playwright suites sequentially. CI invokes the release
+integration suite on PostgreSQL 18, started by a step (`scripts/ci-postgres.mjs`:
+signed in to Docker Hub where the token exists, else ECR Public); the 4-shard
+mutation matrix; and all three Playwright suites sequentially. CI invokes the release
 classifier against the PR/push event base as a conservative job-selection
 optimization; only a narrow presentation-path allowlist may skip the Postgres
 job, and the mutation job also skips when `needs_mutation` is false (only
