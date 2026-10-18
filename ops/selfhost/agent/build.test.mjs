@@ -3,15 +3,33 @@ import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
-import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease, parseMemoryPeak } from "./build.mjs";
+import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease } from "./build.mjs";
 import { SHA, T0, TRACKED_DOTENV_EXAMPLES, leagueEnv, makeBox } from "./harness.test.mjs";
 import { RELEASE_WRITABLE_DIRS } from "./layout.mjs";
 import { describeRelease } from "./releases.mjs";
 
 const ID = "us-20261016T150000Z-0123456789ab";
 
+/**
+ * What systemd-run --wait prints once a unit is gone, as systemd 255 does on
+ * the box: a right CPU total, and a memory peak read as the unit started.
+ */
+const staleSummary = ({ result = "success", main = "code=exited/status=0" } = {}) => [
+  `Finished with result: ${result}`,
+  `Main processes terminated with: ${main}`,
+  "Service runtime: 2min 31.112s",
+  "CPU time consumed: 1min 58.036s",
+  "Memory peak: 2.4M",
+  "Memory swap peak: 0B",
+];
+// What cgroup-report.mjs prints as the build unit stops: 1240 MB, 300 MB swapped.
+const BUILD_REPORT =
+  "ggd2l cgroup: memory.peak=1300234240 memory.swap.peak=314572800 memory.high=1258291200 memory.max=1887436800 cpu.weight=20 events.high=4182 events.max=0 events.oom_kill=0";
+const INSTALL_REPORT =
+  "ggd2l cgroup: memory.peak=524288000 memory.swap.peak=0 memory.high=max memory.max=max cpu.weight=20 events.high=0 events.max=0 events.oom_kill=0";
+
 /** A box whose git, npm and build behave like the real ones, as files. */
-function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = null, plant = null } = {}) {
+function buildBox({ buildLines, buildCode = 0, artifacts = REQUIRED_ARTIFACTS, onMain = true, dotenv = null, plant = null } = {}) {
   const box = makeBox();
   const env = box.writeEnv("us");
   const dir = box.layout.release(ID);
@@ -23,7 +41,8 @@ function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, d
     `AUTH_SECRET=${env.AUTH_SECRET} CRON=${env.CRON_SECRET}`,
     `site ${env.APP_URL} and key ${env.NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}`,
     `${SCHEMA_GATE_LINE} in schema public: 16 migrations and 17 native objects verified.`,
-    "Memory peak: 1.5G",
+    BUILD_REPORT,
+    ...staleSummary(),
   ];
   box.on((command, args) => {
     const line = args.join(" ");
@@ -58,9 +77,10 @@ function buildBox({ buildLines, artifacts = REQUIRED_ARTIFACTS, onMain = true, d
       mkdirSync(path.join(dir, "node_modules/.bin"), { recursive: true });
       symlinkSync("../next/dist/bin/next", path.join(dir, "node_modules/.bin/next"));
       if (plant) plant(dir);
-      return { lines };
+      return { lines, code: buildCode };
     }
-    if (command.endsWith("/systemd-run") && args.includes("ci")) return { lines: [`npm: cache ${box.layout.npmCache}`] };
+    if (command.endsWith("/systemd-run") && args.includes("ci"))
+      return { lines: [`npm: cache ${box.layout.npmCache}`, INSTALL_REPORT, ...staleSummary()] };
     return undefined;
   });
   return { box, env, dir };
@@ -73,7 +93,7 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   box.clock.t = T0;
   const result = await buildRelease(box.ctx, "us", SHA);
   assert.equal(result.id, ID);
-  assert.equal(result.peakRssMb, 1536);
+  assert.equal(result.peakRssMb, 1240);
 
   const install = argsOf(box, /systemd-run .* ci /);
   assert.ok(install.includes("User=ggd2l-build"));
@@ -200,10 +220,49 @@ test("build refuses an env file that breaks the contract, and low disk, before a
   assert.equal(box.calls.length, 0);
 });
 
-test("systemd's memory summary parses to MB", () => {
-  assert.equal(parseMemoryPeak("Memory peak: 1.5G"), 1536);
-  assert.equal(parseMemoryPeak("Memory peak: 812.4M"), 812);
-  assert.equal(parseMemoryPeak("nothing here"), null);
+test("both units report their own cgroup as they stop, and the record takes the build's peak from it", async () => {
+  const { box, dir } = buildBox();
+  const result = await buildRelease(box.ctx, "us", SHA);
+  const stopPost = `ExecStopPost=-/usr/bin/node ${box.layout.helper("cgroup-report.mjs")}`;
+  for (const [pattern, command] of [[/systemd-run .* ci /, "/usr/bin/npm"], [/scripts\/vercel-build\.mjs/, "/usr/bin/node"]]) {
+    const args = argsOf(box, pattern);
+    const at = args.indexOf(stopPost);
+    // A unit property ahead of the command; "-" keeps a failed report from failing the unit.
+    assert.ok(at > 0 && args[at - 1] === "-p" && at < args.indexOf(command), pattern.source);
+  }
+  // Not systemd-run's "Memory peak: 2.4M", read before the build used anything.
+  assert.equal(result.peakRssMb, 1240);
+  assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).peakRssMb, 1240);
+  const log = readFileSync(box.layout.buildLog(ID), "utf8").split("\n");
+  for (const [report, summary] of [
+    [INSTALL_REPORT, "== npm ci memory peak 500 MB, swap peak 0 MB"],
+    [BUILD_REPORT, "== build memory peak 1240 MB, swap peak 300 MB"],
+  ]) {
+    assert.ok(log.includes(report), "the unit's own line stays in the log");
+    const at = log.findIndex((line) => line.startsWith(summary));
+    // The agent's summary follows systemd-run's own, whatever that says.
+    assert.ok(at > log.indexOf(report) && log[at - 1] === "Memory swap peak: 0B", summary);
+    assert.ok(log[at].endsWith("read from the unit's cgroup as it stopped"), log[at]);
+  }
+});
+
+test("a build with no cgroup report records no peak, never systemd-run's", async () => {
+  const lines = [ENV_GATE_LINE, `${SCHEMA_GATE_LINE} in schema public.`, ...staleSummary()];
+  const { box, dir } = buildBox({ buildLines: lines });
+  assert.equal((await buildRelease(box.ctx, "us", SHA)).peakRssMb, null);
+  assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).peakRssMb, null);
+  assert.ok(readFileSync(box.layout.buildLog(ID), "utf8").includes("== build memory peak unknown (no cgroup report)"));
+});
+
+test("a build the kernel killed keeps its cgroup's peak on the FAILED record", async () => {
+  const killed = BUILD_REPORT.replace("memory.peak=1300234240", "memory.peak=1887436800").replace("events.oom_kill=0", "events.oom_kill=1");
+  const summary = staleSummary({ result: "oom-kill", main: "code=killed/status=KILL" });
+  const { box, dir } = buildBox({ buildLines: [ENV_GATE_LINE, killed, ...summary], buildCode: 1 });
+  await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "build_failed" });
+  const record = JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8"));
+  assert.equal(record.state, "FAILED");
+  assert.equal(record.peakRssMb, 1800);
+  assert.ok(readFileSync(box.layout.buildLog(ID), "utf8").includes("== build memory peak 1800 MB, swap peak 300 MB"));
 });
 
 test("a link the build planted outside the release stops the lockdown before root uses it", async () => {

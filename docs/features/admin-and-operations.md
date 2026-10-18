@@ -403,9 +403,14 @@ respect there:
   `/api/cron/automation`; a new deadline gets a wake-up in
   `src/lib/automation-gate.ts`, never a timer of its own.
 - **Builds share the box with both live sites.** A build runs as
-  `ggd2l-build` at low priority with a 3 GB Node heap and peaks around 1.6
-  GB; never cap its memory below that. Count a new dependency's install and
-  build cost on one vCPU, and a new background request's database work.
+  `ggd2l-build` at low priority with a 3 GB Node heap, held by its unit's
+  limits near 1.1 GiB with the rest in swap; the 2026-10-15 trial build
+  peaked at 1.54 GB outside them, so never cap its memory below that. Each
+  build's real peak is its unit's cgroup `memory.peak` (`peakRssMb`, read as
+  the unit stops), never systemd-run's own `Memory peak:` line, which systemd
+  255 can repeat from the unit's first second. Count a new dependency's
+  install and build cost on one vCPU, and a new background request's
+  database work.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.
