@@ -51,8 +51,10 @@ note before changing that area: it is required reading, not background.
 - **Pages, navigation and Home render per phase** so unused features hide.
 - **Inhouse is season-independent:** no `seasonId`, no phase gate. It shares
   identity, the latest `Registration.mmr`, Settings, Discord and OpenDota.
-- **There are no websockets.** The rooms poll over HTTP; scheduled work runs in
-  one authenticated worker once a minute.
+- **There are no websockets.** The rooms poll over HTTP; the inhouse room
+  long-polls (the server holds its plain HTTP request until the room version
+  moves, its next clock or 25s). Scheduled work runs in one authenticated
+  worker once a minute.
 
 ## Where things live
 
@@ -345,9 +347,17 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 - **Both leagues share one 1-vCPU box with Postgres and the lobby bot:** poll
   only as fast as a deadline needs (the rooms' rates live in
-  `src/lib/room-poll.ts`), and count a new background request's database work
-  before adding one. Every poll, prefetch and page view of both leagues lands
-  on the same CPU and the same database.
+  `src/lib/room-poll.ts`; a request costs ~15-25 ms of box CPU), and count a
+  new background request's database work before adding one. Every poll,
+  prefetch and page view of both leagues lands on the same CPU and the same
+  database. The inhouse room asks once per change instead: a state request
+  that sends back its reply's `roomVersion` is held (`holdInhouseRoomPoll`),
+  and only a reply with no version or a request that must answer at once
+  falls back to the ladder.
+- **Keep per-process server state on `globalThis`** under a `Symbol.for` key
+  (the long-poll's `inhouse-room-wait.ts`): a `next start` process loads
+  `src/lib` twice, once for route handlers and once for pages and server
+  actions, so module-scope state is two copies that never hear each other.
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
   signed-in room poll runs maintenance only when it wins a `claimThrottle`,
@@ -357,8 +367,9 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **After any commit the inhouse room shows, call `publishInhouseRoomChange()`
   before any provider call or response,** never inside a transaction. Each
   instance serves the room from a snapshot while the room version is
-  unchanged, so a writer that skips it shows stale rows for up to 15s
-  (`inhouse-room-publish.test.ts` guards the sites;
+  unchanged, and a publish is what wakes the held requests, so a writer that
+  skips it shows stale rows for up to 15s, and to a long-polling tab for up
+  to its 25s hold (`inhouse-room-publish.test.ts` guards the sites;
   [inhouse](docs/features/inhouse.md#scope-and-where-it-runs)).
 - **Give every new server-side clock or deadline a wake-up in
   `src/lib/automation-gate.ts`,** and after a mutation that creates or moves

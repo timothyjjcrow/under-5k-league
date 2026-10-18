@@ -95,9 +95,10 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   the response. Never inside a transaction:** the hot Setting row would add
   P2034s to the Serializable `joinQueue` and `formOneLobby`, and
   `formOneLobby` takes those as "someone else formed", so formation would
-  silently slip. It bumps a process-local generation first, then runs one
+  silently slip. It bumps the process's generation first, then runs one
   `INSERT … ON CONFLICT` (`claimThrottle`'s shape), retries once, logs only
-  the error code and never throws.
+  the error code and never throws. After the statement, landed or not, it
+  wakes the requests held in this process (the long-poll, below).
   - **The sites are a closed set.** The route publishes right after the
     dispatch (ok and refusal), before its follow-up read: that read is
     several round trips, and a poll the client sent during the action must
@@ -123,11 +124,68 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     of an engine writer publishes or imports only self-publishing ones. No
     publish sits in a `$transaction`, and each listed site comes before its
     provider call.
-  - **Writers that never publish show within the 15s max age:** admin
-    display edits, the worker's rank refresh and profile writes outside the
-    room's flows, such as a relinked Dota account's medal (`docs/DECISIONS.md`).
-    So does a lost publish, and during a release's overlap the old slot's
-    writes. A new writer the room waits on publishes.
+  - **Writers that never publish show within the 15s max age, and wake no
+    held request:** a long-polling viewer sees them when something else
+    publishes or their hold ends (25s). They are admin display edits, the
+    worker's rank refresh and profile writes outside the room's flows, such
+    as a relinked Dota account's medal (`docs/DECISIONS.md`). So does a lost
+    publish. During a release's overlap the old slot's writes reach a held
+    request through the 2s watch. A new writer the room waits on publishes.
+- **The room long-polls on the version (Tim's call, 2026-10-18; still plain
+  HTTP, no websockets).** A `state` reply carries `roomVersion`
+  (`inhouseRoomVersionToken`: the version, or `"none"` with no row yet),
+  read BEFORE the reply's rows, so the rows are at least that new; never
+  put a later read's version on a reply, or a client holds on a change it
+  never saw. A request that sends it back as `since` (and the `holdMs` it
+  can wait, clamped to `LONG_POLL_HOLD_MS`, 25s, by `parseInhouseHold`) is
+  held when the version the route just read is still `since`: anything
+  else answers at once through the unchanged `pollInhouseState`. After the
+  hold the route reads the session and the version again and polls exactly
+  as an unheld request would (heartbeat, due gate, 2s claim). Signed-out
+  requests hold too and still only read. A client that went away gets a 204
+  and no poll (`req.signal`).
+  - **The hold (`holdInhouseRoomPoll`, `src/lib/inhouse-room-state.ts`)
+    reads only this instance's snapshot and writes nothing.** It ends at the
+    earliest of: the version moving, the room's next clock
+    (`inhouseRoomWakeAt`, `src/lib/inhouse-room-wake.ts`: accept, vote and
+    pick deadlines, the result window opening, the abandon floors, the
+    queue's idle reset and each player turning away, all plus
+    `LONG_POLL_CLOCK_GRACE_MS`), the hold, or the abort. A signed-in viewer
+    who finds work already due (another poll holds the 2s claim) is held at
+    most `LONG_POLL_DUE_RETRY_MS` (2.25s), so work nobody finished is retried
+    at a fast poll's pace. A new clock the room's reply or a resolver flips
+    on gets a clause there as well as in the automation gate.
+  - **The waiter registry is one per process, on `globalThis`**
+    (`src/lib/inhouse-room-wait.ts`, a leaf), with the snapshot's publish
+    count: a `next start` process loads `src/lib` twice (route handlers in
+    one module instance, pages and server actions in another), so a
+    module-scope registry would never hear the signup save or the admin
+    void. A held request takes no database connection. A publish here
+    re-checks the version once, `LONG_POLL_COALESCE_MS` (100ms) after its
+    statement (a mutation publishes twice), and wakes the requests it moved
+    past, each after up to `LONG_POLL_JITTER_MS` (150ms) more at random
+    (Prisma's pool is four). While anything is held one timer re-reads the
+    version every `LONG_POLL_WATCH_MS` (2s): the other slot's publishes
+    during a release's overlap, and writes outside the process. The route
+    reads the publish count before the version, so a publish racing that
+    read re-checks the hold instead of being missed.
+  - **A release's overlap is safe both ways.** A new slot's held requests
+    see the old slot's publishes through the watch, and the old slot answers
+    its own within a hold (25s, inside the 90s overlap). An old slot answers
+    `since` at once with no `roomVersion`, and the room falls back to its
+    ladder (below), never a hot loop.
+  - **Tests:** `src/lib/inhouse-room-wait.test.ts` (the registry: publish,
+    coalescing, the watch, abort, deadlines, jitter bounds, two module
+    instances sharing it and a per-module copy missing it),
+    `inhouse-room-version.test.ts` (the publish wakes held requests only
+    after its statement; deleting that call fails it),
+    `inhouse-room-wake.test.ts` (each clock against `inhouseRoomDue`),
+    `src/app/api/inhouse/route.test.ts` (hold, re-read, abort) and
+    `test/integration/inhouse-room-longpoll.itest.ts` (through the real
+    route: a join, a server action in another module instance and a version
+    moved elsewhere each answering a held request well under a second, the
+    clock and the claim retry, an abort, and about one request per change
+    plus one per hold).
 - **Give every new lobby or queue clock a wake-up in
   `src/lib/automation-gate.ts`,** which schedules the worker for accept, vote
   and pick deadlines, the detect window, abandonment floors and queue
@@ -151,10 +209,12 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   `pick`, `start`, `finish`, `roles`, `record`, `detect`, `cancel`, `giveup`,
   `void`, `remove`. The body must be a JSON
   object with a non-empty string `action`, else 400. Lobby actions carry the
-  `lobbyId` the room showed. `state` allows 1,200/min
-  per IP; mutations 300/min per signed-in user (signed-out attempts are
-  IP-limited, then 401), in a separate bucket so poll back-pressure never eats
-  an action allowance.
+  `lobbyId` the room showed. `state` takes an optional `since` (a reply's
+  `roomVersion`, at most 64 characters) and `holdMs`, and its replies carry
+  `roomVersion`; mutation replies carry none. `state` allows 1,200/min
+  per IP (a held request counts once); mutations 300/min per signed-in user
+  (signed-out attempts are IP-limited, then 401), in a separate bucket so
+  poll back-pressure never eats an action allowance.
 
 ## Two games at once
 
@@ -837,41 +897,74 @@ Every transition is a guarded claim; keep it that way (general rules:
 
 ## The room (client)
 
-- **Cadence comes only from pure `inhousePollCadence`** (`src/lib/room-poll.ts`,
+- **The room long-polls; cadence comes only from pure `inhouseLongPoll`,
+  `inhousePollDelay` and `inhousePollCadence`** (`src/lib/room-poll.ts`,
   sharing `roomPollCadence` with the draft room). A source guard fails if an
-  `INHOUSE.POLL_*` rate reappears in the room.
-  - **Every poll is a request to the one box both leagues share,** with the
+  `INHOUSE.POLL_*` rate or an `INHOUSE.LONG_POLL_*` value reappears in the
+  room, and pins the wiring below.
+  - **Every request is CPU on the one box both leagues share,** with the
     session and room-version reads behind it, on one vCPU beside Postgres
-    and the lobby bot. The rates were set on Vercel's Hobby plan (on
-    2026-10-11 five /inhouse tabs polling every 10s made 79% of the US site's
-    calls, and its four hours of Active CPU ran out) and stay until Tim asks
-    (`docs/DECISIONS.md`). Poll fast only where seconds decide something;
-    every long wait is slow.
-  - Fast (`pollMs`, 1500) only for the clocked stages: ready check, vote and
-    draft. Game setup (READY until the scan window opens,
-    `inhouseReadyInPlay`, after which a hand-hosted game polls like
-    IN_PROGRESS and drops "(!) Teams locked") has no clock: it polls at
-    `POLL_SETUP_MS` (5s). At 1.5s a setup that ran its 15 minutes cost about
-    6,000 calls for ten players (2026-10-13 logs).
-  - Otherwise `POLL_QUEUE_MS` (10s) when queued, `POLL_GAME_MS` (30s) in your
-    own game, `POLL_IDLE_MS` (30s) spectating. The room passes `inLobby`
+    and the lobby bot: about 15-25 ms of box CPU each across Node, Postgres,
+    Caddy and the tunnel (2026-10-18), not the 1.6-1.9 ms Node-only figure in
+    the 2026-10-12 row. So the room asks once per change, not once per tick:
+    polling everyone every 1-2s would cost a tenth to a quarter of the vCPU
+    through an evening (`docs/DECISIONS.md`).
+  - **The long-poll:** each request sends back the `roomVersion` of the last
+    poll reply `apply()` took (`since`), with the hold it can wait:
+    `LONG_POLL_TIMED_HOLD_MS` (10s) for a member in their own game's clocked
+    stages (ready check, vote, draft), so a dead connection there still
+    shows inside the vote, else `LONG_POLL_HOLD_MS` (25s). Its fetch
+    deadline is the hold plus `ROOM_POLL_TIMEOUT_MS`. The next request leaves
+    straight from the reply's continuation (`reissue()`, no timer for a
+    hidden tab to clamp, so a hidden queued tab's chime and title arrive with
+    the change), never sooner than `LONG_POLL_MIN_GAP_MS` (1s) after the
+    previous one started, so a moving version can't hot-loop.
+  - **A request answers at once instead** (no `since`, on the ladder below)
+    when the last reply carried no version (the first request, or an old
+    slot during a release), after a failure, and while something waits on
+    it (`urgent`): a resync after going offline, an action in flight
+    (`actionsInFlightRef`) or awaiting reconciliation. Those controls stay
+    locked until a reply lands, so it must not be held.
+  - **An action, an offline/online change and unmounting release a held
+    request** (`releaseHold`: its controller, linked to the
+    `AbortSignal.timeout`; `AbortSignal.any` is missing on older Safari). It
+    started before the action, so request-start ordering would drop its
+    reply anyway. A release is not a failure; the rerun latch polls next.
+- **The fallback ladder** (`inhousePollCadence`; rates retuned for the box on
+  2026-10-18, before them the Vercel Hobby rates): fast (`pollMs`, 1500)
+  only for the clocked stages: ready check, vote and draft. Game setup
+  (READY until the scan window opens, `inhouseReadyInPlay`, after which a
+  hand-hosted game polls like IN_PROGRESS and drops "(!) Teams locked") has
+  no clock: it polls at `POLL_SETUP_MS` (2.5s).
+  - Otherwise `POLL_QUEUE_MS` (3s) when queued, `POLL_GAME_MS` (5s) in your
+    own game, `POLL_IDLE_MS` (10s) spectating. The room passes `inLobby`
     (source-guarded): `pollingLobby` shows a queued player someone else's
     game, and that player is waiting for their own lobby, so they poll by the
     queue (or fast while the other game drafts), never at the game rate.
   - Hidden with a stake: in your own game's timed stage `POLL_KEEPALIVE_MS`
     (10s), which must stay shorter than the vote window; in your own game
-    `POLL_GAME_MS`; queued `POLL_QUEUE_KEEPALIVE_MS` (20s), which must leave
-    at least 60s of the accept window (`room-poll.test.ts`; the vote can't
-    open before a queued player has seen the check and accepted). Hidden with
-    no stake: no fetch. `isColdStart` gives a tab hidden at load a few bounded
-    attempts, since stake is learned from a payload.
+    `POLL_GAME_KEEPALIVE_MS` (30s); queued `POLL_QUEUE_KEEPALIVE_MS` (10s),
+    which must leave at least 60s of the accept window (`room-poll.test.ts`;
+    the vote can't open before a queued player has seen the check and
+    accepted). Hidden with no stake: no fetch, held or not. `isColdStart`
+    gives a tab hidden at load a few bounded attempts, since stake is
+    learned from a payload.
   - A warm-room 429 eases to `POLL_RECOVERY_MS` (10s) and is not a failure; on
     a cold page 429s count toward the retry state (else "Loading" forever). A
-    disconnected room's backoff starts from the same 10s, so the slower
-    spectator rate never slows a recovery. Offline sends nothing.
+    disconnected room's backoff starts from the same 10s, never faster than
+    idling. Offline sends nothing.
   - Reschedule from live visibility (refocus mid-fetch snaps back);
-    `visibilitychange → visible` polls at once; a successful `act()` nudges the
-    loop (`bumpPollRef`) so a join goes fast within ~250ms.
+    `visibilitychange → visible` polls at once (a held request in flight is
+    already current); a successful `act()` nudges the loop (`bumpPollRef`)
+    so the action's outcome lands within ~250ms.
+  - **e2e:** `e2e/zz4e-inhouse-long-poll.spec.ts` (a change in every tab
+    within about a second, signed in or out; an idle tab at about one
+    request per hold; offline and actions releasing the hold; a reply with
+    no version on the ladder, never a loop). The poll-resilience specs
+    (`e2e/zz3-room-poll-resilience.spec.ts`) that hold a short poll run on
+    the ladder by stripping `roomVersion`, as an old slot answers;
+    `e2e/zz4d-inhouse-room-snapshot.spec.ts` publishes through
+    `/api/test/cache` to make every tab poll.
 - **Sequence-order every response** (`issueSequence` / `acceptSequence`) for
   poll AND `act()`: a late pre-pick poll put the drafted player back in the
   pool. Mint the sequence BEFORE the `await` and keep `apply()` the only
@@ -881,9 +974,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   1s hysteresis), so vote and pick clocks run on server time. The server's
   room snapshot keeps this contract only because every poll checks the room
   version (see "Scope and where it runs"); never cache `now`.
-- **Every room fetch has an `AbortSignal.timeout`** (`ROOM_POLL_TIMEOUT_MS`;
-  actions `ROOM_ACTION_TIMEOUT_MS`, or `INHOUSE_SCAN_ACTION_TIMEOUT_MS` for
-  `INHOUSE_SCAN_ACTIONS`). A timed-out, 5xx or unreadable action may have
+- **Every room fetch has an `AbortSignal.timeout`** (`ROOM_POLL_TIMEOUT_MS`,
+  plus the hold for a held request; actions `ROOM_ACTION_TIMEOUT_MS`, or
+  `INHOUSE_SCAN_ACTION_TIMEOUT_MS` for `INHOUSE_SCAN_ACTIONS`). A timed-out, 5xx or unreadable action may have
   committed: say it is checking, keep controls locked until a poll that
   STARTED after the action lands, and never say it failed. A poll that started
   before an offline/online change is stale.

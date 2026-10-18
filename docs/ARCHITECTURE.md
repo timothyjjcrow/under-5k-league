@@ -27,7 +27,9 @@ has no `seasonId` or league-phase gate. There is no websocket. Interactive
 rooms still use HTTP polling; anonymous polls are side-effect-free, while
 authenticated polls elect at most one database-backed maintenance winner per
 room every two seconds (the inhouse room only when a resolver is due, and it
-serves each poll from a per-instance snapshot checked against a room version).
+serves each poll from a per-instance snapshot checked against a room version;
+its client long-polls on that version, so the server holds a request until
+the room changes).
 Sitewide background work runs once per minute through the bearer-authenticated
 `GET /api/cron/automation` boundary. Public page traffic observes automation
 state but does not serve as its clock.
@@ -165,7 +167,7 @@ resolvers before every read, every route
 (`/api/draft/tick|bid|nominate|admin-nominate`) funnels through it, and the
 authenticated maintenance worker also calls the two resolvers after a cheap
 due-clock preflight. A visible site tab discovers activity from the read-only
-`GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 60s
+`GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 30s
 watch cadence while an auction clock remains live; those browser reads refresh
 the UI but never advance the clock themselves.
 The client is `src/components/draft-room.tsx`, a ~1.2s poll loop whose cadence,
