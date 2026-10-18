@@ -8,7 +8,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, buttonClasses, textLink } from "@/components/ui";
+import Link from "@/components/app-link";
+import { Badge, LinkArrow, buttonClasses, textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
@@ -54,6 +55,7 @@ import {
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
 import { armAudioUnlock, playChime, unlockAudio } from "@/components/chime";
+import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
 import type { RoomLobby, RoomMe } from "@/components/inhouse/shared";
 import { RoomStages, roomStageLabel } from "@/components/inhouse/room-stages";
@@ -95,18 +97,19 @@ function withDeadline(controller: AbortController, timeoutMs: number) {
 
 export function InhouseRoom({
   pollMs = 1500,
-  signupMmr = 0,
+  fixedMmr = null,
   mmrHint = null,
   joinRefusal = null,
   firstGame = false,
 }: {
   pollMs?: number;
   /**
-   * The viewer's newest league-signup MMR (0 = none). joinQueue always uses
-   * it when there is one, so the join panel shows it as plain text instead
-   * of an input whose value would be ignored.
+   * The viewer's fixed MMR (inhouseFixedMmr): an admin's inhouse MMR, else
+   * their newest league signup's; null when there is neither. joinQueue
+   * always uses it when there is one, so the join panel shows it as plain
+   * text instead of an input whose value would be ignored.
    */
-  signupMmr?: number;
+  fixedMmr?: InhouseFixedMmr | null;
   /** Server-computed medal→MMR window note for the queue join panel. */
   mmrHint?: string | null;
   /**
@@ -134,7 +137,7 @@ export function InhouseRoom({
   const pending =
     reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
-  const [mmr, setMmr] = useState<number>(signupMmr);
+  const [mmr, setMmr] = useState<number>(fixedMmr?.mmr ?? 0);
   // An unsaved positions pick, held here (like the typed MMR) because the
   // queue's controls move between cards as games form and end.
   const [rolesDraft, setRolesDraft] = useState<RolesDraft | null>(null);
@@ -1271,7 +1274,7 @@ export function InhouseRoom({
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             joinRefusal={joinRefusal}
-            signupMmr={signupMmr}
+            fixedMmr={fixedMmr}
             firstGame={firstGameFold}
             act={act}
             nextGame
@@ -1286,7 +1289,7 @@ export function InhouseRoom({
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             joinRefusal={joinRefusal}
-            signupMmr={signupMmr}
+            fixedMmr={fixedMmr}
             act={act}
           />
         )
@@ -1306,7 +1309,7 @@ export function InhouseRoom({
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             joinRefusal={joinRefusal}
-            signupMmr={signupMmr}
+            fixedMmr={fixedMmr}
             firstGame={firstGameFold}
             act={act}
           />
@@ -1319,6 +1322,16 @@ export function InhouseRoom({
           may not be on screen (a live game), and away players have no slot. */}
       {me.isAdmin && state.queue.length > 0 ? (
         <AdminQueueRemoval queue={state.queue} pending={pending} act={act} />
+      ) : null}
+
+      {/* Any player's inhouse MMR and medal, queued or not and signed up for
+          the league or not, are set on their own admin page. */}
+      {me.isAdmin ? (
+        <p className="text-right text-xs">
+          <Link href="/admin/inhouse-players" className={textLink()}>
+            Admin: players&apos; medal &amp; MMR <LinkArrow />
+          </Link>
+        </p>
       ) : null}
 
       {lobby ? (
