@@ -79,6 +79,16 @@ heartbeat), `ggd2l-bot`.
   `node /usr/local/lib/ggd2l/env-contract.mjs --bot --file <path>`. Five
   failed starts in ten minutes leave the unit failed instead of restarting
   forever.
+- A slot can write only the release folders `next start` writes at runtime,
+  `RELEASE_WRITABLE_DIRS` in `agent/layout.mjs` (`.next/cache`, and
+  `.next/server/route-cache` for Next's response cache). The build creates
+  them for the league user and the unit's `ReadWritePaths=` names them; the
+  rest of the release is read-only. CI's boot step fails a build that writes
+  anywhere else.
+- Each slot process holds one Prisma pool of `connection_limit=8`
+  (`provision-league-db.sh`), so four processes in a release overlap use 32 of
+  PostgreSQL's 47 usable connections. A release built before 2026-10-17's fix
+  holds two pools per process.
 
 ## Daily operations
 

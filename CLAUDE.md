@@ -405,6 +405,14 @@ and `ops/selfhost/README.md`.
   `ops/selfhost/smoke/smoke.mjs`.
 - **Keep the per-instance cache rules (Rule P).** The box runs one process per
   league, except for the 90 s overlap of every release, when two serve it.
+- **One Prisma client per process.** `src/lib/prisma.ts` keeps it on
+  `globalThis` in every environment: Next loads the module once per server
+  bundle, and a module-level client opens a pool per bundle
+  (`prisma.test.ts`). `connection_limit` is per process.
+- **A slot can write only `RELEASE_WRITABLE_DIRS`**
+  (`ops/selfhost/agent/layout.mjs`: `.next/cache`, `.next/server/route-cache`).
+  The build creates them, the units name them, and CI's boot step fails a
+  build that writes anywhere else; a new folder goes in that list.
 
 ### Third-party calls
 

@@ -95,7 +95,7 @@ test("each run writes the four 0600 env files from the stored passwords", (t) =>
   const app = box.file("secrets/us-app.pw").trim();
   const owner = box.file("secrets/us-owner.pw").trim();
   const rehearsal = box.file("secrets/rehearsal.pw").trim();
-  const params = "schema=public&sslmode=disable&connection_limit=4&pool_timeout=10&connect_timeout=5";
+  const params = "schema=public&sslmode=disable&connection_limit=8&pool_timeout=10&connect_timeout=5";
   const appUrl = `postgresql://ggd2l_us_app:${app}@127.0.0.1:5432/ggd2l_us?${params}`;
   const ownerUrl = `postgresql://ggd2l_us_owner:${owner}@127.0.0.1:5432/ggd2l_us?${params}`;
   assert.equal(box.file("fragments/us-db.env"), `DATABASE_URL=${appUrl}\nDIRECT_URL=${appUrl}\n`);
