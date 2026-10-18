@@ -358,15 +358,10 @@ migration, rollback, backup and health procedures. The box kit and its
 runbook are in `ops/selfhost/` (`ops/selfhost/README.md`). The full docs
 index is [docs/README.md](docs/README.md).
 
-> **Status: planned.** Both leagues move from Vercel and Neon to the box on
-> the cutover day ([DECISIONS](docs/DECISIONS.md#hosting)); until then they
-> run on Vercel and Neon as before and nothing is released. The Vercel and
-> Neon setup this section replaced is at `git show 33a1f348:README.md`.
-> **Until a league has moved, run its scheduler pause, resume and rollback
-> deploys (`npm run scheduler:*`) from a checkout of 33a1f348.** The
-> `wrangler*.jsonc` on `main` already point the Workers at the box's origins,
-> which don't serve a league until it moves, so deploying them from `main`
-> would stop a Vercel league's automation.
+> **Status: live.** Both leagues moved from Vercel and Neon to the box on
+> 2026-10-17 (US 15:43Z, Europe 16:24Z; [DECISIONS](docs/DECISIONS.md#hosting)).
+> The old Vercel origins only redirect. The Vercel and Neon setup this section
+> replaced is at `git show 33a1f348:README.md`; it no longer applies.
 
 Both leagues run on one DigitalOcean droplet, `ggd2l-1` (Ubuntu 24.04, 1
 vCPU, 2 GB RAM plus 4 GB swap):

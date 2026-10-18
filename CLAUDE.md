@@ -10,11 +10,9 @@ and a Europe league, each with its own database, Discord server and settings.
 > approval. Nothing in this file or the feature notes overrides them.
 >
 > **Hosting:** production is one self-hosted box (SSH alias `ggd2l-1`) behind
-> a Cloudflare Tunnel. **Status: planned.** Both leagues move there from Vercel
-> and Neon on the cutover day ([decisions](docs/DECISIONS.md#hosting)); until
-> then they run as before and nothing is released. Until a league has moved,
-> run its scheduler pause, resume and rollback deploys from a checkout of
-> 33a1f348: the `wrangler*.jsonc` on `main` already target the box's origins.
+> a Cloudflare Tunnel. **Status: live** since the cutover on 2026-10-17 (US
+> 15:43Z, Europe 16:24Z; [decisions](docs/DECISIONS.md#hosting)). The old
+> `*.vercel.app` origins only redirect to the new ones.
 
 [docs/DECISIONS.md](docs/DECISIONS.md) lists settled decisions and deferrals,
 one line each: check it before proposing a change. Where it disagrees with this
