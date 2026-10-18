@@ -380,7 +380,8 @@ ggd2l-1   cloudflared ─> Caddy 127.0.0.1:8080
                            ├─ eu.ggd2l.com  ─> 127.0.0.1:3011 | 3012   (Europe slots a | b)
                            └─ ggd2l.com, www ─> 302 https://us.ggd2l.com{uri}
           PostgreSQL 18 on 127.0.0.1:5432 (ggd2l_us, ggd2l_eu)
-          lobby bot on 127.0.0.1:8090 ─WSS─> the Cloudflare relay
+          lobby bot on 127.0.0.1:8090 (planned; on Tim's Mac via the Cloudflare relay until it moves)
+                                       sites call it over loopback once it is here
 Cloudflare Workers: the one-minute schedulers -> https://{us,eu}.ggd2l.com/api/cron/automation
 R2 bucket ggd2l-backups: age-encrypted dumps and daily config archives
 Vercel: ggd2l.vercel.app, ggd2l-europe.vercel.app redirect to the new origins

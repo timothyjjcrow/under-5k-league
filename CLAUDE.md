@@ -32,7 +32,7 @@ note before changing that area: it is required reading, not background.
 | [draft](docs/features/draft.md) | the auction engine, the draft admin controls, `/draft` or the draft room |
 | [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover, check-ins, the week reminder |
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
-| [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later |
+| [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal (`/admin/inhouse-players`) |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
 | [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
@@ -405,6 +405,14 @@ and `ops/selfhost/README.md`.
   `ops/selfhost/smoke/smoke.mjs`.
 - **Keep the per-instance cache rules (Rule P).** The box runs one process per
   league, except for the 90 s overlap of every release, when two serve it.
+- **One Prisma client per process.** `src/lib/prisma.ts` keeps it on
+  `globalThis` in every environment: Next loads the module once per server
+  bundle, and a module-level client opens a pool per bundle
+  (`prisma.test.ts`). `connection_limit` is per process.
+- **A slot can write only `RELEASE_WRITABLE_DIRS`**
+  (`ops/selfhost/agent/layout.mjs`: `.next/cache`, `.next/server/route-cache`).
+  The build creates them, the units name them, and CI's boot step fails a
+  build that writes anywhere else; a new folder goes in that list.
 
 ### Third-party calls
 

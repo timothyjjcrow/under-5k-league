@@ -2,12 +2,9 @@
 
 import { useState } from "react";
 import { setPlayerRank } from "@/app/actions/admin-roster";
-import { RANK_MEDALS, rankMedalName } from "@/lib/rank";
+import { EDITABLE_RANK_TIERS, rankMedalName } from "@/lib/rank";
 import { ActionForm, SubmitButton } from "./action-form";
 import { RankMedal } from "./ui";
-
-const MEDAL_OPTIONS = [0, ...RANK_MEDALS.slice(1, 8).flatMap((_, index) =>
-  [1, 2, 3, 4, 5].map((stars) => (index + 1) * 10 + stars)), 80];
 
 export function AdminPlayerRankEditor({
   registrationId, name, mmr, rankTier, rankTierManual, mmrLocked = false,
@@ -60,7 +57,7 @@ export function AdminPlayerRankEditor({
             <span>Medal &amp; stars</span>
             <select name="rankTier" value={medal} onChange={(event) => setMedal(event.target.value)}
               disabled={mode !== "manual"} aria-label={`Medal for ${name}`} className={fieldClass}>
-              {MEDAL_OPTIONS.map((value) => (
+              {EDITABLE_RANK_TIERS.map((value) => (
                 <option key={value} value={value}>{rankMedalName(value)}</option>
               ))}
             </select>

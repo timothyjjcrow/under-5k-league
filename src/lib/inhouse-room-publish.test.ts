@@ -85,8 +85,10 @@ describe("rule P: who publishes the inhouse room's changes", () => {
         f.path !== "src/lib/inhouse-service.ts" &&
         ROOM_TABLE_WRITE.test(code(f.text)),
     );
-    // Today: the lobby bot's start (dota-lobby) and the result outbox.
-    expect(writers.map((f) => f.path).length).toBeGreaterThanOrEqual(2);
+    // Today: the result outbox. (The lobby bot's start and its game over are
+    // engine writers, markInhouseGameStartedFromBot and
+    // endInhouseGameFromBot, which publish their own commits.)
+    expect(writers.map((f) => f.path).length).toBeGreaterThanOrEqual(1);
     for (const file of writers) {
       expect(code(file.text), `${file.path} writes the room's rows`).toContain(
         PUBLISH,
@@ -105,6 +107,8 @@ describe("rule P: who publishes the inhouse room's changes", () => {
       "voidLastResult",
       "maybeFormLobby",
       "maybeAutoDetectResult",
+      "markInhouseGameStartedFromBot",
+      "endInhouseGameFromBot",
     ]);
     // Callers that publish around what they call, and why.
     const PUBLISHING_CALLERS: Record<string, string> = {
@@ -142,8 +146,9 @@ describe("rule P: who publishes the inhouse room's changes", () => {
 
   it("never publishes inside a transaction", () => {
     const publishers = src.filter((f) => code(f.text).includes(PUBLISH));
-    // The engine, the route, the poll, the worker, the bot route, the
-    // outbox, the fixture route and the three profile writers' files.
+    // The engine (the bot's writes included), the route, the poll, the
+    // worker, the outbox, the fixture route, the version module itself and
+    // the profile writers' files.
     expect(publishers.length).toBeGreaterThanOrEqual(9);
     let transactions = 0;
     for (const file of publishers) {
@@ -208,14 +213,34 @@ describe("rule P: the publish sites, in order", () => {
       "maybeAutoDetectResult",
       ["data: { detectedAt: new Date(now) }", PUBLISH, "lookUpLobbyGame(", "data: { detectedAt: lobby.detectedAt }", PUBLISH],
     ],
+    // The bot's two writes, for the bot panel's read and the result scan.
+    [
+      "markInhouseGameStartedFromBot",
+      ["data: { status: INHOUSE_STATUS.IN_PROGRESS, startedAt: new Date() }", "if (started.count === 0) return false;", PUBLISH],
+    ],
+    // Before the bot release and the formation ping.
+    [
+      "endInhouseGameFromBot",
+      ["data: { status: INHOUSE_STATUS.AWAITING_RESULT, finishedAt }", "if (ended.count === 0) return false;", PUBLISH, "releaseInhouseBotAfterClose(", "maybeFormLobby()", "invalidateAutomationGateBestEffort()"],
+    ],
+    // The bot's own reads in the result lookup come before OpenDota's.
+    [
+      "lookUpLobbyGame",
+      ["inhouseBotGameStatus(", "endInhouseGameFromBot(", "markInhouseGameStartedFromBot(", "fetchOpenDotaMatch("],
+    ],
   ] as const)("%s publishes after its commit, before its provider call", (name, marks) => {
     const body = fn(service, name);
     expect(body.length, `${name} not found`).toBeGreaterThan(0);
     ordered(body, ...marks);
   });
 
+  it("the bot panel's route writes the room only through the engine's self-publishing writers", () => {
+    const route = code(sourceFile("src/app/api/dota-lobby/route.ts").text);
+    expect(route).not.toMatch(ROOM_TABLE_WRITE);
+    ordered(route, "callLobbyBot(", "await endInhouseGameFromBot(id)", "await markInhouseGameStartedFromBot(id)", "NextResponse.json(");
+  });
+
   it.each([
-    ["src/app/api/dota-lobby/route.ts", /if \(started\.count > 0\) \{\s*await publishInhouseRoomChange\(\);/],
     ["src/lib/inhouse-announcement-outbox.ts", /if \(outcome !== "skipped"\) await publishInhouseRoomChange\(\);/],
     ["src/app/api/test/cache/route.ts", /await publishInhouseRoomChange\(\);/],
     ["src/lib/users.ts", /\}\);\s*await publishInhouseRoomChange\(\);\s*return user;/],

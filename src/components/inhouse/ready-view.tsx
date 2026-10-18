@@ -34,8 +34,9 @@ export function ReadyView({
         </h2>
         <p className="mx-auto mt-2 max-w-md text-sm text-muted">
           Join the Dota lobby and your team’s voice channel, then play. The
-          result records itself from OpenDota after the game, and once it
-          ends anyone in it can press “Game over — queue again”.
+          result records itself from OpenDota after the game. A game the
+          lobby bot hosts is marked over by itself when Dota shows its end;
+          otherwise anyone in it can press “Game over — queue again”.
         </p>
         {/* A game hosted by hand stays READY for its whole length, so once it
             is plausibly being played the way out of it lives here too. */}

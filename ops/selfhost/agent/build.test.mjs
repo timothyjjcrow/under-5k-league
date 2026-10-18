@@ -5,6 +5,7 @@ import path from "node:path";
 import { test } from "node:test";
 import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease, parseMemoryPeak } from "./build.mjs";
 import { SHA, T0, TRACKED_DOTENV_EXAMPLES, leagueEnv, makeBox } from "./harness.test.mjs";
+import { RELEASE_WRITABLE_DIRS } from "./layout.mjs";
 import { describeRelease } from "./releases.mjs";
 
 const ID = "us-20261016T150000Z-0123456789ab";
@@ -119,7 +120,16 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   assert.ok(commands.includes(`chmod 0700 ${dir}`), "nobody else reads the tree while the build writes the action key");
   assert.ok(commands.includes(`chown -R -P -h root:ggd2l-us ${dir}`));
   assert.ok(commands.includes(`chmod -R g+rX,g-w,o-rwx ${dir}`));
-  assert.ok(commands.includes(`install -d -o ggd2l-us -g ggd2l-us -m 0700 ${dir}/.next/cache`));
+  // The league user owns exactly the folders `next start` writes, each made
+  // after the tree is locked down so the chmod cannot take them back.
+  const lockdown = commands.indexOf(`chmod -R g+rX,g-w,o-rwx ${dir}`);
+  assert.deepEqual(RELEASE_WRITABLE_DIRS, [".next/cache", ".next/server/route-cache"]);
+  for (const writable of RELEASE_WRITABLE_DIRS) {
+    const made = commands.indexOf(`install -d -o ggd2l-us -g ggd2l-us -m 0700 ${dir}/${writable}`);
+    const owned = commands.indexOf(`chown -R -P -h ggd2l-us:ggd2l-us ${dir}/${writable}`);
+    assert.ok(made > lockdown && owned > made, `${writable} is created, then owned, after the lockdown`);
+  }
+  assert.equal(commands.filter((line) => line.startsWith("install -d -o ggd2l-us ")).length, RELEASE_WRITABLE_DIRS.length);
   assert.ok(commands.includes(`rsync -a --no-links --no-owner --no-group --chmod=D0755,F0644 ${dir}/.next/static/ ${box.layout.staticDir("us")}/`));
   assert.ok(commands.some((line) => line.includes("merge-base --is-ancestor " + SHA)));
 });
@@ -210,5 +220,32 @@ test("a link the build planted outside the release stops the lockdown before roo
     const commands = box.calls.map((call) => path.basename(call.command));
     assert.ok(!commands.includes("rsync"), "nothing is published");
     assert.ok(!box.calls.some((call) => call.args.includes("g+rX,g-w,o-rwx")), "no chmod follows the refusal");
+  }
+});
+
+test("a link or file the build left where a league-writable folder goes is never handed to the league user", async () => {
+  for (const plant of [
+    // Inside the release, so the link check passes: the folder check must not.
+    (dir) => {
+      mkdirSync(path.join(dir, ".next/server"), { recursive: true });
+      symlinkSync("../static", path.join(dir, ".next/server/route-cache"));
+    },
+    (dir) => symlinkSync("../node_modules", path.join(dir, ".next/server")),
+    (dir) => {
+      mkdirSync(path.join(dir, ".next"), { recursive: true });
+      symlinkSync("../prisma", path.join(dir, ".next/cache"));
+    },
+    (dir) => {
+      mkdirSync(path.join(dir, ".next/server"), { recursive: true });
+      writeFileSync(path.join(dir, ".next/server/route-cache"), "x");
+    },
+  ]) {
+    const { box, dir } = buildBox({ plant });
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "lockdown_failed" });
+    const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
+    assert.ok(!commands.some((line) => line.startsWith("install -d -o ggd2l-us ")), "no folder is made the league user's");
+    assert.ok(!commands.some((line) => line.startsWith("chown -R -P -h ggd2l-us:")), "nothing is re-owned");
+    assert.ok(!commands.some((line) => line.startsWith("rsync ")), "nothing is published");
+    assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).state, "FAILED");
   }
 });

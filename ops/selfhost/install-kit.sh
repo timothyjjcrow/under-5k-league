@@ -31,6 +31,8 @@
 #     re-asserts both league databases and roles (provision-league-db.sh)
 #   - renders /etc/cloudflared/config.yml once the tunnel's credentials exist
 #   - records the install in /var/lib/ggd2l/kit.json
+# Before any of it, it refuses to go on if the live league env files
+# (/etc/ggd2l/<lg>.env) break this kit's env contract.
 # It writes no secret except the database URLs provision-league-db.sh derives,
 # and it holds the agent's lock, so no release runs while files move.
 set -euo pipefail
@@ -151,6 +153,15 @@ while IFS= read -r f; do bash -n "$f" || die "${f} does not parse"; done \
   < <(find "${SELFHOST}" -name '*.sh' -type f)
 while IFS= read -r f; do node --check "$f" || die "${f} does not parse"; done \
   < <(find "${SELFHOST}/agent" "${SELFHOST}/backup" -name '*.mjs' -type f)
+# This kit's env contract must pass each league's live env file before it is
+# installed: every slot's ExecStartPre and the agent's builds run it, so a
+# rule the kit tightens (such as the production DOTA_LOBBY_BOT_URL rule) would
+# otherwise stop a live league at its next restart. Names only, never values.
+for lg in $LEAGUES; do
+  [[ -f "/etc/ggd2l/${lg}.env" ]] || continue
+  node "${SELFHOST}/agent/env-contract.mjs" --league "$lg" --file "/etc/ggd2l/${lg}.env" \
+    || die "/etc/ggd2l/${lg}.env breaks this kit's env contract (the names above); fix it first, nothing was changed"
+done
 
 # The agent takes this lock for every mutating verb (§2.1).
 exec 9>>/run/ggd2l-agent.lock

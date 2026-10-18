@@ -22,7 +22,10 @@ import { gameMvp } from "@/lib/achievements";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
-import { inhouseJoinRefusalBeforeTyping } from "@/lib/inhouse-mmr-cap";
+import {
+  inhouseFixedMmr,
+  inhouseJoinRefusalBeforeTyping,
+} from "@/lib/inhouse-mmr-cap";
 import { loadInhouseJoinFacts } from "@/lib/inhouse-service";
 import {
   loadInhouseLadderSummary,
@@ -175,11 +178,12 @@ export default async function InhousePage({
     if (action === "join") redirect("/inhouse?join=1");
   }
 
-  // The player's most recent league signup MMR, if any (the join panel shows
-  // it instead of an MMR field), and the medal so the join panel can explain
-  // the MMR check for everyone else (the server clamps implausible typed
-  // values to the medal window's floor on join) and name the MMR cap in
-  // place of Join for a player over it: the same two facts joinQueue reads.
+  // The player's fixed MMR, if any (an admin's inhouse MMR, else their most
+  // recent league signup's: the join panel shows it instead of an MMR
+  // field), and the medal so the join panel can explain the MMR check for
+  // everyone else (the server clamps implausible typed values to the medal
+  // window's floor on join) and name the MMR cap in place of Join for a
+  // player over it: the same facts joinQueue reads.
   // The completed-game count decides whether the ladder, results and the
   // section nav have anything to show yet (an indexed count, always fresh).
   const [viewerRows, completedGames] = await Promise.all([
@@ -213,15 +217,16 @@ export default async function InhousePage({
   // empty cards (and the section nav would jump between them), so the page is
   // the room plus one line until then.
   const hasGames = completedGames > 0;
-  // With a league signup the join panel shows that MMR as plain text (the
-  // server always uses it), so the medal note is only for everyone else.
-  const signupMmr = joinFacts?.signupMmr ?? 0;
+  // With a fixed MMR (an admin's, or a league signup's) the join panel shows
+  // it as plain text (the server always uses it), so the medal note is only
+  // for everyone else.
+  const fixedMmr = joinFacts ? inhouseFixedMmr(joinFacts) : null;
   const rankTier = joinFacts?.rankTier ?? null;
   // A player over the MMR cap gets its reason in place of Join (the room
   // offers no join the server refuses), and no note on typing an MMR.
   const joinRefusal = joinFacts ? inhouseJoinRefusalBeforeTyping(joinFacts) : null;
   const mmrWindow =
-    signupMmr > 0 || joinRefusal ? null : mmrRangeForRankTier(rankTier);
+    fixedMmr || joinRefusal ? null : mmrRangeForRankTier(rankTier);
   // The window as far as the cap, which refuses anything typed over it.
   const shownWindow = mmrWindow && {
     min: mmrWindow.min,
@@ -303,7 +308,7 @@ export default async function InhousePage({
             aria-label="Live inhouse room"
           >
             <InhouseRoom
-              signupMmr={signupMmr}
+              fixedMmr={fixedMmr}
               mmrHint={mmrHint}
               joinRefusal={joinRefusal}
               firstGame={firstGame}
@@ -805,7 +810,9 @@ function OpenDotaGuide({
           <li className="flex gap-3">
             <GuideStep n={4} />
             <span>
-              Play your inhouse. When it ends, press{" "}
+              Play your inhouse. A game the lobby bot hosts is marked over by
+              itself when Dota shows its end; then press <b>Join queue</b> to queue
+              again. Otherwise, when it ends, press{" "}
               <b>Game over — queue again</b> to play the next one straight
               away. The result is fetched from OpenDota by itself (usually 10
               to 30 minutes after the game), or anyone in the game can paste

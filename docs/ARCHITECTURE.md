@@ -481,8 +481,9 @@ stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
-1. **Queue** — `joinQueue` (MMR trust chain: league registration > clamped
-   typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
+1. **Queue** — `joinQueue` (MMR trust chain: an admin's inhouse MMR
+   (`User.inhouseMmr`, set on `/admin/inhouse-players`) > league registration >
+   clamped typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
    refuses a Divine 3+ medal or an MMR over `HARD_MMR_CEILING`) into the
    userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
@@ -733,9 +734,12 @@ reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
 attempts fall back to IP);
 `/api/dota-lobby` — the lobby bot panel's POST (`{kind, id, action:
-status|create|start|release|invite}`; signed in, 30 reads and 10 writes per
-minute per user), relayed to the bot by `callLobbyBot`; the browser gets
-names, sides, seats and invite results, never a Steam ID;
+status|create|start|release|invite}`; signed in, 60 reads and 10 writes per
+minute per user), sent to the bot by `callLobbyBot` (through the relay, or
+over loopback once the bot is on the box), with every panel of a game sharing
+one status read per 2 seconds; the browser gets names, sides, seats, invite
+results and the bot's releasing and game-over flags, never a Steam ID, and a
+read showing Dota's postgame marks the game over (`endInhouseGameFromBot`);
 `/api/dota-lobby/recovery` — the admin-only bot recovery check;
 `/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
 result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,
@@ -1108,6 +1112,9 @@ box-score issues) and `/admin/health` (one season's signups and seats, check-in
 rate, standin bookings and their lead time, Discord links and posts, and new
 accounts per week, as counts; `?season=` picks any season;
 `league-health-service.ts` over the pure `league-health.ts`).
+Off-page with edits of its own: `/admin/inhouse-players`, any player's inhouse
+MMR and medal, signed up for the league or not (`setInhouseRating` over
+`inhouse-rating-service.ts`; [inhouse](features/inhouse.md#queue)).
 
 ## 9. External integrations
 
@@ -1319,7 +1326,10 @@ is enabled. Caddy removes `X-Vercel-Forwarded-For`, `X-Real-IP` and
 passes `Host` through. A promote restarts the target slot clean, swaps the
 league's Caddy mode file and reloads Caddy; a rollback is a promote of the
 previous release. Every slot start deletes `.next/cache/fetch-cache`, because
-Next keeps cache tag state only in a process's memory. One fixed
+Next keeps cache tag state only in a process's memory. A slot's user can write
+only `.next/cache` and `.next/server/route-cache` (Next's response cache for
+prerendered routes) of its release (`RELEASE_WRITABLE_DIRS`), and each process
+holds one Prisma pool (`src/lib/prisma.ts`). One fixed
 `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` per league keeps action ids stable
 across releases. PostgreSQL 18 holds both leagues' databases on
 127.0.0.1:5432. `ops/selfhost/` is the kit, and `ops/selfhost/README.md` its

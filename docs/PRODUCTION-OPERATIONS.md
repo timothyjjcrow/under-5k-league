@@ -1021,6 +1021,13 @@ environment (the env contract: `LEAGUE_DEPLOY_ENV`, the league's region, the
 canonical origin `https://<lg>.ggd2l.com` in production and staging alike, the
 app role's local URL, no Vercel or Neon keys).
 
+**Slots.** A slot runs `next start` as `ggd2l-<lg>`, which can write only the
+release's `.next/cache` and `.next/server/route-cache` (`RELEASE_WRITABLE_DIRS`;
+the build creates both). Each slot process holds one Prisma pool of
+`connection_limit=8`, so the four processes of a release overlap use 32 of
+PostgreSQL's 47 usable connections; a release built before 2026-10-17 holds
+two pools per process.
+
 **The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
 PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
 reboot at 09:00 UTC when an update needs it. Only live slots are enabled, so

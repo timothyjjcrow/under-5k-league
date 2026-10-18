@@ -1,21 +1,34 @@
 import { describe, expect, it } from "vitest";
 import {
+  botGameOverRefusal,
   botHoldsUnlaunchedLobby,
+  createOpen,
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_INVITES,
+  LOBBY_OVER_NOTE,
   LOBBY_PANEL_POLL_MS,
   LOBBY_PANEL_STARTED_POLL_MS,
+  LOBBY_RECOVERY_POLL_MS,
   LOBBY_SEATS,
+  lobbyBusyElsewhere,
+  lobbyBusyLabel,
+  lobbyBusyNote,
   lobbyInviteScope,
+  lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
+  lobbyStatusLabel,
   noPopupHelp,
   lobbyPlayerViews,
   parseBotPlayers,
   parseInvitedCount,
+  parseLobbyDigits,
+  parseLobbyLifecycle,
   reinviteMissingOpen,
+  releaseOpen,
   selfInviteOpen,
+  startOpen,
   type DotaLobbyPlayerView,
   type DotaLobbyStatus,
   type LobbyInvite,
@@ -36,21 +49,234 @@ describe("lobbyPanelPollMs", () => {
     released: null,
   } satisfies Record<DotaLobbyStatus["state"], number | null>;
 
-  it.each(Object.entries(cases))("%s refreshes every %s ms", (state, every) => {
-    expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"])).toBe(every);
+  it.each(Object.entries(cases))(
+    "%s refreshes every %s ms once the game is over",
+    (state, every) => {
+      expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"], false)).toBe(
+        every,
+      );
+    },
+  );
+
+  // 2026-10-17: a captain pressed Create, and every other panel (the other
+  // captain's, the admins', the players') stayed on "No bot lobby yet" until
+  // the game started, so nobody else saw the seats, the invites or Start.
+  it.each(["idle", "released"] as const)(
+    "keeps reading a playable game with no bot lobby (%s) at the setup rate",
+    (state) => {
+      expect(lobbyPanelPollMs(state, true)).toBe(LOBBY_PANEL_POLL_MS);
+    },
+  );
+
+  it.each(Object.entries(cases).filter(([, every]) => every !== null))(
+    "reads %s at the same rate whether or not the game is playable",
+    (state, every) => {
+      expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"], true)).toBe(
+        every,
+      );
+    },
+  );
+
+  it("does not refresh while the first read is still out", () => {
+    expect(lobbyPanelPollMs(undefined, true)).toBeNull();
+    expect(lobbyPanelPollMs(undefined, false)).toBeNull();
   });
 
-  it("does not refresh before the bot has answered", () => {
-    expect(lobbyPanelPollMs(undefined)).toBeNull();
+  // A panel whose first read failed (a bot restarting refuses connections
+  // for half a minute) used to show the failure until someone pressed
+  // "Refresh bot status".
+  it("retries a failed first read at the running-game rate", () => {
+    for (const playable of [true, false])
+      expect(lobbyPanelPollMs(undefined, playable, false, true)).toBe(
+        LOBBY_PANEL_STARTED_POLL_MS,
+      );
+    expect(lobbyPanelPollMs(undefined, true, true, true)).toBeNull();
+    // Once the bot answered, its state decides, whatever failed before.
+    expect(lobbyPanelPollMs("ready", true, false, true)).toBe(LOBBY_PANEL_POLL_MS);
+    expect(lobbyPanelPollMs("released", false, false, true)).toBeNull();
   });
 
-  // Setup keeps the 5s read (seats, invites, the Start answer); the running
-  // game's read is the CPU saving and must stay well above it.
-  it("reads a running game at least ten times less often than setup", () => {
-    expect(LOBBY_PANEL_POLL_MS).toBe(5_000);
-    expect(LOBBY_PANEL_STARTED_POLL_MS).toBeGreaterThanOrEqual(10 * LOBBY_PANEL_POLL_MS);
+  // Dota showed the game over: the site marks it over and the panel has
+  // nothing left to wait for, whatever the state or the game.
+  it.each(Object.keys(cases))("stops reading a game Dota showed over (%s)", (state) => {
+    for (const playable of [true, false])
+      expect(
+        lobbyPanelPollMs(state as DotaLobbyStatus["state"], playable, true),
+      ).toBeNull();
+  });
+
+  // The rates Tim asked for on the box (2026-10-18): 3s while a lobby is set
+  // up or awaited (every panel of a game shares one bot read), 15s through a
+  // running game, fast enough to show its end and a pending release.
+  it("reads setup every 3 seconds and a running game every 15", () => {
+    expect(LOBBY_PANEL_POLL_MS).toBe(3_000);
+    expect(LOBBY_PANEL_STARTED_POLL_MS).toBe(15_000);
+    expect(LOBBY_RECOVERY_POLL_MS).toBe(15_000);
   });
 });
+
+describe("parseLobbyLifecycle", () => {
+  it("keeps only a boolean true for each flag", () => {
+    expect(parseLobbyLifecycle({ releasing: true, over: true })).toEqual({
+      releasing: true,
+      over: true,
+    });
+    expect(parseLobbyLifecycle({ releasing: true })).toEqual({ releasing: true });
+    expect(parseLobbyLifecycle({ over: true })).toEqual({ over: true });
+    expect(parseLobbyLifecycle({})).toEqual({});
+  });
+
+  it.each([false, "true", 1, null, {}, [true]])(
+    "reads %j as unknown, so absent",
+    (value) => {
+      expect(parseLobbyLifecycle({ releasing: value, over: value })).toEqual({});
+    },
+  );
+});
+
+describe("parseLobbyDigits", () => {
+  it("keeps Valve's digit ids", () => {
+    for (const id of ["1", "30007027938516500", "9050201642", "1".repeat(20)])
+      expect(parseLobbyDigits(id)).toBe(id);
+  });
+
+  it.each(["", "0", "012", "1".repeat(21), "12a", " 12", "-1", "1e5"])(
+    "drops %j",
+    (id) => {
+      expect(parseLobbyDigits(id)).toBeUndefined();
+    },
+  );
+
+  it.each([123, null, undefined, {}, ["1"]])("drops a non-string %j", (id) => {
+    expect(parseLobbyDigits(id)).toBeUndefined();
+  });
+});
+
+describe("the panel's lifecycle wording and controls", () => {
+  it("shows the seat list while the lobby is ready and while Dota starts the game", () => {
+    const shown = (Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]).filter(
+      lobbyListVisible,
+    );
+    expect(shown).toEqual(["ready", "starting"]);
+    expect(lobbyListVisible(undefined)).toBe(false);
+  });
+
+  it("says a pending release before anything else, then a game Dota showed over", () => {
+    for (const state of Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]) {
+      expect(lobbyStatusLabel({ state, releasing: true, over: true })).toBe(
+        "Leaving the Dota lobby…",
+      );
+      expect(lobbyStatusLabel({ state, over: true })).toBe("Game over in Dota");
+      expect(lobbyStatusLabel({ state })).toBe(LOBBY_STATES[state]);
+    }
+    expect(LOBBY_OVER_NOTE).toBe(
+      "Game over in Dota — the result records itself from OpenDota.",
+    );
+  });
+
+  it("offers Release while the bot holds a lobby, never twice while one is pending", () => {
+    const open = (
+      state: DotaLobbyStatus["state"],
+      extra: { releasing?: true; canRelease?: boolean } = {},
+    ) =>
+      releaseOpen({
+        canRelease: extra.canRelease ?? true,
+        status: { state, ...(extra.releasing ? { releasing: true } : {}) },
+      });
+    const offered = (Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]).filter(
+      (state) => open(state),
+    );
+    expect(offered).toEqual(["ready", "started", "blocked"]);
+    for (const state of offered) {
+      expect(open(state, { releasing: true })).toBe(false);
+      expect(open(state, { canRelease: false })).toBe(false);
+    }
+  });
+
+  // Once Dota shows the game over the bot leaves at the postgame by itself,
+  // and a release after that answers STATE ("This lobby cannot perform that
+  // action"): no button for it.
+  it("never offers Release once Dota showed the game over", () => {
+    expect(
+      releaseOpen({ canRelease: true, status: { state: "started", over: true } }),
+    ).toBe(false);
+    expect(releaseOpen({ canRelease: true, status: { state: "started" } })).toBe(true);
+  });
+
+  // The bot refuses Start on a lobby it is leaving (STATE), so the button
+  // must not show while a release is pending.
+  it("offers Start to a captain or admin on a ready lobby, never while a release is pending", () => {
+    const open = (
+      state: DotaLobbyStatus["state"],
+      extra: { releasing?: true; canControl?: boolean } = {},
+    ) =>
+      startOpen({
+        canControl: extra.canControl ?? true,
+        status: { state, ...(extra.releasing ? { releasing: true } : {}) },
+      });
+    expect(
+      (Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]).filter((state) => open(state)),
+    ).toEqual(["ready"]);
+    expect(open("ready", { releasing: true })).toBe(false);
+    expect(open("ready", { canControl: false })).toBe(false);
+  });
+});
+
+// 2026-10-18 review: one bot hosts one game at a time, so on a two-game night
+// game 2's panel must say the bot is game 1's and send it to the by-hand steps.
+describe("the bot hosting another game", () => {
+  const live = { game: "#4110", closed: false };
+  const closed = { game: "#4110", closed: true };
+  const view = (
+    state: DotaLobbyStatus["state"],
+    busyElsewhere?: { game: string | null; closed: boolean },
+    canControl = true,
+  ) => ({ canControl, status: { state }, ...(busyElsewhere ? { busyElsewhere } : {}) });
+
+  it("counts only while this game's own job has no lobby", () => {
+    for (const state of Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]) {
+      const busy = lobbyBusyElsewhere(view(state, live));
+      expect(busy, state).toEqual(state === "idle" || state === "released" ? live : null);
+    }
+    expect(lobbyBusyElsewhere(view("idle"))).toBeNull();
+  });
+
+  it("names the game, or another game when it isn't this league's in-house game", () => {
+    expect(lobbyBusyLabel(live)).toBe("The bot is hosting game #4110");
+    expect(lobbyBusyLabel(closed)).toBe("The bot is still leaving finished game #4110");
+    expect(lobbyBusyLabel({ game: null, closed: false })).toBe("The bot is hosting another game");
+  });
+
+  it("sends a game still being played to the by-hand steps, and a closed one to Create", () => {
+    expect(lobbyBusyNote(live, true)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(live, false)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(closed, true)).toMatch(/^Press “Create Dota lobby”/);
+    expect(lobbyBusyNote(closed, false)).toMatch(/A captain's “Create Dota lobby”/);
+  });
+
+  it("offers Create only where it would work", () => {
+    expect(createOpen(view("idle"))).toBe(true);
+    expect(createOpen(view("released"))).toBe(true);
+    // A game still being played keeps the bot: Create would only answer BUSY.
+    expect(createOpen(view("idle", live))).toBe(false);
+    // A closed game's hold: Create frees the bot from it first.
+    expect(createOpen(view("idle", closed))).toBe(true);
+    expect(createOpen(view("idle", undefined, false))).toBe(false);
+    for (const state of ["creating", "ready", "starting", "started", "blocked"] as const)
+      expect(createOpen(view(state)), state).toBe(false);
+  });
+});
+
+/** Every bot state with its panel label, in the bot's order. */
+const LOBBY_STATES = {
+  idle: "No bot lobby yet",
+  creating: "Creating lobby…",
+  ready: "Lobby ready",
+  starting: "Dota is starting the game…",
+  started: "Game started",
+  blocked: "Lobby needs attention",
+  released: "Bot released",
+} as const satisfies Record<DotaLobbyStatus["state"], string>;
 
 describe("botHoldsUnlaunchedLobby", () => {
   // Every state the bot reports, each with its answer. `satisfies` makes a new
@@ -97,6 +323,33 @@ describe("botHoldsUnlaunchedLobby", () => {
     expect(
       botHoldsUnlaunchedLobby({ state: "ready", message: "released" }),
     ).toBe(true);
+  });
+
+  // The bot is already leaving: its Start and invites refuse and the panel
+  // hides Release, so a refusal naming them would point at nothing.
+  it("lets a pending release through, whatever the state", () => {
+    for (const state of Object.keys(HOLDS) as DotaLobbyStatus["state"][])
+      expect(botHoldsUnlaunchedLobby({ state, releasing: true }), state).toBe(false);
+  });
+});
+
+describe("botGameOverRefusal", () => {
+  it("names the panel's two buttons only for a ready lobby, where both show", () => {
+    expect(botGameOverRefusal({ state: "ready" })).toBe(
+      "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
+    );
+    // Neither button shows while the bot creates or starts the lobby.
+    for (const state of ["creating", "starting"] as const)
+      expect(botGameOverRefusal({ state }), state).toBe(
+        "The lobby bot is still setting up or starting this game's Dota lobby. Try again in a minute.",
+      );
+  });
+
+  it("refuses nothing the bot doesn't hold", () => {
+    expect(botGameOverRefusal(null)).toBeNull();
+    for (const state of ["idle", "started", "blocked", "released"] as const)
+      expect(botGameOverRefusal({ state }), state).toBeNull();
+    expect(botGameOverRefusal({ state: "ready", releasing: true })).toBeNull();
   });
 });
 
@@ -265,6 +518,17 @@ describe("the invite buttons", () => {
     // Captains and admins get Re-invite instead.
     expect(selfInviteOpen(view("missing", "ready", meMissing))).toBe(false);
     expect(selfInviteOpen(view(null, "ready", meMissing))).toBe(false);
+  });
+
+  // The bot refuses invites into a lobby it is leaving (STATE).
+  it("offers neither invite while a release is pending", () => {
+    const leaving = (scope: LobbyInviteScope, players: DotaLobbyPlayerView[]) => ({
+      inviteScope: scope,
+      status: { state: "ready" as const, releasing: true as const },
+      players,
+    });
+    expect(reinviteMissingOpen(leaving("missing", [row("radiant", true), row("absent")]))).toBe(false);
+    expect(selfInviteOpen(leaving("self", [row("absent", true), row("radiant")]))).toBe(false);
   });
 });
 
