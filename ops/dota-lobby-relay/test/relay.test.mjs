@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { Miniflare } from "miniflare";
-import { leaseAlive, LEASE_MS, validControlRequest, validReply } from "../src/protocol.mjs";
+import { leaseAlive, LEASE_MS, MAX_BYTES, validControlRequest, validReply } from "../src/protocol.mjs";
 
 const SITE_SECRET = "test-site-secret-".repeat(3);
 const WORKER_SECRET = "test-worker-secret-".repeat(3);
@@ -352,6 +352,34 @@ test("releasing and over dispatch through the relay unchanged", { timeout: 5_000
   const bad = await bot.nextRequest();
   bot.ws.send(JSON.stringify({ id: bad.id, status: 200, body: { state: "started", over: "yes" } }));
   await assertResponse(await badPending, 409, { code: "STATE" });
+});
+
+// The site's in-house spec carries each side's display names for the bot's
+// lobby chat (radiantNames, direNames; 2026-10-18). The relay treats a spec as
+// an opaque record, so new keys need no relay release: they reach the bot as
+// sent, and a full ten-player spec stays far under the body cap.
+test("a spec's lobby chat names pass through to the bot unchanged", { timeout: 5_000 }, async (t) => {
+  const { post, connect } = await fixture(t);
+  const bot = await connect();
+  const ids = (from) => Array.from({ length: 5 }, (_, i) => `7656119800000${from + i}`.padEnd(17, "0"));
+  // Steam's longest names (32 characters), in four-byte characters.
+  const name = (i) => `${"😀".repeat(30)}${String(i).padStart(2, "0")}`;
+  const spec = {
+    key: "inhouse:fixture:1", name: "GGD2L Inhouse fixture1", password: "ggd2l", leagueId: 20004,
+    gameMode: 2, serverRegion: 2, radiant: ids(1000), dire: ids(2000),
+    radiantName: `${name(0)}'s team`, direName: `${name(5)}'s team`,
+    radiantNames: [0, 1, 2, 3, 4].map(name), direNames: [5, 6, 7, 8, 9].map(name),
+    withLifecycle: true, withPlayers: true,
+  };
+  for (const action of LOBBY_ACTIONS)
+    assert.equal(validControlRequest({ action, spec }), true, action);
+  const request = { action: "create", spec };
+  assert.ok(new TextEncoder().encode(JSON.stringify(request)).byteLength < MAX_BYTES / 2);
+  const pending = post(request);
+  const command = await bot.nextRequest();
+  assert.deepEqual(command.request, request);
+  bot.ws.send(JSON.stringify({ id: command.id, status: 200, body: { state: "creating" } }));
+  await assertResponse(await pending, 200, { state: "creating" });
 });
 
 test("health, active and unknown actions refuse the lobby-only reply fields", () => {

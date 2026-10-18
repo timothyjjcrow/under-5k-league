@@ -810,7 +810,9 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **The bot invites the ten once its lobby is ready** (Tim's call,
   2026-10-10; `docs/DOTA-LOBBY-BOT.md#lobby-invites`), once per game.
   Accepting joins without the password but lands the player on neither side,
-  so they take their own slot; the bot never seats or kicks a player. While the
+  so they take their own slot: Dota lets nobody seat another player. Since
+  2026-10-18 the bot corrects the sides instead (see "Getting the ten on
+  their sides" below). While the
   lobby is ready the panel lists "Who's in the lobby" (each player's seat and
   invite, no Steam IDs) and offers "Re-invite missing players" to the captains
   and admins and "Send me an invite" to the other players, each only while
@@ -824,6 +826,63 @@ Every transition is a guarded claim; keep it that way (general rules:
   line. The list also shows while Dota is starting the game
   (`lobbyListVisible`: ready and starting, the two states the bot reports
   seats in), with its own line instead of the invite copy.
+- **Getting the ten on their sides** (Tim's call, 2026-10-18, in-house only:
+  the DECISIONS row of that date in `docs/DECISIONS.md#product-decisions`,
+  superseding the 2026-10-10 invites row's "never kicks a stranger or seats
+  anyone"; the bot's half is `docs/DOTA-LOBBY-BOT.md#seat-help`). "Right"
+  means the right SIDE: inhouse assigns no positions, so any slot on it will
+  do. The lobby password and visibility are unchanged.
+  - **Release order: the bot first, then the site, to both leagues.** The
+    site's copy below says the bot moves players and may post in lobby chat,
+    and the site can't tell which bot answers it (seat help adds no reply
+    field), so under an older bot that copy would be false. The names alone
+    could ship in either order; the copy can't. Roll back the other way: the
+    site first, then the bot.
+  - **Each player's own side, first.** `GameSetupCard` puts one line straight
+    under its heading (`role="status"`, named "Your side"), on a phone's first
+    screen of the Set up stage: "You're Radiant — take any Radiant slot."
+    (`inhouseViewerSideLine` in `src/lib/inhouse.ts`, source-guarded in
+    `game-setup-card.test.ts`). It is for a player on this game's roster only
+    (`me.myTeam`; a spectator or an admin watching gets none), from the
+    stored side mapping, while the game is READY, or IN_PROGRESS while the
+    bot still reports seats ("Start the game clock" pressed early). The panel
+    reports the viewer's own row from the seat list it shows
+    (`onViewerSeat`, `viewerLobbySeat`; no new bot field), so the line then
+    says "you're in a Radiant slot", or, for a player in the lobby on no side
+    or the wrong one, says so plainly and that the bot moves anyone on the
+    wrong side back to unassigned. A hand-hosted game gets the plain line.
+  - **"All ten seated".** Right above the panel's buttons,
+    `lobbySeatSummary` counts the roster on its own side ("6 of 10 on their
+    side.") while the lobby is ready with no release pending, and once all
+    ten are, says "All ten seated — press “Start game with bot”." and rings
+    that button for a viewer who has it (`startOpen`), or "All ten seated —
+    waiting for a captain to start the game." for everyone else: nobody else
+    gets a Start prompt. No seat list (an older bot, a reply that didn't
+    parse) shows no count, never "0 of 10". Start still shows without one,
+    and the bot still refuses it (`ROSTER`) until the sides are right.
+  - **The panel's copy** says the bot moves anyone on the wrong side, and
+    anyone not in this game, back to unassigned, and may post in lobby chat
+    who goes where (`INHOUSE_SEAT_RULE_NOTE`, in a ready in-house lobby
+    only); so does /inhouse's "Make your games auto-detect" step 3 when the
+    bot can host (`inhouseTicketGuideStep`). The by-hand steps don't: a lobby
+    made by hand has no bot in it.
+  - **Names for the lobby chat.** The in-house spec carries `radiantNames`
+    and `direNames`, name i for Steam id i of `radiant` and `dire`, from the
+    same roster pass (`inhouseLobbyPlan`), so the browser's controls, the
+    worker's status read and every release send the same spec. Each is the
+    display name the room shows, through `lobbyChatName` (control and bidi
+    characters dropped, whitespace folded, at most 32 code points, "Player"
+    when empty): names only, never contact info, never returned to the
+    browser (`dota-lobby.itest.ts` pins the spec's keys and the browser's
+    view). A season spec has none. The relay passes a spec through as an
+    opaque record (`validControlRequest` checks only that it is one), and
+    ten capped names keep the body far under its 8 KiB cap (both pinned in
+    `ops/dota-lobby-relay/test/relay.test.mjs`); an older bot ignores the
+    keys, since its `validSpec` reads only the keys it knows. The cleaner
+    spells its bidi characters as `\u` escapes, never literally ("Trojan
+    Source": an editor or GitHub would show the line reordered), and
+    `src/lib/bidi-source-guard.test.ts` fails on a literal one anywhere in
+    the code, tests and ops included.
 - **The panel's rates (DECISIONS 2026-10-18, superseding the 2026-10-12
   row for the panel):** `lobbyPanelPollMs` in `src/lib/dota-lobby.ts`,
   source-guarded in the panel. Every 3s (`LOBBY_PANEL_POLL_MS`) while the bot
@@ -1411,7 +1470,10 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   in a unit test). Fallback: a Playwright spec
   (`e2e/zz3-room-poll-resilience.spec.ts` interception pattern). jsdom last.
 - **e2e:** `e2e/zz4-inhouse.spec.ts` (join/leave with a phone overflow check,
-  then accept to in-progress with nine API players, zero page errors);
+  then accept to in-progress with nine API players, zero page errors; the
+  setup card's "Your side" line for the player, whole above the tab bar on
+  a fresh 390x664 load, none for a watching admin or once the game is under
+  way);
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
   admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).

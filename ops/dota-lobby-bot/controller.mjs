@@ -1,5 +1,19 @@
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { eventLog } from "./event-log.mjs";
+import { LOBBY_CHANNEL_TYPE, lobbyChannelName } from "./lobby-wire.mjs";
+import {
+  CHAT_JOIN_TIMEOUT_MS,
+  CHAT_LINE_GAP_MS,
+  CHAT_MAX_JOINS,
+  CHAT_QUEUE_MAX,
+  CHAT_STALE_MS,
+  greeting,
+  greetLine,
+  moveLine,
+  rosterNames,
+  seatHelpKey,
+  seatPlan,
+} from "./seat-help.mjs";
 
 export class BotError extends Error {
   constructor(code) {
@@ -275,6 +289,12 @@ const showsGame = (lobby) =>
   ([2, 3].includes(lobby.state) &&
     !(atPostgame(lobby) && notScored(lobby.matchOutcome)));
 
+/** The players' display names serve only the seat help's lobby chat: a job
+ * whose claim is freed keeps none in lobbies.json, which keeps every job. */
+function forgetNames(job) {
+  for (const field of ["names", "radiantNames", "direNames"]) delete job.spec[field];
+}
+
 /** No Leave is waiting on Dota's confirmation. */
 function clearLeaveClock(job) {
   delete job.leavePendingAt;
@@ -306,6 +326,11 @@ export class LobbyController {
     this.welcomeLeave = null;
     this.lastLobbyLog = null;
     this.lastAnswers = new Map();
+    // The lobby chat of the job being set up: its channel once Dota answered
+    // the join, and the lines waiting their turn. In memory only: a GC
+    // session that restarts has left the channel.
+    this.chat = null;
+    this.seatUnknown = new Map();
     this.data = existsSync(file)
       ? JSON.parse(readFileSync(file, "utf8"))
       : { active: null, jobs: {} };
@@ -421,6 +446,300 @@ export class LobbyController {
     if (entry.result === result) return;
     entry.result = result;
     this.save();
+  }
+  /** Seat help runs only for an inhouse job while its lobby is set up:
+   * online, on Dota's lobby screen, `ready` (which every lobby-screen
+   * snapshot decides: this job's own lobby, led by the bot with the job's
+   * settings, no launch asked for) and not being released. */
+  seatHelpOpen(job, lobby) {
+    return (
+      this.online &&
+      !!job &&
+      !!lobby &&
+      seatHelpKey(job.spec.key) &&
+      lobby.state === 0 &&
+      job.state === "ready" &&
+      !job.releasing
+    );
+  }
+  /**
+   * Help the ten onto their sides (Tim's call, 2026-10-18; seat-help.mjs):
+   * swap the sides when the whole roster sits mirrored, otherwise send each
+   * roster player on the wrong side, and any stranger on a side, back to the
+   * unassigned pool, and say so in the lobby's chat, where each drafted
+   * player is also greeted with their side once they arrive. Each move and
+   * swap is recorded and saved before it goes out, like an invite, so a
+   * reconnect or restart never repeats one inside its limits. Runs on every
+   * lobby snapshot and on the 30 s clock.
+   */
+  seatHelp(job, lobby) {
+    if (!this.seatHelpOpen(job, lobby)) return;
+    const now = this.now();
+    this.chatJoin(job, lobby, now);
+    this.noteArrivals(job, lobby, now);
+    this.fixSeats(job, lobby, now);
+    // Greetings are worked out when a line can go: this may be one's turn.
+    this.pumpChat();
+  }
+  /** When each member now in the lobby was first seen there, for greeting()
+   * (in memory: a new GC session, or a player who left and came back,
+   * starts again). */
+  noteArrivals(job, lobby, now) {
+    const chat = this.chat;
+    if (!chat || chat.key !== job.spec.key) return;
+    chat.seen = new Map(currentMembers(lobby).map((m) => [m.id, chat.seen.get(m.id) ?? now]));
+  }
+  fixSeats(job, lobby, now) {
+    const key = job.spec.key;
+    const flips = job.seatFlips ?? {};
+    // The swap shows in the lobby: everyone where they belong.
+    if (flips.at !== undefined && flips.confirmedAt === undefined && rosterMatches(lobby, job.spec)) {
+      flips.confirmedAt = now;
+      this.save();
+      this.log("seat-flip", { key, result: "confirmed", n: flips.count });
+    }
+    const plan = seatPlan({
+      members: currentMembers(lobby),
+      spec: job.spec,
+      bot: this.transport.steamId(),
+      now,
+      flips,
+      kicks: job.seatKicks ?? {},
+    });
+    this.logSeatUnknown(key, plan.unknown);
+    if (plan.flip) {
+      job.seatFlips = { count: (flips.count ?? 0) + 1, at: now };
+      this.save();
+      let result = "sent";
+      try {
+        this.transport.flipTeams();
+      } catch {
+        // Steam dropped: the 30 s clock may try the one swap left.
+        result = "failed";
+      }
+      this.log("seat-flip", { key, result, n: job.seatFlips.count });
+      if (result === "sent") this.say(job, moveLine("flip"), "flip");
+      return;
+    }
+    if (!plan.kicks.length) return;
+    job.seatKicks ??= {};
+    for (const { id } of plan.kicks)
+      job.seatKicks[id] = { at: now, count: (job.seatKicks[id]?.count ?? 0) + 1 };
+    this.save();
+    const names = rosterNames(job.spec);
+    const sent = { side: 0, stranger: 0 };
+    const failed = { side: 0, stranger: 0 };
+    for (const { id, why, side } of plan.kicks) {
+      try {
+        this.transport.kickFromTeam(id);
+      } catch {
+        // Counted against the player's limits all the same: never retried
+        // inside 30 s.
+        failed[why] += 1;
+        continue;
+      }
+      sent[why] += 1;
+      // One line a move: so at most one about a player every 30 s. It tells
+      // a drafted player their side, so it is their greeting too.
+      this.say(job, moveLine(why, side, names.get(id)), why, why === "side" ? [id] : []);
+    }
+    // Counts only: never who was moved.
+    for (const why of ["side", "stranger"])
+      if (sent[why] || failed[why])
+        this.log("seat-kick", { key, reason: why, count: sent[why], n: failed[why] });
+  }
+  /** Members whose team the decoder filled in are never moved; the count is
+   * logged when it changes (a live check that Dota sends every team). */
+  logSeatUnknown(key, count) {
+    if ((this.seatUnknown.get(key) ?? 0) === count) return;
+    if (this.seatUnknown.size >= 500) this.seatUnknown.clear();
+    this.seatUnknown.set(key, count);
+    this.log("seat-unknown", { key, count });
+  }
+  /** Join the lobby's chat channel, at most CHAT_MAX_JOINS times a job and
+   * 30 s apart, recorded and saved before the join goes out. One Dota
+   * refuses, or never answers twice, leaves the job's chat unavailable: the
+   * seat help goes on without it. */
+  chatJoin(job, lobby, now) {
+    if (job.chat?.unavailable) return;
+    let chat = this.chat;
+    if (!chat || chat.key !== job.spec.key || chat.lobbyId !== lobby.lobbyId) {
+      chat = this.chat = {
+        key: job.spec.key,
+        lobbyId: lobby.lobbyId,
+        channelId: null,
+        pendingAt: undefined,
+        lastLineAt: undefined,
+        queue: [],
+        timer: false,
+        echoed: false,
+        seen: new Map(),
+      };
+    }
+    if (chat.channelId) return;
+    const record = job.chat ?? { joins: 0 };
+    if (chat.pendingAt !== undefined) {
+      if (now - chat.pendingAt < CHAT_JOIN_TIMEOUT_MS) return;
+      chat.pendingAt = undefined;
+      if ((record.joins ?? 0) >= CHAT_MAX_JOINS) return this.chatUnavailable(job, "no-answer");
+    }
+    if ((record.joins ?? 0) >= CHAT_MAX_JOINS || now - (record.at ?? -Infinity) < CHAT_JOIN_TIMEOUT_MS)
+      return;
+    record.joins = (record.joins ?? 0) + 1;
+    record.at = now;
+    job.chat = record;
+    chat.pendingAt = now;
+    this.save();
+    try {
+      this.transport.joinChat(lobby.lobbyId);
+    } catch {
+      return this.chatUnavailable(job, "send-failed");
+    }
+    this.log("chat", { key: job.spec.key, result: "joining", n: record.joins });
+  }
+  /** Dota's answer to a chat join (server.mjs decodes 7010). Only the active
+   * job's own lobby channel counts: "Lobby_<lobby id>", or, with a join of
+   * ours waiting, a lobby channel Dota names some other way. Once joined,
+   * the bot greets the drafted players already in the lobby (pumpChat).
+   * True when it joined. */
+  chatJoined({ channelName, channelType, channelId, result } = {}) {
+    const chat = this.chat;
+    const job = this.data.jobs[this.data.active];
+    if (!chat || !job || chat.key !== job.spec.key || job.chat?.unavailable) return false;
+    if (channelType !== undefined && channelType !== LOBBY_CHANNEL_TYPE) return false;
+    const name = typeof channelName === "string" ? channelName : "";
+    const ours =
+      name === lobbyChannelName(chat.lobbyId) ||
+      (chat.pendingAt !== undefined && channelType === LOBBY_CHANNEL_TYPE && !/^Lobby_\d+$/.test(name));
+    if (!ours) return false;
+    chat.pendingAt = undefined;
+    if ((result ?? 0) !== 0 || typeof channelId !== "string" || !/^[1-9]\d{0,19}$/.test(channelId)) {
+      this.chatUnavailable(job, "refused", result);
+      return false;
+    }
+    if (chat.channelId === channelId) return true;
+    chat.channelId = channelId;
+    job.chat ??= { joins: 0 };
+    this.log("chat", { key: job.spec.key, result: "joined", n: job.chat.joins });
+    this.pumpChat();
+    return true;
+  }
+  /** The bot's own line came back on its channel: chat works for this
+   * account (logged once a job, for the live check). */
+  chatSeen(channelId) {
+    const chat = this.chat;
+    if (!chat?.channelId || chat.channelId !== channelId || chat.echoed) return false;
+    chat.echoed = true;
+    this.log("chat", { key: chat.key, result: "echoed" });
+    return true;
+  }
+  /** No more chat for this job: saved, so a restart doesn't try again. */
+  chatUnavailable(job, reason, code) {
+    job.chat = { ...(job.chat ?? { joins: 0 }), unavailable: reason };
+    if (Number.isInteger(code)) job.chat.code = code;
+    if (this.chat?.key === job.spec.key) {
+      this.chat.queue = [];
+      this.chat.channelId = null;
+      this.chat.pendingAt = undefined;
+    }
+    this.save();
+    this.log("chat", {
+      key: job.spec.key,
+      result: "unavailable",
+      reason,
+      n: Number.isInteger(code) ? code : undefined,
+    });
+  }
+  /** Queue a chat line, never more than CHAT_QUEUE_MAX waiting. `about`:
+   * the drafted players it tells their side, who count as greeted once it
+   * goes. A no-op once the job's chat is unavailable. */
+  say(job, text, reason, about = []) {
+    const chat = this.chat;
+    if (!chat || chat.key !== job.spec.key || job.chat?.unavailable) return false;
+    if (chat.queue.length >= CHAT_QUEUE_MAX) return false;
+    chat.queue.push({ text, reason, about, at: this.now() });
+    this.pumpChat();
+    return true;
+  }
+  /** Who to greet now (seat-help.mjs greeting): due, or settling for `wait`
+   * more ms. */
+  greetingNow(job, now) {
+    return greeting({
+      members: currentMembers(this.lobby),
+      spec: job.spec,
+      now,
+      seen: this.chat.seen,
+      greeted: job.chat?.greeted,
+    });
+  }
+  /**
+   * Send the next chat line once the channel is joined, at most one every
+   * 5 s (transport.later wakes it for the next): a move's or swap's line
+   * first, then a greeting, worked out now so players who arrived together
+   * share it. A move's line older than 30 s is dropped, and so is the whole
+   * queue once the lobby is no longer being set up. Whoever a line tells
+   * their side is recorded as greeted and saved before it goes out, so a
+   * reconnect or restart never greets them again. A send that throws makes
+   * the job's chat unavailable.
+   */
+  pumpChat(fromTimer = false) {
+    const chat = this.chat;
+    if (!chat) return false;
+    if (fromTimer) chat.timer = false;
+    const job = this.data.jobs[this.data.active];
+    if (!job || job.spec.key !== chat.key || job.chat?.unavailable || !this.seatHelpOpen(job, this.lobby)) {
+      chat.queue = [];
+      return false;
+    }
+    if (!chat.channelId) return false;
+    const now = this.now();
+    chat.queue = chat.queue.filter((line) => now - line.at < CHAT_STALE_MS);
+    const greet = chat.queue.length ? null : this.greetingNow(job, now);
+    if (!chat.queue.length && !greet.due) {
+      if (greet.wait !== undefined) this.scheduleChat(greet.wait);
+      return false;
+    }
+    const wait = CHAT_LINE_GAP_MS - (now - (chat.lastLineAt ?? -Infinity));
+    if (wait > 0) {
+      this.scheduleChat(wait);
+      return false;
+    }
+    const line =
+      chat.queue.shift() ??
+      {
+        text: greetLine(greet.due.side, greet.due.ids, rosterNames(job.spec)),
+        reason: "greet",
+        about: greet.due.ids,
+      };
+    chat.lastLineAt = now;
+    if (line.about.length) {
+      job.chat = { ...(job.chat ?? { joins: 0 }) };
+      job.chat.greeted = { ...job.chat.greeted };
+      for (const id of line.about) job.chat.greeted[id] ??= now;
+      this.save();
+    }
+    try {
+      this.transport.chat(chat.channelId, line.text);
+    } catch {
+      this.chatUnavailable(job, "send-failed");
+      return false;
+    }
+    this.log("chat-line", { key: job.spec.key, reason: line.reason });
+    const next = chat.queue.length ? CHAT_LINE_GAP_MS : this.greetingNow(job, now);
+    if (typeof next === "number") this.scheduleChat(next);
+    else if (next.due) this.scheduleChat(CHAT_LINE_GAP_MS);
+    else if (next.wait !== undefined) this.scheduleChat(Math.max(next.wait, CHAT_LINE_GAP_MS));
+    return true;
+  }
+  scheduleChat(ms) {
+    const chat = this.chat;
+    if (!chat || chat.timer) return;
+    chat.timer = true;
+    try {
+      this.transport.later(ms);
+    } catch {
+      chat.timer = false;
+    }
   }
   /** request() with one log line per answer: every write, and a read only
    * when its answer changed. A BUSY names the claim that holds the bot. */
@@ -724,6 +1043,8 @@ export class LobbyController {
     this.save();
     this.logJob(job, was, failed ? "launch-failed" : undefined);
     if (due.length) this.sendInvites(job, due);
+    // Inhouse only, and only while the lobby is set up (seatHelpOpen).
+    if (!failed) this.seatHelp(job, lobby);
     // The bot leaves at the game's end (its postgame), once a launch is back
     // on the lobby screen, and for a release once leaving is safe. Never
     // while the game runs: Dota ignores that Leave, so a release pending on a
@@ -876,7 +1197,13 @@ export class LobbyController {
     ) {
       job.releasing = true;
       reason = "idle";
-    } else return false;
+    } else {
+      // A player moved back to the pool who sat down on the wrong side again
+      // inside 30 s, with nothing changing since: the clock catches them.
+      this.seatHelp(job, lobby);
+      this.pumpChat();
+      return false;
+    }
     this.leave(job, reason);
     return true;
   }
@@ -891,6 +1218,8 @@ export class LobbyController {
         : null;
     if (job) clearLeaveClock(job);
     this.lobby = null;
+    // A new GC session has left the lobby's chat channel.
+    this.chat = null;
   }
   /** Settle a GC welcome once its out-of-date caches have replayed as
    * snapshots. Only a welcome that resent every cache (`complete`) and held
@@ -968,6 +1297,7 @@ export class LobbyController {
         this.data.active = null;
         job.freedAt = now;
         job.freedBy = source;
+        forgetNames(job);
       }
       this.save();
       this.log("departed", { key: job.spec.key, source, lobbyId: job.lobbyId ?? null });
@@ -984,6 +1314,7 @@ export class LobbyController {
       this.log("departed", { key: done?.spec.key ?? null, source });
     }
     this.lobby = null;
+    this.chat = null;
     this.absenceConfirmed = true;
   }
 }

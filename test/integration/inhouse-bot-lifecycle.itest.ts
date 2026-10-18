@@ -222,6 +222,12 @@ function lobbyRequest(body: unknown) {
 }
 
 /** Each bot request's action and key, once every release has landed. */
+/** Every lobby chat name a bot request's spec carries, sorted. */
+function specNames(request: BotRequest | undefined): string[] {
+  const names = [request?.spec?.radiantNames, request?.spec?.direNames];
+  return names.flatMap((list) => (Array.isArray(list) ? (list as string[]) : [])).sort();
+}
+
 async function sent() {
   await settleInhouseBotReleases();
   return botCalls.map((c) => [c.action, c.spec?.key ?? null]);
@@ -620,6 +626,8 @@ describe("every close releases the bot, without waiting on it", () => {
     await vi.waitFor(() => expect(botCalls.map((c) => c.action)).toEqual(["release"]));
     answerRelease();
     expect(await sent()).toEqual([["release", keyOf(lobby.id)]]);
+    // The close's release sends the game's own spec, lobby chat names too.
+    expect(specNames(botCalls[0])).toEqual(players.map((p) => p.user.name).sort());
   });
 
   it("a Game over press answers at once and releases its game's job", async () => {
@@ -721,7 +729,8 @@ describe("Create's BUSY", () => {
 
   /** A closed game the bot still holds, and Create on a new game. */
   async function heal(prefix: string, release: (request: BotRequest) => BotAnswer) {
-    const old = await playedLobby(await makePlayers(INHOUSE.LOBBY_SIZE, `${prefix}old-`), {
+    const oldPlayers = await makePlayers(INHOUSE.LOBBY_SIZE, `${prefix}old-`);
+    const old = await playedLobby(oldPlayers, {
       status: INHOUSE_STATUS.AWAITING_RESULT,
     });
     stubBot((request) =>
@@ -739,6 +748,8 @@ describe("Create's BUSY", () => {
       ["health", null],
       ["release", keyOf(old.id)],
     ]);
+    // The self-heal's release is the closed game's own spec, names too.
+    expect(specNames(botCalls[2])).toEqual(oldPlayers.map((p) => p.user.name).sort());
     return { old, error: (await res.json()).error as string };
   }
 
@@ -903,6 +914,10 @@ describe("the bot connection", () => {
     await inhouseBotGameStatus({ id: lobby.id, radiantTeam: 1, players: rows });
     expect(botCalls).toHaveLength(6);
     for (const call of botCalls) expect(call.spec?.withLifecycle).toBe(true);
+    // ...and the lobby chat's names, from the same builder: Start and the
+    // worker's read included.
+    for (const call of botCalls)
+      expect(specNames(call), call.action).toEqual(players.map((p) => p.user.name).sort());
   });
 });
 

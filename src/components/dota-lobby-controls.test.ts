@@ -224,6 +224,54 @@ describe("DotaLobbyControls refresh (source)", () => {
   );
 });
 
+// SOURCE GUARD: the in-house seat summary ("All ten seated"), Start's
+// highlight and the viewer's own seat for the setup card all come from the
+// tested pure helpers (Tim's call, 2026-10-18).
+describe("DotaLobbyControls seats (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+
+  it("words the seat summary through lobbySeatSummary, with Start's own predicate", () => {
+    expect(code).toMatch(
+      /lobbySeatSummary\(\{\s*kind,\s*playable,\s*status: view\.status,\s*players,\s*canStart: !recoveryOnly && startOpen\(view\),\s*\}\)/,
+    );
+    expect(code).toMatch(/\{seatSummary\.text\}/);
+    // A live region, so a screen-reader captain hears "All ten seated".
+    expect(code).toMatch(/\{seatSummary \? \(\s*<p\s+role="status"\s+className=\{cn\(/);
+    expect(code).toMatch(/seatSummary\.allSeated\s*\?/);
+    // Start's highlight is the summary's `start`; Start itself still renders
+    // only through startOpen (the guard below).
+    expect(code).toMatch(/const startHighlighted = seatSummary\?\.start === true;/);
+    expect(code).toMatch(
+      /startHighlighted\s*\?\s*"ring-2 ring-success ring-offset-2 ring-offset-surface"\s*:\s*undefined/,
+    );
+    // Right above the buttons, so "All ten seated" sits beside Start.
+    const summaryAt = code.indexOf("{seatSummary ? (");
+    const buttonsAt = code.indexOf('<div className="flex flex-wrap gap-2">');
+    expect(summaryAt).toBeGreaterThan(-1);
+    expect(buttonsAt).toBeGreaterThan(summaryAt);
+    expect(code.slice(summaryAt, buttonsAt)).not.toMatch(/<button/);
+  });
+
+  it("reports the viewer's own seat from the seat list it shows", () => {
+    expect(code).toMatch(/const mySeat = viewerLobbySeat\(players\);/);
+    expect(code).toMatch(
+      /useEffect\(\(\) => \{\s*onViewerSeat\?\.\(mySeat\);\s*\}, \[mySeat, onViewerSeat\]\);/,
+    );
+    // A hook: before the early return, so it runs on every render.
+    expect(code.indexOf("onViewerSeat?.(mySeat)")).toBeLessThan(
+      code.indexOf("if (!lobbyPanelVisible(audience, availability)) return null;"),
+    );
+  });
+
+  it("says what the bot does about the sides only in a ready in-house lobby", () => {
+    expect(code).toMatch(
+      /\{kind === "inhouse" && state === "ready" && !releasing \? \(\s*<p className="text-xs text-muted">\{INHOUSE_SEAT_RULE_NOTE\}<\/p>/,
+    );
+  });
+});
+
 // SOURCE GUARD: Start renders only through startOpen, which hides it while a
 // release is pending (the bot refuses to start a lobby it is leaving).
 describe("DotaLobbyControls Start (source)", () => {

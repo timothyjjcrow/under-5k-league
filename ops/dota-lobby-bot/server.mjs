@@ -16,6 +16,7 @@ import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegions } from "./region.mjs";
 import { lobbyHealth } from "./health.mjs";
 import { offlineWatchdog, OFFLINE_RESTART_MS } from "./watchdog.mjs";
+import { accountIdOf, lobbyChannelName, LOBBY_CHANNEL_TYPE, markWireTeams, readMessage } from "./lobby-wire.mjs";
 
 // Timestamped, secret-free lines (event-log.mjs). launchd's log files carry
 // no time of their own; journald adds one, and these read the same either way.
@@ -104,8 +105,33 @@ const controller = new LobbyController({
     // sendPartial fills the client version that send() would leave undefined.
     invite: (steamId) =>
       dota.sendPartial(protos.EGCBaseMsg.k_EMsgGCInviteToLobby, { steamId }),
+    // Seat help (seat-help.mjs), inhouse lobbies only. KickFromTeam sends a
+    // player back to the unassigned pool; it never removes anyone from the
+    // lobby (that is Kick, 7081, which the bot never sends).
+    kickFromTeam: (steamId) =>
+      send(8047, "KickFromTeam", { accountId: accountIdOf(steamId) }),
+    flipTeams: () => send(7320, "Empty"),
+    joinChat: (lobbyId) =>
+      send(7009, "JoinChatChannel", {
+        channelName: lobbyChannelName(lobbyId),
+        channelType: LOBBY_CHANNEL_TYPE,
+      }),
+    chat: (channelId, text) =>
+      send(7273, "ChatMessage", {
+        channelId: protobuf.util.Long.fromString(channelId, true),
+        text,
+      }),
+    // The next chat line's turn (at most one every 5 s).
+    later: (ms) => setTimeout(runChat, ms).unref(),
   },
 });
+function runChat() {
+  try {
+    controller.pumpChat(true);
+  } catch {
+    // Chat is best-effort and never stops the worker.
+  }
+}
 
 function control(request) {
   try {
@@ -138,7 +164,7 @@ const relay = new RelayClient({
   log: say,
 });
 
-const { ESOMsg, EGCBaseClientMsg, EGCBaseMsg, CSODOTALobby } = protos;
+const { ESOMsg, EGCBaseClientMsg, EGCBaseMsg, EDOTAGCMsg, CSODOTALobby } = protos;
 const LOBBY_TYPE_ID = 2004;
 let steamStopped = false;
 let pendingRefreshToken;
@@ -161,7 +187,9 @@ function saveRefreshToken(refreshToken, steamId, accountName) {
 function objectUpdate(obj) {
   if (
     obj.typeId === LOBBY_TYPE_ID &&
-    controller.snapshot(CSODOTALobby.decode(obj.objectData))
+    // Which members' team Dota actually sent: the decoder reads a missing
+    // one as Radiant, and the seat help never acts on that.
+    controller.snapshot(markWireTeams(CSODOTALobby.decode(obj.objectData), obj.objectData))
   )
     say("[dota-bot] Launch came back to the lobby screen without a game; releasing the bot");
 }
@@ -209,6 +237,43 @@ user.on("receivedFromGC", (appid, type, payload) => {
     say(`[dota-bot] Lobby invite created${created.userOffline ? " (player offline)" : ""}`);
     controller.inviteCreated(created.steamId, created.userOffline);
   }
+  // Nor the chat answers, which Dota2User has no decoders for.
+  if (appid === 570 && type === EDOTAGCMsg.k_EMsgGCJoinChatChannelResponse) {
+    let joined;
+    try {
+      joined = readMessage(schema, "JoinChatChannelResponse", payload);
+    } catch {
+      return warn("[dota-bot] Unreadable chat join answer from the Game Coordinator");
+    }
+    try {
+      controller.chatJoined(joined);
+    } catch {
+      // Chat is best-effort and never stops the worker.
+    }
+  }
+  if (appid === 570 && type === EDOTAGCMsg.k_EMsgGCChatMessage) {
+    // Only the bot's own line coming back: proof its chat reaches the lobby.
+    // Players' lines are never kept or logged.
+    try {
+      const line = readMessage(schema, "ChatMessage", payload);
+      if (line.accountId === user.steamID?.accountid) controller.chatSeen(line.channelId);
+    } catch {
+      // Unreadable, or nothing to do with the bot.
+    }
+  }
+});
+// The Game Coordinator's answer to a host command (node-dota2 reads it for a
+// kick from a team or a swap): its result only, logged when it isn't OK (1).
+dota.router.on(EDOTAGCMsg.k_EMsgGCPracticeLobbyResponse, (answer) => {
+  if (answer?.eresult !== 1) log("lobby-refused", { result: answer?.eresult ?? null });
+});
+// A limited Steam account (under US$5 spent) may be unable to chat: logged
+// once a run and on any change, so a silent lobby chat has its likely reason.
+let limitedLogged;
+user.on("accountLimitations", (limited) => {
+  if (limitedLogged === !!limited) return;
+  limitedLogged = !!limited;
+  log("account", { limited: !!limited });
 });
 dota.router.on(ESOMsg.k_ESOMsg_Destroy, (obj) => removed(obj, "destroy"));
 dota.router.on(ESOMsg.k_ESOMsg_UpdateMultiple, (update) => {

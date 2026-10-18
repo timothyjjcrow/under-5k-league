@@ -25,5 +25,29 @@ message CreateLobby {
   optional string pass_key = 5;
   optional LobbyDetails lobby_details = 7;
 }
+// CMsgPracticeLobbyKickFromTeam (8047): back to the unassigned pool, never
+// out of the lobby. The bot never sends CMsgPracticeLobbyKick (7081).
 message KickFromTeam { optional uint32 account_id = 1; }
+// Also CMsgFlipLobbyTeams (7320), which has no fields.
 message Empty {}
+// From dota_gcmessages_client_chat.proto, inspected 2026-10-18. The enums
+// (DOTAChatChannelType_t, the response's Result) are uint32 here: the same
+// varint on the wire.
+message JoinChatChannel {
+  optional string channel_name = 2;
+  optional uint32 channel_type = 4;
+}
+message JoinChatChannelResponse {
+  optional uint32 response = 1;
+  optional string channel_name = 2;
+  optional fixed64 channel_id = 3;
+  optional uint32 channel_type = 6;
+  optional uint32 result = 7;
+}
+// CMsgDOTAChatMessage: channel_id is a varint uint64 here, unlike the join
+// answer's fixed64.
+message ChatMessage {
+  optional uint32 account_id = 1;
+  optional uint64 channel_id = 2;
+  optional string text = 4;
+}

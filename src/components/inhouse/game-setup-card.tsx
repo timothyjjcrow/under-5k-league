@@ -5,7 +5,12 @@ import { textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { DISCORD_INVITE_URL, INHOUSE } from "@/lib/constants";
-import { inhouseHandLobbyName, inhouseVoiceChannel } from "@/lib/inhouse";
+import type { LobbySeat } from "@/lib/dota-lobby";
+import {
+  inhouseHandLobbyName,
+  inhouseViewerSideLine,
+  inhouseVoiceChannel,
+} from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 import {
   DotaLobbyControls,
@@ -72,6 +77,17 @@ export function GameSetupCard({
     setBot(next);
     if (next === "busy") setHandHosted(true);
   }, []);
+  // The viewer's own seat in the bot's lobby, from the panel's seat list
+  // (null while it shows none).
+  const [viewerSeat, setViewerSeat] = useState<LobbySeat | null>(null);
+  // The first thing a player needs once teams lock: which side to sit on,
+  // and, while the bot reports seats, whether they're on it yet.
+  const sideLine = inhouseViewerSideLine({
+    status: lobby.status,
+    myTeam: me.myTeam,
+    teams: lobby.teams,
+    seat: viewerSeat,
+  });
   const botOn = bot === "on";
   // The bot as this game's way in: the by-hand steps fold away under it.
   const botFirst = botOn && !handHosted;
@@ -211,6 +227,50 @@ export function GameSetupCard({
           </a>
         ) : null}
       </div>
+      {/* Straight under the heading, so it is on a phone's first screen:
+          the side to sit on, from the game's teams, and from the bot's seat
+          list whether the viewer is on it yet. */}
+      {sideLine ? (
+        <div
+          role="status"
+          aria-label="Your side"
+          className={cn(
+            "flex min-w-0 items-start gap-2.5 border-b border-line px-5 py-3",
+            sideLine.tone === "move"
+              ? "bg-accent/10"
+              : sideLine.side === "radiant"
+                ? "bg-success/10"
+                : "bg-danger/10",
+          )}
+        >
+          {sideLine.tone === "join" ? (
+            <span
+              aria-hidden
+              className={cn(
+                "mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full",
+                sideMeta(sideLine.side === "radiant").dot,
+              )}
+            />
+          ) : (
+            <span
+              aria-hidden
+              className={cn(
+                "shrink-0 text-sm font-bold",
+                sideLine.tone === "move"
+                  ? "text-accent"
+                  : sideLine.side === "radiant"
+                    ? "text-success"
+                    : "text-danger-soft",
+              )}
+            >
+              {sideLine.tone === "move" ? "!" : "✓"}
+            </span>
+          )}
+          <p className="min-w-0 break-words text-sm font-semibold text-fg">
+            {sideLine.text}
+          </p>
+        </div>
+      ) : null}
       {/* Always mounted, so it keeps reporting whether the bot answers; only
           shown when it can help (or to an admin, as a status line). */}
       <div className={showBotPanel ? "border-b border-line p-5" : "hidden"}>
@@ -219,6 +279,7 @@ export function GameSetupCard({
           kind="inhouse"
           id={lobby.id}
           onAvailability={onAvailability}
+          onViewerSeat={setViewerSeat}
         />
       </div>
       {botFirst ? (
