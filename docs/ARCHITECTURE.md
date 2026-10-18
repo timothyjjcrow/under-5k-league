@@ -732,9 +732,12 @@ reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
 attempts fall back to IP);
 `/api/dota-lobby` — the lobby bot panel's POST (`{kind, id, action:
-status|create|start|release|invite}`; signed in, 30 reads and 10 writes per
-minute per user), relayed to the bot by `callLobbyBot`; the browser gets
-names, sides, seats and invite results, never a Steam ID;
+status|create|start|release|invite}`; signed in, 60 reads and 10 writes per
+minute per user), sent to the bot by `callLobbyBot` (through the relay, or
+over loopback once the bot is on the box), with every panel of a game sharing
+one status read per 2 seconds; the browser gets names, sides, seats, invite
+results and the bot's releasing and game-over flags, never a Steam ID, and a
+read showing Dota's postgame marks the game over (`endInhouseGameFromBot`);
 `/api/dota-lobby/recovery` — the admin-only bot recovery check;
 `/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
 result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,

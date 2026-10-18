@@ -26,21 +26,65 @@ export type DotaLobbyStatus = {
   lobbyId?: string;
   matchId?: string;
   message?: string;
+  /**
+   * The bot was asked to leave this game's lobby and hasn't yet: a started
+   * game's bot leaves only once Dota shows the game's end. Only when this key
+   * is the bot's active claim; absent otherwise (and from an older bot).
+   */
+  releasing?: true;
+  /**
+   * Dota showed this game's end, and the game was played (not "not scored").
+   * Never for a failed launch; absent otherwise (and from an older bot).
+   */
+  over?: true;
 };
 
-/** How often the lobby-bot panel re-reads the bot while it sets up a lobby. */
-export const LOBBY_PANEL_POLL_MS = 5_000;
+/**
+ * The bot reply's two lifecycle flags, read strictly: only the boolean `true`
+ * counts. Anything else (absent, "true", 1, false) is unknown, so absent.
+ */
+export function parseLobbyLifecycle(body: {
+  releasing?: unknown;
+  over?: unknown;
+}): Pick<DotaLobbyStatus, "releasing" | "over"> {
+  return {
+    ...(body.releasing === true ? { releasing: true as const } : {}),
+    ...(body.over === true ? { over: true as const } : {}),
+  };
+}
 
 /**
- * How often it re-reads once Dota reports the game running. Nothing on the
- * panel changes for the rest of the game, and every read is a function call on
- * the Vercel Hobby plan both leagues share that also asks the bot through the
- * relay: at 5s, ten players' panels made a fifth of the US site's Active CPU
- * on 2026-10-13. The first "started" answer, read at the setup rate, already
- * moved the inhouse lobby to IN_PROGRESS (the route's guarded READY write), so
- * this slow read is only a safety net for that.
+ * A Dota lobby or match id as the bot passes Valve's ids through: digits, no
+ * leading zero, at most twenty. Anything else is dropped, never shown.
  */
-export const LOBBY_PANEL_STARTED_POLL_MS = 60_000;
+export function parseLobbyDigits(value: unknown): string | undefined {
+  return typeof value === "string" && /^[1-9]\d{0,19}$/.test(value)
+    ? value
+    : undefined;
+}
+
+/**
+ * How often the lobby-bot panel re-reads the bot while it sets up a lobby,
+ * and while a playable game has no bot lobby yet. The route serves every
+ * panel of a game from one short-lived bot read (the status cache in
+ * dota-lobby-service.ts), so faster panels don't multiply the bot's reads.
+ */
+export const LOBBY_PANEL_POLL_MS = 3_000;
+
+/**
+ * How often it re-reads once Dota reports the game running: enough to show
+ * the game's end (`over`) and a pending release within seconds. The first
+ * "started" answer moves the inhouse lobby to IN_PROGRESS (the guarded READY
+ * write), and the worker's own bot read does it too, so no tab has to be open.
+ */
+export const LOBBY_PANEL_STARTED_POLL_MS = 15_000;
+
+/**
+ * How often the admin's bot line (/inhouse, "Bot online") re-checks the bot's
+ * health while its tab is visible. One admin's tabs only, and loopback on the
+ * box, so a fast line costs next to nothing.
+ */
+export const LOBBY_RECOVERY_POLL_MS = 15_000;
 
 /**
  * The panel's refresh interval for a bot lobby state, or null when it should
@@ -49,16 +93,100 @@ export const LOBBY_PANEL_STARTED_POLL_MS = 60_000;
  * press Create, and every other panel of the game must see that lobby, its
  * seats and Start without a reload (on 2026-10-17 only the presser's panel
  * moved, so the admins and the other captain never saw a lobby). A game that
- * is no longer playable has nothing left to wait for.
+ * is no longer playable, or that Dota showed over, has nothing left to wait
+ * for.
+ *
+ * Before the bot has answered there is no state: the first read is still in
+ * flight, or it failed (`unanswered`: a bot restarting refuses connections
+ * for half a minute). A failed panel tries again at the running-game rate,
+ * so it recovers by itself instead of waiting for "Refresh bot status".
  */
 export function lobbyPanelPollMs(
   state: DotaLobbyStatus["state"] | undefined,
   playable: boolean,
+  over = false,
+  unanswered = false,
 ): number | null {
-  if (!state) return null;
+  if (over) return null;
+  if (!state) return unanswered ? LOBBY_PANEL_STARTED_POLL_MS : null;
   if (state === "idle" || state === "released")
     return playable ? LOBBY_PANEL_POLL_MS : null;
   return state === "started" ? LOBBY_PANEL_STARTED_POLL_MS : LOBBY_PANEL_POLL_MS;
+}
+
+/**
+ * Whether "Who's in the lobby" shows for this bot state: while the lobby is
+ * ready and while Dota is starting the game, the two states the bot reports
+ * seats in. Only with a list that parsed (`players`).
+ */
+export function lobbyListVisible(state: DotaLobbyStatus["state"] | undefined) {
+  return state === "ready" || state === "starting";
+}
+
+/** The panel's status line for each bot state. */
+const LOBBY_STATE_LABELS = {
+  idle: "No bot lobby yet",
+  creating: "Creating lobby…",
+  ready: "Lobby ready",
+  starting: "Dota is starting the game…",
+  started: "Game started",
+  blocked: "Lobby needs attention",
+  released: "Bot released",
+} as const satisfies Record<DotaLobbyStatus["state"], string>;
+
+/**
+ * The panel's status line: a pending release first (the bot is still in the
+ * lobby, so its state alone would read as if Release did nothing), then a game
+ * Dota showed over, then the state's own label.
+ */
+export function lobbyStatusLabel(
+  status: Pick<DotaLobbyStatus, "state" | "releasing" | "over">,
+): string {
+  if (status.releasing) return "Leaving the Dota lobby…";
+  if (status.over) return "Game over in Dota";
+  return LOBBY_STATE_LABELS[status.state];
+}
+
+/** The line under a game Dota showed over. */
+export const LOBBY_OVER_NOTE =
+  "Game over in Dota — the result records itself from OpenDota.";
+
+/** The line under a pending release. */
+export const LOBBY_RELEASING_NOTE =
+  "The bot leaves the moment Dota lets it: at once on the lobby screen, or when the game ends. Nothing more to press.";
+
+/**
+ * "Release bot…": a captain or admin, while the bot holds a lobby (ready,
+ * blocked or started), and not while a release is already pending: a second
+ * press would change nothing.
+ */
+export function releaseOpen(
+  view: Pick<DotaLobbyView, "canRelease"> & {
+    status: Pick<DotaLobbyStatus, "state" | "releasing">;
+  },
+): boolean {
+  return (
+    view.canRelease &&
+    !view.status.releasing &&
+    (view.status.state === "ready" ||
+      view.status.state === "blocked" ||
+      view.status.state === "started")
+  );
+}
+
+/**
+ * "Start game with bot": a captain or admin on a playable game
+ * (`canControl`), the lobby ready, and no release pending: the bot refuses to
+ * start a lobby it is leaving.
+ */
+export function startOpen(
+  view: Pick<DotaLobbyView, "canControl"> & {
+    status: Pick<DotaLobbyStatus, "state" | "releasing">;
+  },
+): boolean {
+  return (
+    view.canControl && view.status.state === "ready" && !view.status.releasing
+  );
 }
 
 /** The two sides of the bot's Dota lobby, in its spec's order. */
@@ -238,30 +366,34 @@ export function lobbyInviteScope(viewer: {
 }
 
 type InviteControlsView = Pick<DotaLobbyView, "inviteScope" | "players"> & {
-  status: Pick<DotaLobbyStatus, "state">;
+  status: Pick<DotaLobbyStatus, "state" | "releasing">;
 };
 
 /**
  * "Re-invite missing players": a captain or an admin on a playable game
- * (scope "missing"), the lobby ready, and someone on the roster not in it.
- * The bot invites only while ready and skips anyone already in the lobby.
+ * (scope "missing"), the lobby ready with no release pending, and someone on
+ * the roster not in it. The bot invites only while ready, refuses a lobby it
+ * is leaving, and skips anyone already in the lobby.
  */
 export function reinviteMissingOpen(view: InviteControlsView): boolean {
   return (
     view.inviteScope === "missing" &&
     view.status.state === "ready" &&
+    !view.status.releasing &&
     !!view.players?.some((p) => p.seat === "absent")
   );
 }
 
 /**
  * "Send me an invite": a rostered player who is not a captain or an admin, on
- * a playable game (scope "self"), the lobby ready, and their own row absent.
+ * a playable game (scope "self"), the lobby ready with no release pending,
+ * and their own row absent.
  */
 export function selfInviteOpen(view: InviteControlsView): boolean {
   return (
     view.inviteScope === "self" &&
     view.status.state === "ready" &&
+    !view.status.releasing &&
     !!view.players?.some((p) => p.self && p.seat === "absent")
   );
 }
@@ -390,13 +522,30 @@ export function parseLobbyLeagueId(
  * hosted is `null` and never blocks. Nor does "blocked": the bot also reports
  * it whenever it is offline from Steam, when Release can't work either, and
  * admin recovery treats a game marked over as closed and can release it later.
+ * Nor does a release already pending (`releasing`): the bot is leaving on its
+ * own, the press releases it again, and a closed game's bot is freed by
+ * Create's BUSY self-heal, so nothing is stranded.
  */
 export function botHoldsUnlaunchedLobby(
   status: DotaLobbyStatus | null,
 ): boolean {
+  if (status?.releasing) return false;
   return (
     status?.state === "creating" ||
     status?.state === "ready" ||
     status?.state === "starting"
   );
+}
+
+/**
+ * "Game over"'s refusal while the bot holds the game's lobby unlaunched, or
+ * null when it doesn't. A ready lobby names the panel's two buttons, which
+ * both show then; while the bot is still creating or starting the lobby
+ * neither does, so the copy says to wait instead.
+ */
+export function botGameOverRefusal(status: DotaLobbyStatus | null): string | null {
+  if (!botHoldsUnlaunchedLobby(status)) return null;
+  return status?.state === "ready"
+    ? "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over."
+    : "The lobby bot is still setting up or starting this game's Dota lobby. Try again in a minute.";
 }

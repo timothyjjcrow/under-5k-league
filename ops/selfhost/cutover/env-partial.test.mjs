@@ -41,12 +41,22 @@ test("production carries the credentials and never the old origin", () => {
   const us = keys(buildPartial("us", "production", { ...io, read: fakeFs(FILES) }));
   assert.equal(us.DISCORD_BOT_TOKEN, `${SECRET}-bot`);
   assert.equal(us.DISCORD_GUILD_ID, "1524287040508657725");
-  assert.equal(us.DOTA_LOBBY_BOT_URL, "https://relay.example/");
+  // Both leagues reach the bot on the box over loopback, with the bot's secret.
+  assert.equal(us.DOTA_LOBBY_BOT_URL, "http://127.0.0.1:8090");
+  assert.equal(us.DOTA_LOBBY_BOT_SECRET, `${SECRET}-relay`);
   const eu = keys(buildPartial("eu", "production", { ...io, read: fakeFs(FILES) }));
+  assert.equal(eu.DOTA_LOBBY_BOT_URL, "http://127.0.0.1:8090");
   assert.equal(eu.NEXT_PUBLIC_SITE_URL, "https://eu.ggd2l.com");
   assert.equal(eu.DISCORD_WEBHOOK_URL, undefined, "webhooks only with --webhooks");
   assert.equal(keys(buildPartial("eu", "production", { ...io, read: fakeFs(FILES), webhooks: true })).DISCORD_WEBHOOK_URL,
     "https://discord.com/api/webhooks/1/x");
+});
+
+test("--bot-via-relay keeps the relay's URL until the bot moves onto the box", () => {
+  for (const lg of ["us", "eu"]) {
+    const env = keys(buildPartial(lg, "production", { ...io, read: fakeFs(FILES), botViaRelay: true }));
+    assert.equal(env.DOTA_LOBBY_BOT_URL, "https://relay.example/", lg);
+  }
 });
 
 test("errors name keys or files, never values", () => {

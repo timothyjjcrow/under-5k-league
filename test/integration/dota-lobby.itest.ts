@@ -19,6 +19,8 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
 import { readInhouseRoomVersion } from "@/lib/inhouse-room-version";
+import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
+import { resetLobbyBotStatusCacheForTests } from "@/lib/lobby-bot-status-cache";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
 // The bot's IN_PROGRESS write expires the automation gate (the abandon floor
 // moves to startedAt); spied so the test can see when.
@@ -34,7 +36,10 @@ beforeEach(() => {
   vi.stubEnv("DOTA_INHOUSE_LEAGUE_ID", "54321");
   vi.stubEnv("DOTA_SEASON_LOBBY_BOT_ENABLED", "");
 });
-afterEach(() => {
+afterEach(async () => {
+  // A close's bot release runs on after the action answers: let it finish
+  // against this test's stubs, never the real fetch.
+  await settleInhouseBotReleases();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -375,7 +380,9 @@ describe("Dota lobby authorization and settings", () => {
     expect(gate).not.toHaveBeenCalled();
     expect(await readInhouseRoomVersion()).toBeNull();
 
-    // A fresh Response per call: a body can be read once.
+    // A fresh Response per call: a body can be read once. The status cache
+    // serves the failed read above for its TTL; start this read fresh.
+    resetLobbyBotStatusCacheForTests();
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => Response.json({ state: "started" })),
@@ -713,9 +720,13 @@ describe("lobby invites and the seat report", () => {
     expect(bot.calls[0].action).toBe("status");
     expect(bot.calls[0].spec).not.toHaveProperty("withPlayers");
     expect(bot.calls[0].spec).not.toHaveProperty("invite");
-    // The request is exactly the spec an older bot reads.
+    // The request is the spec an older bot reads, plus `withLifecycle`
+    // (every request asks for the release and game-over flags; an older bot
+    // ignores the key).
+    expect(bot.calls[0].spec.withLifecycle).toBe(true);
     expect(Object.keys(bot.calls[0].spec).sort()).toEqual(
       [
+        "withLifecycle",
         "key",
         "name",
         "password",
@@ -960,12 +971,20 @@ describe("lobby invites and the seat report", () => {
     const unknown =
       "The lobby bot didn't confirm, but the invites may have gone out. Check the list before sending again.";
     // The relay answers OFFLINE for a reply it lost after delivery, too.
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "https://relay.example");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ code: "OFFLINE" }), { status: 409 })),
     );
     let body = await (await inhouse(lobby.id, "invite")).json();
     expect(body).toEqual({ error: unknown, unknown: true });
+    // On loopback nothing sits between the site and the bot: its OFFLINE is
+    // the bot's own word, a definite refusal.
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "http://127.0.0.1:8090");
+    body = await (await inhouse(lobby.id, "invite")).json();
+    expect(body).toEqual({
+      error: "The bot is not connected to Dota yet. Try again shortly.",
+    });
     // No answer at all.
     vi.stubGlobal(
       "fetch",

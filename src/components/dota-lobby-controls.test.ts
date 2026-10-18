@@ -77,11 +77,16 @@ describe("DotaLobbyControls invite controls (source)", () => {
     expect(code).toMatch(/Who&apos;s in the lobby/);
   });
 
-  it("shows the invite list and its copy only when the bot reported seats", () => {
+  it("shows the seat list only when the bot reported seats, while ready or starting", () => {
     expect(code).toMatch(
-      /const players =\s*view\?\.enabled && state === "ready" && view\.players\?\.length/,
+      /const players =\s*view\?\.enabled && lobbyListVisible\(state\) && view\.players\?\.length/,
     );
     expect(code).toMatch(/\{players \? \(/);
+    // The invite copy is for a ready lobby only: Dota starting the game has
+    // its own line.
+    expect(code).toMatch(
+      /\{state === "ready" \? \(\s*<p className="text-xs text-muted">\s*The bot invites everyone/,
+    );
   });
 
   it("sends only the kind, id and action: never invite targets", () => {
@@ -90,19 +95,121 @@ describe("DotaLobbyControls invite controls (source)", () => {
   });
 });
 
-// SOURCE GUARD: the panel's refresh comes only from the tested pure rate, so
-// a running game is read once a minute instead of every five seconds.
-describe("DotaLobbyControls refresh (source)", () => {
+// SOURCE GUARD: the release and game-over wording and the one Release button
+// come from the tested pure helpers in src/lib/dota-lobby.ts.
+describe("DotaLobbyControls lifecycle (source)", () => {
   const code = stripLineComments(
     sourceFile("src/components/dota-lobby-controls.tsx").text,
   );
 
-  it("sets its interval from lobbyPanelPollMs(state, playable)", () => {
+  it("words the status line, a pending release and a game over through the helpers", () => {
+    expect(code).toMatch(/lobbyStatusLabel\(view\.status\)/);
+    expect(code).toMatch(/\{releasing \? \(\s*<p[^>]*>\{LOBBY_RELEASING_NOTE\}<\/p>\s*\) : over \? \(\s*<p[^>]*>\{LOBBY_OVER_NOTE\}<\/p>/);
+  });
+
+  it("offers Release only through releaseOpen, so never a second press while one is pending", () => {
+    expect(code.match(button("Release bot…"))?.[1]).toBe("releaseOpen");
+    expect(code).toMatch(/\{confirmRelease && releaseOpen\(view\) \? \(/);
+  });
+
+  // The predicate guarding the one <button> whose label is `name`.
+  function button(name: string) {
+    return new RegExp(
+      `\\{(\\w+)\\(view\\) \\? \\(\\s*<button(?:(?!</button>)[^])*>\\s*${name}\\s*</button>`,
+    );
+  }
+});
+
+// SOURCE GUARD: the panel's refresh comes only from the tested pure rate, and
+// its reads never hold the buttons' lock (2026-10-18: background polls shared
+// it, so a read in flight disabled Create and Start and dropped clicks).
+describe("DotaLobbyControls refresh (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+  /** One `const name = useCallback(...)` body, up to the next one. */
+  const callback = (name: string) => {
+    const start = code.indexOf(`const ${name} = useCallback(`);
+    expect(start, name).toBeGreaterThan(0);
+    const next = code.indexOf("= useCallback(", start + name.length + 20);
+    return code.slice(start, next === -1 ? undefined : next);
+  };
+
+  it("sets its interval from lobbyPanelPollMs(state, playable, over, unanswered)", () => {
     expect(code).toMatch(/const playable = view\?\.playable === true;/);
-    expect(code).toMatch(/const every = lobbyPanelPollMs\(state, playable\);/);
-    expect(code).toMatch(/\[state, playable, request\]\);/);
+    // A failed first read (no view, an error) retries by itself.
+    expect(code).toMatch(/const unanswered = !view && error !== "";/);
+    expect(code).toMatch(
+      /const every = lobbyPanelPollMs\(state, playable, over, unanswered\);/,
+    );
+    expect(code).toMatch(/\[state, playable, over, unanswered, read\]\);/);
     expect(code).toMatch(/if \(every === null\) return;/);
     expect(code).toMatch(/setInterval\([^]*?\}, every\);/);
-    expect(code).not.toMatch(/\b5000\b|5_000|60_000/);
+    expect(code).not.toMatch(/\b5000\b|5_000|60_000|3_000|15_000/);
+  });
+
+  it("reads at once when the tab becomes visible again", () => {
+    expect(code).toMatch(
+      /document\.addEventListener\("visibilitychange", onVisible\)/,
+    );
+    expect(code).toMatch(
+      /document\.removeEventListener\("visibilitychange", onVisible\)/,
+    );
+  });
+
+  it("keeps background reads off the action lock, and lets an action win", () => {
+    const read = callback("read");
+    // A read never takes or releases the buttons' lock.
+    expect(read).not.toMatch(/setPending|acting\.current = /);
+    // It stands down while an action runs, and drops its answer once one
+    // started after it was sent.
+    expect(read).toMatch(/if \(acting\.current \|\| inFlightRead\.current\) return;/);
+    expect(read).toMatch(/actions\.current !== since/);
+    const act = callback("act");
+    expect(act).toMatch(/actions\.current \+= 1;\s*[^]*?inFlightRead\.current\?\.abort\(\);/);
+    expect(act).toMatch(/setPending\(true\)/);
+    // Only the action lock disables a control.
+    expect(code.match(/disabled=\{[^}]*\}/g)?.every((d) => d === "disabled={pending}")).toBe(true);
+    // Polls and "Refresh bot status" read; the buttons act.
+    expect(code).toMatch(/void read\(\)/);
+    expect(code).not.toMatch(/request\(/);
+  });
+
+  // 2026-10-18 review: an action's failure (BUSY, "Freeing the bot…", "the
+  // bot isn't running") was set inline, and the next 3s read cleared it
+  // before the presser could read what to do.
+  it("toasts an action's failures instead of setting them inline", () => {
+    const act = callback("act");
+    expect(act).not.toMatch(/setError\((?!"")/);
+    expect(act).toMatch(/else pushToast\("error", routeError\(body\)\);/);
+    expect(act).toMatch(/else pushToast\("error", UNREACHABLE\);/);
+  });
+
+  // Safari before 17.4 has no AbortSignal.any, and calling it throws: every
+  // read of the panel failed there. Both panels bound their requests with
+  // the portable requestSignal, which done() unhooks.
+  it.each(["src/components/dota-lobby-controls.tsx", "src/components/dota-lobby-recovery.tsx"])(
+    "%s never calls AbortSignal.any or AbortSignal.timeout",
+    (file) => {
+      const source = stripLineComments(sourceFile(file).text);
+      expect(source).not.toMatch(/AbortSignal\.(any|timeout)/);
+      expect(source).toMatch(/requestSignal\(/);
+      expect(source).toMatch(/signal: request\.signal/);
+      expect(source).toMatch(/request\.done\(\)/);
+    },
+  );
+});
+
+// SOURCE GUARD: Start renders only through startOpen, which hides it while a
+// release is pending (the bot refuses to start a lobby it is leaving).
+describe("DotaLobbyControls Start (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+  it("renders Start game with bot only through startOpen", () => {
+    expect(code).toMatch(
+      /\{!recoveryOnly && startOpen\(view\) \? \(\s*<button(?:(?!<\/button>)[^])*>\s*Start game with bot\s*<\/button>/,
+    );
+    expect(code.match(/Start game with bot/g)).toHaveLength(1);
   });
 });

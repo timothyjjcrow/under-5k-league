@@ -8,6 +8,14 @@ import { rateLimit } from "@/lib/rate-limit";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+/**
+ * Checks per admin per minute. The bot line checks every 15s
+ * (LOBBY_RECOVERY_POLL_MS) while its tab is visible, 4 a minute, so this
+ * covers six visible /inhouse tabs or devices plus presses of "Check bot
+ * connection". Each check is one health read of the bot.
+ */
+const CHECKS_PER_MINUTE = 30;
+
 export async function POST(req: NextRequest) {
   const guard = guardJsonMutation(req);
   if (guard) return guard;
@@ -19,7 +27,7 @@ export async function POST(req: NextRequest) {
     );
   const parsed = await readBoundedJsonObject(req);
   if (!parsed.ok) return parsed.response;
-  if (!rateLimit(`dota-lobby-recovery:${viewer.id}`, { limit: 12, windowMs: 60_000 }, Date.now()).allowed)
+  if (!rateLimit(`dota-lobby-recovery:${viewer.id}`, { limit: CHECKS_PER_MINUTE, windowMs: 60_000 }, Date.now()).allowed)
     return NextResponse.json(
       { error: "Please wait before checking bot recovery again." },
       { status: 429 },

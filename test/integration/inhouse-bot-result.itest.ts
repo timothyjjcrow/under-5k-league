@@ -7,6 +7,7 @@ import {
   autoDetectResult,
   maybeAutoDetectResult,
 } from "@/lib/inhouse-service";
+import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
 import { makeUser, sessionFor } from "./factories";
 
 // When the lobby bot hosted the game, the result scan asks the bot for the
@@ -61,11 +62,20 @@ beforeEach(() => {
   mockRecent.mockResolvedValue([]);
   mockMatch.mockResolvedValue(null);
 });
-afterEach(() => {
+afterEach(async () => {
+  // A recorded result's bot release runs on after the scan: let it finish
+  // against this test's stubs, never the real fetch.
+  await settleInhouseBotReleases();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
+
+/** Each bot request's action, in order, once every release has landed. */
+async function botActions() {
+  await settleInhouseBotReleases();
+  return botCalls.map((c) => JSON.parse(String(c.init.body)).action);
+}
 
 /** A drafted READY lobby (nobody pressed Start), formed `minutes` ago. */
 async function readyLobby(minutes = INHOUSE.DETECT_READY_MIN_MINUTES + 30) {
@@ -156,14 +166,17 @@ describe("inhouse — recording a bot-hosted game from the bot's match id", () =
     expect(done.status).toBe(INHOUSE_STATUS.COMPLETED);
     expect(done.dotaMatchId).toBe("7300000001");
     expect(done.winnerTeam).toBe(2);
-    expect(done.startedAt).toBeNull();
+    // The scan's own bot read saw the game running and marked it started
+    // (no tab had to be open), before the result landed.
+    expect(done.startedAt).not.toBeNull();
     // One OpenDota call, for the bot's id; not ten recent-match lists.
     expect(mockMatch).toHaveBeenCalledOnce();
     expect(mockMatch.mock.calls[0]?.[0]).toBe("7300000001");
     expect(mockRecent).not.toHaveBeenCalled();
 
-    // One status read of THIS lobby's bot job — never a create or start.
-    expect(botCalls).toHaveLength(1);
+    // One status read of THIS lobby's bot job — never a create or start —
+    // and, the game closed, its release.
+    expect(await botActions()).toEqual(["status", "release"]);
     expect(botCalls[0].url).toBe(`${BOT_ORIGIN}/lobby`);
     expect(new Headers(botCalls[0].init.headers).get("Authorization")).toBe(
       `Bearer ${"test-lobby-secret-".repeat(4)}`,
@@ -199,7 +212,8 @@ describe("inhouse — recording a bot-hosted game from the bot's match id", () =
       );
 
       expect(await maybeAutoDetectResult()).toBe(false);
-      expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.READY);
+      // Not recorded; the bot saw its own game running, so it is started.
+      expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.IN_PROGRESS);
       // The id wasn't this lobby's game, so the players' histories are
       // searched the ordinary way (they share nothing here).
       expect(mockRecent).toHaveBeenCalledTimes(INHOUSE.LOBBY_SIZE);
@@ -217,7 +231,8 @@ describe("inhouse — recording a bot-hosted game from the bot's match id", () =
     const scanned = await prisma.inhouseLobby.findUniqueOrThrow({
       where: { id: lobby.id },
     });
-    expect(scanned.status).toBe(INHOUSE_STATUS.READY);
+    // The bot saw it running: marked started, its result still to come.
+    expect(scanned.status).toBe(INHOUSE_STATUS.IN_PROGRESS);
     expect(scanned.detectedAt).not.toBeNull();
 
     // Hours later OpenDota still has nothing: something happened to the bot's
@@ -281,7 +296,8 @@ describe("inhouse — recording a bot-hosted game from the bot's match id", () =
       expect(await maybeAutoDetectResult()).toBe(true);
       expect(mockRecent).toHaveBeenCalledTimes(INHOUSE.LOBBY_SIZE);
       expect(mockMatch).toHaveBeenCalledExactlyOnceWith("7300000006", {});
-      expect(botCalls).toHaveLength(1);
+      // The scan's status read, then the closed game's release.
+      expect(await botActions()).toEqual(["status", "release"]);
       const done = await prisma.inhouseLobby.findUniqueOrThrow({
         where: { id: lobby.id },
       });
@@ -326,8 +342,7 @@ describe("inhouse — \"Check now\" on a bot-hosted game", () => {
     // One lookup for the bot's id; not ten recent-match lists.
     expect(mockMatch).toHaveBeenCalledExactlyOnceWith("7300000011", {});
     expect(mockRecent).not.toHaveBeenCalled();
-    expect(botCalls).toHaveLength(1);
-    expect(JSON.parse(String(botCalls[0].init.body)).action).toBe("status");
+    expect(await botActions()).toEqual(["status", "release"]);
   });
 
   it("says the bot's game isn't published yet instead of blaming privacy settings", async () => {
@@ -343,7 +358,8 @@ describe("inhouse — \"Check now\" on a bot-hosted game", () => {
     // spent — the same rule as the scheduled scan.
     expect(mockMatch).toHaveBeenCalledExactlyOnceWith("7300000012", {});
     expect(mockRecent).not.toHaveBeenCalled();
-    expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.READY);
+    // Not recorded, but the bot saw it running: marked started.
+    expect(await statusOf(lobby.id)).toBe(INHOUSE_STATUS.IN_PROGRESS);
   });
 
   it("falls back to the players' histories when the bot's id isn't this game", async () => {

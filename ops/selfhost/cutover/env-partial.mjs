@@ -21,6 +21,11 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 
+// The lobby bot on the box (ggd2l-bot.service binds 127.0.0.1:8090), the one
+// plain-http URL the site and the env contract accept in production. Until
+// the bot moves onto the box, `--bot-via-relay` writes the relay's URL from
+// the bot's own .env instead.
+const BOT_LOOPBACK_URL = "http://127.0.0.1:8090";
 const US_DISCORD_GUILD_ID = "1524287040508657725";
 const EU_DISCORD_CLIENT_ID = "1545719497472741466";
 const DEFAULT_ADMIN_STEAM_IDS = "76561198016829831";
@@ -51,6 +56,7 @@ export function buildPartial(lg, mode, {
   exists = existsSync,
   webhooks = false,
   withoutBot = false,
+  botViaRelay = false,
 } = {}) {
   if (!/^(us|eu)$/.test(lg)) throw new Error("league must be us or eu");
   if (!/^(staging|production)$/.test(mode)) throw new Error("mode must be staging or production");
@@ -88,7 +94,7 @@ export function buildPartial(lg, mode, {
         set("DISCORD_GUILD_ID", US_DISCORD_GUILD_ID);
         set("DISCORD_BOT_TOKEN", read(tokenFile, "utf8"));
       }
-      set("DOTA_LOBBY_BOT_URL", bot.DOTA_LOBBY_RELAY_URL);
+      set("DOTA_LOBBY_BOT_URL", botViaRelay ? bot.DOTA_LOBBY_RELAY_URL : BOT_LOOPBACK_URL);
       set("DOTA_LOBBY_BOT_SECRET", bot.DOTA_LOBBY_BOT_SECRET);
       set("DOTA_SEASON_LOBBY_BOT_ENABLED", env.GGD2L_SEASON_LOBBY_BOT || local.DOTA_SEASON_LOBBY_BOT_ENABLED || "false");
     }
@@ -108,7 +114,8 @@ export function buildPartial(lg, mode, {
       // The database's Setting rows win over these; carry them only when the
       // restored database turned out not to have the rows (design §6.2 E6).
       if (webhooks) for (const key of EU_WEBHOOK_KEYS) if (prod[key]) set(key, prod[key]);
-      set("DOTA_LOBBY_BOT_URL", prod.DOTA_LOBBY_BOT_URL);
+      // Both leagues reach the one bot the same way.
+      set("DOTA_LOBBY_BOT_URL", botViaRelay ? prod.DOTA_LOBBY_BOT_URL : BOT_LOOPBACK_URL);
       set("DOTA_LOBBY_BOT_SECRET", prod.DOTA_LOBBY_BOT_SECRET);
       set("DOTA_SEASON_LOBBY_BOT_ENABLED", prod.DOTA_SEASON_LOBBY_BOT_ENABLED || "false");
     }
@@ -131,7 +138,11 @@ export function pushPartial(lg, text, { host = process.env.GGD2L_BOX_SSH || "ggd
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const [lg, mode, ...flags] = process.argv.slice(2);
   try {
-    const text = buildPartial(lg, mode, { webhooks: flags.includes("--webhooks"), withoutBot: flags.includes("--without-bot") });
+    const text = buildPartial(lg, mode, {
+      webhooks: flags.includes("--webhooks"),
+      withoutBot: flags.includes("--without-bot"),
+      botViaRelay: flags.includes("--bot-via-relay"),
+    });
     const keys = text.trim().split("\n").map((line) => line.split("=")[0]);
     const target = pushPartial(lg, text);
     console.log(`env-partial: ${target} installed with ${keys.length} keys: ${keys.join(", ")}`);

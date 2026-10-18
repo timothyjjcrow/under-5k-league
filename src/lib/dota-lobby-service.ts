@@ -17,10 +17,13 @@ import {
 import { accountIdToSteamId64 } from "./dota";
 import { UserFacingError } from "./user-facing-error";
 import { LEAGUE_CONFIG } from "./league-config";
+import { inhouseLobbyCode } from "./inhouse";
 import {
   parseBotPlayers,
   parseInvitedCount,
+  parseLobbyDigits,
   parseLobbyLeagueId,
+  parseLobbyLifecycle,
   type DotaLobbyBotPlayer,
   type DotaLobbySpec,
   type LobbyKind,
@@ -29,6 +32,17 @@ import {
   type LobbyRosterEntry,
   type LobbySide,
 } from "./dota-lobby";
+import {
+  BotReplyUnreadableError,
+  connectionRefused,
+  readBotReply,
+} from "./lobby-bot-transport";
+import {
+  cachedLobbyBotStatus,
+  dropLobbyBotStatus,
+  storeLobbyBotStatus,
+} from "./lobby-bot-status-cache";
+import { trackBotRelease } from "./lobby-bot-releases";
 
 /**
  * An invite whose answer was lost on the bot's leg: the invites may have gone
@@ -41,6 +55,42 @@ export class InviteOutcomeUnknownError extends UserFacingError {
     );
   }
 }
+
+/**
+ * A lobby action whose answer was lost (a timeout, a dropped socket, an
+ * unreadable reply): it may have reached Dota, so it is unknown, never a
+ * refusal. The BUSY self-heal tells this apart from a refusal.
+ */
+class LobbyBotOutcomeUnknownError extends UserFacingError {
+  constructor() {
+    super(
+      "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
+    );
+  }
+}
+
+/**
+ * The bot answered BUSY: its one Steam account holds another game's Dota
+ * lobby. The route's Create tries `freeBotFromClosedInhouseGame` on it.
+ */
+export class LobbyBotBusyError extends UserFacingError {
+  constructor() {
+    super(
+      "The bot is hosting another game's lobby. It hosts one game at a time and is free again when that game ends: try again then, or host this game by hand.",
+    );
+  }
+}
+
+/**
+ * Nothing answered at the bot's address (ECONNREFUSED): the request never
+ * reached it, so this is a definite failure, never "may have reached Dota".
+ */
+const BOT_NOT_RUNNING =
+  "The lobby bot isn't running right now, so nothing was sent to Dota. Try again in a minute, or host this game by hand.";
+
+/** The connection's request timeout: loopback answers at once or not at all. */
+const LOOPBACK_TIMEOUT_MS = 5_000;
+const RELAY_TIMEOUT_MS = 15_000;
 
 function playingSteamId(user: DotaAccountIdentity) {
   const account = effectiveDotaAccountId(user);
@@ -70,17 +120,34 @@ export function lobbyBotKindEnabled(kind: LobbyKind) {
   return kind === "inhouse" || process.env.DOTA_SEASON_LOBBY_BOT_ENABLED === "true";
 }
 
+/** The addresses the bot listens on when it runs on the same box as the site. */
+const LOOPBACK_HOSTS = new Set(["127.0.0.1", "[::1]"]);
+
+/**
+ * Where the site reaches the bot, from DOTA_LOBBY_BOT_URL and
+ * DOTA_LOBBY_BOT_SECRET, or null when neither is set. `loopback` is a bot on
+ * this machine: a shorter timeout, since it answers at once or not at all.
+ *
+ * Production takes https for any host (the relay), or plain http only to the
+ * bot on the same box: exactly `http://127.0.0.1:<port>` or
+ * `http://[::1]:<port>`, never `localhost` (a name, and the bot binds IPv4)
+ * and never another host, whose traffic would leave the machine unencrypted
+ * with the bearer secret in it. Development also allows `http://localhost`.
+ */
 export function lobbyBotConnection() {
   const origin = process.env.DOTA_LOBBY_BOT_URL;
   const token = process.env.DOTA_LOBBY_BOT_SECRET;
   if (!origin && !token) return null;
   try {
     const url = new URL(origin ?? "");
+    const loopback = LOOPBACK_HOSTS.has(url.hostname);
     const local =
       process.env.NODE_ENV !== "production" &&
-      ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+      (loopback || url.hostname === "localhost");
+    const plainHttpAllowed =
+      url.protocol === "http:" && (local || (loopback && url.port !== ""));
     if (
-      (url.protocol !== "https:" && !(local && url.protocol === "http:")) ||
+      (url.protocol !== "https:" && !plainHttpAllowed) ||
       url.username ||
       url.password ||
       url.search ||
@@ -92,12 +159,99 @@ export function lobbyBotConnection() {
       /\s/.test(token)
     )
       throw new Error();
-    return { origin: url.origin, token };
+    return {
+      origin: url.origin,
+      token,
+      loopback: loopback || url.hostname === "localhost",
+    };
   } catch {
     throw new UserFacingError(
       "The lobby bot configuration needs an admin's attention.",
     );
   }
+}
+
+type LobbyBotConnection = NonNullable<ReturnType<typeof lobbyBotConnection>>;
+
+/** One POST to the bot's /lobby, bounded by the connection's timeout. */
+function postToBot(
+  connection: LobbyBotConnection,
+  body: unknown,
+  signal?: AbortSignal,
+) {
+  const timeout = AbortSignal.timeout(
+    connection.loopback ? LOOPBACK_TIMEOUT_MS : RELAY_TIMEOUT_MS,
+  );
+  return fetch(`${connection.origin}/lobby`, {
+    method: "POST",
+    cache: "no-store",
+    redirect: "error",
+    signal: signal ? AbortSignal.any([signal, timeout]) : timeout,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${connection.token}`,
+    },
+    body: JSON.stringify(body),
+  });
+}
+
+/** What the bot's health action says, or "offline" (not connected to Dota). */
+type LobbyBotHealth =
+  | { online: boolean; steamId: string | null; activeKey: string | null }
+  | "offline";
+
+/**
+ * The bot's health: whether it is online, its Steam account and the job key
+ * it holds. Throws on a reply that breaks the contract or a bot that can't be
+ * reached; never changes anything on the bot.
+ */
+async function readLobbyBotHealth(
+  connection: LobbyBotConnection,
+): Promise<LobbyBotHealth> {
+  const { status, body } = await readBotReply(
+    await postToBot(connection, { action: "health" }),
+  );
+  if (status === 409 && body.code === "OFFLINE") return "offline";
+  if (
+    status !== 200 ||
+    typeof body.online !== "boolean" ||
+    (body.steamId !== null &&
+      (typeof body.steamId !== "string" || !/^\d{17}$/.test(body.steamId))) ||
+    (body.activeKey !== null && typeof body.activeKey !== "string")
+  )
+    throw new BotReplyUnreadableError();
+  return {
+    online: body.online,
+    steamId: body.steamId as string | null,
+    activeKey: body.activeKey as string | null,
+  };
+}
+
+/** The in-house statuses a game can't come back from to use its bot again. */
+const CLOSED_INHOUSE_STATUSES = [
+  INHOUSE_STATUS.COMPLETED,
+  INHOUSE_STATUS.CANCELLED,
+  INHOUSE_STATUS.AWAITING_RESULT,
+];
+
+/**
+ * The in-house game the bot's active job belongs to, when it is this
+ * league's and the database shows it closed: finished, cancelled, or marked
+ * over (its result on the way). Null for no job, another league's or a season
+ * job, or a game still being played. Shared by admin recovery and Create's
+ * BUSY self-heal, so both free the bot from exactly the same games.
+ */
+async function closedInhouseLobbyForBotKey(
+  activeKey: string | null,
+): Promise<string | null> {
+  if (activeKey === null) return null;
+  const key = ownLobbyKey(activeKey);
+  if (key?.kind !== "inhouse") return null;
+  const lobby = await prisma.inhouseLobby.findFirst({
+    where: { id: key.id, status: { in: CLOSED_INHOUSE_STATUSES } },
+    select: { id: true },
+  });
+  return lobby?.id ?? null;
 }
 
 /**
@@ -112,57 +266,68 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
   if (!connection)
     return { enabled: false, online: false, steamId: null, id: null };
   try {
-    const response = await fetch(`${connection.origin}/lobby`, {
-      method: "POST",
-      cache: "no-store",
-      redirect: "error",
-      signal: AbortSignal.timeout(15_000),
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${connection.token}`,
-      },
-      body: JSON.stringify({ action: "health" }),
-    });
-    const body = await response.json();
-    if (response.status === 409 && body?.code === "OFFLINE")
+    const health = await readLobbyBotHealth(connection);
+    if (health === "offline")
       return { enabled: true, online: false, steamId: null, id: null };
-    if (
-      !response.ok ||
-      !body ||
-      typeof body.online !== "boolean" ||
-      (body.steamId !== null &&
-        (typeof body.steamId !== "string" || !/^\d{17}$/.test(body.steamId))) ||
-      (body.activeKey !== null && typeof body.activeKey !== "string")
-    )
-      throw new Error();
-    const health = {
+    return {
       enabled: true,
-      online: body.online as boolean,
-      steamId: body.steamId as string | null,
-      id: null,
+      online: health.online,
+      steamId: health.steamId,
+      id: await closedInhouseLobbyForBotKey(health.activeKey),
     };
-    if (body.activeKey === null) return health;
-    const key = ownLobbyKey(body.activeKey);
-    if (key?.kind !== "inhouse") return health;
-    const lobby = await prisma.inhouseLobby.findFirst({
-      where: {
-        id: key.id,
-        status: {
-          in: [
-            INHOUSE_STATUS.COMPLETED,
-            INHOUSE_STATUS.CANCELLED,
-            INHOUSE_STATUS.AWAITING_RESULT,
-          ],
-        },
-      },
-      select: { id: true },
-    });
-    return { ...health, id: lobby?.id ?? null };
   } catch {
     throw new UserFacingError(
       "Could not check bot recovery. Confirm the bot is online, then try again.",
     );
   }
+}
+
+/**
+ * What Create's BUSY self-heal got the bot to do about a closed game: leave
+ * its lobby now (`leavingNow`), or leave once Dota lets it (a game still
+ * running in Dota, or a release whose answer was lost).
+ */
+export type FreedBot = { id: string; leavingNow: boolean };
+
+/**
+ * Create's BUSY self-heal. When the bot's active job is this league's
+ * in-house game and the database shows that game closed, ask the bot to
+ * release it. Null when there is nothing to free, or when the bot refused the
+ * release (it can't leave yet, isn't running, or the game's spec can't be
+ * built): that changed nothing, so the BUSY answer stands. A release the bot
+ * accepted for a game still running in Dota (`started`) only leaves at that
+ * game's end, and a lost answer may or may not have landed: neither is
+ * `leavingNow`. One health read and at most one release; never throws.
+ */
+export async function freeBotFromClosedInhouseGame(): Promise<FreedBot | null> {
+  try {
+    const connection = lobbyBotConnection();
+    if (!connection) return null;
+    const health = await readLobbyBotHealth(connection);
+    if (health === "offline") return null;
+    const id = await closedInhouseLobbyForBotKey(health.activeKey);
+    if (!id) return null;
+    let reply: DotaLobbyBotReply | null;
+    try {
+      reply = await releaseInhouseBotLobby(id);
+    } catch (error) {
+      return error instanceof LobbyBotOutcomeUnknownError
+        ? { id, leavingNow: false }
+        : null;
+    }
+    if (!reply) return null;
+    return { id, leavingNow: reply.state !== "started" };
+  } catch {
+    return null;
+  }
+}
+
+/** Create's answer when the self-heal sent the closed game's release. */
+export function freeingBotMessage(freed: FreedBot) {
+  const game = `#${inhouseLobbyCode(freed.id)}`;
+  return freed.leavingNow
+    ? `Freeing the bot from finished game ${game}. Press “Create Dota lobby” again in a few seconds.`
+    : `Asked the bot to leave finished game ${game}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
 }
 
 /** What an in-house bot spec is built from: the lobby's id, sides and roster. */
@@ -245,6 +410,38 @@ function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
   return inhouseLobbyPlan(lobby, null).spec;
 }
 
+/** A player's name and the columns their playing Steam id is built from. */
+const BOT_IDENTITY_SELECT = {
+  name: true,
+  steamId: true,
+  dotaAccountIdV2: true,
+  legacyDotaAccountId: true,
+} as const;
+
+/** What an in-house bot spec is built from, and nothing else. */
+const INHOUSE_SPEC_SELECT = {
+  id: true,
+  status: true,
+  radiantTeam: true,
+  players: {
+    select: {
+      userId: true,
+      team: true,
+      isCaptain: true,
+      user: { select: BOT_IDENTITY_SELECT },
+    },
+  },
+} as const;
+
+/** A season side's display name, captain, standing and roster identities. */
+const SEASON_TEAM_SELECT = {
+  id: true,
+  name: true,
+  captainId: true,
+  withdrawn: true,
+  members: { select: { userId: true, user: { select: BOT_IDENTITY_SELECT } } },
+} as const;
+
 /** All lobby settings and roster identities come from trusted app state. */
 export async function resolveDotaLobby(
   viewer: SessionUser,
@@ -263,7 +460,7 @@ export async function resolveDotaLobby(
   if (kind === "inhouse") {
     const lobby = await prisma.inhouseLobby.findUnique({
       where: { id },
-      include: { players: { include: { user: true } } },
+      select: INHOUSE_SPEC_SELECT,
     });
     if (!lobby) throw new UserFacingError("In-house lobby not found.");
     const member = lobby.players.find((p) => p.userId === viewer.id);
@@ -274,8 +471,8 @@ export async function resolveDotaLobby(
     canControl = admin || !!member?.isCaptain;
     // Any live game with its teams locked can use the bot; two games can be
     // live at once, and each has its own bot job. The one Steam account hosts
-    // one Dota lobby at a time, answering BUSY until the other game starts.
-    // A finished lobby can still release its bot.
+    // one Dota lobby at a time, until that game's postgame, answering BUSY to
+    // every other game meanwhile. A finished lobby can still release its bot.
     playable = (INHOUSE_PLAYING_STATUSES as readonly string[]).includes(
       lobby.status,
     );
@@ -283,11 +480,24 @@ export async function resolveDotaLobby(
   } else {
     const match = await prisma.match.findUnique({
       where: { id },
-      include: {
-        season: true,
-        homeTeam: { include: { members: { include: { user: true } } } },
-        awayTeam: { include: { members: { include: { user: true } } } },
-        standins: { include: { standin: true } },
+      select: {
+        seasonId: true,
+        phase: true,
+        status: true,
+        bestOf: true,
+        homeScore: true,
+        awayScore: true,
+        season: { select: { status: true, dotaLeagueId: true } },
+        homeTeam: { select: SEASON_TEAM_SELECT },
+        awayTeam: { select: SEASON_TEAM_SELECT },
+        standins: {
+          select: {
+            teamId: true,
+            standinUserId: true,
+            replacingUserId: true,
+            standin: { select: BOT_IDENTITY_SELECT },
+          },
+        },
       },
     });
     if (!match) throw new UserFacingError("Season match not found.");
@@ -374,11 +584,46 @@ export type DotaLobbyBotReply = DotaLobbyStatus & {
   invited?: number;
 };
 
+/** The status cache's key: one entry per bot, job and seat-report choice. */
+function statusCacheKey(
+  connection: LobbyBotConnection,
+  jobKey: string,
+  withPlayers: boolean,
+) {
+  return `${connection.origin}|${jobKey}|${withPlayers ? "players" : "plain"}`;
+}
+
+/** A write's reply, as the next status read of its job should see it. */
+function rememberWrite(
+  connection: LobbyBotConnection,
+  jobKey: string,
+  withPlayers: boolean,
+  reply: DotaLobbyBotReply | null,
+) {
+  const own = statusCacheKey(connection, jobKey, withPlayers);
+  // The other variant's copy predates this write: the next read asks again.
+  dropLobbyBotStatus(statusCacheKey(connection, jobKey, !withPlayers));
+  if (!reply) return dropLobbyBotStatus(own);
+  const status: DotaLobbyBotReply = { ...reply };
+  delete status.invited;
+  storeLobbyBotStatus(own, status);
+}
+
+/**
+ * Ask the bot to act on (or report) one game's job. Every request carries
+ * `withLifecycle: true`, so the reply says when a release is pending and
+ * when Dota showed the game over; an older bot ignores it.
+ *
+ * A browser status read (no `signal`) goes through the status cache: every
+ * panel of a game shares one bot read per `LOBBY_BOT_STATUS_TTL_MS`. Writes
+ * always ask the bot, then refresh that cache with their reply. The worker's
+ * bounded read passes a `signal` and always asks the bot.
+ */
 export async function callLobbyBot(
   spec: DotaLobbySpec,
   action?: LobbyAction,
   options: {
-    /** Extra cancellation (the scheduled worker's deadline); 15s applies regardless. */
+    /** Extra cancellation (the scheduled worker's deadline); the connection's timeout applies regardless. */
     signal?: AbortSignal;
     /**
      * Ask for the roster's seats and invites. Browser reads only: a bot
@@ -409,103 +654,191 @@ export async function callLobbyBot(
   const connection = lobbyBotConnection();
   if (!connection)
     throw new UserFacingError("The lobby bot has not been configured yet.");
-  try {
-    const timeout = AbortSignal.timeout(15_000);
-    const response = await fetch(`${connection.origin}/lobby`, {
-      method: "POST",
-      cache: "no-store",
-      redirect: "error",
-      signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${connection.token}`,
-      },
-      body: JSON.stringify({
-        action: action ?? "status",
-        // Without these the request is exactly what an older bot expects.
-        spec: {
-          ...spec,
-          ...(options.withPlayers ? { withPlayers: true } : {}),
-          ...(invite ? { invite: [...invite] } : {}),
-        },
-      }),
+  const withPlayers = options.withPlayers === true;
+  const ask = () =>
+    askLobbyBot(connection, spec, key.kind, action, {
+      signal: options.signal,
+      withPlayers,
+      invite,
     });
-    const body = await response.json();
-    // Only our controlled service's small, fixed response contract is exposed.
-    if (!response.ok) {
-      const messages: Record<string, string> = {
-        BUSY: "The bot is setting up another game's lobby. It's free again once that game starts, usually within a few minutes: try again then, or host this game by hand.",
-        OFFLINE: "The bot is not connected to Dota yet. Try again shortly.",
-        // Inhouses have no match page and no stand-ins: the ten drafted
-        // players are the whole roster.
-        ROSTER:
-          key.kind === "inhouse"
-            ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
-            : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
-        SETTINGS:
-          "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
-        STATE:
-          action === "invite"
-            ? "The bot invites players only while its lobby is ready and waiting for them. Refresh its status first."
-            : "This lobby cannot perform that action. Refresh its status first.",
-        // An invite's targets the bot didn't accept: a roster that changed
-        // since this page loaded.
-        ...(action === "invite"
-          ? {
-              INVALID:
-                "The bot couldn't match those invites to this game's roster. Refresh its status, then try again.",
-            }
-          : {}),
-      };
-      const code: unknown = body?.code;
-      // The relay answers OFFLINE for a reply it lost after delivering the
-      // command too (timeout, dropped socket), so an invite's OFFLINE is
-      // unknown, never failed.
-      if (action === "invite" && code === "OFFLINE")
-        throw new InviteOutcomeUnknownError();
-      throw new UserFacingError(
-        (typeof code === "string" && Object.hasOwn(messages, code)
-          ? messages[code]
-          : undefined) ??
-          "The bot could not complete that request. Refresh its status before retrying.",
-      );
-    }
-    if (
-      ![
-        "idle",
-        "creating",
-        "ready",
-        "starting",
-        "started",
-        "blocked",
-        "released",
-      ].includes(body.state)
-    )
-      throw new Error();
-    const reply: DotaLobbyBotReply = {
-      state: body.state,
-      lobbyId: typeof body.lobbyId === "string" ? body.lobbyId : undefined,
-      matchId: typeof body.matchId === "string" ? body.matchId : undefined,
+  if (!action) {
+    if (options.signal) return ask();
+    return {
+      ...(await cachedLobbyBotStatus(
+        statusCacheKey(connection, spec.key, withPlayers),
+        ask,
+      )),
     };
-    // A malformed list or count is unknown: left out, never read as "not
-    // invited" or "none sent".
-    if (options.withPlayers) {
-      const players = parseBotPlayers(body.players);
-      if (players) reply.players = players;
-    }
-    if (action === "invite") {
-      const invited = parseInvitedCount(body.invited);
-      if (invited !== undefined) reply.invited = invited;
-    }
+  }
+  try {
+    const reply = await ask();
+    rememberWrite(connection, spec.key, withPlayers, reply);
     return reply;
   } catch (error) {
-    if (error instanceof UserFacingError) throw error;
-    // A lost answer may still have reached Dota: unknown, never failed.
-    if (action === "invite") throw new InviteOutcomeUnknownError();
+    // A refusal changed nothing, but an unknown outcome may have: either
+    // way the next read asks the bot.
+    rememberWrite(connection, spec.key, withPlayers, null);
+    throw error;
+  }
+}
+
+/** One request to the bot and its reply, read strictly. */
+async function askLobbyBot(
+  connection: LobbyBotConnection,
+  spec: DotaLobbySpec,
+  kind: LobbyKind,
+  action: LobbyAction | undefined,
+  options: {
+    signal?: AbortSignal;
+    withPlayers: boolean;
+    invite: readonly string[] | undefined;
+  },
+): Promise<DotaLobbyBotReply> {
+  const { withPlayers, invite } = options;
+  // A lost answer may still have reached Dota: unknown, never failed.
+  const unknown = () =>
+    action === "invite"
+      ? new InviteOutcomeUnknownError()
+      : new LobbyBotOutcomeUnknownError();
+  let response: Response;
+  try {
+    response = await postToBot(
+      connection,
+      {
+        action: action ?? "status",
+        // An older bot ignores the keys it doesn't know.
+        spec: {
+          ...spec,
+          withLifecycle: true,
+          ...(withPlayers ? { withPlayers: true } : {}),
+          ...(invite ? { invite: [...invite] } : {}),
+        },
+      },
+      options.signal,
+    );
+  } catch (error) {
+    // Nothing listened: the request never reached the bot.
+    if (connectionRefused(error)) throw new UserFacingError(BOT_NOT_RUNNING);
+    throw unknown();
+  }
+  let reply: Awaited<ReturnType<typeof readBotReply>>;
+  try {
+    reply = await readBotReply(response);
+  } catch {
+    throw unknown();
+  }
+  const { body } = reply;
+  // Only our controlled service's small, fixed response contract is exposed.
+  if (reply.status !== 200) {
+    const code: unknown = body.code;
+    if (code === "BUSY") throw new LobbyBotBusyError();
+    // The relay answers OFFLINE for a reply it lost after delivering the
+    // command too (timeout, dropped socket), so an invite's OFFLINE through
+    // it is unknown, never failed. On loopback only the bot itself says it.
+    if (action === "invite" && code === "OFFLINE" && !connection.loopback)
+      throw new InviteOutcomeUnknownError();
+    const messages: Record<string, string> = {
+      OFFLINE: "The bot is not connected to Dota yet. Try again shortly.",
+      // Inhouses have no match page and no stand-ins: the ten drafted
+      // players are the whole roster.
+      ROSTER:
+        kind === "inhouse"
+          ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
+          : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
+      SETTINGS:
+        "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
+      STATE:
+        action === "invite"
+          ? "The bot invites players only while its lobby is ready and waiting for them. Refresh its status first."
+          : "This lobby cannot perform that action. Refresh its status first.",
+      // An invite's targets the bot didn't accept: a roster that changed
+      // since this page loaded.
+      ...(action === "invite"
+        ? {
+            INVALID:
+              "The bot couldn't match those invites to this game's roster. Refresh its status, then try again.",
+          }
+        : {}),
+    };
     throw new UserFacingError(
-      "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
+      (typeof code === "string" && Object.hasOwn(messages, code)
+        ? messages[code]
+        : undefined) ??
+        "The bot could not complete that request. Refresh its status before retrying.",
     );
   }
+  if (
+    typeof body.state !== "string" ||
+    ![
+      "idle",
+      "creating",
+      "ready",
+      "starting",
+      "started",
+      "blocked",
+      "released",
+    ].includes(body.state)
+  )
+    throw unknown();
+  const result: DotaLobbyBotReply = {
+    state: body.state as DotaLobbyStatus["state"],
+    lobbyId: parseLobbyDigits(body.lobbyId),
+    matchId: parseLobbyDigits(body.matchId),
+    ...parseLobbyLifecycle(body),
+  };
+  // A malformed list or count is unknown: left out, never read as "not
+  // invited" or "none sent".
+  if (withPlayers) {
+    const players = parseBotPlayers(body.players);
+    if (players) result.players = players;
+  }
+  if (action === "invite") {
+    const invited = parseInvitedCount(body.invited);
+    if (invited !== undefined) result.invited = invited;
+  }
+  return result;
+}
+
+/**
+ * Ask the bot to release this in-house game's job, built from the game's
+ * own stored roster (the bot checks the job's name and password), and return
+ * its answer. Throws what callLobbyBot throws; a missing game is a no-op
+ * (null).
+ */
+async function releaseInhouseBotLobby(
+  lobbyId: string,
+): Promise<DotaLobbyBotReply | null> {
+  const lobby = await prisma.inhouseLobby.findUnique({
+    where: { id: lobbyId },
+    select: INHOUSE_SPEC_SELECT,
+  });
+  if (!lobby) return null;
+  return callLobbyBot(inhouseLobbySpec(lobby), "release");
+}
+
+/**
+ * After a game closes (marked over by a press or by the bot, cancelled, given
+ * up on, voided, or its result recorded), ask the bot to release that game's
+ * job, so a bot still attached never answers BUSY to the next game.
+ *
+ * Best-effort and never awaited: the close is already committed, the caller
+ * answers at once, and the request runs on in this process (a lost release
+ * changes nothing; a started game's bot also leaves by itself at the
+ * postgame). A no-op when no bot is configured, before any database read.
+ * Never call it inside a transaction.
+ */
+export function releaseInhouseBotAfterClose(lobbyId: string): void {
+  try {
+    if (!lobbyBotConnection()) return;
+  } catch {
+    return;
+  }
+  trackBotRelease(
+    releaseInhouseBotLobby(lobbyId).then(
+      () => {},
+      () => {},
+    ),
+  );
 }
 
 // The worker's bot read is a garnish on a result scan that has its own
@@ -516,10 +849,12 @@ const BOT_STATUS_MIN_BUDGET_MS = 1_000;
 /**
  * Server-side, for the scheduled result scan (there is no viewer): what the
  * lobby bot knows about this in-house game — in particular the Dota match id
- * it saw when the game launched, which it keeps after it leaves the running
- * game. Also read by "Game over", which waits for an unlaunched bot lobby to
+ * it saw when the game launched, which it keeps after it leaves the game,
+ * whether it saw the game running ("started": the scan stamps a READY game
+ * IN_PROGRESS) and whether Dota showed it over (`over`: the scan marks it
+ * over). Also read by "Game over", which waits for an unlaunched bot lobby to
  * be started or released (botHoldsUnlaunchedLobby).
- * One status read, bounded by the caller's deadline.
+ * One status read, bounded by the caller's deadline, never from the cache.
  *
  * Never throws: an unconfigured, misconfigured or unreachable bot, a missing
  * ticket id or a player with no usable Dota account all return null, and the
