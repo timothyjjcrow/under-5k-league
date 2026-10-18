@@ -700,12 +700,13 @@ export class LobbyController {
    * (welcoming/welcomed). It sends no create, start or leave. Never while a
    * lobby is being set up or its server allocated, at most one a minute, and
    * at most three per job; then the bot logs that the leave went unconfirmed
-   * and waits for the next postgame or welcome. True when it started one. */
+   * and waits for the next postgame or welcome. True when it started one.
+   * A resync in flight is offline until its welcome, so it never starts a
+   * second. */
   resync(job, reason) {
     const now = this.now();
     if (
       !this.online ||
-      this.resyncing ||
       (["creating", "ready", "starting"].includes(job.state) && !job.releasing) ||
       (this.lobby && [1, 4, 5, 6].includes(this.lobby.state))
     )

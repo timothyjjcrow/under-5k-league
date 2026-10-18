@@ -1371,9 +1371,11 @@ test("a Leave Dota doesn't confirm within 20 s gets exactly one resync", (t) => 
   assert.equal(c.tick(), false);
   assert.equal(resyncs(calls), 1);
   assert.equal(c.data.jobs[spec.key].lastResyncAt, time.at);
-  // Nothing more while it runs, even with the minute's limit out of the way.
+  // Nothing more while it runs (offline until its welcome), even with the
+  // minute's limit out of the way.
   time.at += 1000;
   c.tick();
+  assert.equal(c.online, false);
   const last = c.data.lastResyncAt;
   c.data.lastResyncAt = time.at - RESYNC_MIN_INTERVAL_MS;
   c.tick();
@@ -1709,7 +1711,7 @@ test("a started game with no end seen three hours after Start gets one resync", 
   assert.equal(resyncs(other.calls), 1);
   assert.equal(welcome(other.controller), true);
   assert.equal(other.controller.data.active, null);
-  // A game whose end the bot saw has the Leave's clock instead.
+  // A game whose end the bot saw has the Leave's clock instead...
   const ended = setup(t);
   const endedTime = clock(ended.controller);
   running(ended.controller);
@@ -1717,6 +1719,15 @@ test("a started game with no end seen three hours after Start gets one resync", 
   endedTime.at += STARTED_BACKSTOP_MS;
   ended.controller.tick();
   assert.equal(ended.controller.resyncing.reason, "leave-unconfirmed");
+  // ...and never the backstop, even with no Leave on the clock.
+  const seen = setup(t);
+  const seenTime = clock(seen.controller);
+  running(seen.controller);
+  seen.controller.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+  delete seen.controller.data.jobs[spec.key].leavePendingAt;
+  seenTime.at += STARTED_BACKSTOP_MS;
+  seen.controller.tick();
+  assert.equal(resyncs(seen.calls), 0);
 });
 
 test("an orphan Leave Dota doesn't confirm resyncs too", (t) => {
