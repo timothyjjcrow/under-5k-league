@@ -24,7 +24,12 @@ import {
   setMatchTime,
   setWeekNight,
 } from "@/app/actions/admin-schedule-results";
-import { proposeReschedule, respondReschedule } from "@/lib/reschedule-service";
+import {
+  loadRescheduleDeadline,
+  proposeReschedule,
+  respondReschedule,
+} from "@/lib/reschedule-service";
+import { createPlayoffBracket } from "@/lib/playoff-service";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { announceAdminRetime } from "@/lib/retime-announcement";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -116,6 +121,65 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       ? "2026-03-22T19:00:00.000Z" : "2026-03-22T18:00:00.000Z");
     expect(matchNightForWeek(updated.firstMatchNight!, 4).toISOString())
       .toBe("2026-04-12T18:00:00.000Z");
+  });
+
+  it.each([true, false])("a one-off move of a later week (cascade unticked) keeps the anchor, the reschedule deadline and the playoff night (existing anchor: %s)", async (hasAnchor) => {
+    const { season, matches } = await seasonWithMatches();
+    const lastWeek = Math.max(...matches.map((m) => m.week));
+    expect(lastWeek).toBe(3);
+    // A future weekly rhythm on the league's clock, anchored on week 1.
+    const anchor = new Date(Math.ceil(Date.now() / 3600e3) * 3600e3 + 2 * 864e5);
+    for (let week = 1; week <= lastWeek; week++) {
+      await prisma.match.updateMany({
+        where: { seasonId: season.id, week },
+        data: { scheduledAt: matchNightForWeek(anchor, week) },
+      });
+    }
+    // Without an anchor (a season generated before the first night was
+    // required) the move derives one from week 2's night BEFORE the move.
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { firstMatchNight: hasAnchor ? anchor : null },
+    });
+
+    // Week 2 alone goes two days later (a holiday), cascade left unticked.
+    const oneOff = new Date(matchNightForWeek(anchor, 2).getTime() + 2 * 864e5);
+    const result = await setWeekNight({}, fd({
+      expectedActiveSeasonId: season.id, week: "2",
+      night: oneOff.toISOString(), nightTs: String(oneOff.getTime()),
+    }));
+    expect(result).not.toHaveProperty("error");
+    // Positive control: week 2 really moved, week 3 kept its night.
+    for (const m of await prisma.match.findMany({ where: { seasonId: season.id } })) {
+      expect(m.scheduledAt?.getTime()).toBe(
+        m.week === 2 ? oneOff.getTime() : matchNightForWeek(anchor, m.week).getTime(),
+      );
+    }
+
+    const updated = await prisma.season.findUniqueOrThrow({ where: { id: season.id } });
+    expect(updated.firstMatchNight?.getTime()).toBe(anchor.getTime());
+    const planned = matchNightForWeek(anchor, lastWeek + 1);
+    const regular = matches.find((m) => m.week === lastWeek)!;
+    expect(
+      (await loadRescheduleDeadline(prisma, regular, updated.firstMatchNight, Date.now()))?.getTime(),
+    ).toBe(planned.getTime());
+
+    // Finish the regular season without ties (lower draft order wins), then
+    // start the bracket: round one lands on the league's night, not the one-off.
+    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    const strength = new Map(teams.map((t) => [t.id, t.draftOrder]));
+    for (const m of matches) {
+      const homeStronger = strength.get(m.homeTeamId)! < strength.get(m.awayTeamId)!;
+      await recordMatchDirect(m.id, homeStronger ? 2 : 0, homeStronger ? 0 : 2);
+    }
+    await createPlayoffBracket(season.id);
+    const firstRound = await prisma.match.findMany({
+      where: { seasonId: season.id, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+    });
+    expect(firstRound.length).toBeGreaterThan(0);
+    for (const m of firstRound) {
+      expect(m.scheduledAt?.getTime()).toBe(planned.getTime());
+    }
   });
 
   it("setWeekNight leaves a COMPLETED match on the night it was played", async () => {

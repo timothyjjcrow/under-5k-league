@@ -1252,19 +1252,30 @@ describe("schedule controls — stale season claims", () => {
 });
 
 describe("setMatchTime — a retime must report itself", () => {
-  it("clears the week's reminder marker so Discord can re-announce", async () => {
+  it("releases only its old kickoff's reminder marker, so Discord can re-announce", async () => {
     const { season, matches } = await seasonWithSchedule();
     const target = matches[0];
-    await setSetting(
-      `weekReminder:${season.id}:${target.week}`,
-      new Date().toISOString(),
-    );
-    await setSetting(
-      `weekReminder:${season.id}:${target.week}:kickoff-cluster`,
-      new Date().toISOString(),
-    );
-    const otherWeekKey = `weekReminder:${season.id}:${target.week}0`;
-    await setSetting(otherWeekKey, new Date().toISOString());
+    const kickoff = new Date(Date.now() + 864e5);
+    const lone = new Date(kickoff.getTime() + 3 * 3600e3);
+    // The target sits alone at `lone`; the week's other fixture keeps its own
+    // kickoff, whose post did not move.
+    await prisma.match.update({
+      where: { id: target.id },
+      data: { scheduledAt: lone },
+    });
+    const mate = matches.find(
+      (m) => m.week === target.week && m.id !== target.id,
+    )!;
+    await prisma.match.update({
+      where: { id: mate.id },
+      data: { scheduledAt: kickoff },
+    });
+    const movedKey = weekReminderKey(season.id, target.week, lone.getTime());
+    const mateKey = weekReminderKey(season.id, target.week, kickoff.getTime());
+    const otherWeekKey = weekReminderKey(season.id, target.week + 10, lone.getTime());
+    for (const key of [movedKey, mateKey, otherWeekKey]) {
+      await setSetting(key, new Date().toISOString());
+    }
     const when = new Date(Date.now() + 6 * 864e5);
 
     const res = await setMatchTime(
@@ -1278,15 +1289,15 @@ describe("setMatchTime — a retime must report itself", () => {
     );
 
     expect(res?.error).toBeUndefined();
-    expect(
-      await getSetting(`weekReminder:${season.id}:${target.week}`),
-    ).toBeNull();
-    expect(
-      await getSetting(
-        `weekReminder:${season.id}:${target.week}:kickoff-cluster`,
-      ),
-    ).toBeNull();
+    expect(await getSetting(movedKey)).toBeNull();
+    expect(await getSetting(mateKey)).not.toBeNull();
     expect(await getSetting(otherWeekKey)).not.toBeNull();
+    // The toast promises only what the release does: one reminder for the
+    // new kickoff, never a re-send of the week's.
+    expect(res?.message).toMatch(
+      /reminder posts for the new kickoff unless that kickoff's reminder already went out/,
+    );
+    expect(res?.message).not.toMatch(/week's Discord reminder/);
   });
 
   it("names the check-ins it wiped", async () => {
@@ -1384,10 +1395,10 @@ describe("setMatchTime — a retime must report itself", () => {
         proposedTime: new Date(when.getTime() + 864e5),
       },
     });
-    await setSetting(
-      `weekReminder:${season.id}:${target.week}`,
-      new Date().toISOString(),
-    );
+    // The kickoff's own cluster marker: the one a real retime of this
+    // fixture would release (releaseRetimedReminderMarker).
+    const markerKey = weekReminderKey(season.id, target.week, when.getTime());
+    await setSetting(markerKey, new Date().toISOString());
 
     const res = await setMatchTime(
       empty,
@@ -1403,9 +1414,7 @@ describe("setMatchTime — a retime must report itself", () => {
     expect(
       await prisma.matchAvailability.count({ where: { matchId: target.id } }),
     ).toBe(1);
-    expect(
-      await getSetting(`weekReminder:${season.id}:${target.week}`),
-    ).not.toBeNull();
+    expect(await getSetting(markerKey)).not.toBeNull();
     expect(
       (
         await prisma.rescheduleRequest.findUniqueOrThrow({

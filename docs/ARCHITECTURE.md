@@ -179,7 +179,8 @@ initial failure, delayed sync, paused, waiting, completed, and short-roster
 completion each have distinct UI states.
 
 The room directly offers `pauseDraft`/`resumeDraft`, `voidCurrentLot` (paused
-active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase),
+active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase,
+only while it is the sale the confirm named: `expectedSaleMembershipId`),
 plus a link to `/admin` for typed-confirmation Abort. Abort is one Serializable
 pre-season reset: it preserves registrations, teams, authoritative
 `Team.captainId` captains, draft settings/night/readiness; removes every other
@@ -1491,8 +1492,9 @@ and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
-active scheduled lease. healthchecks.io dead-man checks alert on readiness
-through Cloudflare, the automation probe, each backup and the weekly drill.
+active scheduled lease. healthchecks.io dead-man checks are to alert on
+readiness through Cloudflare, the automation probe, each backup and the weekly
+drill; they are not configured yet (PRODUCTION-OPERATIONS, Box operations).
 The pinned-commit promotion, release evidence, traffic freeze, rollback,
 recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.

@@ -22,8 +22,9 @@
 #   - installs the agent, the env contract, the SQL files and the shell helpers
 #     into a fresh folder, then swaps it in as /usr/local/lib/ggd2l (a real
 #     directory, never a symlink); the entry point is /usr/local/sbin/ggd2l-agent
-#   - installs the systemd units and timers, and NEVER enables, disables,
-#     starts, stops or restarts any of them
+#   - installs the systemd units, timers and drop-ins (one gives the packaged
+#     caddy.service its restart policy), and NEVER enables, disables, starts,
+#     stops or restarts any of them
 #   - installs the Caddyfile; a league with no mode file yet gets the
 #     maintenance one, and an existing mode file (a live site) is never touched
 #   - installs the PostgreSQL settings and pg_hba rules, then creates or
@@ -130,6 +131,7 @@ systemd/ggd2l-heartbeat.timer
 systemd/ggd2l-config-archive.service
 systemd/ggd2l-config-archive.timer
 systemd/ggd2l-bot.service
+systemd/caddy.service.d/10-ggd2l.conf
 "
 for f in $REQUIRED; do
   [[ -f "${SELFHOST}/${f}" ]] || die "missing ops/selfhost/${f} in the kit clone"
@@ -302,6 +304,8 @@ install -m 0644 "${SELFHOST}/caddy/maintenance.html" /srv/ggd2l/www/maintenance.
 mv -f /srv/ggd2l/www/maintenance.html.new /srv/ggd2l/www/maintenance.html
 
 log "systemd units (installed, never enabled or started here)"
+# Each <unit>.d folder is a drop-in for that unit, ours or a package's
+# (caddy.service.d gives the packaged Caddy a restart policy).
 changed_units=""
 install_unit_file() { # <source> <destination>
   if ! cmp -s "$1" "$2"; then
@@ -323,6 +327,10 @@ if [[ -n "$changed_units" ]]; then
   note "changed:${changed_units}"
   live="$(active_units | tr '\n' ' ')"
   [[ -z "$live" ]] || note "running units keep their old definition until restarted: ${live}"
+  case " ${changed_units} " in
+    *" caddy.service.d/"*)
+      note "caddy: Restart= applies from now on; OOMScoreAdjust= from its next start (a reboot, or systemctl restart caddy in a quiet minute)" ;;
+  esac
 else
   note "unchanged"
 fi
@@ -485,7 +493,10 @@ Check (as root):
     cloudflared-ggd2l.service ggd2l-bot.service ggd2l-heartbeat.service ggd2l-heartbeat.timer \\
     ggd2l-backup@us.service ggd2l-backup@us.timer ggd2l-backup@eu.timer \\
     ggd2l-drill@us.service ggd2l-drill@us.timer ggd2l-drill@eu.timer \\
-    ggd2l-config-archive.service ggd2l-config-archive.timer
+    ggd2l-config-archive.service ggd2l-config-archive.timer caddy.service
+  systemctl show -p Restart -p OOMScoreAdjust caddy.service   # the unit's settings: Restart=on-failure, OOMScoreAdjust=-500
+  cat /proc/\$(systemctl show -p MainPID --value caddy.service)/oom_score_adj   # the running Caddy: -500 only after its next start
+  # (choom -p <that pid> -n -500 applies it now, without the blink of a restart)
   runuser -u caddy -- env HOME=/var/lib/caddy caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
   ggd2l-agent status
 EOF

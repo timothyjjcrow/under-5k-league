@@ -52,14 +52,14 @@ describe("adminNextStep — signups", () => {
       teamCount: 4,
       unlinkedDiscordCount: 3,
     });
-    expect(s.detail).toMatch(/3 signed-up players haven't linked Discord/);
+    expect(s.detail).toMatch(/3 signed-up players and standins haven't linked Discord/);
     const one = at({
       playerCount: 10,
       minPlayers: 10,
       teamCount: 4,
       unlinkedDiscordCount: 1,
     });
-    expect(one.detail).toMatch(/1 signed-up player hasn't linked Discord/);
+    expect(one.detail).toMatch(/1 signed-up player or standin hasn't linked Discord/);
   });
 
   it("says nothing about Discord when everyone linked (or the count wasn't supplied)", () => {
@@ -164,7 +164,7 @@ describe("adminNextStep — draft", () => {
       draftStatus: null,
       unlinkedDiscordCount: 2,
     });
-    expect(s.detail).toMatch(/2 signed-up players haven't linked Discord/);
+    expect(s.detail).toMatch(/2 signed-up players and standins haven't linked Discord/);
   });
 
   it("flags a PAUSED auction as the blocking state it is", () => {

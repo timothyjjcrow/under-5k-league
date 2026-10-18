@@ -900,7 +900,10 @@ used by every CI job.
    zero. Exercise **Run maintenance now** once while idle and verify it records
    an Admin manual run; if the Worker owns the lease, the control must refuse
    to overlap it. The healthchecks.io `automation` check alerts when the probe
-   stops answering 200. The complete pinned-commit promotion, evidence, pause,
+   stops answering 200 (not configured yet: no checks or
+   `/etc/ggd2l/healthchecks.env` exist, so nothing alerts until Tim sets them
+   up; see [Box operations](docs/PRODUCTION-OPERATIONS.md#box-operations)).
+   The complete pinned-commit promotion, evidence, pause,
    rollback, recovery, and secret-rotation procedure is in
    [`docs/PRODUCTION-OPERATIONS.md`](docs/PRODUCTION-OPERATIONS.md).
 
@@ -1084,7 +1087,9 @@ body exposes only a bounded status enum; detailed failure/backlog state remains
 in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 
 On the box these are healthchecks.io dead-man checks that email Tim when they
-go quiet ([Box operations](docs/PRODUCTION-OPERATIONS.md#box-operations)): the
+go quiet ([Box operations](docs/PRODUCTION-OPERATIONS.md#box-operations); not
+configured yet: no checks or `/etc/ggd2l/healthchecks.env` exist, so nothing
+alerts until Tim sets them up): the
 heartbeat pings `box` every five minutes only while both leagues answer
 `/api/health/ready` **through Cloudflare** (so the ping proves the tunnel,
 Caddy, the app and the database together) and the box's disk, memory, swap and

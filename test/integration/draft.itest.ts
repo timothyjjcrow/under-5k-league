@@ -27,6 +27,7 @@ import {
   resetDb,
   sessionFor,
   startDraftState,
+  undoTargetId,
 } from "./factories";
 
 // Stub the sender (formatters stay real) so tests can assert what would have
@@ -496,7 +497,7 @@ describe("draft auction — claim guards", () => {
     const firstCalls = [...mockSend.mock.calls];
 
     const admin = sessionFor(await makeUser("Boss", "ADMIN"));
-    expect((await undoLastSale(season.id, admin)).ok).toBe(true);
+    expect((await undoLastSale(season.id, admin, await undoTargetId(season.id))).ok).toBe(true);
     mockSend.mockClear();
     expect(
       (await nominatePlayer(season.id, sessionFor(capB.user), p3.id, 2)).ok,
@@ -917,7 +918,7 @@ describe("draft auction — bid trail + undo", () => {
     await expireClock(season.id);
     expect(await resolveExpiredNomination(season.id)).toBe(true);
 
-    const res = await undoLastSale(season.id, admin);
+    const res = await undoLastSale(season.id, admin, await undoTargetId(season.id));
     expect(res.ok).toBe(true);
 
     const teamA = await prisma.team.findUniqueOrThrow({
@@ -960,7 +961,7 @@ describe("draft auction — bid trail + undo", () => {
     expect(await resolveExpiredNomination(season.id)).toBe(true);
 
     expect((await pauseDraft(season.id, admin)).ok).toBe(true);
-    const res = await undoLastSale(season.id, admin);
+    const res = await undoLastSale(season.id, admin, await undoTargetId(season.id));
     expect(res.ok).toBe(true);
     expect(res.ok && res.paused).toBe(true); // the toast has to be able to say so
 
@@ -992,7 +993,7 @@ describe("draft auction — bid trail + undo", () => {
     await expireClock(season.id);
     await resolveExpiredNomination(season.id);
 
-    const res = await undoLastSale(season.id, admin);
+    const res = await undoLastSale(season.id, admin, await undoTargetId(season.id));
     expect(res.ok && res.paused).toBe(false);
     const draft = await prisma.draft.findUniqueOrThrow({
       where: { seasonId: season.id },
@@ -1010,13 +1011,13 @@ describe("draft auction — bid trail + undo", () => {
     await startDraftState(season.id);
 
     // Nothing sold yet → nothing to undo.
-    expect((await undoLastSale(season.id, admin)).ok).toBe(false);
+    expect((await undoLastSale(season.id, admin, await undoTargetId(season.id))).ok).toBe(false);
 
     await nominatePlayer(season.id, sessionFor(capA.user), only.id, 4);
     // Live lot → refuse. Assert the REASON: with no sale on the books yet this
     // call also refuses via the "no auction sale to undo" branch, so a bare
     // `.ok === false` passed even with the live-lot guard deleted.
-    const live = await undoLastSale(season.id, admin);
+    const live = await undoLastSale(season.id, admin, await undoTargetId(season.id));
     expect(live.ok).toBe(false);
     expect(!live.ok && live.error).toMatch(/lot is live/i);
 
@@ -1029,14 +1030,14 @@ describe("draft auction — bid trail + undo", () => {
     expect(draft.status).toBe(DRAFT_STATUS.COMPLETE);
 
     // Undo re-opens the draft with the buyer on the clock.
-    expect((await undoLastSale(season.id, admin)).ok).toBe(true);
+    expect((await undoLastSale(season.id, admin, await undoTargetId(season.id))).ok).toBe(true);
     const reopened = await prisma.draft.findUniqueOrThrow({
       where: { seasonId: season.id },
     });
     expect(reopened.status).toBe(DRAFT_STATUS.IN_PROGRESS);
     expect(reopened.nominatorTeamId).toBe(capA.team.id);
     // Non-admin can't touch it.
-    expect((await undoLastSale(season.id, sessionFor(capB.user))).ok).toBe(
+    expect((await undoLastSale(season.id, sessionFor(capB.user), await undoTargetId(season.id))).ok).toBe(
       false,
     );
   });
@@ -1288,11 +1289,15 @@ describe("undoLastSale — two racing undos stay a toast, never a crash", () => 
     expect(await resolveExpiredNomination(season.id)).toBe(true);
 
     // Must RESOLVE — an unhandled P2025 would reject the whole race.
-    const res = await raceN(2, () => undoLastSale(season.id, admin));
+    // Both clicks name the same sale, as two tabs on one page would.
+    const target = await undoTargetId(season.id);
+    const res = await raceN(2, () => undoLastSale(season.id, admin, target));
     expect(res.filter((r) => r.ok)).toHaveLength(1);
     const loser = res.find((r) => !r.ok) as { ok: false; error: string };
+    // With an older sale on the books the loser now meets "can no longer be
+    // undone" instead of reverting that one too; here there is one sale.
     expect(loser.error).toMatch(
-      /already undone|No sale to undo|phase, roster, or auction just changed/i,
+      /already undone|No sale to undo|can no longer be undone|phase, roster, or auction just changed/i,
     );
 
     // Refunded exactly once.
@@ -1342,10 +1347,11 @@ describe.skipIf(!ON_POSTGRES)(
       expect(before.nominatorTeamId).toBe(capB.team.id);
 
       let fired = false;
+      const target = await undoTargetId(season.id);
       setRaceHook(
         onceAt("draft.nominatePlayer.beforeClaim", async () => {
           fired = true;
-          const undone = await undoLastSale(season.id, admin);
+          const undone = await undoLastSale(season.id, admin, target);
           if (!undone.ok) throw new Error(`rival undo failed: ${undone.error}`);
         }),
       );

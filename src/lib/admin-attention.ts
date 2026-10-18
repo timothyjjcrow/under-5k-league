@@ -271,7 +271,7 @@ export function adminAttention(input: AdminAttentionInput): AttentionItem[] {
         key: "discord",
         text: rostersLive
           ? `${n} rostered ${plural(n, "player or standin", "players and standins")} ${n === 1 ? "hasn't" : "haven't"} linked Discord, so pings can't reach them.`
-          : `${n} signed-up ${plural(n, "player hasn't", "players haven't")} linked Discord, so pings can't reach them.`,
+          : `${n} signed-up ${plural(n, "player or standin", "players and standins")} ${n === 1 ? "hasn't" : "haven't"} linked Discord, so pings can't reach them.`,
         href: "#adm-reach",
       });
     }

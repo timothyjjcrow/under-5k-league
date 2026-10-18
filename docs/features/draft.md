@@ -131,6 +131,23 @@ In the Captains & draft card on `/admin` and inside the room
   pool-dry season deleted a $0 signing instead of the disputed sale. Since it
   can skip newer signings, keep the toast naming the purchase (player, team,
   price). Tested in `abort-draft.itest.ts`.
+- **Undo reverts only the sale its confirm named.** Both Undo forms post
+  `expectedSaleMembershipId`, the roster row of the sale the confirm names,
+  and `undoLastSale` refuses before any write unless that row is still the
+  newest auction purchase ("A newer sale landed since this page loaded: …",
+  or that the named sale can no longer be undone). /admin doesn't poll during
+  the auction, so a confirm rendered at sale #5 used to revert sale #12. A
+  form without the id (rendered by an older build; the action id survives a
+  release) is refused with "reload", never undone blindly. Both surfaces pick
+  the target with pure `undoSaleTarget` (`draft-admin.ts`, undoLastSale's
+  rule over roster rows): /admin over its rosters, the room from the poll's
+  `undoSale` (admins only, computed from the rosters `getDraftState` already
+  reads). Never from `recentSales[0]`: a released player's lot stays SOLD in
+  that history, and naming it reverted the sale before it. Undo renders only
+  once something has sold. Tested in `draft-history.itest.ts` (staged, not
+  raced: the id comparison inside the transaction is the only check, and a
+  sale committing mid-undo is a P2034 on the Draft row); the forms are
+  source-guarded in `draft-admin.test.ts`.
 - **Undo re-asserts "no live lot" at its last write and THROWS if it lost.**
   A stall resolver can open a lot during undo's intermediate writes; a blind
   write left a live lot and a nomination clock at once, and the next expiry
@@ -155,7 +172,9 @@ In the Captains & draft card on `/admin` and inside the room
   then carry standings and brackets); the button hides on the same results
   check. It is not phase-gated on purpose: recovering a season whose phase
   moved is the point. It is a type-to-confirm `DangerSubmit`, and the action
-  stands down cancelled standin bookings after commit.
+  stands down cancelled standin bookings after commit. Its toast says whether
+  the "auction stopped" post went out (`sendDiscordMessage`'s boolean, worded
+  like `setSeasonPhase`'s), never "Discord was notified" by default.
 - **Admin auto-nominate shows only while IN_PROGRESS** (`adminNominationTeam`)
   and confirms, since it spends another team's turn; Max bid confirms too.
   `setDraftNight` doesn't re-announce an unchanged timestamp.
@@ -217,9 +236,13 @@ In the Captains & draft card on `/admin` and inside the room
   for `draftViewerStake` (captains and admins at `POLL_KEEPALIVE_MS`, a pool
   player at `POLL_WATCH_KEEPALIVE_MS`). A failed poll in a live auction
   retries at the viewer's live rate, never the waiting-room rate, so
-  `disconnected` trips promptly. At a clock's zero only a signed-in tab polls
-  at once (only its poll can settle the lot); a signed-out tab waits for its
-  next poll.
+  `disconnected` trips promptly. At a clock's zero only a captain's or an
+  admin's tab polls at once (`draftPollsAtClockZero`): they have controls
+  waiting on the settled lot, and only a signed-in poll can settle it. Every
+  other tab (signed out, a spectator, a pool player) sees the sale on its next
+  poll, at most `POLL_WATCH_MS` later. When every signed-in tab polled at zero,
+  a full US room sent about 63 polls at once per sale, about 2.2 s of the
+  box's one vCPU each time (measured 2026-10-17).
 - **The poll reads only what the room shows:** the pool's display fields,
   the nominee's profile and contact in one extra read, the run's id and
   provenance, and the last 8 sales while the auction runs (`readDraftSales`
@@ -231,6 +254,23 @@ In the Captains & draft card on `/admin` and inside the room
   `docs/features/admin-and-operations.md`).
 - **Responses are sequence-ordered** (`issueSequence` / `acceptSequence`), so
   a slow tick can't clobber a fresher bid.
+- **Refresh the layout's render once per phase move.** The header's status
+  chip and the phase nav come from the root layout, which a poll never
+  repeats: a captain who parked on `/draft` before Start read "Signups open"
+  through the whole auction. The room remembers the season and auction
+  status its render shows (seeded from the page's `renderedPhase`, then each
+  poll's) and calls `router.refresh()` only when `draftRoomNeedsRefresh`
+  (`draft-room-refresh.ts`) says either moved: start, pause, resume,
+  completion, abort, a phase move. Never on every poll; each refresh
+  re-renders the layout and page on the shared box (one render per open tab
+  per transition: about 175 for 35 tabs and five transitions, against the
+  tens of thousands of polls of an auction). An admin's own action
+  already re-rendered their page, so their tab may refresh twice. Once the
+  season leaves the Draft phase with the auction finished, the refresh lands
+  on `/teams`, as any load of `/draft` would.
+  `room-source-guards.test.ts` pins the one call site;
+  `e2e/zz-admin-draft.spec.ts` checks a tab parked before Start shows "Draft
+  live" in its header without a reload.
 - **The outbid latch is pure.** `wasOutbid` raises it (its same-player guard
   stops a flash when a sale resolves into a new nomination within one poll);
   `outbidLatchAfter` decides set, clear or keep and takes no budget input on

@@ -7,9 +7,10 @@
 // printing "Match night to be announced" beside real kickoff times.
 //
 // It is read from the fixtures themselves, never from Season.firstMatchNight.
-// That field is the arithmetic anchor playoff rounds are dated from, and
-// moving any single week moves it too, so a one-off Tuesday in week 3 would
-// have relabelled the whole season "Tuesdays".
+// That field is the arithmetic anchor playoff rounds are dated from: moving
+// week 1 sets it even as a one-off, and moving any later week used to shift
+// it, so a one-off Tuesday would relabel the whole season "Tuesdays" (an
+// archived season may still hold such an anchor).
 //
 // While a match-night poll is open during signups, the night isn't settled,
 // and every page that names it says so instead (pollDecidesMatchNight).
@@ -44,43 +45,48 @@ function weeklySlotFormatter(
 
 /**
  * The weekly slot the season's fixtures kick off in, or null when none has a
- * kickoff yet. It is the slot most fixtures share, so a week the admin moved
- * on its own or a match two captains rescheduled stays an exception instead
- * of becoming the league's night. Fixtures still to be played decide it (a
- * later-season move to a new night counts from then on); once every fixture
- * is played, all of them do. A tie goes to the slot that comes first.
+ * kickoff yet. It is the slot most timed fixtures share, played ones
+ * included, so a week the admin moved on its own or a match two captains
+ * rescheduled stays an exception instead of becoming the league's night.
+ * Counting only the fixtures still to play let the last open fixture, often
+ * the rescheduled one, name the night on every page. A tie goes to the slot
+ * with more fixtures still to play (a move of the rest of the season takes
+ * over once it holds as many fixtures as the old night), then to the slot
+ * that comes first.
  */
 export function fixturesMatchNightLabel(
   fixtures: readonly FixtureKickoff[],
   timeZone: string = LEAGUE_CONFIG.timeZone,
   locale: string = LEAGUE_LOCALE,
 ): string | null {
-  const timed = fixtures.filter(
-    (f): f is { scheduledAt: Date; status: string } => f.scheduledAt != null,
-  );
-  const open = timed.filter((f) => f.status !== MATCH_STATUS.COMPLETED);
-  const counted = open.length > 0 ? open : timed;
-  if (counted.length === 0) return null;
-
   const slotOf = weeklySlotFormatter(timeZone, locale);
-  const slots = new Map<string, { count: number; first: number }>();
-  for (const { scheduledAt } of counted) {
+  const slots = new Map<
+    string,
+    { count: number; open: number; first: number }
+  >();
+  for (const { scheduledAt, status } of fixtures) {
+    if (!scheduledAt) continue;
     const label = slotOf(scheduledAt);
     const at = scheduledAt.getTime();
+    const open = status === MATCH_STATUS.COMPLETED ? 0 : 1;
     const slot = slots.get(label);
     if (slot) {
       slot.count += 1;
+      slot.open += open;
       slot.first = Math.min(slot.first, at);
     } else {
-      slots.set(label, { count: 1, first: at });
+      slots.set(label, { count: 1, open, first: at });
     }
   }
-  let best: { label: string; count: number; first: number } | null = null;
+  let best: { label: string; count: number; open: number; first: number } | null =
+    null;
   for (const [label, slot] of slots) {
     if (
       !best ||
       slot.count > best.count ||
-      (slot.count === best.count && slot.first < best.first)
+      (slot.count === best.count &&
+        (slot.open > best.open ||
+          (slot.open === best.open && slot.first < best.first)))
     ) {
       best = { label, ...slot };
     }

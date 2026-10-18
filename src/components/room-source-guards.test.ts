@@ -447,6 +447,17 @@ describe("live rooms delegate their poll policy", () => {
     );
   });
 
+  it("draft-room polls at a clock's zero only through draftPollsAtClockZero", () => {
+    // Every signed-in tab polling at zero was ~63 simultaneous polls per sale
+    // in a full US room on the one-vCPU box; only captains and admins have
+    // controls waiting on the settled lot.
+    const src = code("draft-room.tsx");
+    const body = /const reconcileExpiredClock = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[/.exec(src);
+    expect(body, "reconcileExpiredClock moved").not.toBeNull();
+    expect(body![1]).toContain("draftPollsAtClockZero(");
+    expect(body![1]).not.toMatch(/if \(state\?\.me\.userId\) setPollKick/);
+  });
+
   it("draft-room computes its cadence only through draftPollCadence", () => {
     const src = code("draft-room.tsx");
     expect(src).toContain("draftPollCadence(");
@@ -573,6 +584,23 @@ describe("live rooms delegate their alert triggers", () => {
           `one-character drift would have stacked prefixes in the tab forever.`,
       ).toEqual([]);
     }
+  });
+
+  it("draft-room refreshes the layout's render only through draftRoomNeedsRefresh", () => {
+    // The header chip and phase nav are the root layout's render. A parked
+    // tab said "Signups open" through a whole auction; refreshing on EVERY
+    // poll instead would re-render the layout and page every 2s per tab on
+    // the one box both leagues share. One refresh, behind the tested rule.
+    const src = code("draft-room.tsx");
+    expect(src).toMatch(
+      /if \(draftRoomNeedsRefresh\(renderedPhaseRef\.current, polled\)\) \{\s*router\.refresh\(\);\s*\}\s*renderedPhaseRef\.current = polled;/,
+    );
+    expect(src.split("router.refresh()").length - 1).toBe(1);
+    // Seeded from the page's render, so a Start before the first poll counts.
+    expect(src).toMatch(/useRef<DraftRoomPhase \| null>\(\s*renderedPhase \?\? null,?\s*\)/);
+    expect(appCode("draft/page.tsx")).toMatch(
+      /renderedPhase=\{\{\s*seasonStatus: season\.status,\s*draftStatus: renderedDraftStatus \?\? DRAFT_STATUS\.NOT_STARTED,?\s*\}\}/,
+    );
   });
 
   it("draft-room decides the outbid latch through outbidLatchAfter", () => {

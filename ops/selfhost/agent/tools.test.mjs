@@ -5,8 +5,8 @@ import { test } from "node:test";
 import { caddyConfigSha256, renderMode } from "./caddy-modes.mjs";
 import { SHA, SHA2, T0, TRACKED_DOTENV_EXAMPLES, addRelease, makeBox } from "./harness.test.mjs";
 import { promoteRelease } from "./releases.mjs";
-import { status } from "./status.mjs";
-import { attest, backup, botDeploy, botStatus, drill, prepareTools } from "./tools.mjs";
+import { STATUS_UNITS, lastDrill, status } from "./status.mjs";
+import { attest, backup, botDeploy, botStatus, drill, prepareTools, readDrillRecord } from "./tools.mjs";
 
 function gitBox() {
   const box = makeBox();
@@ -196,18 +196,86 @@ test("status summarises units, live releases, modes and slots", async () => {
         ? { stdout: "ggd2l-backup@eu.service loaded failed failed GGD2L backup eu\n" }
         : undefined,
   );
+  // Europe's only drill ran through `drill eu <sha>` (systemd-run, outside the
+  // unit), so only its record shows it.
+  mkdirSync(path.join(box.layout.backupDir("eu"), "state"), { recursive: true });
+  writeFileSync(path.join(box.layout.backupDir("eu"), "state", "last-drill.json"),
+    JSON.stringify({ ok: true, league: "eu", dump: "/x/backup-a.sql", dumpSha256: "a".repeat(64), tools: "/srv/ggd2l/tools/0123456789ab", finishedAt: "2026-10-16T13:21:00Z" }));
   const result = await status(box.ctx, { meminfo: path.join(box.root, "missing") });
   assert.deepEqual(result.units["ggd2l-us@a.service"], { active: "active", enabled: "enabled" });
   assert.equal(result.units["ggd2l-eu@a.service"].active, "unknown");
   assert.equal(result.leagues.us.live.id, id);
   assert.equal(result.leagues.us.mode, "proxy");
   assert.deepEqual(result.leagues.us.slots, { a: id, b: null });
-  assert.deepEqual(result.leagues.us.lastDrill, { result: "success", at: "Sun 2026-10-18 10:31:00 UTC" });
+  assert.deepEqual(result.leagues.us.lastDrill, { result: "success", at: "2026-10-18T10:31:00.000Z", source: "unit" });
+  assert.deepEqual(result.leagues.eu.lastDrill, { result: "success", at: "2026-10-16T13:21:00.000Z", source: "record" });
   assert.equal(result.leagues.eu.mode, "maintenance");
   assert.deepEqual(result.failedUnits, ["ggd2l-backup@eu.service"]);
   assert.equal(result.pendingReboot, false);
   assert.equal(result.serverErrors24h, 0);
+  assert.equal(result.maintenance503s24h, 0);
+  // The daily config archive is reported with the other timers.
+  for (const unit of ["ggd2l-config-archive.timer", "ggd2l-config-archive.service"]) {
+    assert.ok(STATUS_UNITS.includes(unit), unit);
+    assert.ok(unit in result.units, unit);
+    assert.ok(box.calls.some((call) => call.args[0] === "show" && call.args.includes(unit)), `systemctl show asks for ${unit}`);
+  }
   // release-box records it in box-manifest.json.
   assert.match(result.caddyConfigSha256, /^[0-9a-f]{64}$/);
   assert.equal(result.caddyConfigSha256, caddyConfigSha256(box.layout));
+});
+
+test("the last drill is the later of the unit's last run and the last passing drill's record", () => {
+  const record = { ok: true, league: "us", finishedAt: "2026-10-17T13:21:00Z" };
+  const unit = (Result, at) => ({ Result, ExecMainExitTimestamp: at });
+  const passed = { result: "success", at: "2026-10-17T13:21:00.000Z", source: "record" };
+  // Never run either way.
+  assert.equal(lastDrill(undefined, null), null);
+  assert.equal(lastDrill(unit("", ""), null), null);
+  // Only the agent's sha drill ran: the record answers (the bug: null).
+  assert.deepEqual(lastDrill(unit("", ""), record), passed);
+  assert.deepEqual(lastDrill(unit("", "n/a"), record), passed);
+  // The weekly unit failed after that pass: the failure shows.
+  assert.deepEqual(lastDrill(unit("exit-code", "Sun 2026-10-18 10:31:00 UTC"), record),
+    { result: "exit-code", at: "2026-10-18T10:31:00.000Z", source: "unit" });
+  // The unit failed, then a sha drill passed: the pass clears it.
+  assert.deepEqual(lastDrill(unit("exit-code", "Fri 2026-10-16 10:31:00 UTC"), record), passed);
+  // A time systemd printed in a zone this can't read: a failure still shows.
+  assert.deepEqual(lastDrill(unit("exit-code", "Sun 2026-10-18 12:31:00 CEST"), record),
+    { result: "exit-code", at: "Sun 2026-10-18 12:31:00 CEST", source: "unit" });
+  assert.deepEqual(lastDrill(unit("success", "Sun 2026-10-18 12:31:00 CEST"), record), passed);
+});
+
+test("a drill record counts only for its league, when it says ok and has a time", () => {
+  const box = makeBox();
+  const file = path.join(box.layout.backupDir("us"), "state", "last-drill.json");
+  mkdirSync(path.dirname(file), { recursive: true });
+  assert.equal(readDrillRecord(box.ctx, "us"), null);
+  const good = { ok: true, league: "us", finishedAt: "2026-10-17T13:21:00Z" };
+  for (const [record, expected] of [
+    [good, good],
+    [{ ...good, league: "eu" }, null],
+    [{ ...good, ok: false }, null],
+    [{ ...good, finishedAt: "soon" }, null],
+  ]) {
+    writeFileSync(file, JSON.stringify(record));
+    assert.deepEqual(readDrillRecord(box.ctx, "us"), expected);
+  }
+  writeFileSync(file, "{ not json");
+  assert.equal(readDrillRecord(box.ctx, "us"), null);
+});
+
+test("status counts the maintenance page's 503s apart from real 5xx", async () => {
+  const box = makeBox();
+  const line = (atMs, status, headers) => JSON.stringify({
+    ts: atMs / 1000, status, resp_headers: headers,
+    request: { host: "eu.ggd2l.com", uri: "/", method: "GET" },
+  });
+  const page = { "Retry-After": ["600"], "Cache-Control": ["no-store"], "X-Robots-Tag": ["noindex, nofollow"] };
+  const file = path.join(box.layout.caddyLogs, "eu.access.json");
+  writeFileSync(file, `${[line(T0 - 60_000, 503, page), line(T0 - 50_000, 503, page), line(T0 - 40_000, 502, {})].join("\n")}\n`);
+  utimesSync(file, T0 / 1000, T0 / 1000);
+  const result = await status(box.ctx, { meminfo: path.join(box.root, "missing") });
+  assert.equal(result.serverErrors24h, 1);
+  assert.equal(result.maintenance503s24h, 2);
 });

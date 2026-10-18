@@ -96,6 +96,11 @@ beforeEach(() => {
   mockUpdate.mockResolvedValue({ ok: true, eventId: EVENT });
   mockDelete.mockReset();
   mockDelete.mockResolvedValue("ok");
+  // Start every test with Discord linking OFF, as CI runs it: a developer's
+  // .env that sets the OAuth client otherwise makes "I'm in" demand a linked
+  // account and fails the tests below. The linking tests switch it on.
+  vi.stubEnv("DISCORD_CLIENT_ID", "");
+  vi.stubEnv("DISCORD_CLIENT_SECRET", "");
 });
 afterEach(() => {
   setRaceHook(null);

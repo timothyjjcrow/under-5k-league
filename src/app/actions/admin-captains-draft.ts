@@ -1450,7 +1450,10 @@ export async function startDraft(
   };
 }
 
-/** Admin: revert the most recent auction sale (mis-click / dispute recovery). */
+/**
+ * Admin: revert the most recent auction sale (mis-click / dispute recovery),
+ * and only the one the confirm named (`expectedSaleMembershipId`).
+ */
 export async function undoLastSaleAction(
   _prev: ActionResult,
   formData: FormData,
@@ -1479,8 +1482,26 @@ export async function undoLastSaleAction(
         "The season has moved on — use Release / Sign free agent for roster corrections.",
     };
   }
-  const res = await undoLastSale(season.id, admin);
-  if (!res.ok) return { error: res.error };
+  // The sale the confirm named. A form without it was rendered before Undo
+  // carried its target (the server-action id survives a release), so it can't
+  // say which sale the admin agreed to: refuse rather than undo blindly.
+  const expectedSaleMembershipId = str(
+    formData,
+    "expectedSaleMembershipId",
+  ).trim();
+  if (!expectedSaleMembershipId) {
+    return {
+      error:
+        "This Undo last sale button is from an older page — reload, then undo again.",
+    };
+  }
+  const res = await undoLastSale(season.id, admin, expectedSaleMembershipId);
+  if (!res.ok) {
+    // /admin doesn't poll: re-render it so the button and its confirm name the
+    // sale that is newest now, or every retry is refused until a reload.
+    refresh();
+    return { error: res.error };
+  }
   refresh();
   // Name the purchase. Undo targets the newest AUCTION sale, so when free-agent
   // signings sit on top of it the row reverted is not the newest roster addition
@@ -1558,7 +1579,10 @@ export async function abortDraftAction(
   await expireLeagueAnnouncementGroup(
     draftLiveAnnouncementGroup(season.id),
   ).catch(() => 0);
-  await sendDiscordMessage(
+  // false = not delivered or queued: no webhook set, a preview build, or a
+  // failed send. The toast must say so (setSeasonPhase's wording), or the admin
+  // trusts captains were told the auction stopped.
+  const abortAnnounced = await sendDiscordMessage(
     draftAbortedMessage(season.name, res.playersReturned, res.matchesRemoved),
   );
   refresh();
@@ -1588,7 +1612,11 @@ export async function abortDraftAction(
     bits.push(`cleared ${cleared.join(", ")} tied to the old rosters`);
   }
   bits.push("fix the captains, then start the draft again");
-  bits.push("Discord was notified that the auction stopped");
+  bits.push(
+    abortAnnounced
+      ? "Discord was notified that the auction stopped"
+      : "the Discord announcement failed; tell the league in Discord that the auction stopped",
+  );
   return { message: `${bits.join(" · ")}.` };
 }
 

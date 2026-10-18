@@ -295,7 +295,11 @@ export async function MatchPreview({
         </p>
       ) : null}
 
-      <StakesBanner match={match} seasonMatches={seasonMatches} />
+      <StakesBanner
+        match={match}
+        seasonMatches={seasonMatches}
+        nowMs={previewNow}
+      />
 
       <TaleOfTheTape
         match={match}

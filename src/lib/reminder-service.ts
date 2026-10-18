@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { predictionOpen } from "./pickem";
 import { isPlayoffPhase } from "./league-lifecycle";
 import { prisma } from "./prisma";
@@ -58,6 +59,53 @@ async function weekByeTeamNames(seasonId: string, week: number): Promise<string[
     byeTeamsByWeek(weekMatches, teams.map((t) => t.id)).get(week) ?? [],
   );
   return teams.filter((t) => byeIds.has(t.id)).map((t) => t.name);
+}
+
+/**
+ * Release the week-reminder marker a retimed fixture leaves behind. Call it
+ * inside the retime's transaction, after the match write, with the kickoff
+ * the fixture had BEFORE the move (one fixture retimed: Set time and a
+ * reschedule lock; "Move a match night" moves whole weeks and releases them
+ * all).
+ *
+ * A reminder is one post per kickoff cluster (week + exact kickoff, see
+ * maybeAnnounceUpcomingWeek), so the marker stays while any other SCHEDULED
+ * fixture of that week still kicks off there: those fixtures did not move,
+ * and releasing it re-posted their reminder and re-pinged their players.
+ * Once the old kickoff is empty the marker goes, which also cancels a post
+ * for it still waiting in the outbox. The new kickoff is its own cluster with
+ * its own marker, so the moved fixture is reminded afresh, unless another
+ * fixture's post already covered that kickoff.
+ */
+export async function releaseRetimedReminderMarker(
+  tx: Pick<Prisma.TransactionClient, "match" | "setting">,
+  moved: {
+    id: string;
+    seasonId: string;
+    week: number;
+    oldKickoff: Date | null;
+  },
+): Promise<void> {
+  if (!moved.oldKickoff) return;
+  const stillThere = await tx.match.count({
+    where: {
+      id: { not: moved.id },
+      seasonId: moved.seasonId,
+      week: moved.week,
+      status: MATCH_STATUS.SCHEDULED,
+      scheduledAt: moved.oldKickoff,
+    },
+  });
+  if (stillThere > 0) return;
+  await tx.setting.deleteMany({
+    where: {
+      key: weekReminderKey(
+        moved.seasonId,
+        moved.week,
+        moved.oldKickoff.getTime(),
+      ),
+    },
+  });
 }
 
 /**
