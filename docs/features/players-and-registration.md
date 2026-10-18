@@ -73,7 +73,11 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   adding only a "heads up"; a manual medal (`User.rankTierManual`) beats every
   automatic write. Inhouse `joinQueue` also trusts it as-is, up to the
   ceiling, and judges the medal on every join, a signup's included
-  (`inhouse.md`, "The MMR cap").
+  (`inhouse.md`, "The MMR cap"). An admin's inhouse MMR beats it at the
+  queue, and `/admin/inhouse-players` sets the same manual medal for anyone,
+  a player with no signup or any player once the season is over, when
+  `setPlayerRank` refuses (`inhouse.md`, "An admin's inhouse MMR and
+  medal").
 - **Never rewrite a typed number silently.** `/me` shows the medal window
   (`mmrLeadLine`), a danger line when the medal rules the player out, and a
   display-only preview (`mmrPreviewLine`); the toast names any change. A

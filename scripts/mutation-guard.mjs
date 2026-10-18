@@ -362,6 +362,7 @@ const FILES = [
   "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
   "src/lib/player-data-refresh.ts",
+  "src/lib/inhouse-rating-service.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */
