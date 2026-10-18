@@ -165,7 +165,7 @@ live probe result:
 ready probe result:
 automation probe result:
 Two consecutive production Cloudflare Cron result timestamps (Caddy log):
-healthchecks.io alert-delivery evidence (box, automation, backups, drill, bot):
+Discord alert-delivery evidence (each Worker's and the box's hello, `ggd2l-alert@test` and its recovery):
 Slot rollback rehearsal result:
 Traffic freeze (`agent mode <lg> maintenance`) rehearsal result:
 Final smoke-test result:
@@ -448,7 +448,8 @@ Cloudflare Workers Free currently permits 100,000 requests/day, five Cron
 Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
 Trigger, and 15 minutes wall time. This Worker uses about 1,440 invocations/day,
 one trigger, one outbound request per invocation, a 65-second timeout, and a
-bounded 2 KiB response parse. Before initial launch and before a scheduler or
+bounded 2 KiB response parse; with alerts on, also one Durable Object request
+per unpaused invocation and a Discord post only when an alert changes (below). Before initial launch and before a scheduler or
 account-capacity change, verify that other account work has not consumed those
 shared limits and re-check the current
 [Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
@@ -501,6 +502,40 @@ can take up to 15 minutes to propagate.
 After propagation, require two consecutive one-minute HTTP 200 `SUCCEEDED`
 passes, `/api/health/automation` = 200, a cleared lease, and zero consecutive
 failures before opening traffic.
+
+### Discord alerts from the Workers
+
+Each Worker is also the leagues' dead-man alarm
+(`ops/cloudflare-automation-worker/src/alerts.ts`; the rules are in
+[DECISIONS](DECISIONS.md#hosting) and the box runbook's Alerts). After every
+unpaused pass it hands the outcome to one SQLite Durable Object
+(`SchedulerAlertState`, bound as `ALERT_STATE`, migration `v1`), which posts
+to the admin channel when 3 passes in a row fail (10 between 09:00 and 09:15
+UTC), a reminder each day, and the recovery after 2 clean passes; the first
+pass that sees a new webhook posts a 👋 hello. A healthy minute costs one
+Durable Object request and one row read, and writes nothing (Workers Free:
+100,000 requests, 5 million rows read and 100,000 rows written a day, account
+wide; both leagues use about 2,900 requests). The alert never changes the
+pass: a failing Durable Object or Discord logs `ALERT_STATE_UNAVAILABLE` or
+`ALERT_POST_FAILED` and the cron event succeeds or fails exactly as before.
+Only the two canonical routes alert, and the posted text names a failure's
+kind, never its message.
+
+Two optional secrets turn it on, the same values for both Workers:
+`ALERT_DISCORD_WEBHOOK_URL` (the webhook, a credential) and
+`ALERT_PING_USER_ID` (the one Discord user a failure pings; leave it unset to
+ping nobody). Neither is in `secrets.required`, so a pause always deploys.
+Each `secret put` deploys a new version of the Worker's current code at once,
+so put them while the reviewed code is live, from 0600 files, through stdin:
+
+```bash
+npx wrangler@4.118.0 secret put ALERT_DISCORD_WEBHOOK_URL --config ops/cloudflare-automation-worker/wrangler.jsonc < <0600 file>
+npx wrangler@4.118.0 secret put ALERT_DISCORD_WEBHOOK_URL --config ops/cloudflare-automation-worker/wrangler.europe.jsonc < <0600 file>
+npx wrangler@4.118.0 secret list --cwd ops/cloudflare-automation-worker
+```
+
+The next pass posts each Worker's hello. To stop alerts, `secret delete` the
+webhook; the state stays and the next hello comes with the next webhook.
 
 ### Pause and resume
 
@@ -978,7 +1013,11 @@ of errors) or release again.
   rerun the corresponding real profile/import smoke test.
 - The tunnel's credentials (`/etc/cloudflared/<uuid>.json`), the R2 key
   (`rclone.conf`) or the healthchecks ping URLs: replace them at Cloudflare or
-  healthchecks first. A new tunnel needs Tim to authorize `cloudflared tunnel
+  healthchecks first.
+- The Discord alert webhook: delete it in the channel's Integrations, make a
+  new one, then put it in both Workers' `ALERT_DISCORD_WEBHOOK_URL` and the
+  box's `/etc/ggd2l/alerts.env` ([Discord alerts from the Workers](#discord-alerts-from-the-workers)).
+  Each says hello on the new webhook. A new tunnel needs Tim to authorize `cloudflared tunnel
   login` again.
 - An SSH key: remove it from `~ggd2l/.ssh/authorized_keys` on the box.
 
@@ -1006,7 +1045,8 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | `postgresql@18-main` | Both leagues' databases on 127.0.0.1:5432 |
 | `ggd2l-backup@us.timer`, `ggd2l-backup@eu.timer` | Hourly dumps at :17 |
 | `ggd2l-drill@us.timer`, `ggd2l-drill@eu.timer` | Weekly restore drills, Sundays 10:30 and 11:30 UTC |
-| `ggd2l-heartbeat.timer` | The healthchecks pings, every 5 minutes |
+| `ggd2l-heartbeat.timer` | The box's Discord alerts (and any healthchecks pings), every 5 minutes |
+| `ggd2l-alert@<key>.service` | A Discord alert for one backup, drill or config-archive run, started by that unit's `OnFailure=` and `OnSuccess=` |
 | `ggd2l-config-archive.timer` | The daily encrypted config archive, 04:47 UTC, as root |
 | `ggd2l-bot.service` | The lobby bot, on 127.0.0.1:8090 ([DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md)) |
 
@@ -1020,20 +1060,23 @@ app role's local URL, no Vercel or Neon keys).
 **The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
 PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
 reboot at 09:00 UTC when an update needs it. Only live slots are enabled, so
-exactly they come back; the `box` check's 15-minute grace covers the gap.
+exactly they come back; the scheduler Workers wait for 10 failed passes in a
+row before alerting until 09:15 UTC, which covers the gap.
 Before a release near 09:00 UTC, check `pending reboot` in `box_agent status`
 and don't run one across it.
 
-**Alerts.** healthchecks.io emails Tim when a check goes quiet:
+**Alerts.** Discord, in the admin channel ([DECISIONS](DECISIONS.md#hosting)):
 
-| Check | Pinged by | Period / grace |
+| From | Posts when | Clears when |
 | --- | --- | --- |
-| `box` | The heartbeat, only while both leagues answer `/api/health/ready` through Cloudflare, disk is under 85%, MemAvailable over 150 MB, swap used under 1.5 GB and no unit has failed | 5 min / 15 min |
-| `automation` | The heartbeat, while both `/api/health/automation` answer 200 | 5 min / 30 min |
-| `backup-us`, `backup-eu` | Each backup run | 1 h / 2 h |
-| `drill` | Each drill | 7 days / 1 day |
-| `bot` | The heartbeat, while `ggd2l-bot` is active | 5 min / 20 min |
-| `config` | Each daily config archive | 1 day / 1 day |
+| Each scheduler Worker, outside the box | 3 passes in a row fail (10 until 09:15 UTC) | 2 pass in a row |
+| `ggd2l-alert@<key>` (backups, drills, the config archive) | A run fails, naming the step | The next run passes |
+| The heartbeat (`discord-alert.mjs heartbeat`) | Disk 85% full; MemAvailable under 150 MB or swap over 1.5 GB for 3 beats; a unit failed for 2; a league whose site answers has stale passes for 3; an enabled bot down for 4 | The check is good again (2 beats for memory, swap, passes and the bot) |
+
+Settings, the hello and the test post are in `ops/selfhost/README.md`
+(Alerts, Discord alerts). healthchecks.io's `box`, `automation`, `backup-us`,
+`backup-eu`, `drill`, `bot` and `config` checks still get their pings if
+`/etc/ggd2l/healthchecks.env` is ever written.
 
 **Memory and disk.** Steady state is expected around 1.2-1.5 GB (both slots,
 Postgres, cloudflared, Caddy and the bot), confirmed in the rehearsal; a
@@ -1065,8 +1108,8 @@ recover the secrets. After changing anything in those folders, run
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
 
-**Tim's monthly hour.** Read the healthchecks dashboard and
-`box_agent status`; check `df -h`; watch for OpenDota rate limits (both leagues
+**Tim's monthly hour.** Scroll the admin channel for a 🔴 without its 🟢, and
+read `box_agent status`; check `df -h`; watch for OpenDota rate limits (both leagues
 share one IP now; the app treats a 429 as unreachable and does not log it, so
 look for result imports that lag, not for journal lines); review
 `authorized_keys`. Quarterly, the offsite

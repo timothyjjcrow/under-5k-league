@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # Five-minute heartbeat (design §5.2; ops/selfhost/README.md). Runs as
-# ggd2l-ops from ggd2l-heartbeat.service.
+# ggd2l-ops from ggd2l-heartbeat.service. It reports two ways: healthchecks.io
+# pings when /etc/ggd2l/healthchecks.env has ping URLs (below), and Discord
+# alerts through discord-alert.mjs when /etc/ggd2l/alerts.env has a webhook.
+# Every fact it measures goes to discord-alert.mjs on stdin, which decides
+# what to post and when (it needs StateDirectory=ggd2l-alerts).
 #
 #   box         Every live league answers /api/health/ready with 200 through
 #               Cloudflare (tunnel, Caddy, app and database); / is under 85%
@@ -19,11 +23,19 @@
 # file when readable. With nothing configured the heartbeat only logs. It exits
 # 0 once it has reported, so its own unit never shows as failed.
 #
+# Discord, as discord-alert.mjs decides it (ops/selfhost/README.md "Alerts"):
+# the disk, memory, swap, any failed unit (except a backup, drill or config
+# archive whose own alert went out), a league whose site answers but whose
+# /api/health/automation is stale, and an enabled ggd2l-bot that isn't active.
+# A league the box can't reach through Cloudflare is left to the scheduler
+# Worker, which alerts from outside the box.
+#
 # Test hooks, never set on the box: GGD2L_ETC, GGD2L_MEMINFO.
 set -euo pipefail
 export LC_ALL=C
 
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 MEMINFO="${GGD2L_MEMINFO:-/proc/meminfo}"
 DISK_LIMIT_PERCENT=85
 MEM_FLOOR_KB=153600    # 150 MB
@@ -75,13 +87,31 @@ hc_ping() { # url suffix body
   fi
 }
 
-# 200 or not. Retries ride out a blip (curl retries timeouts and 5xx).
-http_ok() {
+# The HTTP status, 000 when nothing answered. Retries ride out a blip (curl
+# retries timeouts and 5xx).
+http_code() {
   local code
   code="$(curl -sS -o /dev/null -m 10 --retry 2 --retry-delay 5 --retry-connrefused \
     -A "${USER_AGENT}" -w '%{http_code}' "$1" 2> /dev/null || true)"
-  [ "${code}" = 200 ]
+  case "${code}" in [0-9][0-9][0-9]) printf '%s' "${code}" ;; *) printf '000' ;; esac
 }
+
+# The status and the JSON "status" field of a small health answer: "200
+# healthy", "503 stale", "000 unknown".
+http_status() {
+  local out code status
+  out="$(curl -sS -m 10 --retry 2 --retry-delay 5 --retry-connrefused \
+    -A "${USER_AGENT}" -w '\n%{http_code}' "$1" 2> /dev/null || true)"
+  code="${out##*$'\n'}"
+  case "${code}" in [0-9][0-9][0-9]) ;; *) code=000 ;; esac
+  # || true: under pipefail a closed pipe must not end the heartbeat.
+  status="$(printf '%s' "${out}" | sed -n 's/.*"status":"\([a-z-]*\)".*/\1/p' | head -n 1 || true)"
+  printf '%s %s' "${code}" "${status:-unknown}"
+}
+
+# What discord-alert.mjs reads: one fact per line.
+FACTS=""
+fact() { FACTS="${FACTS}$*"$'\n'; }
 
 meminfo_kb() {
   awk -v key="$1:" '$1 == key { print $2; found = 1 } END { if (!found) print -1 }' "${MEMINFO}" 2> /dev/null || echo -1
@@ -94,29 +124,35 @@ for lg in ${LEAGUES}; do
 done
 
 # --- box ---------------------------------------------------------------------
+fact "leagues ${LEAGUES}"
 problems=""
 for lg in ${LEAGUES}; do
-  http_ok "https://${lg}.ggd2l.com/api/health/ready" || problems="${problems} ready-${lg}"
+  code="$(http_code "https://${lg}.ggd2l.com/api/health/ready")"
+  fact "ready ${lg} ${code}"
+  [ "${code}" = 200 ] || problems="${problems} ready-${lg}"
 done
 
 disk="$(df -P / 2> /dev/null | awk 'NR == 2 { sub(/%$/, "", $5); print $5 }' || true)"
-case "${disk}" in '' | *[!0-9]*) disk=100 ;; esac
+case "${disk}" in '' | *[!0-9]*) disk=100; fact "disk unknown" ;; *) fact "disk ${disk}" ;; esac
 [ "${disk}" -lt "${DISK_LIMIT_PERCENT}" ] || problems="${problems} disk"
 
 mem_available="$(meminfo_kb MemAvailable)"
 swap_total="$(meminfo_kb SwapTotal)"
 swap_free="$(meminfo_kb SwapFree)"
+fact "mem-available-kb ${mem_available}"
 [ "${mem_available}" -gt "${MEM_FLOOR_KB}" ] || problems="${problems} memory"
 if [ "${swap_total}" -lt 0 ] || [ "${swap_free}" -lt 0 ]; then
   problems="${problems} swap"
   swap_used=-1
 else
   swap_used=$((swap_total - swap_free))
+  fact "swap-used-kb ${swap_used}"
   [ "${swap_used}" -lt "${SWAP_LIMIT_KB}" ] || problems="${problems} swap"
 fi
 
 failed_units="$(systemctl list-units --state=failed --plain --no-legend --no-pager 2> /dev/null | awk '{ print $1 }' | tr '\n' ' ' || true)"
 failed_units="${failed_units% }"
+for unit in ${failed_units}; do fact "failed-unit ${unit}"; done
 if [ -n "${failed_units}" ]; then problems="${problems} failed-units"; fi
 
 summary="disk=${disk}% memAvailableMb=$((mem_available / 1024)) swapUsedMb=$((swap_used / 1024))"
@@ -131,7 +167,9 @@ fi
 # --- automation --------------------------------------------------------------
 automation_down=""
 for lg in ${LEAGUES}; do
-  http_ok "https://${lg}.ggd2l.com/api/health/automation" || automation_down="${automation_down} ${lg}"
+  probe="$(http_status "https://${lg}.ggd2l.com/api/health/automation")"
+  fact "automation ${lg} ${probe}"
+  [ "${probe%% *}" = 200 ] || automation_down="${automation_down} ${lg}"
 done
 if [ -z "${automation_down}" ]; then
   hc_ping "$(conf_value HC_PING_AUTOMATION)" "" "ok ${LEAGUES}"
@@ -140,12 +178,23 @@ else
 fi
 
 # --- bot ---------------------------------------------------------------------
+bot_active=inactive
+if systemctl is-active --quiet ggd2l-bot.service; then bot_active=active; fi
+bot_enabled=disabled
+if systemctl is-enabled --quiet ggd2l-bot.service 2> /dev/null; then bot_enabled=enabled; fi
+fact "bot ${bot_enabled} ${bot_active}"
 bot_url="$(conf_value HC_PING_BOT)"
 if [ -n "${bot_url}" ]; then
-  if systemctl is-active --quiet ggd2l-bot.service; then
+  if [ "${bot_active}" = active ]; then
     hc_ping "${bot_url}" "" "ok"
   else
     log "ggd2l-bot.service is not active (no ping; the check's grace decides)"
   fi
+fi
+
+# --- Discord -------------------------------------------------------------------
+# The webhook reaches discord-alert.mjs only through the unit's environment.
+if ! printf '%s' "${FACTS}" | node "${HERE}/discord-alert.mjs" heartbeat; then
+  log "discord-alert.mjs failed"
 fi
 exit 0

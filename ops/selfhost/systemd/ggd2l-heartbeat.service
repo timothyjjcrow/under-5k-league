@@ -2,10 +2,12 @@
 # answer /api/health/ready through Cloudflare, disk, memory and swap are in
 # bounds and no unit has failed; pings "automation" when both
 # /api/health/automation answer 200; pings "bot" when ggd2l-bot is active.
-# Otherwise it pings /fail with a reason. It never calls /api/cron/automation:
-# the Cloudflare scheduler Worker is the only clock.
+# Otherwise it pings /fail with a reason. It also hands what it measured to
+# discord-alert.mjs, which posts to Discord (alerts.env) when a problem lasts
+# and when it clears, keeping its state in /var/lib/ggd2l-alerts. It never
+# calls /api/cron/automation: the Cloudflare scheduler Worker is the only clock.
 [Unit]
-Description=GGD2L heartbeat to healthchecks.io
+Description=GGD2L heartbeat to healthchecks.io and Discord
 After=network-online.target
 Wants=network-online.target
 
@@ -14,7 +16,9 @@ Type=oneshot
 User=ggd2l-ops
 Group=ggd2l-ops
 EnvironmentFile=-/etc/ggd2l/healthchecks.env
+EnvironmentFile=-/etc/ggd2l/alerts.env
 ExecStart=/usr/local/lib/ggd2l/heartbeat.sh
+StateDirectory=ggd2l-alerts
 TimeoutStartSec=4min
 MemoryMax=128M
 UMask=0077

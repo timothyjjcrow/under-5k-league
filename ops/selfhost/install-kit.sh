@@ -103,6 +103,7 @@ backup/backup-league.sh
 backup/drill-league.sh
 backup/heartbeat.sh
 backup/config-archive.sh
+backup/discord-alert.mjs
 postgres/provision-league-db.sh
 postgres/90-ggd2l.conf
 postgres/pg_hba.snippet
@@ -128,6 +129,7 @@ systemd/ggd2l-heartbeat.timer
 systemd/ggd2l-config-archive.service
 systemd/ggd2l-config-archive.timer
 systemd/ggd2l-bot.service
+systemd/ggd2l-alert@.service
 "
 for f in $REQUIRED; do
   [[ -f "${SELFHOST}/${f}" ]] || die "missing ops/selfhost/${f} in the kit clone"
@@ -144,6 +146,9 @@ done
 grep -Eq "^include_dir = 'conf.d'" "${PG_ETC}/postgresql.conf" || die "${PG_ETC}/postgresql.conf does not include conf.d"
 getent group "${ADMIN_USER}" >/dev/null || die "admin group ${ADMIN_USER} does not exist"
 getent passwd caddy >/dev/null || die "the caddy user does not exist; is the caddy package installed?"
+# ggd2l-alert@.service reads a failed run's step from the journal; systemd
+# refuses to start a unit whose SupplementaryGroups= does not exist.
+getent group systemd-journal >/dev/null || die "the systemd-journal group does not exist"
 # Refuse to install a kit whose own scripts do not parse.
 while IFS= read -r f; do bash -n "$f" || die "${f} does not parse"; done \
   < <(find "${SELFHOST}" -name '*.sh' -type f)
@@ -474,7 +479,7 @@ Check (as root):
     cloudflared-ggd2l.service ggd2l-bot.service ggd2l-heartbeat.service ggd2l-heartbeat.timer \\
     ggd2l-backup@us.service ggd2l-backup@us.timer ggd2l-backup@eu.timer \\
     ggd2l-drill@us.service ggd2l-drill@us.timer ggd2l-drill@eu.timer \\
-    ggd2l-config-archive.service ggd2l-config-archive.timer
+    ggd2l-config-archive.service ggd2l-config-archive.timer ggd2l-alert@backup-us.service
   runuser -u caddy -- env HOME=/var/lib/caddy caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
   ggd2l-agent status
 EOF

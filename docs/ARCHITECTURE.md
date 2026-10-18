@@ -1030,8 +1030,12 @@ non-placeholder `CRON_SECRET` and compares fixed-length digests in constant
 time. Query strings and browser cookies are not credential sources. The route
 returns 401 before worker work on bad auth, 202 when another owner holds the
 lease, 200 only for a healthy completed pass, and non-2xx for a degraded,
-failed, or unavailable pass; those outcomes fail the Cloudflare Cron Event so
-provider monitoring can alert while the next minute owns recovery.
+failed, or unavailable pass; those outcomes fail the Cloudflare Cron Event
+while the next minute owns recovery. After each unpaused pass the Worker also
+tells its league's SQLite Durable Object (`src/alert-state.ts`, rules in
+`src/alerts.ts`), which posts to the admin Discord channel when 3 passes in a
+row fail and again when 2 pass, through the optional `ALERT_DISCORD_WEBHOOK_URL`
+secret; that bookkeeping never changes the pass's outcome.
 
 `src/lib/automation-service.ts` wraps every scheduled and admin-requested pass
 in the same database-global 90-second owner/token lease. Work gets a 45-second
@@ -1479,8 +1483,11 @@ and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
-active scheduled lease. healthchecks.io dead-man checks alert on readiness
-through Cloudflare, the automation probe, each backup and the weekly drill.
+active scheduled lease. Alerts go to Discord: each scheduler Worker reports
+its league's failing passes from outside the box, and the box reports failed
+backups, drills and config archives, its disk, memory, swap and failed units,
+stale passes and the lobby bot (`ops/selfhost/backup/discord-alert.mjs`).
+healthchecks.io dead-man pings still go out if their URLs are configured.
 The pinned-commit promotion, release evidence, traffic freeze, rollback,
 recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.

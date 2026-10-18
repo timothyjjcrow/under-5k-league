@@ -1,3 +1,8 @@
+import { failureDetail, productionLeague, normalizeDiscordWebhookUrl } from "./alerts";
+
+// The Durable Object class must be exported from the Worker's main module.
+export { SchedulerAlertState } from "./alert-state";
+
 const AUTOMATION_PATH = "/api/cron/automation";
 const REQUEST_TIMEOUT_MS = 65_000;
 const MAX_RESPONSE_BYTES = 2_048;
@@ -10,10 +15,20 @@ const MAX_RESPONSE_BYTES = 2_048;
 // challenge`.
 const USER_AGENT = "ggd2l-automation-scheduler";
 
+/** The slice of DurableObjectNamespace this uses (the app has no Workers types). */
+export type AlertStateNamespace = {
+  idFromName(name: string): unknown;
+  get(id: unknown): { fetch(input: string, init?: RequestInit): Promise<Response> };
+};
+
 export type SchedulerEnv = {
   AUTOMATION_URL: string;
   AUTOMATION_SECRET: string;
   AUTOMATION_PAUSED?: string;
+  // Optional secrets: without the webhook the Worker never alerts.
+  ALERT_DISCORD_WEBHOOK_URL?: string;
+  ALERT_PING_USER_ID?: string;
+  ALERT_STATE?: AlertStateNamespace;
 };
 
 type AutomationResponse = {
@@ -143,13 +158,58 @@ export async function invokeAutomation(
   }
 }
 
+/**
+ * Hand one finished pass to the league's alert state (alert-state.ts), which
+ * posts to Discord when the rules in alerts.ts call for it. Best-effort: it
+ * never throws and never delays the pass's own outcome by more than one
+ * Durable Object call. Without a production route or a webhook it does
+ * nothing at all, so a Worker without the secret costs exactly what it did.
+ */
+export async function reportPass(
+  env: SchedulerEnv,
+  failure: unknown,
+  nowMs: number,
+): Promise<void> {
+  const league = productionLeague(env.AUTOMATION_URL);
+  if (!league || !normalizeDiscordWebhookUrl(env.ALERT_DISCORD_WEBHOOK_URL)) return;
+  if (!env.ALERT_STATE) {
+    console.error("ALERT_STATE_UNBOUND");
+    return;
+  }
+  try {
+    const stub = env.ALERT_STATE.get(env.ALERT_STATE.idFromName(league));
+    const response = await stub.fetch("https://alert-state/event", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(
+        failure === null
+          ? { ok: true, at: nowMs }
+          : { ok: false, at: nowMs, detail: failureDetail(failure) },
+      ),
+    });
+    if (!response.ok) console.error(`ALERT_STATE_REFUSED HTTP ${response.status}`);
+    else await response.body?.cancel().catch(() => undefined);
+  } catch {
+    console.error("ALERT_STATE_UNAVAILABLE");
+  }
+}
+
 const worker = {
   async scheduled(
     _controller: unknown,
     env: SchedulerEnv,
     _context: unknown,
   ): Promise<void> {
-    await invokeAutomation(env);
+    let failure: unknown = null;
+    try {
+      await invokeAutomation(env);
+    } catch (error) {
+      failure = error;
+    }
+    // A paused Worker made no pass, so there is nothing to count.
+    if (env.AUTOMATION_PAUSED !== "true") await reportPass(env, failure, Date.now());
+    // The cron event still fails exactly as before.
+    if (failure !== null) throw failure;
   },
 };
 

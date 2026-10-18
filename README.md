@@ -898,8 +898,9 @@ used by every CI job.
    cron**, the lease clears after each pass, and the failure streak remains
    zero. Exercise **Run maintenance now** once while idle and verify it records
    an Admin manual run; if the Worker owns the lease, the control must refuse
-   to overlap it. The healthchecks.io `automation` check alerts when the probe
-   stops answering 200. The complete pinned-commit promotion, evidence, pause,
+   to overlap it. The scheduler Worker posts to the admin Discord channel when
+   3 passes in a row fail, and the box's heartbeat when the probe stays stale
+   while the site answers. The complete pinned-commit promotion, evidence, pause,
    rollback, recovery, and secret-rotation procedure is in
    [`docs/PRODUCTION-OPERATIONS.md`](docs/PRODUCTION-OPERATIONS.md).
 
@@ -1082,14 +1083,18 @@ automation 503 that lasts longer than three minutes. The automation
 body exposes only a bounded status enum; detailed failure/backlog state remains
 in Admin. Also alert on non-2xx `/api/cron/automation` responses.
 
-On the box these are healthchecks.io dead-man checks that email Tim when they
-go quiet ([Box operations](docs/PRODUCTION-OPERATIONS.md#box-operations)): the
-heartbeat pings `box` every five minutes only while both leagues answer
-`/api/health/ready` **through Cloudflare** (so the ping proves the tunnel,
-Caddy, the app and the database together) and the box's disk, memory, swap and
-units are healthy, and pings `automation` while both automation probes answer
-200 (a 30-minute grace absorbs a sleeping worker). Each backup run and each
-drill pings its own check. A readiness check costs one `SELECT 1` against a
+On the box these alerts go to the admin Discord channel
+([Box operations](docs/PRODUCTION-OPERATIONS.md#box-operations)). The
+dead-man half runs outside the box: each league's scheduler Worker already
+reaches `/api/cron/automation` **through Cloudflare** every minute (so a pass
+proves the tunnel, Caddy, the app and the database together) and posts when 3
+in a row fail, then when 2 in a row pass. The heartbeat posts what only the
+box can see: its disk, memory, swap and failed units, an enabled lobby bot
+that is down, and an automation probe that stays stale while `/api/health/ready`
+answers (three beats, so a sleeping worker's wake never alerts). Each backup
+run, drill and config archive posts its own failure and recovery. The
+heartbeat also still pings healthchecks.io's `box` and `automation` checks,
+and each backup and drill its own, wherever their URLs are configured. A readiness check costs one `SELECT 1` against a
 local database that never sleeps, so its interval is a detection choice, not a
 cost; `/api/health/live` does no database work, and `/api/health/automation`
 reuses the cached gate while automation is sleeping. See the
