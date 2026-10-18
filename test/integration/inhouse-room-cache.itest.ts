@@ -93,6 +93,7 @@ import {
   voidLastResult,
 } from "@/lib/inhouse-service";
 import { pollInhouseState } from "@/lib/inhouse-room-state";
+import { loadAsAnotherProcessForTests } from "@/lib/inhouse-room-wait";
 import {
   publishInhouseRoomChange,
   readInhouseRoomVersion,
@@ -1020,10 +1021,15 @@ describe("room snapshot — two server instances", () => {
     );
     await publishInhouseRoomChange();
     const viewer = c.p[5].session;
-    // Instance B: a second copy of every module (its own route, snapshot and
-    // local publish count); only the database is shared.
-    vi.resetModules();
-    const bRoute = await import("@/app/api/inhouse/route");
+    // Instance B: another PROCESS, as the other slot of a release's overlap
+    // is (its own route, snapshot and publish count); only the database is
+    // shared. A second module graph loaded plainly would share this
+    // process's publish count (it lives on globalThis), and A's local fence
+    // alone would then catch the pick, with the version check deleted.
+    const bRoute = await loadAsAnotherProcessForTests(async () => {
+      vi.resetModules();
+      return import("@/app/api/inhouse/route");
+    });
     vi.mocked((await import("@/lib/auth")).getSessionUser).mockResolvedValue(viewer);
     const pollB = async () => {
       const res = await bRoute.POST(
@@ -1262,13 +1268,18 @@ describe("room snapshot — raced", () => {
         draftSeats,
       );
       await publishInhouseRoomChange();
-      // The rival publishes through a second module instance when "elsewhere":
+      // The rival publishes from another process when "elsewhere" (a second
+      // module graph with its own publish count, loadAsAnotherProcessForTests):
       // this instance's local fence never hears of it, so only the version
       // label can keep the stale fill out.
       let publish = publishInhouseRoomChange;
       if (elsewhere) {
-        vi.resetModules();
-        publish = (await import("@/lib/inhouse-room-version")).publishInhouseRoomChange;
+        publish = (
+          await loadAsAnotherProcessForTests(async () => {
+            vi.resetModules();
+            return import("@/lib/inhouse-room-version");
+          })
+        ).publishInhouseRoomChange;
       }
       const viewer = c.p[5].session;
       let fired = false;
