@@ -178,8 +178,10 @@ if [ "${OFFSITE}" = uploaded ]; then
     n="$(basename "${f}")"
     stamp="${n#config-}"
     key="config/${stamp:0:4}-${stamp:4:2}-${stamp:6:2}/${n}"
-    if ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}" "${OFFSITE_REMOTE}/${key}" ||
-      ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "${f}.sha256" "${OFFSITE_REMOTE}/${key}.sha256"; then
+    # The same flags as backup-league.sh's rclone_copy, for the same reasons
+    # (the bucket-scoped token; rclone 1.60.1's versioned HEAD that R2 refuses).
+    if ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket --s3-no-head copyto "${f}" "${OFFSITE_REMOTE}/${key}" ||
+      ! rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket --s3-no-head copyto "${f}.sha256" "${OFFSITE_REMOTE}/${key}.sha256"; then
       fail upload "could not upload ${n}"
     fi
     printf '%s\n' "${OFFSITE_REMOTE}/${key}" > "${f}.uploaded"

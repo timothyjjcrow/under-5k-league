@@ -5,8 +5,9 @@ import path from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { scheduledPasses } from "../../../scripts/release-both.mjs";
+import { renderMode } from "./caddy-modes.mjs";
 import { T0, makeBox } from "./harness.test.mjs";
-import { caddyRows, cronRequestCount, leagueLogs, parseCaddyLine, serverErrorCount } from "./logs.mjs";
+import { caddyRows, cronRequestCount, isMaintenanceResponse, leagueLogs, parseCaddyLine, serverErrorCounts } from "./logs.mjs";
 
 // The shape Caddy v2 writes with `format json` (http.log.access).
 function caddyLine(atMs, uri, status, host = "us.ggd2l.com") {
@@ -123,5 +124,59 @@ test("logs returns scheduler rows, 5xx rows as errors and journal warnings; rele
 
 test("status counts 5xx across both leagues and the apex", () => {
   const { box } = fixture();
-  assert.equal(serverErrorCount({ layout: box.layout, sinceMs: T0 - 600_000 }), 2);
+  assert.deepEqual(serverErrorCounts({ layout: box.layout, sinceMs: T0 - 600_000 }), { serverErrors: 2, maintenance503s: 0 });
+});
+
+// What Caddy logs for the maintenance page: the mode's headers ride every
+// answer, the GET page (file_server, 503) and the plain-text 503 for a write.
+function maintenanceLine(atMs, uri, { method = "GET", host = "us.ggd2l.com" } = {}) {
+  const entry = JSON.parse(caddyLine(atMs, uri, 503, host));
+  entry.request.method = method;
+  entry.resp_headers = {
+    "Retry-After": ["600"],
+    "Cache-Control": ["no-store"],
+    "X-Robots-Tag": ["noindex, nofollow"],
+    "Content-Type": [method === "GET" ? "text/html; charset=utf-8" : "text/plain; charset=utf-8"],
+    Server: ["Caddy"],
+  };
+  return JSON.stringify(entry);
+}
+
+test("the maintenance page's 503s are counted apart from real server errors", () => {
+  const box = makeBox();
+  const dir = box.layout.caddyLogs;
+  writeFileSync(path.join(dir, "us.access.json"), `${[
+    maintenanceLine(T0 + 1_000, "/"),
+    maintenanceLine(T0 + 2_000, "/api/inhouse", { method: "POST" }),
+    maintenanceLine(T0 + 3_000, "/api/cron/automation"),
+    // A slot Caddy cannot reach, and the app's own 503 (not ready): real.
+    caddyLine(T0 + 4_000, "/schedule", 502),
+    caddyLine(T0 + 5_000, "/api/health/ready", 503),
+  ].join("\n")}\n`);
+  writeFileSync(path.join(dir, "eu.access.json"), `${maintenanceLine(T0 + 6_000, "/players", { host: "eu.ggd2l.com" })}\n`);
+  for (const name of ["us.access.json", "eu.access.json"]) utimesSync(path.join(dir, name), (T0 + 10_000) / 1000, (T0 + 10_000) / 1000);
+  assert.deepEqual(serverErrorCounts({ layout: box.layout, sinceMs: T0 }), { serverErrors: 2, maintenance503s: 4 });
+  // The release gate's rows are unchanged: every 5xx is still an error row.
+  assert.equal(caddyRows({ layout: box.layout, lg: "us", sinceMs: T0 }).filter((row) => row.level === "error").length, 5);
+});
+
+test("only a 503 carrying both maintenance headers is the maintenance page", () => {
+  const page = JSON.parse(maintenanceLine(T0, "/"));
+  assert.equal(isMaintenanceResponse(page), true);
+  // Header names in any case, as long as both values match.
+  assert.equal(isMaintenanceResponse({ ...page, resp_headers: { "retry-after": ["600"], "x-robots-tag": ["noindex, nofollow"] } }), true);
+  assert.equal(isMaintenanceResponse({ ...page, status: 502 }), false);
+  assert.equal(isMaintenanceResponse({ ...page, resp_headers: { "Retry-After": ["600"] } }), false);
+  assert.equal(isMaintenanceResponse({ ...page, resp_headers: { "X-Robots-Tag": ["noindex, nofollow"], "Retry-After": ["30"] } }), false);
+  assert.equal(isMaintenanceResponse({ ...page, resp_headers: undefined }), false);
+  assert.equal(isMaintenanceResponse(null), false);
+});
+
+test("the maintenance signature is what the agent's maintenance and allowlist modes send", () => {
+  // If the mode files stop sending these, status would count the page as errors.
+  for (const mode of ["maintenance", "allowlist"]) {
+    const text = renderMode(mode, { port: 3001 });
+    assert.match(text, /^\s*header Retry-After 600$/m, mode);
+    assert.match(text, /^\s*header X-Robots-Tag "noindex, nofollow"$/m, mode);
+  }
 });

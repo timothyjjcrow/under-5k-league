@@ -22,7 +22,7 @@ const KNOWN = {
     "ExecStartPre", "ExecStart", "KillSignal", "TimeoutStopSec", "TimeoutStartSec",
     "SuccessExitStatus", "Restart", "RestartSec", "MemoryHigh", "MemoryMax", "UMask",
     "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "ReadWritePaths",
-    "Nice", "IOSchedulingClass",
+    "Nice", "IOSchedulingClass", "OOMScoreAdjust",
   ]),
   Timer: new Set(["OnCalendar", "Persistent"]),
   Install: new Set(["WantedBy"]),
@@ -48,6 +48,7 @@ const VALUES = {
   KillSignal: /^SIGTERM$/,
   SuccessExitStatus: /^\d+$/,
   WantedBy: /^(multi-user|timers)\.target$/,
+  OOMScoreAdjust: /^-?\d{1,4}$/,
 };
 
 /** Parse a unit file into Map<section, [key, value][]>, refusing anything systemd would warn about. */
@@ -99,7 +100,7 @@ function resolve(value, instanceName) {
 
 const UNIT_FILES = readdirSync(DIR).filter((f) => /\.(service|timer)$/.test(f)).sort();
 const DROP_INS = readdirSync(DIR).filter((f) => f.endsWith(".d") && statSync(path.join(DIR, f)).isDirectory())
-  .flatMap((d) => readdirSync(path.join(DIR, d)).map((f) => `${d}/${f}`));
+  .flatMap((d) => readdirSync(path.join(DIR, d)).map((f) => `${d}/${f}`)).sort();
 const units = new Map(UNIT_FILES.map((f) => [f, parseUnit(read(`systemd/${f}`), f)]));
 const installKit = read("install-kit.sh");
 
@@ -118,7 +119,7 @@ test("the kit ships exactly the units the design names", () => {
     "ggd2l-heartbeat.timer",
     "ggd2l-us@.service",
   ]);
-  assert.deepEqual(DROP_INS, ["ggd2l-drill@eu.timer.d/10-schedule.conf"]);
+  assert.deepEqual(DROP_INS, ["caddy.service.d/10-ggd2l.conf", "ggd2l-drill@eu.timer.d/10-schedule.conf"]);
   // install-kit.sh refuses a kit clone that lacks any of them.
   for (const file of [...UNIT_FILES, ...DROP_INS])
     assert.ok(installKit.includes(`\nsystemd/${file}\n`), `install-kit.sh REQUIRED lists systemd/${file}`);
@@ -143,7 +144,10 @@ test("every unit parses, describes itself, and runs an absolute command", () => 
       assert.ok(one(unit, "Service", "MemoryMax"), name);
     }
   }
-  parseUnit(read(`systemd/${DROP_INS[0]}`), DROP_INS[0]);
+  for (const dropIn of DROP_INS) {
+    assert.match(dropIn, /^[\w@.-]+\.(service|timer)\.d\/[\w-]+\.conf$/, `${dropIn}: systemd reads only <unit>.d/*.conf`);
+    parseUnit(read(`systemd/${dropIn}`), dropIn);
+  }
 });
 
 test("the two league units are byte-identical copies of one template", () => {
@@ -332,6 +336,31 @@ test("the tunnel and the bot run as the design says (§1.5, §7)", () => {
   assert.equal(one(bot, "Service", "RestartSec"), "30");
   assert.equal(one(bot, "Service", "MemoryMax"), "300M");
   assert.deepEqual(all(bot, "Service", "ReadWritePaths"), ["/var/lib/ggd2l-bot"]);
+});
+
+test("Caddy, the packaged unit both leagues go through, restarts on failure and outlives the slots under memory pressure", () => {
+  // The caddy package's unit has no Restart=: without this drop-in a Caddy
+  // that exits leaves both sites down while the tunnel and the slots recover.
+  const dropIn = parseUnit(read("systemd/caddy.service.d/10-ggd2l.conf"), "caddy drop-in");
+  assert.deepEqual([...dropIn.keys()], ["Unit", "Service"]);
+  assert.deepEqual(dropIn.get("Unit"), [["StartLimitIntervalSec", "0"]], "never gives up, like the tunnel");
+  // Only the restart policy and the OOM priority: the package keeps its own
+  // ExecStart, user, sandbox and reload.
+  assert.deepEqual(dropIn.get("Service"), [["Restart", "on-failure"], ["RestartSec", "2"], ["OOMScoreAdjust", "-500"]]);
+  // Kill order under memory pressure: a build (600) first, then a slot (0, no
+  // setting), then Caddy, and PostgreSQL's postmaster (-900, its package) last.
+  const caddy = Number(one(dropIn, "Service", "OOMScoreAdjust"));
+  const build = Number(/"OOMScoreAdjust=(-?\d+)"/.exec(read("agent/build.mjs"))?.[1]);
+  for (const name of ["ggd2l-us@.service", "ggd2l-eu@.service"])
+    assert.deepEqual(all(units.get(name), "Service", "OOMScoreAdjust"), [], `${name} stays at the default 0`);
+  assert.ok(-900 < caddy && caddy < 0 && 0 < build, `expected -900 < caddy ${caddy} < 0 < build ${build}`);
+  // install-kit.sh installs every <unit>.d/*.conf under the same folder name
+  // in /etc/systemd/system, then reloads systemd so Restart= takes effect.
+  const code = installKit.replace(/^\s*#.*$/gm, "");
+  const loop = code.indexOf('for dropin in "${SELFHOST}"/systemd/*.d; do');
+  assert.ok(loop > 0, "install-kit.sh walks every drop-in folder");
+  assert.ok(code.includes('install_unit_file "$src" "${UNIT_DIR}/$(basename "$dropin")/$(basename "$src")"'));
+  assert.ok(code.indexOf("\nsystemctl daemon-reload\n", loop) > loop, "a daemon-reload follows the drop-ins");
 });
 
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {

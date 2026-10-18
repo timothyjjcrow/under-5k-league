@@ -1480,8 +1480,9 @@ and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
-active scheduled lease. healthchecks.io dead-man checks alert on readiness
-through Cloudflare, the automation probe, each backup and the weekly drill.
+active scheduled lease. healthchecks.io dead-man checks are to alert on
+readiness through Cloudflare, the automation probe, each backup and the weekly
+drill; they are not configured yet (PRODUCTION-OPERATIONS, Box operations).
 The pinned-commit promotion, release evidence, traffic freeze, rollback,
 recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.
