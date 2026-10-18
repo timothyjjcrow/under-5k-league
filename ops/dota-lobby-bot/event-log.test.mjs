@@ -35,6 +35,18 @@ test("fields the log doesn't name are dropped, and anything but a plain token is
   assert.equal(formatEvent("bad event\nname", {}, at), "2026-10-18T02:10:43.277Z [dota-bot] event");
 });
 
+test("the seat help's and chat's events carry counts, reasons and the account's limited flag only", () => {
+  assert.equal(formatEvent("account", { limited: true }, at), "2026-10-18T02:10:43.277Z [dota-bot] account limited=true");
+  assert.equal(
+    formatEvent("seat-kick", { key: "inhouse:42:1", reason: "stranger", count: 2, n: 0, id: "76561198000000099" }, at),
+    "2026-10-18T02:10:43.277Z [dota-bot] seat-kick key=inhouse:42:1 reason=stranger count=2 n=0",
+  );
+  assert.equal(
+    formatEvent("chat-line", { key: "inhouse:42:1", reason: "side", text: "Sam: you're on Radiant.", channelId: "9223372036854775907" }, at),
+    "2026-10-18T02:10:43.277Z [dota-bot] chat-line key=inhouse:42:1 reason=side",
+  );
+});
+
 test("a logger whose write throws never throws into the bot", () => {
   const log = eventLog({ write: () => { throw new Error("EPIPE"); }, clock: () => at });
   assert.doesNotThrow(() => log("resync", { reason: "release" }));

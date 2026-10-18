@@ -110,6 +110,12 @@ bot as leader. It skips players already in the lobby, anyone invited in the
 last 30 seconds, and anyone invited five times in this job. The bot also
 invites the roster once by itself, when the lobby is first ready.
 
+An in-house `create` spec may also carry the players' display names for the
+bot's lobby chat ([Seat help](../../docs/DOTA-LOBBY-BOT.md#seat-help)): `names`
+(Steam64 ID to name) or `radiantNames` and `direNames` (one per ID of that
+side, in order). They pass through the relay like every other spec field, and
+seat help adds no reply field, so it needs no relay deploy.
+
 The bot connects to `GET /connect` with a WebSocket upgrade, an
 `Authorization: Bearer <DOTA_RELAY_WORKER_SECRET>` header and an
 `X-Bot-Instance` header containing a random UUID. The UUID stays constant across

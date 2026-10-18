@@ -18,6 +18,7 @@ const FIELDS = new Set([
   "gameState",
   "invited",
   "key",
+  "limited",
   "lobby",
   "lobbyId",
   "lobbyState",
