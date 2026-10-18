@@ -482,7 +482,10 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   in `inhouse-room-due.ts`: a new key of room version plus present ids and
   away count, `BOARD_RECHECK_MS` (60s) since the last check, or a `throttled`
   or `failed` outcome, which stay due so the board's retry-on-difference
-  holds). `syncInhouseBoard` returns its outcome for that memo (`off`,
+  holds). The room long-polls, so "the next poll" is a woken one: a
+  `throttled` memo wakes the signed-in held requests when the throttle ends
+  (`boardRetryAtMs`, `inhouseRoomWakeAt`), and a `failed` one waits for a
+  hold's end inside its own 20s-and-up back-off. `syncInhouseBoard` returns its outcome for that memo (`off`,
   `no-webhook`, `cleared`, `unchanged`, `throttled`, `edited`, `failed`,
   `gone`), and `edited` expires the automation gate. Signed-out polls never
   check. Never use `/api/sync` as a heartbeat.
@@ -584,3 +587,33 @@ additions.
   true.
 - **No inhouse headcount.** Discord's own event shows who is interested, and
   the site never hears those clicks, so a count on the card would go stale.
+
+## Ops alerts (outside the app)
+
+Outages, failed backups and a full disk post to the admin channel through one
+more webhook that the site never holds: each scheduler Worker's
+`ALERT_DISCORD_WEBHOOK_URL` secret and the box's `/etc/ggd2l/alerts.env`.
+The code is `ops/cloudflare-automation-worker/src/alerts.ts` (a league failing
+3 passes in a row, counted in a Durable Object) and
+`ops/selfhost/backup/discord-alert.mjs` (the box's heartbeat and its backup,
+drill and config-archive units); when each posts is in the box runbook's
+Alerts (`ops/selfhost/README.md`) and [DECISIONS](../DECISIONS.md#hosting).
+Neither bundles app code, so each keeps copies of `normalizeDiscordWebhookUrl`
+and `escapeDiscordText`, which `src/lib/ops-alerts-parity.test.ts` pins to the
+originals and the two rule sets to each other. The area's rules hold there too:
+
+- **Only production posts.** The Worker alerts only for its league's canonical
+  route; the box only with `ALERT_DEPLOY_ENV=production`, its version of
+  `discordMutationsAllowed`.
+- **The webhook is a credential.** It lives only in Worker secrets and a
+  root-only file read through `EnvironmentFile=`, never in argv, a log or a
+  message; logs say `ALERT_POST_FAILED` or `Discord answered HTTP 503`.
+- **Ping only the person who must act.** `allowed_mentions: { parse: [] }` on
+  every post, plus `users: [ALERT_PING_USER_ID]` on failures when that one id
+  is set; recoveries and hellos ping nobody.
+- **Only fixed text reaches Discord.** A failed pass is named by its kind
+  (`failureDetail`), a failed unit by the step token its script logged, and
+  everything dynamic is escaped or held to a strict pattern (unit names in
+  code spans).
+- **Unknown is never bad.** A measurement the heartbeat couldn't take, or a
+  league the box can't reach (the Worker's to report), changes no alert.

@@ -13,6 +13,7 @@ import {
   boardCheckKey,
   boardMemoAfterCheck,
   boardMemoAfterLostClaim,
+  boardRetryAtMs,
   inhouseRoomDue,
   roomHeartbeatAction,
 } from "./inhouse-room-due";
@@ -33,9 +34,16 @@ import {
 } from "./inhouse-room-memo";
 import {
   inhouseRoomLocalGeneration,
+  inhouseRoomVersionToken,
   publishInhouseRoomChange,
   readInhouseRoomVersion,
 } from "./inhouse-room-version";
+import {
+  waitForInhouseRoomChange,
+  type InhouseHoldRequest,
+  type InhouseRoomWake,
+} from "./inhouse-room-wait";
+import { inhouseRoomWakeAt } from "./inhouse-room-wake";
 import { raceHook } from "./race-hook";
 import { claimThrottle, SETTING_KEYS } from "./settings";
 
@@ -60,6 +68,12 @@ import { claimThrottle, SETTING_KEYS } from "./settings";
 //   this instance last checked, under the same claim.
 //
 // Anonymous polls only read: no heartbeat, claim, board, publish or resolver.
+//
+// THE LONG-POLL (holdInhouseRoomPoll, below): a request whose `since` is the
+// version the route just read is held first, with no database connection,
+// until the version moves, the room's next clock, its hold, or its client
+// goes away; then the route reads the session and version again and polls
+// exactly as above. The hold reads nothing but the snapshot it would serve.
 
 /** This instance's room snapshot. */
 const roomCache = createRoomCache<InhouseRoomRows>({
@@ -104,6 +118,62 @@ export type InhousePollResult = {
    */
   invalidateGate: boolean;
 };
+
+/** The version as a held request compares it (inhouseRoomVersionToken). */
+async function readInhouseRoomVersionToken(): Promise<string> {
+  return inhouseRoomVersionToken(await readInhouseRoomVersion());
+}
+
+/**
+ * Hold a state request whose client already shows `version` (the route has
+ * just read it and found it equal to `hold.since`). Ends at the earliest of:
+ * the version moving (a publish in this process, or the watch's database
+ * read), the room's next clock (inhouseRoomWakeAt, from this instance's
+ * snapshot of the rows: a cache hit while the version stands), the hold
+ * asked for (at most LONG_POLL_HOLD_MS), the process stopping, or `signal`.
+ * A clock that ran out after the reply the client shows (`hold.sinceNowMs`)
+ * answers at once: that reply is stale already. `mark` is
+ * inhouseRoomHoldMark() read before that version. Reads nothing else
+ * (this instance's board memo is in memory) and writes nothing: the route
+ * polls as usual afterwards, unless the client went away ("aborted").
+ */
+export async function holdInhouseRoomPoll(o: {
+  viewer: SessionUser | null;
+  version: string | null;
+  hold: InhouseHoldRequest;
+  mark: number;
+  signal?: AbortSignal;
+}): Promise<InhouseRoomWake> {
+  if (o.signal?.aborted) return "aborted";
+  const snap = await roomCache.get(o.version);
+  const nowMs = Date.now();
+  const clockAt = inhouseRoomWakeAt(snap.rows, nowMs, {
+    maintains: o.viewer !== null,
+    fromMs: o.hold.sinceNowMs,
+    viewerId: o.viewer?.id ?? null,
+    // A board edit this instance found throttled is retried when the
+    // throttle ends, as the ladder's next poll would have; only a signed-in
+    // poll checks the board, and only where Discord may be changed.
+    boardRetryAtMs:
+      o.viewer !== null && discordMutationsAllowed()
+        ? boardRetryAtMs(readRoomBoardMemo())
+        : null,
+  });
+  // A clock ran out after the reply the client shows: answer now.
+  if (clockAt !== null && clockAt <= nowMs) return "deadline";
+  const holdMs = Math.min(
+    INHOUSE.LONG_POLL_HOLD_MS,
+    Math.max(0, o.hold.holdMs),
+  );
+  return waitForInhouseRoomChange({
+    since: o.hold.since,
+    mark: o.mark,
+    untilMs: Math.min(nowMs + holdMs, clockAt ?? Infinity),
+    signal: o.signal,
+    readToken: readInhouseRoomVersionToken,
+    nowMs,
+  });
+}
 
 /**
  * One room poll for `viewer` (null when signed out). `version` is the room

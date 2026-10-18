@@ -8,5 +8,9 @@
     "AUTOMATION_URL": "https://eu.ggd2l.com/api/cron/automation"
   },
   "triggers": { "crons": ["* * * * *"] },
-  "secrets": { "required": ["AUTOMATION_SECRET"] }
+  "secrets": { "required": ["AUTOMATION_SECRET"] },
+  "durable_objects": {
+    "bindings": [{ "name": "ALERT_STATE", "class_name": "SchedulerAlertState" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["SchedulerAlertState"] }]
 }

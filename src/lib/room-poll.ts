@@ -1,4 +1,10 @@
-import { DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
+import {
+  DRAFT_ROOM,
+  INHOUSE,
+  INHOUSE_STATUS,
+  ROOM_POLL_FAIL_THRESHOLD,
+  ROOM_POLL_TIMEOUT_MS,
+} from "./constants";
 import { inhouseReadyInPlay } from "./inhouse";
 
 /**
@@ -140,43 +146,30 @@ export function roomPollCadence(
   return { skip: false, delayMs: active ? rates.activeMs : rates.idleMs };
 }
 
+/** What the inhouse room knows about the game whose phase sets its pace. */
+export type InhouseRoomPhaseInput = {
+  /** Undefined preserves the cold-start rate before the first snapshot. */
+  lobbyStatus?: string | null;
+  /** `lobby.scanOpensAt` from the last snapshot. */
+  scanOpensAt?: number | null;
+  /** The server clock of the last snapshot. */
+  serverNow?: number | null;
+  /**
+   * The viewer plays in the game `lobbyStatus` describes (`me.inLobby`).
+   * False for a queued player shown another game. Defaults to true, so a
+   * game the caller can't attribute polls as the player's own.
+   */
+  inLobby?: boolean;
+};
+
 /**
- * Membership controls background updates; the phase controls foreground speed.
- * Only ready checks, captain votes and draft picks need the fast rate. Game
- * setup (READY) is timed only in that it ends: it polls at `POLL_SETUP_MS`
- * (or a slower `activeMs`), and ends when a READY lobby is plausibly being
- * played (inhouseReadyInPlay): Start is optional, so a game hosted by hand
- * stays READY for its whole length and must poll at the game rate like
- * IN_PROGRESS.
- *
- * Every other state is a long wait, so it polls slowly: each poll is a
- * function call on the Vercel Hobby plan both leagues share (constants.ts).
- * Whose game `lobbyStatus` describes decides which wait it is. A player in
- * their own game waits on nothing timed (`POLL_GAME_MS`, hidden or not). A
- * queued player sees someone else's game (`pollingLobby`) but is waiting for
- * their own lobby to form: `POLL_QUEUE_MS`, or the fast rate while that game
- * drafts, and `POLL_QUEUE_KEEPALIVE_MS` hidden, which only the accept window
- * binds. A spectator idles at `POLL_IDLE_MS`.
+ * The phase as both inhouse bindings read it. `timedPhase`: a ready check,
+ * vote, draft or game setup (READY until it is plausibly being played,
+ * inhouseReadyInPlay), or nothing known yet. `clocked`: one of the first
+ * three, where a deadline runs. `playing`: the viewer's own game is being
+ * played. `ownLobby`: the game is the viewer's.
  */
-export function inhousePollCadence(
-  o: Omit<RoomPollInput, "active"> & {
-    activeMs: number;
-    idleMs?: number;
-    /** Undefined preserves the cold-start rate before the first snapshot. */
-    lobbyStatus?: string | null;
-    /** `lobby.scanOpensAt` from the last snapshot. */
-    scanOpensAt?: number | null;
-    /** The server clock of the last snapshot. */
-    serverNow?: number | null;
-    /**
-     * The viewer plays in the game `lobbyStatus` describes (`me.inLobby`).
-     * False for a queued player shown another game. Defaults to true, so a
-     * game the caller can't attribute polls as the player's own.
-     */
-    inLobby?: boolean;
-  },
-): RoomPollCadence {
-  const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
+function inhouseRoomPhase(o: InhouseRoomPhaseInput) {
   const readyInPlay = inhouseReadyInPlay(
     o.lobbyStatus,
     o.scanOpensAt,
@@ -195,8 +188,40 @@ export function inhousePollCadence(
     !timedPhase &&
     (readyInPlay || o.lobbyStatus === INHOUSE_STATUS.IN_PROGRESS);
   const ownLobby = o.lobbyStatus != null && o.inLobby !== false;
-  const playing = inGame && ownLobby;
   const setup = timedPhase && o.lobbyStatus === INHOUSE_STATUS.READY;
+  const clocked = timedPhase && !setup && o.lobbyStatus != null;
+  return { timedPhase, setup, clocked, playing: inGame && ownLobby, ownLobby };
+}
+
+/**
+ * The FALLBACK ladder (the long-poll is below): what a request that can't be
+ * held waits before the next one. Membership controls background updates;
+ * the phase controls foreground speed. Only ready checks, captain votes and
+ * draft picks need the fast rate. Game setup (READY) is timed only in that it
+ * ends: it polls at `POLL_SETUP_MS` (or a slower `activeMs`), and ends when a
+ * READY lobby is plausibly being played (inhouseReadyInPlay): Start is
+ * optional, so a game hosted by hand stays READY for its whole length and
+ * must poll at the game rate like IN_PROGRESS.
+ *
+ * Every other state is a long wait, so it polls slower: every request is CPU
+ * on the one box both leagues share (constants.ts). Whose game `lobbyStatus`
+ * describes decides which wait it is. A player in their own game waits on
+ * nothing timed (`POLL_GAME_MS`; `POLL_GAME_KEEPALIVE_MS` hidden, while they
+ * are in the Dota client). A queued player sees someone else's game
+ * (`pollingLobby`) but is waiting for their own lobby to form:
+ * `POLL_QUEUE_MS`, or the fast rate while that game drafts, and
+ * `POLL_QUEUE_KEEPALIVE_MS` hidden, which only the accept window binds. A
+ * spectator idles at `POLL_IDLE_MS`.
+ */
+export function inhousePollCadence(
+  o: Omit<RoomPollInput, "active"> &
+    InhouseRoomPhaseInput & {
+      activeMs: number;
+      idleMs?: number;
+    },
+): RoomPollCadence {
+  const idleMs = o.idleMs ?? INHOUSE.POLL_IDLE_MS;
+  const { timedPhase, setup, playing, ownLobby } = inhouseRoomPhase(o);
   const activeMs = timedPhase
     ? setup
       ? Math.max(o.activeMs, INHOUSE.POLL_SETUP_MS)
@@ -208,20 +233,181 @@ export function inhousePollCadence(
     o.lobbyStatus === undefined || (timedPhase && ownLobby)
       ? INHOUSE.POLL_KEEPALIVE_MS
       : playing
-        ? INHOUSE.POLL_GAME_MS
+        ? INHOUSE.POLL_GAME_KEEPALIVE_MS
         : INHOUSE.POLL_QUEUE_KEEPALIVE_MS;
   return roomPollCadence(o, {
     activeMs,
     idleMs,
     keepaliveMs,
-    // The inhouse route has no separate back-off rate. These two keep the
-    // 10s they had when the idle rate was 10s, so the slower spectator rate
-    // never slows a recovery.
+    // The inhouse route has no separate back-off rate. A 429's back-off and
+    // a disconnected room's first backed-off retry are never faster than
+    // idling.
     rateLimitedMs: INHOUSE.POLL_RECOVERY_MS,
     retryFloorMs: INHOUSE.POLL_RECOVERY_MS,
     retryMs: o.activeMs,
     maxRetryMs: 30_000,
   });
+}
+
+/** A state request the server may hold: what it sends, and its deadline. */
+export type InhouseLongPoll = {
+  /** The `roomVersion` of the last poll reply the room applied. */
+  since: string;
+  /**
+   * The server clock of the reply the room shows (`serverNow`), or null.
+   * The server answers at once when one of the room's clocks ran out after
+   * it (parseInhouseHold, inhouseRoomWakeAt's `fromMs`), so a reply from
+   * before a deadline or a result window never sits out a hold.
+   */
+  sinceNow: number | null;
+  /** How long the server may hold it (it caps this at LONG_POLL_HOLD_MS). */
+  holdMs: number;
+  /** The request's own deadline: the hold plus ROOM_POLL_TIMEOUT_MS. */
+  timeoutMs: number;
+};
+
+/**
+ * Whether the room's next state request is a LONG-POLL, and for how long.
+ * The server holds a request that sends back the version of the reply the
+ * room shows until the room changes, so a change reaches every open tab in
+ * well under a second, at about one request per change.
+ *
+ * Null, and the request answers at once on the fallback ladder, when:
+ * - the last applied reply carried no `version` (the first request, or an
+ *   old slot during a release, which doesn't know `since`): never hot-loop
+ *   on a server that answers at once;
+ * - something waits on an answer now (`urgent`: a resync after going
+ *   offline, an action in flight or awaiting reconciliation, whose controls
+ *   stay locked until a reply lands, or a refocus after a long hide,
+ *   inhouseRefocusResync);
+ * - the last request failed: a retry must be quick to diagnose.
+ *
+ * A member in their own game's clocked stages asks for the shorter
+ * LONG_POLL_TIMED_HOLD_MS, so a held request that silently died there is
+ * given up on, and the fast retries begin, 15s sooner; everyone else asks
+ * for LONG_POLL_HOLD_MS. The cost of holding: usePollHealth says
+ * "Connection lost" only at ROOM_POLL_FAIL_THRESHOLD failures in a row, and
+ * the first held one takes its hold plus ROOM_POLL_TIMEOUT_MS, so a dead
+ * connection shows after about 43s in a clocked stage and 58s elsewhere,
+ * against about 34-43s on the ladder (room-poll.test.ts states it, and
+ * docs/DECISIONS.md's 2026-10-18 row accepts it).
+ */
+export function inhouseLongPoll(
+  o: InhouseRoomPhaseInput & {
+    version: string | null | undefined;
+    urgent: boolean;
+    failureCount?: number;
+  },
+): InhouseLongPoll | null {
+  if (typeof o.version !== "string" || o.version.length === 0) return null;
+  if (o.urgent || (o.failureCount ?? 0) > 0) return null;
+  const { clocked, ownLobby } = inhouseRoomPhase(o);
+  const holdMs =
+    clocked && ownLobby
+      ? INHOUSE.LONG_POLL_TIMED_HOLD_MS
+      : INHOUSE.LONG_POLL_HOLD_MS;
+  return {
+    since: o.version,
+    sinceNow:
+      typeof o.serverNow === "number" && Number.isFinite(o.serverNow)
+        ? o.serverNow
+        : null,
+    holdMs,
+    timeoutMs: holdMs + ROOM_POLL_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Long-poll replies in a row that came back UNHELD: the room had already
+ * moved past the `since` the request sent, so the server answered at once
+ * (the reply's `held` is false). A reply that was held resets it to 0. A
+ * request that sent no `since` (`askedHold` false: the first, a retry, an
+ * urgent one), or a reply that doesn't say (an old slot), leaves it as it
+ * was: neither is news about how fast the room moves.
+ */
+export function inhouseUnheldStreak(
+  prev: number,
+  o: { askedHold: boolean; held: unknown },
+): number {
+  if (!o.askedHold || typeof o.held !== "boolean") return prev;
+  return o.held ? 0 : prev + 1;
+}
+
+/**
+ * The shortest wait between the starts of two long-poll requests. Normally
+ * LONG_POLL_MIN_GAP_MS (1s). Every publish wakes every held tab, refused
+ * and no-op mutations included, so one writer that keeps the version moving
+ * (any signed-in account pressing Leave while not queued, up to the route's
+ * 300 mutations a minute) would hold every visible tab at one request a
+ * second, where the ladder costs one per 3-10s. Churn faster than the 1s gap
+ * comes back unheld: from the second unheld reply in a row (`unheldStreak`,
+ * inhouseUnheldStreak) the gap doubles per reply, up to the ladder rate for
+ * the current phase (inhousePollCadence); a held reply puts it back to 1s.
+ * A writer paced just slower than the gap (a no-op every 1-2s) gets every
+ * request held and woken, so it still holds tabs at about one request a
+ * second, bounded only by LONG_POLL_MIN_GAP_MS: accepted, since one client
+ * can cost as much by polling directly within the per-IP state limit. A member in their own game's clocked stage
+ * (ready check, vote, draft) keeps 1s: their changes come seconds apart and
+ * each one is a deadline.
+ */
+export function inhouseLongPollGapMs(
+  o: Parameters<typeof inhousePollCadence>[0] & { unheldStreak?: number },
+): number {
+  const min = INHOUSE.LONG_POLL_MIN_GAP_MS;
+  const streak = Math.max(0, Math.floor(o.unheldStreak ?? 0));
+  if (streak < 2) return min;
+  const { clocked, ownLobby } = inhouseRoomPhase(o);
+  if (clocked && ownLobby) return min;
+  const ladder = inhousePollCadence(o).delayMs;
+  const doubled = min * 2 ** Math.min(10, streak - 1);
+  return Math.max(min, Math.min(ladder, doubled));
+}
+
+/**
+ * How long the room waits after a state request settles before the next
+ * one. A request that can long-poll next (`longPoll`: inhouseLongPoll was
+ * not null) goes straight away, 0, which the room issues from the reply's
+ * own continuation rather than a timer (hidden tabs clamp timers): no more
+ * often than the long-poll gap (inhouseLongPollGapMs: LONG_POLL_MIN_GAP_MS,
+ * longer while replies keep coming back unheld) after the previous one
+ * started (`startedAgoMs`), so a version that keeps moving can't hot-loop.
+ * Every other case, and every request that didn't land, a 429, offline and
+ * a hidden tab with nothing at stake, waits on the ladder
+ * (inhousePollCadence).
+ */
+export function inhousePollDelay(
+  o: Parameters<typeof inhousePollCadence>[0] & {
+    longPoll: boolean;
+    startedAgoMs: number;
+    /** inhouseUnheldStreak's count; absent, 0. */
+    unheldStreak?: number;
+  },
+): number {
+  const ladder = inhousePollCadence(o).delayMs;
+  if (
+    !o.longPoll ||
+    o.rateLimited ||
+    o.reached === false ||
+    o.offline ||
+    (o.hidden && !o.hasStake)
+  ) {
+    return ladder;
+  }
+  return Math.max(0, inhouseLongPollGapMs(o) - Math.max(0, o.startedAgoMs));
+}
+
+/**
+ * Whether a tab coming back into view must ask afresh, unheld: after a hide
+ * of ROOM_POLL_TIMEOUT_MS or more (a sleep, a phone in a pocket), a held
+ * request may have died with its connection and given no sign (no `offline`
+ * event, no reset), and its own deadline is up to its hold plus
+ * ROOM_POLL_TIMEOUT_MS away (35s). The room releases it and sends one
+ * unheld request, which restores the ladder's 10s bound on a refocus; a
+ * quick alt-tab out of Dota costs nothing. `hiddenForMs` null: the tab
+ * wasn't seen hidden.
+ */
+export function inhouseRefocusResync(hiddenForMs: number | null): boolean {
+  return hiddenForMs !== null && hiddenForMs >= ROOM_POLL_TIMEOUT_MS;
 }
 
 /**

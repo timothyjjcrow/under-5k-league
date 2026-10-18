@@ -32,7 +32,13 @@ import {
   type InhouseAlertSnapshot,
   type InhouseFocusSnapshot,
 } from "@/lib/inhouse";
-import { inhousePollCadence } from "@/lib/room-poll";
+import {
+  inhouseLongPoll,
+  inhousePollCadence,
+  inhousePollDelay,
+  inhouseRefocusResync,
+  inhouseUnheldStreak,
+} from "@/lib/room-poll";
 import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
 import { RoomStatusLine } from "@/components/room-status-line";
 import { nextClockOffset } from "@/lib/countdown";
@@ -72,6 +78,21 @@ import { AdminQueueRemoval } from "@/components/inhouse/admin-queue-removal";
  */
 function clockLobby(s: InhouseState | null) {
   return s ? pollingLobby(s.lobby, s.otherLobbies, s.now) : null;
+}
+
+/**
+ * `controller`'s signal, which also aborts at `timeoutMs`
+ * (AbortSignal.timeout): the poll's deadline, plus a release the room can
+ * pull. AbortSignal.any would do it, but older Safari lacks it.
+ */
+function withDeadline(controller: AbortController, timeoutMs: number) {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  deadline.addEventListener(
+    "abort",
+    () => controller.abort(deadline.reason),
+    { once: true },
+  );
+  return controller.signal;
 }
 
 export function InhouseRoom({
@@ -214,6 +235,9 @@ export function InhouseRoom({
   // Keep controls locked until a state poll that STARTED after that action is
   // successfully applied; an older in-flight payload is not reconciliation.
   const actionReconcileSeqRef = useRef<number | null>(null);
+  // Actions whose response hasn't settled: no state request is held meanwhile
+  // (inhouseLongPoll's `urgent`), so the poll that answers for one is prompt.
+  const actionsInFlightRef = useRef(0);
   // Only a poll that starts after the latest offline/online transition may
   // make controls live again. Transport-held pre-outage responses are stale.
   const connectivityEpochRef = useRef(0);
@@ -237,15 +261,24 @@ export function InhouseRoom({
     return true;
   }, []);
 
-  // Adaptive, visibility-aware poll loop (self-scheduling setTimeout, not a
-  // fixed setInterval): FAST for timed ready/vote/draft stages, slower while
-  // waiting or playing, and IDLE-slow when just spectating. While the tab is HIDDEN: a viewer with a
-  // stake (queued or in a lobby) keeps a slow KEEPALIVE so their presence
-  // heartbeat holds the spot and a forming ready check's chime/title still
-  // reaches them; a hidden spectator doesn't fetch at all (authenticated room
-  // traffic and the leased worker advance lobbies meanwhile). Either way it
-  // re-syncs the instant it's refocused. Mirrors <ResultSyncPing>; kills the
-  // ~40 req/min an idle open tab used to fire.
+  // The state loop. It LONG-POLLS: each request sends back the `roomVersion`
+  // of the last reply it applied, the server holds it until the room changes
+  // (or its next clock, or the hold's end), and the next request leaves from
+  // the reply's own continuation, with no timer for a hidden tab to clamp.
+  // So a change reaches every open tab in well under a second, at about one
+  // request per change (inhouseLongPoll / inhousePollDelay, room-poll.ts).
+  //
+  // A request that must answer at once (the first, a retry, a resync, one
+  // while an action is in flight or awaiting reconciliation) and every reply
+  // without a version (an old slot during a release) fall back to the
+  // adaptive ladder (self-scheduling setTimeout): FAST for timed
+  // ready/vote/draft stages, slower while waiting or playing, IDLE-slow when
+  // just spectating. While the tab is HIDDEN: a viewer with a stake (queued
+  // or in a lobby) keeps polling so their presence heartbeat holds the spot
+  // and a forming ready check's chime/title still reaches them; a hidden
+  // spectator doesn't fetch at all (authenticated room traffic and the leased
+  // worker advance lobbies meanwhile). Either way it re-syncs the instant
+  // it's refocused, unheld after a long hide (inhouseRefocusResync).
   useEffect(() => {
     let alive = true;
     let inFlight = false;
@@ -253,9 +286,30 @@ export function InhouseRoom({
     // Remember the requested reconciliation until that poll settles; merely
     // replacing its timer is insufficient because the timer can fire, see
     // `inFlight`, and disappear without ever starting a post-action request.
+    // A refocus after a long hide asks for the same: one poll straight after
+    // the request it released.
     let rerunRequested = false;
     let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // The `roomVersion` of the last poll reply apply() took; null before the
+    // first, and after a reply that carried none (an old slot).
+    let roomVersion: string | null = null;
+    // An offline/online change waits on a fresh answer, not a held one.
+    let resyncPending = false;
+    // Back after a long hide: the next request is unheld, once (cleared by
+    // the next reply apply() takes).
+    let refocusPending = false;
+    // When the tab was last seen going hidden (null while visible).
+    let hiddenAt: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
+    // Long-poll replies in a row the server answered unheld because the room
+    // had already moved on (inhouseUnheldStreak); it lengthens the gap
+    // between requests while a version never stops moving.
+    let unheldStreak = 0;
+    // The held request in flight, if any, so an action or a connectivity
+    // change can release it: its reply would be stale, or come too late.
+    let currentHold: { controller: AbortController; released: boolean } | null =
+      null;
 
     const markFailure = () => {
       consecutiveFailures += 1;
@@ -267,6 +321,30 @@ export function InhouseRoom({
       if (timer) clearTimeout(timer);
       timer = setTimeout(tick, ms);
     };
+
+    // The long-poll's next request, straight from the settled one: a hidden
+    // tab clamps timers, but not this.
+    const reissue = () => {
+      if (!alive) return;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      void tick();
+    };
+
+    const releaseHold = () => {
+      if (!currentHold) return;
+      currentHold.released = true;
+      currentHold.controller.abort();
+    };
+
+    // Something is waiting on an answer now, so the next request must not be
+    // held: its controls stay locked until a reply lands, or the tab is back
+    // from a long hide and the room it shows may be old.
+    const urgent = () =>
+      resyncPending ||
+      actionsInFlightRef.current > 0 ||
+      actionReconcileSeqRef.current !== null ||
+      refocusPending;
 
     const tick = async () => {
       // inFlight also guards a visibilitychange firing mid-request — the active
@@ -299,6 +377,17 @@ export function InhouseRoom({
         schedule(pre.delayMs);
         return;
       }
+      // Held by the server, or answered at once (null): rules in
+      // inhouseLongPoll, where they're unit-tested.
+      const longPoll = inhouseLongPoll({
+        version: roomVersion,
+        urgent: urgent(),
+        failureCount: consecutiveFailures,
+        lobbyStatus: preClock?.status ?? null,
+        scanOpensAt: preClock?.scanOpensAt ?? null,
+        serverNow: latestStateRef.current?.now ?? null,
+        inLobby: latestStateRef.current?.me.inLobby,
+      });
       inFlight = true;
       // Minted HERE, before the await — ordering is by request START. Move it
       // below the fetch and the gate silently becomes a no-op that rejects
@@ -306,6 +395,10 @@ export function InhouseRoom({
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
       const pollConnectivityEpoch = connectivityEpochRef.current;
+      const startedAt = Date.now();
+      const controller = new AbortController();
+      const hold = longPoll ? { controller, released: false } : null;
+      currentHold = hold;
       let next: InhouseState | null = null;
       let rateLimited = false;
       let supersededByConnectivityChange = false;
@@ -313,26 +406,55 @@ export function InhouseRoom({
         const res = await fetch("/api/inhouse", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "state" }),
+          body: JSON.stringify(
+            longPoll
+              ? {
+                  action: "state",
+                  since: longPoll.since,
+                  sinceNow: longPoll.sinceNow,
+                  holdMs: longPoll.holdMs,
+                }
+              : { action: "state" },
+          ),
           // See ROOM_POLL_TIMEOUT_MS — the draft room's loop shares it, and
-          // both freeze the same way without it.
-          signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
+          // both freeze the same way without it. A held request gets its
+          // hold on top (longPoll.timeoutMs); the controller also lets an
+          // action or a connectivity change release it.
+          signal: withDeadline(
+            controller,
+            longPoll ? longPoll.timeoutMs : ROOM_POLL_TIMEOUT_MS,
+          ),
         });
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
         } else if (res.ok) {
-          const payload = (await res.json()) as InhouseState;
+          const payload = (await res.json()) as InhouseState & {
+            roomVersion?: unknown;
+            held?: unknown;
+          };
           if (pollConnectivityEpoch !== connectivityEpochRef.current) {
             supersededByConnectivityChange = true;
           } else {
             next = payload;
             const applied = apply(next, seq);
+            if (applied) {
+              roomVersion =
+                typeof payload.roomVersion === "string"
+                  ? payload.roomVersion
+                  : null;
+              refocusPending = false;
+            }
+            unheldStreak = inhouseUnheldStreak(unheldStreak, {
+              askedHold: longPoll !== null,
+              held: payload.held,
+            });
             const actionSeq = actionReconcileSeqRef.current;
             if (applied && actionSeq !== null && seq > actionSeq) {
               actionReconcileSeqRef.current = null;
               setActionReconciling(false);
             }
             consecutiveFailures = 0;
+            resyncPending = false;
             pollOk();
             setConnectivity(navigator.onLine === false ? "offline" : "online");
           }
@@ -350,13 +472,18 @@ export function InhouseRoom({
       } catch {
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
+        } else if (hold?.released) {
+          // Released on purpose (an action landed, or the room unmounted):
+          // not a failure. The rerun below polls after the action.
         } else {
           markFailure(); // transient blip (or the abort above); next poll retries
         }
       } finally {
         inFlight = false;
+        if (currentHold === hold) currentHold = null;
       }
       if (supersededByConnectivityChange) {
+        resyncPending = true;
         setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
         schedule(0);
         return;
@@ -375,47 +502,85 @@ export function InhouseRoom({
       // mere existence of a lobby — five people watching a 45min game were each
       // firing 40 req/min because one existed.
       const postClock = clockLobby(latestStateRef.current);
-      schedule(
-        inhousePollCadence({
-          offline: navigator.onLine === false,
-          hidden: document.visibilityState === "hidden",
-          // Keep the latest ACCEPTED state through a failed or stale poll.
-          hasStake: hasStakeRef.current,
-          lobbyStatus: postClock?.status ?? null,
-          scanOpensAt: postClock?.scanOpensAt ?? null,
-          serverNow: latestStateRef.current?.now ?? null,
-          inLobby: latestStateRef.current?.me.inLobby,
-          rateLimited,
-          reached: !!next,
-          failureCount: consecutiveFailures,
-          activeMs: pollMs,
-        }).delayMs,
-      );
+      const nextLongPoll = inhouseLongPoll({
+        version: roomVersion,
+        urgent: urgent(),
+        failureCount: consecutiveFailures,
+        lobbyStatus: postClock?.status ?? null,
+        scanOpensAt: postClock?.scanOpensAt ?? null,
+        serverNow: latestStateRef.current?.now ?? null,
+        inLobby: latestStateRef.current?.me.inLobby,
+      });
+      const delayMs = inhousePollDelay({
+        offline: navigator.onLine === false,
+        hidden: document.visibilityState === "hidden",
+        // Keep the latest ACCEPTED state through a failed or stale poll.
+        hasStake: hasStakeRef.current,
+        lobbyStatus: postClock?.status ?? null,
+        scanOpensAt: postClock?.scanOpensAt ?? null,
+        serverNow: latestStateRef.current?.now ?? null,
+        inLobby: latestStateRef.current?.me.inLobby,
+        rateLimited,
+        reached: !!next,
+        failureCount: consecutiveFailures,
+        activeMs: pollMs,
+        longPoll: nextLongPoll !== null,
+        startedAgoMs: Date.now() - startedAt,
+        unheldStreak,
+      });
+      if (delayMs === 0 && nextLongPoll !== null) {
+        reissue();
+        return;
+      }
+      schedule(delayMs);
     };
 
     const onVisibility = () => {
-      if (document.visibilityState === "visible") tick();
+      if (document.visibilityState !== "visible") {
+        hiddenAt ??= Date.now();
+        return;
+      }
+      const hiddenForMs = hiddenAt === null ? null : Date.now() - hiddenAt;
+      hiddenAt = null;
+      if (inhouseRefocusResync(hiddenForMs)) {
+        // A held request may have died silently with the connection while
+        // the device slept: release it, and ask afresh, unheld.
+        refocusPending = true;
+        rerunRequested = true;
+        releaseHold();
+      }
+      tick();
     };
     const onOffline = () => {
       connectivityEpochRef.current += 1;
+      resyncPending = true;
       setConnectivity("offline");
+      releaseHold();
     };
     const onOnline = () => {
       // Do not re-enable a stale queue/lobby merely because the interface came
-      // back. A successful state payload below is the recovery boundary.
+      // back. A successful state payload below is the recovery boundary, and
+      // a held request may predate the outage: release it and ask afresh.
       connectivityEpochRef.current += 1;
+      resyncPending = true;
       setConnectivity("resyncing");
+      releaseHold();
       tick();
     };
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("offline", onOffline);
     window.addEventListener("online", onOnline);
     // An action that changes the viewer's state (join/accept/vote/pick) calls
-    // this to poll again almost immediately, so the cadence re-locks to fast
-    // right after joining instead of finishing a pending idle wait.
+    // this to poll again almost immediately, so the room shows the action's
+    // outcome (and the board repaints) instead of waiting out a held request:
+    // release it. Request-start ordering drops that request's reply only if
+    // the action's reply lands first. A held reply woken by the action's own
+    // publish can land first and is applied, which is harmless (it was read
+    // after the action committed), and the rerun still polls after it.
     bumpPollRef.current = () => {
       rerunRequested = true;
       schedule(250);
+      releaseHold();
     };
     tick();
 
@@ -426,6 +591,8 @@ export function InhouseRoom({
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
+      // The server would hold a request nobody reads for up to its hold.
+      releaseHold();
     };
   }, [apply, pollOk, pollFail, pollMs]);
 
@@ -565,6 +732,7 @@ export function InhouseRoom({
       }
       unlockAudio(); // this click is a user gesture — prime audio for later
       setPending(true);
+      actionsInFlightRef.current += 1;
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
       const reconcileUnknown = (message: string) => {
@@ -644,6 +812,7 @@ export function InhouseRoom({
         );
         return false;
       } finally {
+        actionsInFlightRef.current -= 1;
         setPending(false);
       }
     },

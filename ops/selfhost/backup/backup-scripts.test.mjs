@@ -99,6 +99,8 @@ if (args[0] === "list-units") {
   if (flag("failed-units")) process.stdout.write(readFileSync(dir + "/failed-units", "utf8"));
 } else if (args[0] === "is-active") {
   process.exit(flag("bot-active") ? 0 : 3);
+} else if (args[0] === "is-enabled") {
+  process.exit(flag("bot-enabled") ? 0 : 1);
 }
 `);
   fake(path.join(bin, "curl"), `${record}
@@ -111,7 +113,13 @@ if (args.includes("-K")) {
 const url = args[args.length - 1];
 const codes = flag("http.json") ? JSON.parse(readFileSync(dir + "/http.json", "utf8")) : {};
 record({ tool: "curl", kind: "http", url, args });
-process.stdout.write(String(codes[url] ?? 200));
+const code = codes[url] ?? 200;
+// A write-out of a newline and the status (no -o) asks for the body too.
+if (args[args.indexOf("-w") + 1] === "\\\\n%{http_code}") {
+  const statuses = flag("status.json") ? JSON.parse(readFileSync(dir + "/status.json", "utf8")) : {};
+  process.stdout.write(JSON.stringify({ ok: code === 200, status: statuses[url] ?? "healthy" }) + "\\n");
+}
+process.stdout.write(String(code));
 `);
   writeFileSync(path.join(etc, "backup-recipients.txt"), "# Tim's offline key\nage1qyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqszqgpqyqs3290gq\n", { mode: 0o644 });
   writeFileSync(path.join(dir, "meminfo"), "MemTotal: 2000000 kB\nMemAvailable: 900000 kB\nSwapTotal: 4194300 kB\nSwapFree: 4000000 kB\n");
@@ -700,6 +708,53 @@ test("the heartbeat probes only the live leagues and pings nothing when unconfig
     assert.deepEqual(pings(box), []);
     assert.ok(box.calls().filter((call) => call.kind === "http").every((call) => call.url.startsWith("https://us.")));
     assert.equal(box.run("heartbeat.sh", [], { GGD2L_HEARTBEAT_LEAGUES: "us ca" }).status, 1);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("the heartbeat hands what it measured to discord-alert.mjs, which posts from the unit's environment", () => {
+  const box = sandbox();
+  try {
+    const webhook = "https://discord.com/api/webhooks/123456789012345678/abcdefghijklmnopqrstuvwxyz0123456789";
+    const state = path.join(box.dir, "state");
+    const outbox = path.join(box.dir, "outbox");
+    mkdirSync(state);
+    const alerts = { ALERT_DEPLOY_ENV: "production", ALERT_DISCORD_WEBHOOK_URL: webhook, STATE_DIRECTORY: state, GGD2L_ALERT_OUTBOX: outbox };
+    const posted = () => (existsSync(outbox) ? readdirSync(outbox).sort() : [])
+      .map((file) => JSON.parse(readFileSync(path.join(outbox, file), "utf8")).content);
+
+    box.set("df-percent", "91");
+    box.set("http.json", JSON.stringify({ "https://us.ggd2l.com/api/health/automation": 503 }));
+    box.set("status.json", JSON.stringify({ "https://us.ggd2l.com/api/health/automation": "stale" }));
+    box.set("failed-units", "ggd2l-us@a.service loaded failed failed GGD2L us web\n");
+    let result = box.run("heartbeat.sh", [], { ...alerts, HC_PING_BOX: HC.HC_PING_BOX });
+    assert.equal(result.status, 0, result.stderr);
+    // healthchecks still gets its ping, exactly as before.
+    assert.deepEqual(pings(box).map((ping) => ping.url), [`${HC.HC_PING_BOX}/fail`]);
+    // Discord: the hello, then the disk (it alerts at once).
+    assert.equal(posted().length, 2);
+    assert.match(posted()[0], /^👋 Alerts are on for /);
+    assert.match(posted()[1], /: the disk is 91% full \(the alert line is 85%\)\./);
+
+    // The failed unit needs two beats, the stale scheduler three.
+    result = box.run("heartbeat.sh", [], alerts);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(posted()[2], /`ggd2l-us@a\.service` has failed/);
+    result = box.run("heartbeat.sh", [], alerts);
+    assert.equal(posted().length, 4);
+    assert.match(posted()[3], /^🔴 \*\*GGD2L US\*\*: the site answers, but no scheduled pass has reached it/);
+
+    // Healthy again: one message carries every recovery.
+    for (const name of ["df-percent", "http.json", "status.json", "failed-units"]) rmSync(path.join(box.dir, name));
+    box.run("heartbeat.sh", [], alerts);
+    box.run("heartbeat.sh", [], alerts);
+    const recoveries = posted().slice(4).join("\n");
+    for (const what of ["disk", "ggd2l-us@a.service", "GGD2L US"]) assert.match(recoveries, new RegExp(`🟢 .*${what.replace(/[.*]/g, "\\$&")}`));
+    assert.equal(posted().length, 6);
+
+    // The webhook travels only in the environment: no tool ever saw it.
+    for (const call of box.calls()) assert.ok(!JSON.stringify(call.args ?? []).includes("abcdefghij"), `${call.tool} argv carries the webhook`);
   } finally {
     box.cleanup();
   }

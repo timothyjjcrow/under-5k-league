@@ -27,7 +27,9 @@ has no `seasonId` or league-phase gate. There is no websocket. Interactive
 rooms still use HTTP polling; anonymous polls are side-effect-free, while
 authenticated polls elect at most one database-backed maintenance winner per
 room every two seconds (the inhouse room only when a resolver is due, and it
-serves each poll from a per-instance snapshot checked against a room version).
+serves each poll from a per-instance snapshot checked against a room version;
+its client long-polls on that version, so the server holds a request until
+the room changes).
 Sitewide background work runs once per minute through the bearer-authenticated
 `GET /api/cron/automation` boundary. Public page traffic observes automation
 state but does not serve as its clock.
@@ -165,7 +167,7 @@ resolvers before every read, every route
 (`/api/draft/tick|bid|nominate|admin-nominate`) funnels through it, and the
 authenticated maintenance worker also calls the two resolvers after a cheap
 due-clock preflight. A visible site tab discovers activity from the read-only
-`GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 60s
+`GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 30s
 watch cadence while an auction clock remains live; those browser reads refresh
 the UI but never advance the clock themselves.
 The client is `src/components/draft-room.tsx`, a ~1.2s poll loop whose cadence,
@@ -1035,8 +1037,12 @@ non-placeholder `CRON_SECRET` and compares fixed-length digests in constant
 time. Query strings and browser cookies are not credential sources. The route
 returns 401 before worker work on bad auth, 202 when another owner holds the
 lease, 200 only for a healthy completed pass, and non-2xx for a degraded,
-failed, or unavailable pass; those outcomes fail the Cloudflare Cron Event so
-provider monitoring can alert while the next minute owns recovery.
+failed, or unavailable pass; those outcomes fail the Cloudflare Cron Event
+while the next minute owns recovery. After each unpaused pass the Worker also
+tells its league's SQLite Durable Object (`src/alert-state.ts`, rules in
+`src/alerts.ts`), which posts to the admin Discord channel when 3 passes in a
+row fail and again when 2 pass, through the optional `ALERT_DISCORD_WEBHOOK_URL`
+secret; that bookkeeping never changes the pass's outcome.
 
 `src/lib/automation-service.ts` wraps every scheduled and admin-requested pass
 in the same database-global 90-second owner/token lease. Work gets a 45-second
@@ -1490,9 +1496,11 @@ and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
-active scheduled lease. healthchecks.io dead-man checks are to alert on
-readiness through Cloudflare, the automation probe, each backup and the weekly
-drill; they are not configured yet (PRODUCTION-OPERATIONS, Box operations).
+active scheduled lease. Alerts go to Discord: each scheduler Worker reports
+its league's failing passes from outside the box, and the box reports failed
+backups, drills and config archives, its disk, memory, swap and failed units,
+stale passes and the lobby bot (`ops/selfhost/backup/discord-alert.mjs`).
+healthchecks.io dead-man pings still go out if their URLs are configured.
 The pinned-commit promotion, release evidence, traffic freeze, rollback,
 recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.

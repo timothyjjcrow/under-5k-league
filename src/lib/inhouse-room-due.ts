@@ -277,6 +277,24 @@ export function boardCheckDue(
   return nowMs - memo.checkedAtMs >= INHOUSE.BOARD_RECHECK_MS;
 }
 
+/**
+ * When a board check that came back `throttled` can next get through, for a
+ * held request to wake on (inhouseRoomWakeAt): BOARD_MIN_SECONDS after the
+ * check, since the edit whose throttle stopped it claimed no later than the
+ * check did, and never inside a lost claim's back-off. A check still
+ * throttled then is re-stamped, so this costs at most one wake per
+ * BOARD_MIN_SECONDS per signed-in viewer until the edit lands. Null for
+ * every other outcome: a `failed` edit's own back-off is 20s and up, so it
+ * waits for the hold's end like any other poll.
+ */
+export function boardRetryAtMs(memo: BoardCheckMemo | null): number | null {
+  if (!memo || memo.outcome !== "throttled") return null;
+  return Math.max(
+    memo.checkedAtMs + INHOUSE.BOARD_MIN_SECONDS * 1000,
+    memo.backoffUntilMs,
+  );
+}
+
 /** The memo after a board check this instance ran. */
 export function boardMemoAfterCheck(
   key: string,

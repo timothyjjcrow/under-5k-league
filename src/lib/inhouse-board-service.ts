@@ -555,9 +555,9 @@ export type InhouseBoardSyncOutcome =
   | "no-webhook" // the board's webhook is unset (left alone)
   | "cleared" // the webhook moved channel; the stranded board was forgotten
   | "unchanged" // the render matches the stored digest: no request
-  | "throttled" // the render moved but another edit is inside the cooldown
+  | "throttled" // the render moved but another edit is inside the cooldown (no failure pending)
   | "edited" // Discord accepted the edit
-  | "failed" // the edit failed; the old digest stays, so it is retried
+  | "failed" // the edit failed, or a check is inside a failure's back-off; the old digest stays, so it is retried
   | "gone"; // the message is gone; the board turned itself off
 
 /**
@@ -613,7 +613,11 @@ export async function syncInhouseBoard(
       snap.nowMs,
     ))
   ) {
-    return "throttled";
+    // Inside a failure's back-off the board is still failing, not merely
+    // cooling down: "failed" keeps the room's held requests on their hold
+    // (boardRetryAtMs wakes signed-in viewers only for a plain cooldown), so
+    // a Discord outage never wakes every viewer every 10s.
+    return (state.failures ?? 0) > 0 ? "failed" : "throttled";
   }
 
   const res = await patchWebhookMessage(url, state.messageId, {

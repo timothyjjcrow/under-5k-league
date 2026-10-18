@@ -9,6 +9,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { RELEASE_WRITABLE_DIRS } from "../agent/layout.mjs";
+import { UNIT_ALERTS } from "../backup/discord-alert.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
 const SELFHOST = path.resolve(DIR, "..");
@@ -17,13 +18,13 @@ const read = (relative) => readFileSync(path.join(SELFHOST, relative), "utf8");
 // Every directive these files may use, per section. A typo (MemroyMax=) is
 // ignored by systemd with only a warning; here it fails.
 const KNOWN = {
-  Unit: new Set(["Description", "After", "Wants", "StartLimitIntervalSec", "StartLimitBurst"]),
+  Unit: new Set(["Description", "After", "Wants", "StartLimitIntervalSec", "StartLimitBurst", "OnFailure", "OnSuccess"]),
   Service: new Set([
     "Type", "User", "Group", "WorkingDirectory", "EnvironmentFile", "Environment",
     "ExecStartPre", "ExecStart", "KillSignal", "TimeoutStopSec", "TimeoutStartSec",
     "SuccessExitStatus", "Restart", "RestartSec", "MemoryHigh", "MemoryMax", "UMask",
     "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "ReadWritePaths",
-    "Nice", "IOSchedulingClass", "OOMScoreAdjust",
+    "Nice", "IOSchedulingClass", "OOMScoreAdjust", "SupplementaryGroups", "StateDirectory",
   ]),
   Timer: new Set(["OnCalendar", "Persistent"]),
   Install: new Set(["WantedBy"]),
@@ -50,6 +51,10 @@ const VALUES = {
   SuccessExitStatus: /^\d+$/,
   WantedBy: /^(multi-user|timers)\.target$/,
   OOMScoreAdjust: /^-?\d{1,4}$/,
+  OnFailure: /^ggd2l-alert@[a-z%-]+\.service$/,
+  OnSuccess: /^ggd2l-alert@[a-z%-]+\.service$/,
+  SupplementaryGroups: /^systemd-journal$/,
+  StateDirectory: /^ggd2l-alerts$/,
 };
 
 /** Parse a unit file into Map<section, [key, value][]>, refusing anything systemd would warn about. */
@@ -108,6 +113,7 @@ const installKit = read("install-kit.sh");
 test("the kit ships exactly the units the design names", () => {
   assert.deepEqual(UNIT_FILES, [
     "cloudflared-ggd2l.service",
+    "ggd2l-alert@.service",
     "ggd2l-backup@.service",
     "ggd2l-backup@.timer",
     "ggd2l-bot.service",
@@ -332,8 +338,52 @@ test("the heartbeat runs every 5 minutes as ggd2l-ops (§5.2)", () => {
   assert.equal(one(unit, "Service", "Type"), "oneshot");
   assert.equal(one(unit, "Service", "User"), "ggd2l-ops");
   assert.equal(one(unit, "Service", "ExecStart"), "/usr/local/lib/ggd2l/heartbeat.sh");
+  // healthchecks' ping URLs and Discord's webhook, each optional.
+  assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["-/etc/ggd2l/healthchecks.env", "-/etc/ggd2l/alerts.env"]);
+  // It writes only discord-alert.mjs's state, which systemd makes writable.
   assert.deepEqual(writable(unit), [], "the heartbeat only reads and pings");
+  assert.equal(one(unit, "Service", "StateDirectory"), "ggd2l-alerts");
   assert.ok(!unit.has("Install"));
+});
+
+test("every backup, drill and config-archive run ends in its own Discord alert unit", () => {
+  const triggered = {
+    "ggd2l-backup@us.service": "ggd2l-backup@.service",
+    "ggd2l-backup@eu.service": "ggd2l-backup@.service",
+    "ggd2l-drill@us.service": "ggd2l-drill@.service",
+    "ggd2l-drill@eu.service": "ggd2l-drill@.service",
+    "ggd2l-config-archive.service": "ggd2l-config-archive.service",
+  };
+  // discord-alert.mjs knows exactly these keys, each for the unit that starts it.
+  assert.deepEqual(Object.values(UNIT_ALERTS).map((alert) => alert.unit).sort(), Object.keys(triggered).sort());
+  for (const [instance, file] of Object.entries(triggered)) {
+    const unit = units.get(file);
+    const failure = resolve(one(unit, "Unit", "OnFailure"), instance);
+    // A failure posts; the next success posts the recovery (or nothing).
+    assert.equal(resolve(one(unit, "Unit", "OnSuccess"), instance), failure, instance);
+    const key = /^ggd2l-alert@(.+)\.service$/.exec(failure)?.[1];
+    assert.equal(UNIT_ALERTS[key]?.unit, instance, `${failure} is the alert for ${instance}`);
+  }
+  // Nothing else starts an alert, and the alert unit starts nothing: no loop.
+  for (const [name, unit] of units) {
+    if (Object.values(triggered).includes(name)) continue;
+    assert.deepEqual([...all(unit, "Unit", "OnFailure"), ...all(unit, "Unit", "OnSuccess")], [], name);
+  }
+});
+
+test("the alert unit posts as ggd2l-ops with only the Discord settings, beside the heartbeat's state", () => {
+  const unit = units.get("ggd2l-alert@.service");
+  assert.equal(one(unit, "Service", "Type"), "oneshot");
+  assert.equal(one(unit, "Service", "User"), "ggd2l-ops");
+  assert.equal(one(unit, "Service", "ExecStart"), "/usr/bin/node /usr/local/lib/ggd2l/discord-alert.mjs unit %i");
+  // No database URL, no league env, no healthchecks URLs.
+  assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["-/etc/ggd2l/alerts.env"]);
+  // The failed run's step comes from the journal.
+  assert.equal(one(unit, "Service", "SupplementaryGroups"), "systemd-journal");
+  assert.ok(installKit.includes("getent group systemd-journal"), "install-kit.sh checks the group exists");
+  assert.equal(one(unit, "Service", "StateDirectory"), one(units.get("ggd2l-heartbeat.service"), "Service", "StateDirectory"));
+  assert.deepEqual(writable(unit), []);
+  assert.ok(!unit.has("Install"), "started only by the units it reports on, or by hand");
 });
 
 test("the tunnel and the bot run as the design says (§1.5, §7)", () => {
@@ -410,6 +460,7 @@ test("every helper a unit runs is installed under /usr/local/lib/ggd2l by instal
     "drill-league.sh": "backup/drill-league.sh",
     "heartbeat.sh": "backup/heartbeat.sh",
     "config-archive.sh": "backup/config-archive.sh",
+    "discord-alert.mjs": "backup/discord-alert.mjs",
   };
   const used = new Set();
   for (const unit of units.values())
