@@ -147,3 +147,30 @@ test("both scripts carry the same check and run it before any git command", () =
       assert.match(call, /^git -c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -C /);
   }
 });
+
+// 2026-10-18 review: a kit can tighten the env contract (the production
+// DOTA_LOBBY_BOT_URL rule), and every live slot's ExecStartPre runs the
+// installed copy, so a live env file the new rule refuses would stop that
+// league at its next restart. install-kit.sh checks both live files with the
+// new contract before it changes anything, and refuses on a problem.
+test("install-kit.sh checks the live league env files with its own contract before changing anything", () => {
+  const code = readFileSync(path.join(SELFHOST, "install-kit.sh"), "utf8").replace(/^\s*#.*$/gm, "");
+  const check = code.indexOf(
+    'node "${SELFHOST}/agent/env-contract.mjs" --league "$lg" --file "/etc/ggd2l/${lg}.env" \\\n    || die ',
+  );
+  assert.ok(check > 0, "install-kit.sh runs the kit's env contract on /etc/ggd2l/<lg>.env and dies on a problem");
+  const loop = code.lastIndexOf("for lg in $LEAGUES; do", check);
+  assert.ok(loop > 0 && check - loop < 200, "the check runs for each league");
+  assert.match(code.slice(loop, check), /\[\[ -f "\/etc\/ggd2l\/\$\{lg\}\.env" \]\] \|\| continue/);
+  for (const change of [
+    "exec 9>>/run/ggd2l-agent.lock",
+    "ensure_user ggd2l-build",
+    "write_slot_env us a",
+    'mv -T "${STAGE}" "${LIB}"',
+    'install_unit_file "$src"',
+  ]) {
+    const at = code.indexOf(change);
+    assert.ok(at > 0, change);
+    assert.ok(check < at, `the env check comes before ${change}`);
+  }
+});

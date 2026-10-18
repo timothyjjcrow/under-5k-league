@@ -73,8 +73,9 @@ heartbeat), `ggd2l-bot`.
 - `ggd2l-bot.service` refuses to start on an env that breaks the bot's
   contract (`env-contract.mjs --bot`, names only): `DOTA_BOT_STATE_DIR`
   exactly `/var/lib/ggd2l-bot`, a 32+ character `DOTA_LOBBY_BOT_SECRET`, no
-  `STEAM_BOT_PASSWORD`, and no `NODE_ENV`, `HOST` or `PORT` in `bot.env`
-  (they would override the unit's). Check a file before installing it with
+  `STEAM_BOT_PASSWORD`, and `NODE_ENV`, `HOST` and `PORT` in `bot.env` only
+  as the unit's own `production`, `127.0.0.1` and `8090` (any other value
+  would override the unit's). Check a file before installing it with
   `node /usr/local/lib/ggd2l/env-contract.mjs --bot --file <path>`. Five
   failed starts in ten minutes leave the unit failed instead of restarting
   forever.
@@ -138,7 +139,14 @@ reach the box only through `install-kit.sh <sha>` run from root's own clone
 (`sudo git -C /root/ggd2l-kit fetch origin`, check out `<sha>`, then
 `sudo bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <sha>`), as a separate,
 recorded operation. Never run it from a tools clone: it refuses any clone, or
-folder above it, that a user other than root could change.
+folder above it, that a user other than root could change. Before it changes
+anything it checks both live `/etc/ggd2l/<lg>.env` files with the new kit's
+env contract (names only) and stops on a problem, since every slot's
+ExecStartPre would run that contract at its next start; fix the file, then run
+it again. The first install after 2026-10-18 brings the production
+`DOTA_LOBBY_BOT_URL` rule (unset, `http://127.0.0.1:8090`, or exactly
+`https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`): record that check's
+output in the install's evidence.
 
 ## Rollback
 

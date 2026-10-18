@@ -272,10 +272,13 @@ test("the lobby bot's own env: its state directory, its secret, no Steam passwor
   const has = (problems, name) => problems.some((problem) => problem.startsWith(`${name}:`));
   assert.deepEqual(checkBotEnv(file), []);
   assert.deepEqual(checkBotEnv(unit, { mode: "unit" }), []);
-  // The Mac's .env copied whole: a relative state directory, and the unit's
-  // own settings, which bot.env would override.
-  for (const [key, value] of [["DOTA_BOT_STATE_DIR", "./state"], ["HOST", "127.0.0.1"], ["PORT", "8090"], ["NODE_ENV", "production"]])
+  // The Mac's .env copied whole: a relative state directory, and settings
+  // of the unit's that bot.env would override with other values.
+  for (const [key, value] of [["DOTA_BOT_STATE_DIR", "./state"], ["HOST", "0.0.0.0"], ["PORT", "80"], ["NODE_ENV", "development"]])
     assert.ok(has(checkBotEnv({ ...file, [key]: value }), key), key);
+  // Repeating the unit's own values changes nothing: the bot's runbook
+  // (docs/DOTA-LOBBY-BOT.md, "On the box") writes HOST and PORT into bot.env.
+  assert.deepEqual(checkBotEnv({ ...file, NODE_ENV: "production", HOST: "127.0.0.1", PORT: "8090" }), []);
   assert.ok(has(checkBotEnv(without(file, "DOTA_BOT_STATE_DIR")), "DOTA_BOT_STATE_DIR"));
   assert.ok(has(checkBotEnv({ ...file, STEAM_BOT_PASSWORD: "hunter2" }), "STEAM_BOT_PASSWORD"));
   assert.ok(has(checkBotEnv({ ...unit, STEAM_BOT_PASSWORD: "hunter2" }, { mode: "unit" }), "STEAM_BOT_PASSWORD"));
@@ -316,10 +319,10 @@ test("the bot CLI checks the unit's environment or a file, by names only", () =>
   assert.deepEqual(JSON.parse(good.stdout), { ok: true, bot: true, problems: [] });
   const dir = mkdtempSync(path.join(tmpdir(), "ggd2l-bot-env-"));
   const file = path.join(dir, "bot.env");
-  writeFileSync(file, `DOTA_LOBBY_BOT_SECRET=${value}\nDOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot\nPORT=8090\n`);
+  writeFileSync(file, `DOTA_LOBBY_BOT_SECRET=${value}\nDOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot\nHOST=127.0.0.1\nPORT=8091\n`);
   const fromFile = spawnSync(process.execPath, [CLI, "--bot", "--file", file], { encoding: "utf8" });
   assert.equal(fromFile.status, 1);
-  assert.deepEqual(JSON.parse(fromFile.stderr).problems, ["PORT: set by the unit, not bot.env"]);
+  assert.deepEqual(JSON.parse(fromFile.stderr).problems, ["PORT: set by the unit; bot.env may only repeat 8090"]);
   assert.ok(!(fromFile.stdout + fromFile.stderr).includes(value));
 });
 
