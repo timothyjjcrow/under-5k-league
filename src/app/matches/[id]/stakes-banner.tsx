@@ -1,24 +1,31 @@
 import { prisma } from "@/lib/prisma";
 import { cn } from "@/lib/utils";
-import { seasonScenarioReport, type StakesMatchRow } from "@/lib/stakes";
+import {
+  seasonScenarioReport,
+  stakesCardTitle,
+  type StakesMatchRow,
+} from "@/lib/stakes";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { PlayoffOutlook } from "@/components/playoff-outlook";
 import { Card, CardBody, CardHeader, TeamCrest } from "@/components/ui";
 
 /**
- * "Tonight's stakes": what this match means for the playoff race, from the
- * exact scenario engine. Renders only when the night actually decides
- * something (win-and-in / lose-and-out / magic number 1) or a side's fate is
- * already sealed — early-season "everyone's in the hunt" stays silent.
+ * "Tonight's stakes" ("What's at stake" before match day, stakesCardTitle):
+ * what this match means for the playoff race, from the exact scenario
+ * engine. Renders only when the night actually decides something
+ * (win-and-in / lose-and-out / magic number 1) or a side's fate is already
+ * sealed — early-season "everyone's in the hunt" stays silent.
  */
 export async function StakesBanner({
   match,
   seasonMatches,
+  nowMs,
 }: {
   match: {
     id: string;
     seasonId: string;
     phase: string;
+    scheduledAt: Date | null;
     homeTeamId: string;
     awayTeamId: string;
     homeTeam: { name: string; logoUrl: string | null };
@@ -31,6 +38,8 @@ export async function StakesBanner({
     awayScore: number;
     winnerTeamId: string | null;
   })[];
+  /** The request time the preview read once: the title's "today". */
+  nowMs: number;
 }) {
   if (match.phase !== "REGULAR") return null;
   if (match.season.status !== "REGULAR_SEASON") return null;
@@ -66,7 +75,7 @@ export async function StakesBanner({
   return (
     <Card className="border-accent/30">
       <CardHeader
-        title="Tonight's stakes"
+        title={stakesCardTitle(match.scheduledAt, nowMs)}
         headingLevel={2}
         subtitle="What each possible result means for the playoffs"
       />

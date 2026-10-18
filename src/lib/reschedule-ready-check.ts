@@ -280,6 +280,16 @@ export function leadingOption(tallies: OptionTally[]): number | null {
   return best?.timeMs ?? null;
 }
 
+/**
+ * "the Raccoons captain", or "The Couriers captain" for a team whose name
+ * brings its own article (never "the The Couriers captain").
+ */
+function teamCaptainPhrase(teamName: string): string {
+  return /^the\s/i.test(teamName.trim())
+    ? `${teamName} captain`
+    : `the ${teamName} captain`;
+}
+
 /** One line on where an option stands, for the card and the home strip. */
 export function optionStatusLine(
   tally: OptionTally,
@@ -287,8 +297,8 @@ export function optionStatusLine(
 ): string {
   if (tally.everyoneIn) return "Everyone's in";
   const waitingCaptains = [
-    tally.captains.home !== "ready" ? `the ${names.home} captain` : null,
-    tally.captains.away !== "ready" ? `the ${names.away} captain` : null,
+    tally.captains.home !== "ready" ? teamCaptainPhrase(names.home) : null,
+    tally.captains.away !== "ready" ? teamCaptainPhrase(names.away) : null,
   ].filter((x): x is string => x !== null);
   const short = [
     !tally.home.full ? tally.home.need - tally.home.ready : 0,

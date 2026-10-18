@@ -1041,7 +1041,7 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | --- | --- |
 | `ggd2l-us@a`, `ggd2l-us@b`, `ggd2l-eu@a`, `ggd2l-eu@b` | The leagues' Next slots; only each league's live slot is enabled |
 | `cloudflared-ggd2l.service` | The Cloudflare Tunnel, outbound only |
-| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/` |
+| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/`. The package's unit plus the kit's drop-in `caddy.service.d/10-ggd2l.conf`: restart on failure (2 s, never giving up) and `OOMScoreAdjust=-500`, since the packaged unit never restarts and both leagues go through it |
 | `postgresql@18-main` | Both leagues' databases on 127.0.0.1:5432 |
 | `ggd2l-backup@us.timer`, `ggd2l-backup@eu.timer` | Hourly dumps at :17 |
 | `ggd2l-drill@us.timer`, `ggd2l-drill@eu.timer` | Weekly restore drills, Sundays 10:30 and 11:30 UTC |
@@ -1050,12 +1050,23 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | `ggd2l-config-archive.timer` | The daily encrypted config archive, 04:47 UTC, as root |
 | `ggd2l-bot.service` | The lobby bot, on 127.0.0.1:8090 ([DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md)) |
 
-`box_agent status` reports the units, each league's live release, slots,
-disk, memory, swap, the last backup and drill, a pending reboot and the 5xx
-count of the last 24 hours. Every unit refuses to start without a valid
+`box_agent status` reports the units (the config archive's included), each
+league's live release and slots, disk, memory, swap, the last backup, the last
+drill (the later of the drill unit's last run and `state/last-drill.json`,
+which every passing drill writes, the agent's `drill <lg> <sha>` included), a
+pending reboot, and two counts for the last 24 hours: real 5xx
+(`serverErrors24h`) and the maintenance page's own 503s
+(`maintenance503s24h`). Every unit refuses to start without a valid
 environment (the env contract: `LEAGUE_DEPLOY_ENV`, the league's region, the
 canonical origin `https://<lg>.ggd2l.com` in production and staging alike, the
 app role's local URL, no Vercel or Neon keys).
+
+**Slots.** A slot runs `next start` as `ggd2l-<lg>`, which can write only the
+release's `.next/cache` and `.next/server/route-cache` (`RELEASE_WRITABLE_DIRS`;
+the build creates both). Each slot process holds one Prisma pool of
+`connection_limit=8`, so the four processes of a release overlap use 32 of
+PostgreSQL's 47 usable connections; a release built before 2026-10-17 holds
+two pools per process.
 
 **The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
 PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
@@ -1078,16 +1089,18 @@ Settings, the hello and the test post are in `ops/selfhost/README.md`
 `backup-eu`, `drill`, `bot` and `config` checks still get their pings if
 `/etc/ggd2l/healthchecks.env` is ever written.
 
-**Memory and disk.** Steady state is expected around 1.2-1.5 GB (both slots,
-Postgres, cloudflared, Caddy and the bot), confirmed in the rehearsal; a
-release briefly adds a candidate, which swap absorbs. A build runs with a 3 GB
+**Memory and disk.** Steady state measured about 0.7 GB used on 2026-10-17
+after both leagues opened (both slots, Postgres, cloudflared and Caddy; the bot
+is not on the box yet). Measure again once the bot moves. A release briefly
+adds a candidate, which swap absorbs. A build runs with a 3 GB
 Node heap (`NODE_OPTIONS=--max-old-space-size=3072`) and peaks around 1.6 GB:
 never cap a build's memory below that, or the kernel kills it. A build needs 5
 GB free; each release takes about 1.2 GB and `box_agent prune <lg>` keeps the
 live, previous and newest. Check `df -h` monthly.
 
 **Logs.** App output goes to journald (capped at 500 MB):
-`journalctl -u ggd2l-us@a`. Caddy writes a JSON access log per host under
+`journalctl -u ggd2l-us@<slot>` for the live slot, which `box_agent status`
+names (`leagues.<lg>.live.slot`; each release flips it). Caddy writes a JSON access log per host under
 `/var/log/caddy/` (rolled at 50 MiB, ten kept); it holds player IP addresses,
 so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`, and
 the output of `attest`, `preflight`, `migrate` and `drill <lg> <sha>` in
@@ -1103,10 +1116,23 @@ verified, gzipped, age-encrypted to Tim's offline key and copied to R2
 (`ggd2l-backups`). Daily at 04:47 UTC, `ggd2l-config-archive.timer` runs
 `config-archive.sh` as root: an age-encrypted archive of `/etc/ggd2l`,
 `/etc/cloudflared` and `/etc/caddy` to R2 (`config/`), so a rebuild can
-recover the secrets. After changing anything in those folders, run
-`sudo systemctl start ggd2l-config-archive` at once. The weekly drill restores the newest dump on the box. Quarterly,
+recover the secrets. After changing anything in those folders (an env file, a
+secret, the tunnel, or an `install-kit.sh` run, which rewrites files in all
+three), run `sudo systemctl start ggd2l-config-archive` right away rather
+than waiting up to a day for the timer. The uploads pass rclone
+`--s3-no-check-bucket` (the token may not create the bucket) and
+`--s3-no-head` (the box's rclone 1.60.1 would HEAD each fresh upload with a
+versionId R2 refuses; the kit README's Backups section has the detail and a
+diagnosis command). The weekly drill restores the newest dump on the box. Quarterly,
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
+
+**Cutover cleanup.** Once the 14 days are over (the old origins on 308 and
+both Neon databases deleted), shred the plaintext Neon dumps left in
+`/var/backups/ggd2l/cutover/<lg>/` (keep the folders: `box_agent import` reads
+them), remove the admin user's `~/buildtest` and `~/.npm` (the 2026-10-15
+trial build and its npm cache), and check that the cutover's scp staging
+folder holds no leftover dump. The commands are in the kit README's Cutover helpers.
 
 **Tim's monthly hour.** Scroll the admin channel for a 🔴 without its 🟢, and
 read `box_agent status`; check `df -h`; watch for OpenDota rate limits (both leagues

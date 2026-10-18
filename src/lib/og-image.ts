@@ -24,10 +24,16 @@ export const OG_SIZE = { width: 1200, height: 630 } as const;
  * On the self-hosted box no edge honours `s-maxage`: Cloudflare caches no
  * dynamic route without a Cache Rule, which the zone deliberately lacks
  * (docs/DECISIONS.md), so every request a browser or unfurler has not cached
- * reaches the box. The value is kept as is for a Vercel deployment.
+ * reaches the box. There each process keeps a drawn picture for
+ * OG_CACHE_TTL_MS instead (og-share-images.tsx). The value is kept as is for
+ * a Vercel deployment.
  */
 export const OG_CACHE_CONTROL =
   "public, max-age=300, s-maxage=300, stale-while-revalidate=600";
+
+/** How long a process keeps a drawn picture: the five minutes the CDN gave
+ *  it on Vercel (OG_CACHE_CONTROL's max-age). */
+export const OG_CACHE_TTL_MS = 5 * 60_000;
 
 /**
  * Hosts a preview may fetch a picture from: Imgur (captains' crests) and

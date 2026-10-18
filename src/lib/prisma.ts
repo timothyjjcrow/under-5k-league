@@ -4,10 +4,18 @@ import { databaseDiagnostics } from "./db-observability";
 import { createPoolMetricsReader } from "./pool-diagnostics";
 import { observeOperation } from "./observe-operation";
 
+// One client, and so one connection pool, per process, in every environment.
+// Next loads this module once per server bundle (route handlers and pages each
+// get their own instance), so a client held only in the module opened a pool
+// per bundle: two per `next start` process on the box (16 sockets at
+// connection_limit=8, measured 2026-10-17). globalThis is shared by every
+// bundle in the process, and by development reloads.
 const globalForPrisma = globalThis as unknown as {
   prisma?: PrismaClient;
+  prismaMetricReaders?: WeakMap<PrismaClient, ReturnType<typeof createPoolMetricsReader>>;
 };
-const metricReaders = new WeakMap<PrismaClient, ReturnType<typeof createPoolMetricsReader>>();
+// Shared too, so the process keeps at most one outstanding engine sample.
+const metricReaders = globalForPrisma.prismaMetricReaders ??= new WeakMap();
 function poolReader(client: PrismaClient) {
   let reader = metricReaders.get(client);
   if (!reader) {
@@ -39,12 +47,8 @@ function createClient() {
   return client;
 }
 
-export const prisma = globalForPrisma.prisma ?? createClient();
+export const prisma = globalForPrisma.prisma ??= createClient();
 
 export async function readPoolDiagnostics() {
   return poolReader(prisma)();
-}
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
 }

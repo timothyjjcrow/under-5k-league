@@ -67,19 +67,47 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   re-assert SCHEDULED, bump `Match.scheduleRevision`, reset
   `autoSyncedAt`/`autoSyncAttempts`, invalidate queued result nudges and
   check-in reminders (`invalidateMatchNudges`), delete the match's
-  check-ins, cancel open proposals (admin paths) and delete the week-reminder
-  markers (`weekReminderKey(season, week)` and its `:<kickoffMs>` keys). A
-  ready-check lock then writes each seat's answer to the locked time as their
-  check-in at the new revision (✓ IN, ✗ OUT), so nobody answers twice.
-  Check-ins answered the old night, and the reminder quoted the old kickoff (a
-  Discord edit notifies nobody), so the marker must be released to re-fire.
+  check-ins, cancel open proposals (admin paths) and release week-reminder
+  markers. A ready-check lock then writes each seat's answer to the locked
+  time as their check-in at the new revision (✓ IN, ✗ OUT), so nobody answers
+  twice. A reminder is one post per kickoff cluster (week + exact kickoff,
+  `weekReminderKey(season, week, kickoffMs)`), so the moved fixture's new
+  kickoff has its own marker and is reminded afresh. Retiming ONE fixture
+  (Set time, a reschedule lock) releases only its OLD kickoff's marker, and
+  only once no other SCHEDULED fixture of the week still kicks off there
+  (`releaseRetimedReminderMarker`, `reminder-service.ts`): releasing every
+  marker of the week re-posted the reminder, with @-mentions, for fixtures
+  that never moved (`reminders.itest.ts`). The accepted trade-off: a fixture
+  moved onto a kickoff of its week whose reminder already posted gets no
+  reminder, so its players, whose check-ins the retime just cleared, are not
+  pinged by name. The move's own post (Set time's, which pings the captains and
+  booked standins, or a reschedule's "Rescheduled") says the check-ins were
+  reset or how many still owe one, and each captain's "Remind the N who haven't
+  answered" on the match page (`sendCheckinNudge`) pings exactly the missing
+  ones. A one-off reminder for just the moved fixture is a possible follow-up.
+  The Set time toast names the exception. "Move a match night" moves whole
+  weeks and releases all their markers.
   After commit, report standin clashes with `clashesAfterRetime`; don't refuse.
   A no-op resubmit returns before touching anything.
-- **The week mover moves the rhythm.** The week's night is its most common
-  kickoff (earliest on a tie), so a rescheduled outlier is never the baseline.
-  The optional cascade shifts later weeks by the local-clock delta
-  (`shiftMatchNight`), and a move re-anchors `firstMatchNight` so future playoff
-  rounds follow.
+- **The week mover moves the rhythm only when asked.** The week's night is
+  its most common kickoff (earliest on a tie), so a rescheduled outlier is
+  never the baseline. The optional cascade shifts later weeks by the
+  local-clock delta (`shiftMatchNight`) and shifts `firstMatchNight` with
+  them, so playoff rounds and the reschedule deadline follow; moving week 1
+  sets the anchor. A one-off move of a later week (cascade unticked, the
+  default) leaves the anchor alone: re-anchoring on it dated every playoff
+  round on the one-off weekday. A season with no anchor derives one from the
+  rhythm (the new night on a cascade, else the week's night before the move).
+  Pinned in `admin-claims.itest.ts`.
+- **The season's printed match night is the slot most timed fixtures share,
+  played ones included** (`fixturesMatchNightLabel`, `match-night.ts`, tested):
+  a tie goes to the slot with more fixtures still to play, then the earlier
+  slot. Counting only the open fixtures let the last one, usually the
+  rescheduled one, name the night on /rules, /how-it-works and /schedule. It
+  never reads `firstMatchNight`, which a one-off week-1 move sets. Known lag,
+  accepted: a late cascade (weeks 7-10 of 10 moved to Thursdays) keeps the old
+  night printed until the new slot holds as many fixtures; weighting open
+  fixtures more is the fix if that matters.
 - **Date new postseason rounds with `upcomingMatchNight`**, which rolls a passed
   date forward in whole weeks. Otherwise a slipped season stamps a new round with
   last week's kickoff and auto-sync searches a closed window.
@@ -299,7 +327,10 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `StakesBanner` renders only for a REGULAR match in REGULAR_SEASON once a side
   has `paths`, a sealed `status` or an `outlook` (forecasts exist only when
   few enough results remain, `NORMAL_FORECAST_CAP`). Never fill it with an
-  early-season "everyone's in the hunt" card: that is noise.
+  early-season "everyone's in the hunt" card: that is noise. It says
+  "Tonight's" only when the kickoff is today on the league's clock, from the
+  preview's one request time, and "What's at stake" before match day
+  (`stakesCardTitle`, `stakes.ts`).
 
 ## Playoff bracket
 

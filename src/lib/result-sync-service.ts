@@ -562,7 +562,10 @@ async function syncInhouse(options: RunResultSyncOptions): Promise<{
       ...(notificationFailed ? { notificationFailed: true } : {}),
     };
   }
-  await maybeFormLobby();
+  // The match-found ping goes out now, not after this request's response:
+  // that comes only at the end of the whole pass, and the ready check's
+  // clock is already running. Nobody waits on the worker's reply.
+  await maybeFormLobby({ pingAfterResponse: false });
   if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
     return {
       recorded: false,

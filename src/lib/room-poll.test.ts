@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { draftPollCadence, inhousePollCadence } from "./room-poll";
+import {
+  draftPollCadence,
+  draftPollsAtClockZero,
+  inhousePollCadence,
+} from "./room-poll";
 import { DEFAULTS, DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
 
 // Two ~1800-line client components' poll loops, with no unit-testable surface
@@ -527,5 +531,22 @@ describe("where the two rooms deliberately differ", () => {
     expect(DRAFT_ROOM.POLL_KEEPALIVE_MS).toBeLessThan(
       INHOUSE.POLL_KEEPALIVE_MS,
     );
+  });
+});
+
+describe("draftPollsAtClockZero", () => {
+  it("polls at once only for a signed-in captain or admin", () => {
+    // They have controls waiting on the settled lot (the next nomination, a
+    // re-bid, the admin tools), and only a signed-in poll can settle it.
+    expect(draftPollsAtClockZero({ signedIn: true, canAct: true })).toBe(true);
+  });
+
+  it("leaves every other tab on its own schedule", () => {
+    // A full US room sent ~63 polls at the same instant per sale when every
+    // signed-in tab polled at zero; spectators and pool players see the sale
+    // on their next poll instead, at most POLL_WATCH_MS later.
+    expect(draftPollsAtClockZero({ signedIn: true, canAct: false })).toBe(false);
+    expect(draftPollsAtClockZero({ signedIn: false, canAct: false })).toBe(false);
+    expect(draftPollsAtClockZero({ signedIn: false, canAct: true })).toBe(false);
   });
 });

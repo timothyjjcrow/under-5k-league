@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { getActiveSeason } from "@/lib/season";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { getSeasonDraftStatus } from "@/lib/queries";
 import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
 import {
   DRAFT_DONE_NEEDS_SCHEDULE_TITLE,
@@ -84,12 +85,14 @@ export default async function DraftPage() {
   // the auction is finished, the room offers them the next step instead.
   const user = await getSessionUser();
   const isAdmin = user?.role === "ADMIN";
-  const [preflight, regularSeasonStep] = isAdmin
-    ? await Promise.all([
-        loadStartDraftPreflight(season),
-        loadRegularSeasonStep(season),
-      ])
-    : [null, null];
+  const [preflight, regularSeasonStep, renderedDraftStatus] = await Promise.all([
+    isAdmin ? loadStartDraftPreflight(season) : null,
+    isAdmin ? loadRegularSeasonStep(season) : null,
+    // What the header chip in this render was built from (request-cached:
+    // the layout's own read in the Draft phase). The room refreshes the
+    // render when its poll shows another phase.
+    getSeasonDraftStatus(season.id),
+  ]);
   const adminStart = preflight
     ? {
         blocker: preflight.blocker,
@@ -183,6 +186,10 @@ export default async function DraftPage() {
         voidLotAction={voidCurrentLotAction}
         adminStart={adminStart}
         adminFinish={adminFinish}
+        renderedPhase={{
+          seasonStatus: season.status,
+          draftStatus: renderedDraftStatus ?? DRAFT_STATUS.NOT_STARTED,
+        }}
       />
     </div>
   );

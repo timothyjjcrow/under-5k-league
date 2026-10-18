@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { RELEASE_WRITABLE_DIRS } from "../agent/layout.mjs";
 import { UNIT_ALERTS } from "../backup/discord-alert.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -23,7 +24,7 @@ const KNOWN = {
     "ExecStartPre", "ExecStart", "KillSignal", "TimeoutStopSec", "TimeoutStartSec",
     "SuccessExitStatus", "Restart", "RestartSec", "MemoryHigh", "MemoryMax", "UMask",
     "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "ReadWritePaths",
-    "Nice", "IOSchedulingClass", "SupplementaryGroups", "StateDirectory",
+    "Nice", "IOSchedulingClass", "OOMScoreAdjust", "SupplementaryGroups", "StateDirectory",
   ]),
   Timer: new Set(["OnCalendar", "Persistent"]),
   Install: new Set(["WantedBy"]),
@@ -49,6 +50,7 @@ const VALUES = {
   KillSignal: /^SIGTERM$/,
   SuccessExitStatus: /^\d+$/,
   WantedBy: /^(multi-user|timers)\.target$/,
+  OOMScoreAdjust: /^-?\d{1,4}$/,
   OnFailure: /^ggd2l-alert@[a-z%-]+\.service$/,
   OnSuccess: /^ggd2l-alert@[a-z%-]+\.service$/,
   SupplementaryGroups: /^systemd-journal$/,
@@ -104,7 +106,7 @@ function resolve(value, instanceName) {
 
 const UNIT_FILES = readdirSync(DIR).filter((f) => /\.(service|timer)$/.test(f)).sort();
 const DROP_INS = readdirSync(DIR).filter((f) => f.endsWith(".d") && statSync(path.join(DIR, f)).isDirectory())
-  .flatMap((d) => readdirSync(path.join(DIR, d)).map((f) => `${d}/${f}`));
+  .flatMap((d) => readdirSync(path.join(DIR, d)).map((f) => `${d}/${f}`)).sort();
 const units = new Map(UNIT_FILES.map((f) => [f, parseUnit(read(`systemd/${f}`), f)]));
 const installKit = read("install-kit.sh");
 
@@ -124,7 +126,7 @@ test("the kit ships exactly the units the design names", () => {
     "ggd2l-heartbeat.timer",
     "ggd2l-us@.service",
   ]);
-  assert.deepEqual(DROP_INS, ["ggd2l-drill@eu.timer.d/10-schedule.conf"]);
+  assert.deepEqual(DROP_INS, ["caddy.service.d/10-ggd2l.conf", "ggd2l-drill@eu.timer.d/10-schedule.conf"]);
   // install-kit.sh refuses a kit clone that lacks any of them.
   for (const file of [...UNIT_FILES, ...DROP_INS])
     assert.ok(installKit.includes(`\nsystemd/${file}\n`), `install-kit.sh REQUIRED lists systemd/${file}`);
@@ -149,7 +151,10 @@ test("every unit parses, describes itself, and runs an absolute command", () => 
       assert.ok(one(unit, "Service", "MemoryMax"), name);
     }
   }
-  parseUnit(read(`systemd/${DROP_INS[0]}`), DROP_INS[0]);
+  for (const dropIn of DROP_INS) {
+    assert.match(dropIn, /^[\w@.-]+\.(service|timer)\.d\/[\w-]+\.conf$/, `${dropIn}: systemd reads only <unit>.d/*.conf`);
+    parseUnit(read(`systemd/${dropIn}`), dropIn);
+  }
 });
 
 test("the two league units are byte-identical copies of one template", () => {
@@ -202,12 +207,31 @@ test("each slot resolves to its own league's user, files, cache and port", () =>
       `/etc/ggd2l/${lg}-slot-${slot}.env`,
       `/srv/ggd2l/${lg}/slots/${slot}/.release.env`,
     ]);
-    // The only writable path is this slot's own cache.
-    assert.deepEqual(all(unit, "Service", "ReadWritePaths").map((v) => resolve(v, name)),
-      [`/srv/ggd2l/${lg}/slots/${slot}/.next/cache`]);
+    // The only writable paths are this slot's own caches.
+    assert.deepEqual(writable(unit).map((v) => resolve(v, name)), [
+      `/srv/ggd2l/${lg}/slots/${slot}/.next/cache`,
+      `-/srv/ggd2l/${lg}/slots/${slot}/.next/server/route-cache`,
+    ]);
     assert.ok(installKit.includes(`write_slot_env ${lg} ${slot} ${port}\n`), `install-kit.sh writes PORT=${port} for ${lg}-${slot}`);
   }
   assert.equal(new Set(Object.values(ports)).size, 4);
+});
+
+test("a league slot can write exactly the release folders the build gives the league user", () => {
+  // ProtectSystem=strict makes the rest of the release read-only, so a folder
+  // `next start` writes that is missing here fails every write to it (the
+  // route-cache warnings of 2026-10-17), and one the build does not create
+  // fails the unit unless it is optional.
+  const unit = units.get("ggd2l-us@.service");
+  const slotDir = "/srv/ggd2l/%j/slots/%i";
+  assert.deepEqual(writable(unit).map((entry) => entry.replace(/^-/, "")),
+    RELEASE_WRITABLE_DIRS.map((relative) => `${slotDir}/${relative}`));
+  // Every build has made .next/cache. Only route-cache, which builds made
+  // before it was added lack, may be absent: a rollback to one must start.
+  assert.deepEqual(writable(unit).filter((entry) => entry.startsWith("-")), [`-${slotDir}/.next/server/route-cache`]);
+  // `rm -rf .next/cache/fetch-cache` wipes inside a writable folder.
+  for (const command of all(unit, "Service", "ExecStartPre").filter((c) => c.startsWith("/usr/bin/rm ")))
+    assert.ok(RELEASE_WRITABLE_DIRS.some((relative) => command.endsWith(` ${relative}/fetch-cache`)), command);
 });
 
 test("backups run hourly at :17 as ggd2l-ops, with only their own env (§5.1)", () => {
@@ -382,6 +406,42 @@ test("the tunnel and the bot run as the design says (§1.5, §7)", () => {
   assert.equal(one(bot, "Service", "RestartSec"), "30");
   assert.equal(one(bot, "Service", "MemoryMax"), "300M");
   assert.deepEqual(all(bot, "Service", "ReadWritePaths"), ["/var/lib/ggd2l-bot"]);
+  // bot.env overrides the unit's Environment=, so the contract checks the
+  // environment the bot actually gets, before it starts.
+  assert.deepEqual(all(bot, "Service", "ExecStartPre"), [
+    "/usr/bin/node /usr/local/lib/ggd2l/env-contract.mjs --bot",
+  ]);
+  // A bot that can't start fails within a few tries instead of restarting
+  // every 30 s forever: the limit's window outlasts the burst of restarts.
+  const window = Number(one(bot, "Unit", "StartLimitIntervalSec"));
+  const burst = Number(one(bot, "Unit", "StartLimitBurst"));
+  assert.ok(burst >= 3 && burst <= 10, `StartLimitBurst=${burst}`);
+  assert.ok(window > burst * Number(one(bot, "Service", "RestartSec")), `StartLimitIntervalSec=${window}`);
+});
+
+test("Caddy, the packaged unit both leagues go through, restarts on failure and outlives the slots under memory pressure", () => {
+  // The caddy package's unit has no Restart=: without this drop-in a Caddy
+  // that exits leaves both sites down while the tunnel and the slots recover.
+  const dropIn = parseUnit(read("systemd/caddy.service.d/10-ggd2l.conf"), "caddy drop-in");
+  assert.deepEqual([...dropIn.keys()], ["Unit", "Service"]);
+  assert.deepEqual(dropIn.get("Unit"), [["StartLimitIntervalSec", "0"]], "never gives up, like the tunnel");
+  // Only the restart policy and the OOM priority: the package keeps its own
+  // ExecStart, user, sandbox and reload.
+  assert.deepEqual(dropIn.get("Service"), [["Restart", "on-failure"], ["RestartSec", "2"], ["OOMScoreAdjust", "-500"]]);
+  // Kill order under memory pressure: a build (600) first, then a slot (0, no
+  // setting), then Caddy, and PostgreSQL's postmaster (-900, its package) last.
+  const caddy = Number(one(dropIn, "Service", "OOMScoreAdjust"));
+  const build = Number(/"OOMScoreAdjust=(-?\d+)"/.exec(read("agent/build.mjs"))?.[1]);
+  for (const name of ["ggd2l-us@.service", "ggd2l-eu@.service"])
+    assert.deepEqual(all(units.get(name), "Service", "OOMScoreAdjust"), [], `${name} stays at the default 0`);
+  assert.ok(-900 < caddy && caddy < 0 && 0 < build, `expected -900 < caddy ${caddy} < 0 < build ${build}`);
+  // install-kit.sh installs every <unit>.d/*.conf under the same folder name
+  // in /etc/systemd/system, then reloads systemd so Restart= takes effect.
+  const code = installKit.replace(/^\s*#.*$/gm, "");
+  const loop = code.indexOf('for dropin in "${SELFHOST}"/systemd/*.d; do');
+  assert.ok(loop > 0, "install-kit.sh walks every drop-in folder");
+  assert.ok(code.includes('install_unit_file "$src" "${UNIT_DIR}/$(basename "$dropin")/$(basename "$src")"'));
+  assert.ok(code.indexOf("\nsystemctl daemon-reload\n", loop) > loop, "a daemon-reload follows the drop-ins");
 });
 
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {

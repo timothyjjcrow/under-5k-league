@@ -270,6 +270,34 @@ export function inhouseHandLobbyName(slot: number): string {
   return slot > 1 ? `${INHOUSE.LOBBY_NAME} ${slot}` : INHOUSE.LOBBY_NAME;
 }
 
+/**
+ * Step 3 of /inhouse's "Make your games auto-detect" guide: who sets the
+ * league ticket. Until the league has an inhouse ticket (Europe's, until
+ * Valve grants one; `INHOUSE.LOBBY_TICKET_CONFIGURED`, as the setup card
+ * decides it) nobody can select one, so the step says the admins will provide
+ * it rather than name a placeholder as a ticket to pick. Otherwise `lead` is
+ * the sentence the page finishes with the ticket's name. `lobbyBot` is
+ * whether the bot can host in-house games (a connection and the ticket's id:
+ * `inhouseLobbyBotConfigured`), so the step never promises a bot that can't
+ * set the ticket.
+ */
+export function inhouseTicketGuideStep(o: {
+  ticketConfigured: boolean;
+  lobbyBot: boolean;
+}): { kind: "pending"; text: string } | { kind: "ticket"; lead: string } {
+  if (!o.ticketConfigured)
+    return {
+      kind: "pending",
+      text: "When teams lock, one of you hosts the lobby in Dota. The league's admins will provide the European ticket before tracked games begin; until then a private game doesn't appear on OpenDota, so it can't record here.",
+    };
+  return {
+    kind: "ticket",
+    lead: o.lobbyBot
+      ? "When teams lock, a captain asks the lobby bot to host the game, with the ticket already set. If the bot is down, the host must be one of the league's ticket admins, since only they can select the "
+      : "When teams lock, the host must be one of the league's ticket admins, since only they can select the ",
+  };
+}
+
 /** The Discord voice channel a game's team (1 | 2) talks in. */
 export function inhouseVoiceChannel(slot: number, team: number): string {
   const channels =
@@ -430,9 +458,10 @@ export function inhouseAlerts(
 
 /**
  * The toast for a player whose game was just marked over, or null. Someone in
- * it pressed "Game over" (or an admin did): the room drops them back to the
- * queue on their next poll, and without a word that reads as a crash or a
- * cancel. Keyed on THEIR live game turning up in `pendingIds`, so an admin
+ * it pressed "Game over" (or an admin did), or the lobby bot saw Dota's
+ * postgame and the site marked it over by itself (endInhouseGameFromBot,
+ * which requeues nobody): the room drops them back to the queue on their next
+ * poll, and without a word that reads as a crash or a cancel. Keyed on THEIR live game turning up in `pendingIds`, so an admin
  * cancel (which leaves no pending row) stays silent, as it always has.
  */
 export function gameMarkedOverToast(

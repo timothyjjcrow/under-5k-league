@@ -4,6 +4,30 @@ import { prisma } from "@/lib/prisma";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { makeSeason, makeTeam, makeUser } from "./factories";
+import { setMatchTime } from "@/app/actions/admin-schedule-results";
+import {
+  proposeReschedule,
+  respondReschedule,
+} from "@/lib/reschedule-service";
+import { weekReminderKey } from "@/lib/settings";
+
+// setMatchTime is a server action: stub auth and cache invalidation as
+// admin-claims.itest.ts does.
+vi.mock("next/cache", () => ({
+  revalidatePath: vi.fn(),
+  revalidateTag: vi.fn(),
+  updateTag: vi.fn(),
+}));
+vi.mock("@/lib/auth", () => ({
+  requireAdmin: vi.fn(async () => ({
+    id: "test-admin",
+    name: "Test administrator",
+    role: "ADMIN",
+    steamId: "76561198000000000",
+    avatar: null,
+  })),
+  requireUser: vi.fn(),
+}));
 
 // Keep the formatters real; stub the webhook lookup + the network send.
 vi.mock("@/lib/discord", async (importOriginal) => {
@@ -415,5 +439,106 @@ describe("week reminder — the empty-week race releases the claim", () => {
     });
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
     expect(mockSend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("week reminder — retiming one fixture of a kickoff cluster", () => {
+  // Two fixtures share week 1's kickoff and the reminder has posted. Moving
+  // ONE of them used to release every marker of the week, so the next pass
+  // re-posted the unmoved fixture's reminder and re-pinged its players.
+  async function sharedKickoff() {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const [moverHome, moverAway, stayerHome, stayerAway] = await Promise.all(
+      ["Mover Home", "Mover Away", "Stayer Home", "Stayer Away"].map(
+        (name, i) => makeTeam(season.id, name, i),
+      ),
+    );
+    const kickoff = new Date(Math.floor((Date.now() + 4 * 3600_000) / 60_000) * 60_000);
+    const fixture = (homeTeamId: string, awayTeamId: string) =>
+      prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week: 1,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId,
+          awayTeamId,
+          scheduledAt: kickoff,
+        },
+      });
+    const mover = await fixture(moverHome.id, moverAway.id);
+    const stayer = await fixture(stayerHome.id, stayerAway.id);
+    return { season, kickoff, mover, stayer, moverHome, moverAway };
+  }
+  const reminders = () =>
+    mockSend.mock.calls
+      .map((call) => call[0])
+      .filter((content) => content.startsWith("⏰"));
+
+  it.each(["Set time", "ready-check lock"])(
+    "%s: the unmoved fixture is not reminded twice; the moved one is reminded at its new kickoff",
+    async (path) => {
+      const { season, kickoff, mover, stayer, moverHome, moverAway } =
+        await sharedKickoff();
+      expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+      expect(reminders()).toHaveLength(1);
+      expect(reminders()[0]).toContain("Stayer Home");
+      expect(reminders()[0]).toContain("Mover Home");
+
+      const moved = new Date(kickoff.getTime() + 5 * 3600_000);
+      if (path === "Set time") {
+        const fd = new FormData();
+        fd.set("expectedActiveSeasonId", season.id);
+        fd.set("matchId", mover.id);
+        fd.set("scheduledAt", moved.toISOString());
+        fd.set("scheduledAtTs", String(moved.getTime()));
+        expect(await setMatchTime({}, fd)).not.toHaveProperty("error");
+      } else {
+        await proposeReschedule(moverHome.captainId, mover.id, moved);
+        const request = await prisma.rescheduleRequest.findFirstOrThrow({
+          where: { matchId: mover.id, status: "PENDING" },
+        });
+        await respondReschedule(moverAway.captainId, request.id, true);
+      }
+      expect(
+        (await prisma.match.findUniqueOrThrow({ where: { id: mover.id } }))
+          .scheduledAt?.getTime(),
+      ).toBe(moved.getTime());
+      // The stayer still kicks off at the old time, so its marker stands.
+      expect(
+        await prisma.setting.findUnique({
+          where: { key: weekReminderKey(season.id, 1, kickoff.getTime()) },
+        }),
+      ).not.toBeNull();
+
+      // The next passes remind the moved fixture once, and only it.
+      expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+      expect(await maybeAnnounceUpcomingWeek(season)).toBe(false);
+      expect(reminders()).toHaveLength(2);
+      expect(reminders()[1]).toContain("Mover Home");
+      expect(reminders()[1]).not.toContain("Stayer Home");
+      expect(
+        (await prisma.match.findUniqueOrThrow({ where: { id: stayer.id } }))
+          .scheduledAt?.getTime(),
+      ).toBe(kickoff.getTime());
+    },
+  );
+
+  it("releases the old kickoff's marker once nothing kicks off there", async () => {
+    const { season, kickoff, mover, stayer } = await sharedKickoff();
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const oldKey = weekReminderKey(season.id, 1, kickoff.getTime());
+    for (const [index, match] of [mover, stayer].entries()) {
+      const moved = new Date(kickoff.getTime() + (index + 5) * 3600_000);
+      const fd = new FormData();
+      fd.set("expectedActiveSeasonId", season.id);
+      fd.set("matchId", match.id);
+      fd.set("scheduledAt", moved.toISOString());
+      fd.set("scheduledAtTs", String(moved.getTime()));
+      expect(await setMatchTime({}, fd)).not.toHaveProperty("error");
+      const marker = await prisma.setting.findUnique({ where: { key: oldKey } });
+      // First move: the stayer still sits there. Second: the kickoff is empty.
+      if (index === 0) expect(marker).not.toBeNull();
+      else expect(marker).toBeNull();
+    }
   });
 });

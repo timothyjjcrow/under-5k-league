@@ -324,7 +324,6 @@ const EQUIVALENT = new Set([
 // source sweep below rejects omissions, so adding a claim in a new module
 // cannot silently leave it outside the ratchet again.
 const FILES = [
-  "src/app/api/dota-lobby/route.ts",
   "src/lib/dota-account-service.ts",
   "src/lib/draft-service.ts",
   "src/lib/draft-history.ts",
@@ -363,6 +362,7 @@ const FILES = [
   "src/lib/team-identity-service.ts",
   "src/lib/users.ts",
   "src/lib/player-data-refresh.ts",
+  "src/lib/inhouse-rating-service.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */

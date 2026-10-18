@@ -165,6 +165,24 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Draw per request and cache five minutes** (`force-dynamic`,
   `OG_CACHE_CONTROL`): a match's picture follows it from the kickoff to the
   live score to the result. `share-image-guards.test.ts` pins every route.
+- **On the box, each process keeps a drawn picture five minutes**
+  (`OG_CACHE_TTL_MS`, `src/lib/picture-cache.ts`, used by
+  `og-share-images.tsx`). A drawing costs about a second of the one vCPU
+  both leagues and Postgres share (measured 0.8 to 1.9 s), and Cloudflare
+  caches no dynamic route ([DECISIONS](../DECISIONS.md#hosting)), so a
+  burst of unfurls or a crawler would draw the same picture again and again.
+  The key is the page's address with no query, so a page's
+  `opengraph-image` and `twitter-image` share one entry; concurrent misses
+  share one draw; it holds at most 100 pictures and 16 MB, dropping the
+  least recently served; only a drawn PNG is kept (never a 404, the league's
+  fallback, or a failed read or draw); and a kept picture is sent with an
+  `Age` header, so a browser counts the box's time against the same five
+  minutes. It lives on `globalThis`, so every route's bundle shares it, and
+  only in production: in development every request draws, so a layout edit
+  shows at once. Per process on purpose, outside Rule P
+  ([concurrency-and-testing](concurrency-and-testing.md#per-instance-caches-the-inhouse-room-snapshot)):
+  a preview up to five minutes stale is what the CDN served on Vercel, and
+  the two processes of a release's overlap each draw their own.
 - **The server fetches a crest or avatar only through `fetchOgImage`:** HTTPS
   on Imgur or Steam's avatar hosts (`ogImageUrlAllowed`), no redirects, a
   2.5-second timeout, a 1.5 MB cap and PNG or JPEG bytes. Anything else draws
@@ -186,6 +204,42 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   rarely offers Discord. It shares the page's own address on the viewer's
   host, with no query or hash, and closing the sheet is not an error. Only a
   copy the clipboard accepted says "Link copied".
+
+## Static files and icons
+
+Next serves `public/` with `Cache-Control: public, max-age=0`, so without a
+rule here every page view asks the box, through the tunnel, whether each
+image has changed. The rules are in `next.config.ts`, and
+`src/lib/next-config.test.ts` matches paths with Next's own route builder.
+
+- **The league's artwork keeps a day, then serves stale for a week**
+  (`DAILY_CACHE`: `public, max-age=86400, stale-while-revalidate=604800`):
+  `/brand/*`, the full-size medals (`/ranks/<file>`), and the US's files at
+  the root (`/icon.svg`, `/apple-icon.png`, `/opengraph-image.png`,
+  `/twitter-image.png`). The header logo is on every page, and its
+  revalidations were the most requested path after `/api/sync`. The names
+  are not versioned, so never `immutable`: an edited file shows within
+  about a day (Cloudflare's default caching of image files may keep it at
+  the edge that long too). **To show a changed file at once, give it a new
+  name** and update its references (`LEAGUE_CONFIG.branding`), so no release
+  has to purge anything. The test checks every file `LEAGUE_CONFIG.branding`
+  names in both leagues, and that no page or API route gets the header.
+- **`/hero-loop.mp4` and the 72px medals (`/ranks/72/*`) keep a year,
+  immutable** (`LONG_CACHE`): they never change, and a changed clip gets a
+  new name. `/ranks/:file` matches one segment only, so it never overrides
+  the 72px copies.
+- **`/favicon.ico` and `/apple-touch-icon.png` (and `-precomposed`)
+  redirect (307) to the league's own icons** (`leagueIconRedirects`): the
+  tab icon the layout links first (`LEAGUE_CONFIG.branding.icons[0]`: the US
+  `/icon.svg`, Europe's 32px PNG) and the home-screen icon
+  (`branding.appleIcon`). Browsers, unfurlers and crawlers ask for these
+  without reading the page's links, and with no file there each rendered
+  the whole not-found page through the layout (about 50 KB and a season
+  read). The region is read at build time the way `LEAGUE_CONFIG` reads it,
+  and the test pins both leagues' targets to `LEAGUE_CONFIG`. Temporary, so
+  a renamed icon never leaves a browser holding a dead redirect. Never add a
+  `public/favicon.ico` (one `public/` serves both leagues) or an
+  `app/favicon.ico`.
 
 ## The shared UI kit
 
@@ -1009,10 +1063,15 @@ the league is already draftable and many visitors have joined. Write for both.
   renders only once the bot answers with a lobby (`lobbyPanelVisible`): those
   viewers can't fix the bot or the ticket, and the manual steps are not on
   their page.
-- **The panel's invite list and buttons show only while the lobby is ready
-  and the bot reported seats** (`docs/DOTA-LOBBY-BOT.md#lobby-invites`;
+- **The panel's seat list shows only while the bot reported seats, with the
+  lobby ready or Dota starting the game (`lobbyListVisible`), and its invite
+  copy and buttons only while it is ready, the invite and Start buttons only
+  with no release pending** (`docs/DOTA-LOBBY-BOT.md#lobby-invites`;
   source guard `dota-lobby-controls.test.ts`). Otherwise, as from an older
-  bot, the "Join through Dota → Play → Custom Lobbies" line stays. "Who's in
+  bot, the "Join through Dota → Play → Custom Lobbies" line stays. Its
+  background reads never disable a button, and an action's failure toasts
+  rather than showing inline, where the next read would clear it (the
+  panel's rates and its action lock: [inhouse](inhouse.md#game-setup)). "Who's in
   the lobby" is a list of `lobbyPlayerRow` texts ("(you)" on the viewer's);
   "Re-invite missing players" and "Send me an invite" render only through
   `reinviteMissingOpen` and `selfInviteOpen`; invite results toast through

@@ -200,6 +200,20 @@ console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 1
 const pings = (box) => box.calls().filter((call) => call.tool === "curl" && call.kind === "ping");
 const uploads = (box) =>
   box.calls().filter((call) => call.tool === "rclone").map((call) => call.args[call.args.length - 1]);
+// Every upload names the config and passes both R2 flags: --s3-no-check-bucket
+// (the token may not create the bucket) and --s3-no-head (Ubuntu's rclone
+// 1.60.1 HEADs a fresh upload with its versionId, which R2 refuses with a 501,
+// so every upload failed once and passed only on rclone's retry).
+function assertR2Uploads(box) {
+  const calls = box.calls().filter((call) => call.tool === "rclone");
+  assert.ok(calls.length > 0, "something was uploaded");
+  for (const { args } of calls) {
+    assert.deepEqual(args.slice(0, 2), ["--config", path.join(box.etc, "rclone.conf")]);
+    for (const flag of ["--s3-no-check-bucket", "--s3-no-head"]) assert.ok(args.includes(flag), `rclone ${args.join(" ")} passes ${flag}`);
+    assert.equal(args.at(-3), "copyto");
+    assert.ok(!args.some((arg) => arg.startsWith("--s3-version")), "never asks R2 for object versions");
+  }
+}
 const sha256 = (file) => createHash("sha256").update(readFileSync(file)).digest("hex");
 const lastReport = (result) => JSON.parse(result.stdout.trim().split("\n").pop());
 // The file a fake flock was handed, as {dev, ino, directory}.
@@ -261,6 +275,7 @@ test("an hourly backup dumps, verifies, encrypts, uploads and reports", () => {
       `r2:ggd2l-backups/us/monthly/2026-10/${name}.gz.age.sha256`,
       `r2:ggd2l-backups/us/monthly/2026-10/${name}.sha256`,
     ]);
+    assertR2Uploads(box);
     assert.equal(report.daily, true);
     assert.equal(report.monthly, true);
     assert.deepEqual(JSON.parse(readFileSync(path.join(box.root, "us/state/last-backup.json"), "utf8")), report);
@@ -764,6 +779,7 @@ test("the config archive is encrypted from the stream, uploaded under config/, a
     assert.match(path.basename(report.file), /^config-20261016T151700Z\.tar\.gz\.age$/);
     assert.equal(report.offsiteKey, `r2:ggd2l-backups/config/2026-10-16/${path.basename(report.file)}`);
     assert.deepEqual(uploads(box), [report.offsiteKey, `${report.offsiteKey}.sha256`]);
+    assertR2Uploads(box);
     assert.equal(report.sha256, sha256(report.file));
 
     const tarball = gunzipSync(readFileSync(report.file).subarray("FAKE-AGE\n".length));

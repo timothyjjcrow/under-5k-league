@@ -102,7 +102,8 @@ standin cover, and match-night check-ins. Main files:
   `withdrawTeam` toast points there.
 - **Mention the player a move happens to.** `freeAgentSignedMessage` mentions
   them and ends with their next move (check in, `/schedule` link), and the toast
-  appends `reachabilityNote`. `playerReleasedMessage` mentions the released player.
+  appends `reachabilityNote` (through `withReachabilityNote`).
+  `playerReleasedMessage` mentions the released player.
 
 ## Standin cover
 
@@ -145,7 +146,8 @@ standin cover, and match-night check-ins. Main files:
   only.
 - **Tell the standin, and the captain when someone else acted.** Assign mentions
   the standin plus the covered captain if they didn't book it; an admin removal
-  mentions both. Assign toasts append `reachabilityNote`. `standinAssignedMessage`
+  mentions both. Assign toasts append `reachabilityNote` through
+  `withReachabilityNote` (its own sentence). `standinAssignedMessage`
   and `playerOutMessage` link the match page. A reschedule that moves the match
   mentions booked standins (`AcceptedReschedule.standinUserIds`): their ping
   quoted the old time. Standins answer the ready check for the seat they cover;
@@ -218,3 +220,7 @@ standin cover, and match-night check-ins. Main files:
   unanswered players only. One claim per kickoff cluster
   (`claimAnnouncementMarker` on `weekReminderKey(season, week, kickoffMs)`), so an
   early fixture can't burn the week; a failed send stays retryable. Await the send.
+  Retiming one fixture releases only its old kickoff's marker, once nothing
+  else kicks off there (`releaseRetimedReminderMarker`), so the fixtures that
+  didn't move are never reminded, and pinged, twice
+  ([retime contract](season-schedule-playoffs.md#schedule-and-kickoff-times)).

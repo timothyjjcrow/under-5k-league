@@ -8,6 +8,51 @@ const LONG_CACHE = "public, max-age=31536000, immutable";
 // The small medal copies are Valve's medal art and never change either.
 const CACHED_MEDIA = ["/hero-loop.mp4", "/ranks/72/:file*"];
 
+// The league's artwork under names that don't change when the file does:
+// the header logo, the tab and home-screen icons and the share picture
+// (public/brand, and the US's at the root), and the full-size medals. Next
+// serves public/ with max-age=0, so every page view asked the box, through
+// the tunnel, whether the header logo had changed. A day fresh, then up to
+// a week of the old copy while a new one loads in the background: an edited
+// file shows within about a day without a rename. Rename a file (and its
+// references) to show it at once. `/ranks/:file` is one segment deep, so the
+// 72px copies keep the year above (docs/features/pages-and-ui.md).
+const DAILY_CACHE = "public, max-age=86400, stale-while-revalidate=604800";
+const DAILY_MEDIA = [
+  "/brand/:file*",
+  "/ranks/:file",
+  "/icon.svg",
+  "/apple-icon.png",
+  "/opengraph-image.png",
+  "/twitter-image.png",
+];
+
+// The icon addresses browsers, link unfurlers and crawlers ask for without
+// reading the page's <link rel="icon">. No file sits at any of them, so each
+// request rendered the whole not-found page (the layout, with its season
+// read). Each redirects to the league's own icon from
+// LEAGUE_CONFIG.branding (src/lib/league-config.ts): the tab icon and the
+// home-screen icon. The region is read as LEAGUE_CONFIG reads it, at build
+// time (next-config.test.ts pins both leagues to it). Temporary, so a
+// renamed icon never leaves a browser holding a dead redirect.
+function leagueIconRedirects() {
+  const europe =
+    process.env.NEXT_PUBLIC_LEAGUE_REGION?.trim().toLowerCase() === "eu";
+  const tabIcon = europe ? "/brand/ggd2l-europe-icon-32.png" : "/icon.svg";
+  const homeScreenIcon = europe
+    ? "/brand/ggd2l-europe-icon-180.png"
+    : "/brand/ggd2l-icon-180.png";
+  return [
+    { source: "/favicon.ico", destination: tabIcon, permanent: false },
+    { source: "/apple-touch-icon.png", destination: homeScreenIcon, permanent: false },
+    {
+      source: "/apple-touch-icon-precomposed.png",
+      destination: homeScreenIcon,
+      permanent: false,
+    },
+  ];
+}
+
 // Baseline security headers on every response. Deliberately no script/style CSP
 // directives (Next injects inline hydration scripts that a strict script-src
 // would break). The remaining directives are hydration-safe: they prevent
@@ -68,6 +113,7 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [
       { source: "/features", destination: "/how-it-works", permanent: true },
+      ...leagueIconRedirects(),
     ];
   },
   async headers() {
@@ -76,6 +122,10 @@ const nextConfig: NextConfig = {
       ...CACHED_MEDIA.map((source) => ({
         source,
         headers: [{ key: "Cache-Control", value: LONG_CACHE }],
+      })),
+      ...DAILY_MEDIA.map((source) => ({
+        source,
+        headers: [{ key: "Cache-Control", value: DAILY_CACHE }],
       })),
     ];
   },

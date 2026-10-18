@@ -7,15 +7,26 @@
 Description=GGD2L Steam Dota lobby bot
 After=network-online.target
 Wants=network-online.target
+# A misconfigured bot (a bad bot.env, a missing release) fails after five
+# starts in ten minutes instead of restarting every 30 s forever, and shows
+# as a failed unit. The offline watchdog and the bot's own Game Coordinator
+# resync exit at most every few minutes, well under this.
+StartLimitIntervalSec=600
+StartLimitBurst=5
 
 [Service]
 Type=simple
 User=ggd2l-bot
 Group=ggd2l-bot
 WorkingDirectory=/srv/ggd2l/bot/current/ops/dota-lobby-bot
-# Fixed, non-secret settings first; bot.env (secrets) is read after them.
+# Fixed, non-secret settings first; bot.env (secrets) is read after them,
+# and its values would win, so the contract checks what the bot gets.
 Environment=NODE_ENV=production DOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot HOST=127.0.0.1 PORT=8090
 EnvironmentFile=/etc/ggd2l/bot.env
+# Refuse to start on an env that breaks the bot's contract (names only,
+# never values): the state directory, the secret, no Steam password, and
+# the unit's own NODE_ENV, HOST and PORT left as they are.
+ExecStartPre=/usr/bin/node /usr/local/lib/ggd2l/env-contract.mjs --bot
 ExecStart=/usr/bin/node server.mjs
 # The offline watchdog exits 1 to get a fresh Steam session: restart it.
 Restart=on-failure

@@ -40,6 +40,10 @@ function optionalPlayers(value) {
 function optionalInvited(value) {
   return value === undefined || (Number.isInteger(value) && value >= 0 && value <= MAX_PLAYERS);
 }
+// The lifecycle flags a spec's withLifecycle asks for: present only as true.
+function optionalTrue(value) {
+  return value === undefined || value === true;
+}
 
 export function validControlRequest(value) {
   if (!record(value) || !onlyKeys(value, ["action", "spec"])) return false;
@@ -62,11 +66,13 @@ export function validReply(value, action) {
       nullableId(body.lobbyId) && nullableUint(body.gameMode) && nullableUint(body.serverRegion) && nullableUint(body.leagueId);
   }
   if (!LOBBY_ACTIONS.includes(action)) return false;
-  // players answers a spec's withPlayers; only an invite reports how many it sent.
-  const keys = ["state", "lobbyId", "matchId", "players", ...(action === "invite" ? ["invited"] : [])];
+  // players answers a spec's withPlayers, releasing and over its withLifecycle;
+  // only an invite reports how many it sent.
+  const keys = ["state", "lobbyId", "matchId", "players", "releasing", "over", ...(action === "invite" ? ["invited"] : [])];
   return onlyKeys(body, keys) && STATES.has(body.state) &&
     (body.lobbyId === undefined || id(body.lobbyId)) && (body.matchId === undefined || id(body.matchId)) &&
-    optionalPlayers(body.players) && optionalInvited(body.invited);
+    optionalPlayers(body.players) && optionalInvited(body.invited) &&
+    optionalTrue(body.releasing) && optionalTrue(body.over);
 }
 
 export function leaseAlive(attachment, automaticResponseAt, now) {

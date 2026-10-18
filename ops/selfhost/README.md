@@ -30,7 +30,7 @@ Browser ─> Cloudflare edge ─> tunnel (outbound from the box) ─> cloudflare
                            ├─ eu.ggd2l.com      ─> 3011 (eu@a) | 3012 (eu@b)
                            └─ ggd2l.com, www    ─> 302 https://us.ggd2l.com{uri}
 PostgreSQL 18 127.0.0.1:5432: ggd2l_us, ggd2l_eu (ld2l_restore_test only during drills)
-Lobby bot 127.0.0.1:8090 ─> the relay Worker (unchanged)
+Lobby bot 127.0.0.1:8090 <─ the sites over loopback once it moves here (the relay Worker until then)
 Cloudflare Workers: the minute scheduler ─> https://{us,eu}.ggd2l.com/api/cron/automation
 R2 bucket ggd2l-backups: age-encrypted dumps and config archives
 ```
@@ -58,8 +58,18 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 Units: `ggd2l-us@{a,b}.service`, `ggd2l-eu@{a,b}.service` (only the live slot is
 enabled), `cloudflared-ggd2l.service`, `ggd2l-backup@<lg>.timer`,
 `ggd2l-drill@<lg>.timer`, `ggd2l-heartbeat.timer`, `ggd2l-config-archive.timer`,
-`ggd2l-bot.service`, and `ggd2l-alert@<key>.service` (started by the backup,
-drill and config-archive units, never enabled).
+`ggd2l-bot.service`, `ggd2l-alert@<key>.service` (started by the backup,
+drill and config-archive units, never enabled), and the caddy package's
+`caddy.service` with the kit's
+drop-in `caddy.service.d/10-ggd2l.conf`: the packaged unit never restarts, so
+the drop-in adds `Restart=on-failure` (every 2 s, never giving up) and
+`OOMScoreAdjust=-500` (the kernel kills a build or a slot before Caddy;
+PostgreSQL stays at -900). `install-kit.sh` installs it; `Restart=` applies at
+once, `OOMScoreAdjust=` from Caddy's next start (the next reboot, or
+`sudo systemctl restart caddy` in a quiet minute: both sites blink for about a
+second; `sudo choom -p <pid> -n -500` sets it on the running process with no
+blink). `systemctl show` reports the unit's value at once, so check the live
+process: `cat /proc/$(systemctl show -p MainPID --value caddy)/oom_score_adj`.
 
 Linux users: `ggd2l` (admin, sudo), `ggd2l-build` (builds; holds no secret),
 `ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, drills,
@@ -74,14 +84,43 @@ heartbeat), `ggd2l-bot`.
 - Never probe `/api/sync` or `/api/health/automation` on a candidate slot.
 - Every unit refuses to start without a valid `LEAGUE_DEPLOY_ENV`; only
   `production` lets the site write to Discord.
+- `ggd2l-bot.service` refuses to start on an env that breaks the bot's
+  contract (`env-contract.mjs --bot`, names only): `DOTA_BOT_STATE_DIR`
+  exactly `/var/lib/ggd2l-bot`, a 32+ character `DOTA_LOBBY_BOT_SECRET`, no
+  `STEAM_BOT_PASSWORD`, and `NODE_ENV`, `HOST` and `PORT` in `bot.env` only
+  as the unit's own `production`, `127.0.0.1` and `8090` (any other value
+  would override the unit's). Check a file before installing it with
+  `node /usr/local/lib/ggd2l/env-contract.mjs --bot --file <path>`. Five
+  failed starts in ten minutes leave the unit failed instead of restarting
+  forever.
+- A slot can write only the release folders `next start` writes at runtime,
+  `RELEASE_WRITABLE_DIRS` in `agent/layout.mjs` (`.next/cache`, and
+  `.next/server/route-cache` for Next's response cache). The build creates
+  them for the league user and the unit's `ReadWritePaths=` names them; the
+  rest of the release is read-only. CI's boot step fails a build that writes
+  anywhere else.
+- Each slot process holds one Prisma pool of `connection_limit=8`
+  (`provision-league-db.sh`), so four processes in a release overlap use 32 of
+  PostgreSQL's 47 usable connections. A release built before 2026-10-17's fix
+  holds two pools per process.
 
 ## Daily operations
 
-- **Status:** `ssh ggd2l-1 sudo -n ggd2l-agent status` shows units, live SHAs,
-  slots, disk, memory, swap, the last backup and drill, a pending reboot and the
-  5xx count for the last 24 h.
-- **Logs:** `ssh ggd2l-1 sudo journalctl -u ggd2l-us@a -f` (the live slot);
-  `sudo -n ggd2l-agent logs us <sinceMs>` returns the 5xx and error rows.
+- **Status:** `ssh ggd2l-1 sudo -n ggd2l-agent status` shows units (the config
+  archive's included), live SHAs and slots, disk, memory, swap, the last backup,
+  the last drill, a pending reboot and two counts for the last 24 h:
+  `serverErrors24h`, the real 5xx, and `maintenance503s24h`, the maintenance
+  page's own 503s (a league held in maintenance answers everything with one).
+  `lastDrill` is the later of the drill unit's last run (the weekly timer,
+  failures included) and `state/last-drill.json`, which every passing drill
+  writes, so a `drill <lg> <sha>` before a migration counts too.
+- **Logs:** `ssh ggd2l-1 sudo journalctl -u ggd2l-us@<slot> -f` for the live
+  slot (`status` names it under `leagues.<lg>.live.slot`; a release flips it).
+  `sudo -n ggd2l-agent logs us <sinceMs>` is the release gate's evidence, not a
+  log reader: one JSON row per scheduler request (`/api/cron/automation`) and
+  per 5xx in Caddy's log, plus a bare `warn` row for each slot journal line
+  that looks like a Next error, with no message text. Read the text itself in
+  the journal.
 - **Alerts** post to Discord, into the admin channel through one webhook, and
   ping nobody unless `ALERT_PING_USER_ID` is set. Each problem posts once, a
   reminder each day it lasts, and once more when it clears (🔴, then 🟢):
@@ -146,7 +185,16 @@ reach the box only through `install-kit.sh <sha>` run from root's own clone
 (`sudo git -C /root/ggd2l-kit fetch origin`, check out `<sha>`, then
 `sudo bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <sha>`), as a separate,
 recorded operation. Never run it from a tools clone: it refuses any clone, or
-folder above it, that a user other than root could change.
+folder above it, that a user other than root could change. Before it changes
+anything it checks both live `/etc/ggd2l/<lg>.env` files with the new kit's
+env contract (names only) and stops on a problem, since every slot's
+ExecStartPre would run that contract at its next start; fix the file, then run
+it again. The first install after 2026-10-18 brings the production
+`DOTA_LOBBY_BOT_URL` rule (unset, `http://127.0.0.1:8090`, or exactly
+`https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`): record that check's
+output in the install's evidence. It rewrites files
+under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
+config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
 ## Rollback
 
@@ -267,6 +315,29 @@ no_check_bucket = true
 The token is limited to Object Read & Write on the one bucket, so rclone must
 not try to create it (`no_check_bucket`; the scripts also pass
 `--s3-no-check-bucket`).
+
+The scripts also pass `--s3-no-head`. Until they did, every upload logged
+`Failed to copy: NotImplemented: Not Implemented` and `Attempt 1/3 failed`,
+then passed on rclone's retry. The box's rclone is Ubuntu's 1.60.1, which
+HEADs every object it has just uploaded with the `versionId` the PUT returned
+(rclone 1.61 stopped: "Ignore versionIDs from uploads"), and R2 has no object
+versions. That HEAD is the only request after a PUT that landed (the retry
+found the object already there and skipped it), and a bare 501 with no error
+text is what a HEAD gets back. Without the HEAD, rclone still checks a
+single-part upload end to end: it sends the file's MD5 as `Content-MD5`, which
+R2 verifies, and compares the ETag R2 returns with it. After installing the
+kit, the next hourly backup's journal
+(`journalctl -u ggd2l-backup@us --since "1 hour ago"`) should show no
+`Attempt 1/3 failed`. If it still does, find the refused request with one
+upload by hand, with the scripts' own flags (`--dump headers` leaves out the
+Authorization header; keep the output on the box, it names the account's
+endpoint):
+
+```bash
+sudo -u ggd2l-ops sh -c 'f=$(mktemp) && echo diag > "$f" && rclone --config /etc/ggd2l/rclone.conf --s3-no-check-bucket --s3-no-head --retries 1 -vv --dump headers copyto "$f" "r2:ggd2l-backups/us/hourly/$(date -u +%F)/diag-$(date -u +%s).txt"; rm -f "$f"'
+```
+
+(`us/hourly/` expires after 7 days, so the test object needs no cleanup.)
 
 <a id="discord-alerts"></a>**Discord alerts.** `/etc/ggd2l/alerts.env` (root, 0600; the units read it
 through `EnvironmentFile=-`, so no script needs to open it) holds:
@@ -441,9 +512,12 @@ and delete the plaintext.
 
 **`cutover/env-partial.mjs` and `cutover/compose-env.sh`** build a league's
 `/etc/ggd2l/<lg>.env` file to file. On the Mac,
-`GGD2L_REPO=<main checkout> node ops/selfhost/cutover/env-partial.mjs <lg> staging|production [--without-bot] [--webhooks]`
+`GGD2L_REPO=<main checkout> node ops/selfhost/cutover/env-partial.mjs <lg> staging|production [--without-bot] [--webhooks] [--bot-via-relay]`
 reads the local secret files and installs the partial on the box through ssh's
-stdin (it prints only key names). Then on the box,
+stdin (it prints only key names). A production partial points the site at the
+lobby bot on the box (`DOTA_LOBBY_BOT_URL=http://127.0.0.1:8090`);
+`--bot-via-relay` keeps the relay's URL while the bot still runs on the Mac.
+The env contract accepts only those two in production. Then on the box,
 `sudo bash /root/ggd2l-kit/ops/selfhost/cutover/compose-env.sh <lg> [--keep-secrets]`
 adds the app-role database URL and fresh AUTH, CRON and BACKUP_RECEIPT secrets
 (or, with `--keep-secrets`, the current ones), keeps the server-action key, and
@@ -484,12 +558,31 @@ needs Tim's yes:
 - **After 14 days:** set `"permanent": true` (308), stage, check and promote the
   same way.
 
+**Cutover cleanup, once the 14 days are over** (the redirects on 308 and both
+Neon databases deleted, per DECISIONS' Hosting row): remove what the cutover
+left on the box. The plaintext Neon dumps in `/var/backups/ggd2l/cutover/<lg>/`
+fall under no 48 h rule; the box's own hourly copies in R2 and Tim's encrypted
+copies on the Mac remain. Check that no `agent import` is staged there (the
+folder is also the restore path), then, as the admin user:
+
+```bash
+sudo sh -c 'ls -la /var/backups/ggd2l/cutover/us /var/backups/ggd2l/cutover/eu'   # only the cutover's dumps and sidecars
+sudo sh -c 'shred -u /var/backups/ggd2l/cutover/us/* /var/backups/ggd2l/cutover/eu/*'   # the folders stay
+du -sh ~/buildtest ~/.npm; rm -rf ~/buildtest ~/.npm   # the 2026-10-15 trial build and its npm cache
+```
+
+Also check that the 0700 staging folder the dumps were copied into with
+`scp -p` (see `neon-dump.mjs` above) is empty or gone: under the file-to-file
+rule at the top it was shredded at the import, so a dump still there is a
+leftover plaintext copy to `shred -u`.
+
 ## Tim's monthly hour
 
 - Scroll the admin channel: every 🔴 has its 🟢, or you know why not.
 - `ssh ggd2l-1 sudo -n ggd2l-agent status`: live SHAs match
   `https://{us,eu}.ggd2l.com/api/health/release`, no failed unit, no pending
-  reboot stuck for days.
+  reboot stuck for days, `serverErrors24h` near 0 (`maintenance503s24h` counts
+  only the maintenance page), and a `lastDrill` from this week.
 - `ssh ggd2l-1 df -h /`: comfortably under the 85% alert line. A release takes
   about 1.2 GB and two days of dumps sit beside it.
 - OpenDota rate limits: both leagues now share one IP. The app treats a 429 as

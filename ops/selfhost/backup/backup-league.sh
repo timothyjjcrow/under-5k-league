@@ -264,8 +264,16 @@ else
   fi
 fi
 
+# --s3-no-check-bucket: the R2 token writes objects but may not create the
+# bucket. --s3-no-head: Ubuntu's rclone 1.60.1 HEADs every object it has just
+# uploaded with the versionId the PUT returned, and R2, which has no object
+# versions, answers 501 NotImplemented; each upload then failed once and passed
+# on rclone's retry, which found the object already there (rclone 1.61 dropped
+# the versionId: "Ignore versionIDs from uploads"). Without that HEAD rclone
+# still checks a single-part upload end to end: it sends Content-MD5, which R2
+# verifies, and compares the ETag R2 returns with the file's MD5.
 rclone_copy() { # local file, key under the remote
-  rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket copyto "$1" "${OFFSITE_REMOTE}/$2"
+  rclone --config "${RCLONE_CONF}" -q --s3-no-check-bucket --s3-no-head copyto "$1" "${OFFSITE_REMOTE}/$2"
 }
 # One encrypted copy with its checksum and the dump's checksum.
 upload_set() { # .age file, key for it

@@ -297,7 +297,12 @@ only after it is available; until then the site shows a neutral Europe ticket
 placeholder. `DOTA_INHOUSE_LEAGUE_ID` and the Europe season's `dotaLeagueId`
 remain unset. `DOTA_SEASON_LOBBY_BOT_ENABLED=false` remains in force until the
 flow is verified. Connection health is ready, but the bot intentionally refuses
-to host without a configured numeric league ticket.
+to host without a configured numeric league ticket. Until
+`DOTA_INHOUSE_LEAGUE_ID` is set, players see no bot panel in a game's setup
+card (only the by-hand steps, whose ticket step says the admins will provide
+the European ticket), admins see a status line naming the missing setting,
+and /inhouse's "Make your games auto-detect" guide promises no bot and names
+no ticket ([inhouse: Game setup](features/inhouse.md#game-setup)).
 See [DOTA-LOBBY-BOT.md](DOTA-LOBBY-BOT.md) and
 [DOTA-BOT-HOSTING.md](DOTA-BOT-HOSTING.md) for the full worker/relay procedure.
 
