@@ -13,6 +13,9 @@ import {
   lobbyBotKindEnabled,
   callLobbyBot,
   inhouseBotGameStatus,
+  INHOUSE_TICKET_MISSING_ADMIN_NOTE,
+  inhouseLobbyBotConfigured,
+  inhouseLobbyTicketId,
 } from "@/lib/dota-lobby-service";
 import { parseLobbyLeagueId } from "@/lib/dota-lobby";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -237,6 +240,66 @@ describe("Dota lobby authorization and settings", () => {
     await expect(
       resolveDotaLobby(asSession(captain), "inhouse", lobby.id),
     ).rejects.toThrow("numeric");
+  });
+  it.each(["", "Under 5K In-House League"])(
+    "with no in-house ticket id (%j), players get no bot panel and only an admin is told why",
+    async (ticket) => {
+      // Europe until Valve grants its ticket: the bot is connected, the
+      // ticket id is not set.
+      vi.stubEnv("DOTA_INHOUSE_LEAGUE_ID", ticket);
+      const captain = await makeUser("Captain");
+      const player = await makeUser("Player");
+      const admin = await makeUser("Admin", "ADMIN");
+      const lobby = await prisma.inhouseLobby.create({
+        data: {
+          status: "READY",
+          radiantTeam: 1,
+          players: {
+            create: [
+              { userId: captain.id, team: 1, isCaptain: true },
+              { userId: player.id, team: 2 },
+            ],
+          },
+        },
+      });
+      const fetch = vi.fn();
+      vi.stubGlobal("fetch", fetch);
+      // A player's read answers like a bot that isn't set up, so the setup
+      // card shows them the by-hand steps and no panel; so does any action.
+      for (const viewer of [captain, player]) {
+        vi.mocked(getSessionUser).mockResolvedValue(asSession(viewer));
+        for (const action of ["status", "create"]) {
+          const res = await POST(
+            request({ kind: "inhouse", id: lobby.id, action }),
+          );
+          expect(res.status).toBe(200);
+          expect(await res.json()).toEqual({ enabled: false });
+        }
+      }
+      // An admin's panel keeps a status line naming what is missing.
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(admin));
+      const res = await POST(
+        request({ kind: "inhouse", id: lobby.id, action: "status" }),
+      );
+      expect(res.status).toBe(400);
+      const body = await res.json();
+      expect(body).toEqual({ error: INHOUSE_TICKET_MISSING_ADMIN_NOTE });
+      expect(body.error).toContain("DOTA_INHOUSE_LEAGUE_ID");
+      expect(fetch).not.toHaveBeenCalled();
+      // /inhouse's guide promises no bot that can't set the ticket.
+      expect(inhouseLobbyTicketId()).toBeNull();
+      expect(inhouseLobbyBotConfigured()).toBe(false);
+    },
+  );
+  it("counts the bot as able to host in-house games only with a connection and the ticket's id", () => {
+    expect(inhouseLobbyTicketId()).toBe(54321);
+    expect(inhouseLobbyBotConfigured()).toBe(true);
+    // A malformed connection is still set up: its panel names the problem.
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "https://example.com/?token=secret");
+    expect(inhouseLobbyBotConfigured()).toBe(true);
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "");
+    vi.stubEnv("DOTA_LOBBY_BOT_SECRET", "");
+    expect(inhouseLobbyBotConfigured()).toBe(false);
   });
   it("denies outsiders and participant mutations before contacting Steam", async () => {
     const { match, home } = await fixture();

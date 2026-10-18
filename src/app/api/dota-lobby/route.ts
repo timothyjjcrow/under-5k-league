@@ -3,6 +3,8 @@ import { getSessionUser } from "@/lib/auth";
 import { guardJsonMutation, readBoundedJsonObject } from "@/lib/json-mutation";
 import {
   callLobbyBot,
+  INHOUSE_TICKET_MISSING_ADMIN_NOTE,
+  inhouseLobbyTicketId,
   InviteOutcomeUnknownError,
   lobbyBotConnection,
   lobbyBotKindEnabled,
@@ -74,6 +76,21 @@ export async function POST(req: NextRequest) {
         { enabled: false },
         { headers: { "Cache-Control": "no-store" } },
       );
+    // No in-house ticket id (Europe's, until Valve grants one): the bot can't
+    // host an in-house game, so its players' panel reads like a bot that
+    // isn't set up, which the setup card hides behind its by-hand steps. Only
+    // an admin's panel says what is missing. Before any read or bot call.
+    if (kind === "inhouse" && inhouseLobbyTicketId() === null) {
+      if (viewer.role !== "ADMIN")
+        return NextResponse.json(
+          { enabled: false },
+          { headers: { "Cache-Control": "no-store" } },
+        );
+      return NextResponse.json(
+        { error: INHOUSE_TICKET_MISSING_ADMIN_NOTE },
+        { status: 400, headers: { "Cache-Control": "no-store" } },
+      );
+    }
     const { spec, canControl, playable, roster } = await resolveDotaLobby(
       viewer,
       kind,

@@ -109,8 +109,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     board edit (`formOneLobby`'s queue reset returns false and
     `resolveStalledPick` drops `restoreLostPickTurn`'s result, so
     per-resolver bumps would miss writes). `syncInhouse` after `resolveStalledPick`, plus a try/finally
-    around its call. `formOneLobby` before its ping when it formed or
-    `expireStaticQueue` deleted rows. `joinQueue` before forming. The
+    around its call. `formOneLobby` before its ping (which goes after the
+    response, below) when it formed or `expireStaticQueue` deleted rows.
+    `joinQueue` before forming. The
     auto-detect claims and their deadline rollback. `applyResult` and
     `voidLastResult` before delivery (the admin `voidInhouseResult` too;
     `voidLastResult` after its result-cursor stamp, so a board check that
@@ -139,6 +140,18 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   claim winner or the worker repaints the board. That is the maintenance
   winner, or, with nothing due, a signed-in poll whose board check is due
   (`boardCheckDue`) and that wins the same 2s claim.
+  - **The pings go out after the response** (`runAfterResponse`, Next's
+    `after`): the match-found ping (`maybeFormLobby`) and the queue's
+    milestone ping (`joinQueue`, whose throttle claim still decides in the
+    request). A Discord post can take 5s, and the tenth joiner's POST, a
+    "Game over" press or a room poll that won maintenance would otherwise
+    hold it, with the joiner's controls locked. They stay after the publish
+    (rule P). The worker alone sends the match-found ping at once
+    (`maybeFormLobby({ pingAfterResponse: false })`): its response comes
+    after a pass of up to 45s, which would eat the 90s accept window, and
+    nobody waits on it. Outside a request (scripts, tests) the ping is sent
+    inline. Tests: `test/integration/inhouse-pings.itest.ts`, and the call
+    sites in `inhouse-room-publish.test.ts`.
   - **The check is due on a new key, 60s (`BOARD_RECHECK_MS`) after the last
     check, or after a `throttled` or `failed` outcome.** The key is this
     instance's: the room version (a digest of the board input while none
@@ -576,6 +589,20 @@ Every transition is a guarded claim; keep it that way (general rules:
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
   its status line. See `docs/DOTA-LOBBY-BOT.md`.
+- **No in-house ticket id, no bot panel for players.** The bot hosts no
+  in-house game without `DOTA_INHOUSE_LEAGUE_ID` (`inhouseLobbyTicketId`;
+  Europe's is unset until Valve grants its ticket), so `/api/dota-lobby`
+  answers a player's read (and any action) for an in-house game like a bot
+  that isn't set up (`{ enabled: false }`: the card shows the by-hand steps
+  and no panel), and an admin's with `INHOUSE_TICKET_MISSING_ADMIN_NOTE`,
+  which names the setting (`dota-lobby.itest.ts`). /inhouse's "Make your
+  games auto-detect" guide follows the same facts (`inhouseTicketGuideStep`
+  in `src/lib/inhouse.ts`, source-guarded in `inhouse.test.ts`): with no
+  ticket (`INHOUSE.LOBBY_TICKET_CONFIGURED`, as the card's ticket step
+  decides it) its step 3 says the admins will provide the European ticket
+  before tracked games begin, never a placeholder as a ticket to pick, and
+  it promises the bot only when `inhouseLobbyBotConfigured` (a connection
+  AND the ticket's id).
 - **The bot invites the ten once its lobby is ready** (Tim's call,
   2026-10-10; `docs/DOTA-LOBBY-BOT.md#lobby-invites`), once per game.
   Accepting joins without the password but lands the player on neither side,

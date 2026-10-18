@@ -81,7 +81,7 @@ actions: `src/app/actions/admin-discord.ts`.
   must report this attempt); news (`postNewsToDiscord` needs the message id to
   edit or delete; it pings @everyone only when the admin ticks the box, and
   edits never re-ping); inhouse alerts (`sendInhouseDiscordMessage`, direct and
-  best-effort). Inhouse results and voids have their own outbox
+  best-effort; the queue and match-found pings are sent after the response). Inhouse results and voids have their own outbox
   (`inhouse-announcement-outbox.ts`, see `docs/features/inhouse.md`).
 - **Pin API v10** (`webhookApiUrl`); unversioned routes ride deprecated v6.
   **Validate URLs with `normalizeDiscordWebhookUrl`**; `runtimeWebhookUrl`'s
@@ -194,7 +194,12 @@ actions: `src/app/actions/admin-discord.ts`.
   it if it cries wolf. It links `joinLink()` (`/inhouse?join=1`).
 - **Lobby formed mentions all ten** (`maybeFormLobby`, after commit):
   `<@discordId>` if linked, escaped name otherwise, plus the accept deadline,
-  and "(Game 2)" when another game is already live.
+  and "(Game 2)" when another game is already live. It goes out after the
+  response (`runAfterResponse`), so the tenth joiner's POST and a room poll
+  never wait on Discord; the worker alone sends it during its pass, which
+  answers too late for the accept clock
+  ([inhouse](inhouse.md#scope-and-where-it-runs)). The queue ping above is
+  posted after the response too.
   Queueing is the consent; don't add an opt-out. One tabbed-away player burns
   the league's scarcest event on a short `INHOUSE.ACCEPT_SECONDS` clock.
 - **Only the interrupting posts carry the ping role:** queue filling, match

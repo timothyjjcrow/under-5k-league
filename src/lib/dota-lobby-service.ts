@@ -70,6 +70,38 @@ export function lobbyBotKindEnabled(kind: LobbyKind) {
   return kind === "inhouse" || process.env.DOTA_SEASON_LOBBY_BOT_ENABLED === "true";
 }
 
+/**
+ * The in-house league ticket's numeric id (`DOTA_INHOUSE_LEAGUE_ID`), or null
+ * while it is unset or not a ticket id: Europe's, until Valve grants one. The
+ * bot hosts no in-house game without it (`inhouseLobbyPlan` refuses).
+ */
+export function inhouseLobbyTicketId(): number | null {
+  return parseLobbyLeagueId(process.env.DOTA_INHOUSE_LEAGUE_ID);
+}
+
+/**
+ * Env only: can the lobby bot host this league's in-house games? It needs a
+ * connection AND the in-house ticket's id, so no page promises a bot that
+ * can't set the ticket. A connection that is set but malformed still counts:
+ * its panel names the problem to admins.
+ */
+export function inhouseLobbyBotConfigured(): boolean {
+  if (inhouseLobbyTicketId() === null) return false;
+  try {
+    return lobbyBotConnection() != null;
+  } catch {
+    return true;
+  }
+}
+
+/**
+ * What an admin's bot panel says while the in-house ticket's id is unset.
+ * Players get no panel then (`/api/dota-lobby` answers their read like a bot
+ * that isn't set up), so this line is the only place it shows.
+ */
+export const INHOUSE_TICKET_MISSING_ADMIN_NOTE =
+  "The bot can't host in-house games until the in-house league ticket's numeric ID is set (DOTA_INHOUSE_LEAGUE_ID). Players see the by-hand steps until then.";
+
 export function lobbyBotConnection() {
   const origin = process.env.DOTA_LOBBY_BOT_URL;
   const token = process.env.DOTA_LOBBY_BOT_SECRET;
@@ -205,7 +237,7 @@ function inhouseLobbyPlan(
   lobby: InhouseSpecLobby,
   viewerId: string | null,
 ): { spec: DotaLobbySpec; roster: LobbyRosterEntry[] } {
-  const leagueId = parseLobbyLeagueId(process.env.DOTA_INHOUSE_LEAGUE_ID);
+  const leagueId = inhouseLobbyTicketId();
   if (!leagueId)
     throw new UserFacingError(
       "An admin must configure the numeric in-house league ticket ID before using the bot.",

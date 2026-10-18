@@ -192,8 +192,10 @@ describe("rule P: the publish sites, in order", () => {
   });
 
   it.each([
-    ["formOneLobby", [PUBLISH, "sendInhouseDiscordMessage("]],
-    ["joinQueue", [PUBLISH, "maybeFormLobby()", "sendInhouseDiscordMessage("]],
+    // Both pings go out after the response (the describe below), but still
+    // after the publish: a deferred send must not jump rule P either.
+    ["formOneLobby", [PUBLISH, "sendInhouseDiscordMessage(", "runAfterResponse(ping)"]],
+    ["joinQueue", [PUBLISH, "maybeFormLobby()", "runAfterResponse(", "sendInhouseDiscordMessage("]],
     ["applyResult", ["eloDeltas: JSON.stringify(deltas)", PUBLISH, "deliverInhouseAnnouncements("]],
     // After the result cursor: a board check that sees the new version must
     // see the post-void stats.
@@ -225,5 +227,40 @@ describe("rule P: the publish sites, in order", () => {
     const actions = sourceFile("src/app/actions/registration.ts");
     ordered(code(fn(actions.text, "saveRegistration")), "saved = true", PUBLISH, "sendDiscordMessage(");
     ordered(code(fn(actions.text, "refreshSteamProfileFor")), "prisma.user.update(", PUBLISH, "refresh()");
+  });
+});
+
+// The inhouse pings never hold a request someone waits on: the tenth
+// joiner's POST, a "Game over" press and a room poll that won maintenance
+// answer first, and Discord gets the post after the response (Next's
+// `after`, through runAfterResponse). The behaviour is tested in
+// test/integration/inhouse-pings.itest.ts; these pin the sites.
+describe("the inhouse pings go out after the response", () => {
+  const service = code(sourceFile("src/lib/inhouse-service.ts").text);
+
+  it("every inhouse Discord send in the engine is deferred, or the worker's inline formation ping", () => {
+    const sends = [...service.matchAll(/sendInhouseDiscordMessage\(/g)];
+    expect(sends).toHaveLength(2);
+    // formOneLobby: deferred unless its caller asked for it now.
+    expect(fn(service, "formOneLobby")).toMatch(
+      /if \(pingAfterResponse\) await runAfterResponse\(ping\);\s*else await ping\(\)/,
+    );
+    // joinQueue's milestone ping: always after the response.
+    expect(fn(service, "joinQueue")).toMatch(
+      /await runAfterResponse\(async \(\) => \{\s*const roleId = await getInhousePingRoleId\(\);\s*await sendInhouseDiscordMessage\(/,
+    );
+  });
+
+  it("only the worker forms with the ping sent at once", () => {
+    const callers = sourceFiles("src/**/*.{ts,tsx}", 300).flatMap((f) =>
+      [...code(f.text).matchAll(/await maybeFormLobby\(([^)]*)\)/g)].map(
+        (m) => `${f.path}: ${m[1]}`,
+      ),
+    );
+    // joinQueue, finishGame, getInhouseState's maintenance and the worker.
+    expect(callers.length).toBeGreaterThanOrEqual(4);
+    expect(callers.filter((c) => !c.endsWith(": "))).toEqual([
+      "src/lib/result-sync-service.ts: { pingAfterResponse: false }",
+    ]);
   });
 });

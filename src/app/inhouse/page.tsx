@@ -61,7 +61,8 @@ import {
 } from "@/lib/inhouse-times";
 import { readInhouseTime } from "@/lib/inhouse-times-service";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
-import { lobbyBotConnection } from "@/lib/dota-lobby-service";
+import { inhouseLobbyBotConfigured } from "@/lib/dota-lobby-service";
+import { inhouseTicketGuideStep } from "@/lib/inhouse";
 import { HeroVideo } from "@/components/hero-video";
 import { LocalTime } from "@/components/local-time";
 import { SectionNav } from "@/components/section-nav";
@@ -398,7 +399,7 @@ export default async function InhousePage({
         >
           <OpenDotaGuide
             matchDataPrivate={dbUser?.fhUnavailable === true}
-            lobbyBot={lobbyBotConfigured()}
+            lobbyBot={inhouseLobbyBotConfigured()}
           />
         </section>
       </div>
@@ -699,23 +700,22 @@ async function LadderCard({ meId }: { meId: string | null }) {
 
 // ---------- OpenDota "be findable" guide ----------
 
-/** Env-only check: is a lobby bot set up? A broken setup still counts. */
-function lobbyBotConfigured() {
-  try {
-    return lobbyBotConnection() != null;
-  } catch {
-    return true;
-  }
-}
-
 function OpenDotaGuide({
   matchDataPrivate,
   lobbyBot,
 }: {
   matchDataPrivate: boolean;
-  /** A lobby bot is set up for this league (it hosts with the ticket set). */
+  /**
+   * The lobby bot can host this league's in-house games: a connection AND
+   * the ticket's id (`inhouseLobbyBotConfigured`), since it hosts with the
+   * ticket set.
+   */
   lobbyBot: boolean;
 }) {
+  const ticketStep = inhouseTicketGuideStep({
+    ticketConfigured: INHOUSE.LOBBY_TICKET_CONFIGURED,
+    lobbyBot,
+  });
   return (
     // Not unconditionally `open` any more. This is read-once setup copy, and it
     // was costing ~200px on every visit forever — including for signed-out
@@ -790,14 +790,17 @@ function OpenDotaGuide({
           <li className="flex gap-3">
             <GuideStep n={3} />
             {/* Dota only lets the league's ticket admins pick its ticket
-                (docs/DOTA-LOBBY-BOT.md), so "the host" is not any player. */}
-            <span>
-              {lobbyBot
-                ? "When teams lock, a captain asks the lobby bot to host the game, with the ticket already set. If the bot is down, the host must be one of the league's ticket admins, since only they can select the "
-                : "When teams lock, the host must be one of the league's ticket admins, since only they can select the "}
-              <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without
-              it, the private game will not appear on OpenDota.
-            </span>
+                (docs/DOTA-LOBBY-BOT.md), so "the host" is not any player.
+                With no ticket yet (Europe) there is none to name. */}
+            {ticketStep.kind === "pending" ? (
+              <span>{ticketStep.text}</span>
+            ) : (
+              <span>
+                {ticketStep.lead}
+                <b>{INHOUSE.LOBBY_TICKET}</b> ticket in Lobby Settings. Without
+                it, the private game will not appear on OpenDota.
+              </span>
+            )}
           </li>
           <li className="flex gap-3">
             <GuideStep n={4} />

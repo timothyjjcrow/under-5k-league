@@ -117,7 +117,11 @@ checks the actual lobby against both the original ticket/region and the
 current request before launch. A shared Steam account needs permission for
 each league's ticket: configure Europe's own numeric `DOTA_INHOUSE_LEAGUE_ID`,
 ticket name and any season `dotaLeagueId` separately. Sharing the account
-does not obtain or grant access to a Europe ticket.
+does not obtain or grant access to a Europe ticket. While a league's
+`DOTA_INHOUSE_LEAGUE_ID` is unset, its in-house panel reads to players like a
+bot that isn't set up (hidden; they get the by-hand steps), and an admin's
+panel names the missing setting
+([inhouse: Game setup](features/inhouse.md#game-setup)).
 
 Activation order:
 
