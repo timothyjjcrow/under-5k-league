@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import {
   bumpInhouseRoomGeneration,
   inhouseRoomGeneration,
+  inhouseRoomPublishMark,
   wakeInhouseRoomWaiters,
 } from "./inhouse-room-wait";
 import { prisma } from "./prisma";
@@ -37,6 +38,16 @@ import { SETTING_KEYS } from "./settings";
  */
 export function inhouseRoomLocalGeneration(): number {
   return inhouseRoomGeneration();
+}
+
+/**
+ * The long-poll's fence (inhouse-room-wait.ts): it moves when a publish in
+ * this process starts its statement or finishes it. The route reads it
+ * before the version it compares with a request's `since`, so a publish
+ * racing that read re-checks the hold instead of waiting for the watch.
+ */
+export function inhouseRoomHoldMark(): number {
+  return inhouseRoomPublishMark();
 }
 
 /** No version row yet: what a reply carries and a client sends back. */

@@ -22,6 +22,14 @@ import { INHOUSE } from "./constants";
 // is held, one timer re-reads the version every LONG_POLL_WATCH_MS: the other
 // slot's publishes during a release's overlap, and writes made outside this
 // process, reach a held request that way.
+//
+// A publish is counted twice, when it starts its statement (`generation`, the
+// snapshot's fence) and when that statement has run (`landed`, in the wake).
+// The route reads both (inhouseRoomPublishMark) before the version it
+// compares with `since`, and a hold that finds either moved re-checks at
+// once. So a publish that started before the route's read and finished
+// before the hold registered (its wake then found nobody held) is still
+// caught, without waiting for the watch.
 
 /** Why a held request ended. */
 export type InhouseRoomWake =
@@ -40,6 +48,8 @@ type Waiter = {
 type Registry = {
   /** Publishes started in this process (bumped before each statement). */
   generation: number;
+  /** Publishes whose statement has run, landed or not (bumped by the wake). */
+  landed: number;
   waiters: Set<Waiter>;
   /** The latest version reader a waiter brought (the watch's and re-check's). */
   readToken: (() => Promise<string>) | null;
@@ -53,7 +63,9 @@ type Registry = {
   again: boolean;
 };
 
-const REGISTRY_KEY = Symbol.for("ggd2l.inhouseRoomWait.v1");
+// v2: `landed` joined the registry. A dev server's hot reload keeps the
+// older shape on globalThis under v1, where it can't be mistaken for this.
+const REGISTRY_KEY = Symbol.for("ggd2l.inhouseRoomWait.v2");
 
 /**
  * This module instance's registry: the one already on globalThis, or a new
@@ -65,6 +77,7 @@ const registry: Registry = (() => {
   const g = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Registry };
   g[REGISTRY_KEY] ??= {
     generation: 0,
+    landed: 0,
     waiters: new Set(),
     readToken: null,
     recheck: null,
@@ -83,6 +96,15 @@ export function inhouseRoomGeneration(): number {
 /** A publish is about to run its statement (inhouse-room-version.ts). */
 export function bumpInhouseRoomGeneration(): void {
   registry.generation += 1;
+}
+
+/**
+ * Moves whenever a publish in this process starts its statement or finishes
+ * it. Read BEFORE the version a held request compares with `since`
+ * (waitForInhouseRoomChange's `mark`).
+ */
+export function inhouseRoomPublishMark(): number {
+  return registry.generation + registry.landed;
 }
 
 /** Held requests in this process, for tests and diagnostics. */
@@ -159,21 +181,25 @@ function queueRecheck(): void {
  * commit it announces happened either way). Never throws.
  */
 export function wakeInhouseRoomWaiters(): void {
+  // Counted even with nothing held: a request that read the version before
+  // this statement landed may be about to register (inhouseRoomPublishMark).
+  registry.landed += 1;
   queueRecheck();
 }
 
 /**
  * Hold a state request until the room version moves past `since`, `untilMs`,
- * or `signal` aborts. `generation` is inhouseRoomGeneration() read BEFORE the
- * caller read the version it compared with `since`: a publish that started
- * after it may have landed before or after that read, so the hold re-checks
- * at once instead of trusting it. `readToken` reads the current version as
- * the client sees it (inhouseRoomVersionToken). Resolves, never rejects; a
- * wake other than "aborted" comes after a random jitter.
+ * or `signal` aborts. `mark` is inhouseRoomPublishMark() read BEFORE the
+ * caller read the version it compared with `since`: when it has moved by
+ * registration, a publish in this process started or finished around that
+ * read, which may have missed it, so the hold re-checks at once instead of
+ * trusting it. `readToken` reads the current version as the client sees it
+ * (inhouseRoomVersionToken). Resolves, never rejects; a wake other than
+ * "aborted" comes after a random jitter.
  */
 export function waitForInhouseRoomChange(o: {
   since: string;
-  generation: number;
+  mark: number;
   untilMs: number;
   signal?: AbortSignal;
   readToken: () => Promise<string>;
@@ -214,10 +240,32 @@ export function waitForInhouseRoomChange(o: {
     );
     deadline.unref?.();
     startWatch();
-    // A publish since the caller's version read: re-check rather than hold
-    // on a version that may already be stale.
-    if (registry.generation !== o.generation) queueRecheck();
+    // A publish started or finished since the caller's mark, around its
+    // version read: re-check rather than hold on a version that may already
+    // be stale.
+    if (inhouseRoomPublishMark() !== o.mark) queueRecheck();
   });
+}
+
+/**
+ * Test-only: run `load` (a dynamic import after vi.resetModules()) as a
+ * second PROCESS would load it: the module copies it loads make their own
+ * registry, so their publishes never reach this one's fence or held requests
+ * (only the database is shared). This process's registry is back on
+ * globalThis afterwards. A second module graph loaded without it shares this
+ * process's registry, as a `next start` process's two instances do.
+ */
+export async function loadAsAnotherProcessForTests<T>(
+  load: () => Promise<T>,
+): Promise<T> {
+  const g = globalThis as typeof globalThis & { [REGISTRY_KEY]?: Registry };
+  const mine = g[REGISTRY_KEY];
+  delete g[REGISTRY_KEY];
+  try {
+    return await load();
+  } finally {
+    g[REGISTRY_KEY] = mine;
+  }
 }
 
 /** Test-only: end every held request and stop the timers. */

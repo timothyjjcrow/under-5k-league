@@ -96,13 +96,13 @@ describe("the room poll's source", () => {
     const read = /Promise\.all\(\[\s*getSessionUser\(\),\s*readInhouseRoomVersion\(\),\s*\]\)/g;
     const reads = [...branch.matchAll(read)].map((m) => m.index!);
     expect(reads).toHaveLength(2);
-    const generation = branch.indexOf("inhouseRoomLocalGeneration()");
+    const mark = branch.indexOf("inhouseRoomHoldMark()");
     const hold = branch.indexOf("holdInhouseRoomPoll(");
     const poll = branch.indexOf("pollInhouseState(user, version)");
-    // The publish count before the first read (a racing publish re-checks
-    // the hold), the hold between the reads, the poll after both.
-    expect(generation).toBeGreaterThan(-1);
-    expect(generation).toBeLessThan(reads[0]);
+    // The hold mark before the first read (a racing publish re-checks the
+    // hold), the hold between the reads, the poll after both.
+    expect(mark).toBeGreaterThan(-1);
+    expect(mark).toBeLessThan(reads[0]);
     expect(hold).toBeGreaterThan(reads[0]);
     expect(reads[1]).toBeGreaterThan(hold);
     expect(poll).toBeGreaterThan(reads[1]);

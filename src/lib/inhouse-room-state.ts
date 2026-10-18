@@ -129,8 +129,8 @@ async function readInhouseRoomVersionToken(): Promise<string> {
  * the version moving (a publish in this process, or the watch's database
  * read), the room's next clock (inhouseRoomWakeAt, from this instance's
  * snapshot of the rows: a cache hit while the version stands), the hold
- * asked for (at most LONG_POLL_HOLD_MS), or `signal`. `generation` is
- * inhouseRoomLocalGeneration() read before that version. Reads nothing else
+ * asked for (at most LONG_POLL_HOLD_MS), or `signal`. `mark` is
+ * inhouseRoomHoldMark() read before that version. Reads nothing else
  * and writes nothing: the route polls as usual afterwards, unless the client
  * went away ("aborted").
  */
@@ -138,7 +138,7 @@ export async function holdInhouseRoomPoll(o: {
   viewer: SessionUser | null;
   version: string | null;
   hold: InhouseHoldRequest;
-  generation: number;
+  mark: number;
   signal?: AbortSignal;
 }): Promise<InhouseRoomWake> {
   if (o.signal?.aborted) return "aborted";
@@ -153,7 +153,7 @@ export async function holdInhouseRoomPoll(o: {
   );
   return waitForInhouseRoomChange({
     since: o.hold.since,
-    generation: o.generation,
+    mark: o.mark,
     untilMs: Math.min(nowMs + holdMs, clockAt ?? Infinity),
     signal: o.signal,
     readToken: readInhouseRoomVersionToken,

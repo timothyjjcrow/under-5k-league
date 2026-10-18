@@ -20,12 +20,14 @@ vi.mock("./prisma", () => ({
 
 import { INHOUSE } from "./constants";
 import {
+  inhouseRoomHoldMark,
   inhouseRoomLocalGeneration,
   inhouseRoomVersionToken,
   publishInhouseRoomChange,
   readInhouseRoomVersion,
 } from "./inhouse-room-version";
 import {
+  heldInhouseRoomRequests,
   inhouseRoomGeneration,
   resetInhouseRoomWaitersForTests,
   waitForInhouseRoomChange,
@@ -40,11 +42,11 @@ const token = async () => inhouseRoomVersionToken(await readInhouseRoomVersion()
 function hold() {
   const outcome: { wake: InhouseRoomWake | null } = { wake: null };
   void (async () => {
-    const generation = inhouseRoomLocalGeneration();
+    const mark = inhouseRoomHoldMark();
     const since = await token();
     outcome.wake = await waitForInhouseRoomChange({
       since,
-      generation,
+      mark,
       untilMs: Date.now() + INHOUSE.LONG_POLL_HOLD_MS,
       readToken: token,
     });
@@ -105,6 +107,41 @@ describe("publishInhouseRoomChange and held requests", () => {
     await publishing;
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     expect(held.wake).toBe("changed");
+  });
+
+  it("a publish already running when the route reads lands before the hold registers: still prompt", async () => {
+    // The interleaving the 2s watch would otherwise have to catch: the
+    // publish has bumped its count, the route takes the mark and reads the
+    // old version, the INSERT lands and the publish's wake runs with nothing
+    // held, and only then does the request register its hold.
+    let land!: () => void;
+    db.executeRaw.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          land = () => {
+            db.version = "v2";
+            resolve(1);
+          };
+        }),
+    );
+    const publishing = publishInhouseRoomChange();
+    const mark = inhouseRoomHoldMark();
+    const since = await token();
+    expect(since).toBe("v1");
+    land();
+    await publishing;
+    expect(heldInhouseRoomRequests()).toBe(0);
+    const outcome: { wake: InhouseRoomWake | null } = { wake: null };
+    void waitForInhouseRoomChange({
+      since,
+      mark,
+      untilMs: Date.now() + INHOUSE.LONG_POLL_HOLD_MS,
+      readToken: token,
+    }).then((wake) => {
+      outcome.wake = wake;
+    });
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(outcome.wake).toBe("changed");
   });
 
   it("still wakes held requests when the statement fails (the commit happened)", async () => {

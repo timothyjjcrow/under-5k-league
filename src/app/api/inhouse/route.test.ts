@@ -26,7 +26,7 @@ const mocks = vi.hoisted(() => ({
   holdInhouseRoomPoll: vi.fn(),
   readInhouseRoomVersion: vi.fn(),
   publishInhouseRoomChange: vi.fn(),
-  inhouseRoomLocalGeneration: vi.fn(),
+  inhouseRoomHoldMark: vi.fn(),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -62,7 +62,7 @@ vi.mock("@/lib/inhouse-room-state", () => ({
 vi.mock("@/lib/inhouse-room-version", () => ({
   readInhouseRoomVersion: mocks.readInhouseRoomVersion,
   publishInhouseRoomChange: mocks.publishInhouseRoomChange,
-  inhouseRoomLocalGeneration: mocks.inhouseRoomLocalGeneration,
+  inhouseRoomHoldMark: mocks.inhouseRoomHoldMark,
   // The real token rule: a missing row is "none".
   inhouseRoomVersionToken: (version: string | null) => version ?? "none",
 }));
@@ -123,7 +123,7 @@ beforeEach(() => {
   mocks.getInhouseState.mockResolvedValue(state);
   mocks.readInhouseRoomVersion.mockResolvedValue(VERSION);
   mocks.publishInhouseRoomChange.mockResolvedValue(undefined);
-  mocks.inhouseRoomLocalGeneration.mockReturnValue(7);
+  mocks.inhouseRoomHoldMark.mockReturnValue(7);
   mocks.holdInhouseRoomPoll.mockResolvedValue("changed");
   for (const action of actionMocks) action.mockResolvedValue({ ok: true });
 });
@@ -344,8 +344,8 @@ describe("POST /api/inhouse request boundary", () => {
 
   it("holds a request whose client shows the version, then authorizes and reads again", async () => {
     const order: string[] = [];
-    mocks.inhouseRoomLocalGeneration.mockImplementation(() => {
-      order.push("generation");
+    mocks.inhouseRoomHoldMark.mockImplementation(() => {
+      order.push("mark");
       return 7;
     });
     mocks.readInhouseRoomVersion
@@ -374,12 +374,12 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(req);
 
     expect(response.status).toBe(200);
-    expect(order).toEqual(["generation", "version", "hold", "version again", "poll"]);
+    expect(order).toEqual(["mark", "version", "hold", "version again", "poll"]);
     expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledWith({
       viewer: user,
       version: VERSION,
       hold: { since: VERSION, holdMs: 10_000 },
-      generation: 7,
+      mark: 7,
       signal: req.signal,
     });
     // The poll runs as the session and on the version read AFTER the hold,

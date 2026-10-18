@@ -29,7 +29,7 @@ import {
   pollInhouseState,
 } from "@/lib/inhouse-room-state";
 import {
-  inhouseRoomLocalGeneration,
+  inhouseRoomHoldMark,
   inhouseRoomVersionToken,
   publishInhouseRoomChange,
   readInhouseRoomVersion,
@@ -109,10 +109,11 @@ export async function POST(req: NextRequest) {
     // Authorization on every request; the poll decides what is due. The
     // room version is read beside the session: it is what decides whether
     // this instance's room snapshot may serve, and whether this request is
-    // held. The publish count is taken first, so a publish racing the read
-    // re-checks the hold instead of being missed.
+    // held. The hold mark is taken first, so a publish in this process that
+    // starts or finishes around the read re-checks the hold instead of
+    // waiting for the 2s watch.
     const hold = parseInhouseHold(body);
-    const generation = inhouseRoomLocalGeneration();
+    const mark = inhouseRoomHoldMark();
     let [user, version] = await Promise.all([
       getSessionUser(),
       readInhouseRoomVersion(),
@@ -124,7 +125,7 @@ export async function POST(req: NextRequest) {
         viewer: user,
         version,
         hold,
-        generation,
+        mark,
         signal: req.signal,
       });
       if (wake === "aborted") return new NextResponse(null, { status: 204 });

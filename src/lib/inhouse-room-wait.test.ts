@@ -4,7 +4,9 @@ import {
   bumpInhouseRoomGeneration,
   heldInhouseRoomRequests,
   inhouseRoomGeneration,
+  inhouseRoomPublishMark,
   inhouseRoomWakeJitterMs,
+  loadAsAnotherProcessForTests,
   parseInhouseHold,
   resetInhouseRoomWaitersForTests,
   waitForInhouseRoomChange,
@@ -17,7 +19,6 @@ import {
 // src/app/api/inhouse/route.test.ts, and end to end through the real route,
 // database and a server action in test/integration/inhouse-room-longpoll.itest.ts.
 
-const REGISTRY_KEY = Symbol.for("ggd2l.inhouseRoomWait.v1");
 const { LONG_POLL_COALESCE_MS, LONG_POLL_JITTER_MS, LONG_POLL_WATCH_MS } = INHOUSE;
 /** Past every coalesce, read and jitter wait. */
 const SETTLE_MS = LONG_POLL_COALESCE_MS + LONG_POLL_JITTER_MS + 5;
@@ -30,7 +31,7 @@ function hold(over: Partial<Parameters<typeof waitForInhouseRoomChange>[0]> = {}
   const outcome: { wake: InhouseRoomWake | null } = { wake: null };
   const promise = waitForInhouseRoomChange({
     since: "v1",
-    generation: inhouseRoomGeneration(),
+    mark: inhouseRoomPublishMark(),
     untilMs: Date.now() + INHOUSE.LONG_POLL_HOLD_MS,
     readToken,
     ...over,
@@ -156,14 +157,41 @@ describe("waitForInhouseRoomChange", () => {
   });
 
   it("re-checks at once when a publish started after the caller's version read", async () => {
-    // The route took the publish count, read the version (maybe before the
+    // The route took the hold mark, read the version (maybe before the
     // publish's statement landed), and only then held: trust nothing.
-    const before = inhouseRoomGeneration();
+    const before = inhouseRoomPublishMark();
     bumpInhouseRoomGeneration();
     token = "v2";
-    const held = hold({ generation: before });
+    const held = hold({ mark: before });
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     expect(held.outcome.wake).toBe("changed");
+  });
+
+  it("re-checks at once when a publish that started before the mark landed before the hold registered", async () => {
+    // The publish bumps its count, then the route takes the mark (which
+    // already includes that bump) and reads the version before the INSERT
+    // lands. The INSERT lands and the publish's wake runs while nothing is
+    // held yet, so its re-check has nobody to wake. The hold registers on the
+    // stale version: only `landed` moving tells it so.
+    bumpInhouseRoomGeneration();
+    const mark = inhouseRoomPublishMark();
+    const since = token; // the route's version read: still "v1"
+    token = "v2";
+    wakeInhouseRoomWaiters();
+    expect(heldInhouseRoomRequests()).toBe(0);
+    const held = hold({ since, mark });
+    // SABOTAGE CHECK: drop `registry.landed += 1` from the wake and this
+    // stays null until the watch's read, LONG_POLL_WATCH_MS later.
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(held.outcome.wake).toBe("changed");
+    expect(SETTLE_MS).toBeLessThan(LONG_POLL_WATCH_MS);
+  });
+
+  it("an unmoved mark trusts the caller's version read: no extra re-check", async () => {
+    const held = hold();
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(readToken).not.toHaveBeenCalled();
+    expect(held.outcome.wake).toBeNull();
   });
 
   it("ends at its deadline: the hold's end or the room's next clock", async () => {
@@ -220,20 +248,26 @@ describe("one registry per process", () => {
     // Load a second copy with the global entry out of the way: a separate
     // registry, as another process has. Its publish wakes nothing here; only
     // the watch's database read does.
-    const g = globalThis as Record<symbol, unknown>;
-    const mine = g[REGISTRY_KEY];
-    delete g[REGISTRY_KEY];
-    vi.resetModules();
-    const elsewhere = await import("./inhouse-room-wait");
-    g[REGISTRY_KEY] = mine;
+    const elsewhere = await loadAsAnotherProcessForTests(async () => {
+      vi.resetModules();
+      return import("./inhouse-room-wait");
+    });
+    expect(elsewhere.inhouseRoomPublishMark).not.toBe(inhouseRoomPublishMark);
+    const markHere = inhouseRoomPublishMark();
     const held = hold();
     elsewhere.bumpInhouseRoomGeneration();
     token = "v2";
     elsewhere.wakeInhouseRoomWaiters();
     await vi.advanceTimersByTimeAsync(SETTLE_MS);
     expect(held.outcome.wake).toBeNull();
+    // Its counts are its own.
+    expect(inhouseRoomPublishMark()).toBe(markHere);
     await vi.advanceTimersByTimeAsync(LONG_POLL_WATCH_MS);
     expect(held.outcome.wake).toBe("changed");
+    // And this process's registry is back for the next module load.
+    vi.resetModules();
+    const again = await import("./inhouse-room-wait");
+    expect(again.inhouseRoomPublishMark()).toBe(inhouseRoomPublishMark());
   });
 });
 
@@ -251,6 +285,27 @@ describe("inhouseRoomWakeJitterMs", () => {
       expect(ms).toBeGreaterThanOrEqual(0);
       expect(ms).toBeLessThanOrEqual(LONG_POLL_JITTER_MS);
     }
+  });
+
+  it("a woken request really waits out its jitter", async () => {
+    // Math.random drives the wait: at 0.99 a woken request answers 149ms
+    // after the re-check's read, at 0 straight after it.
+    // SABOTAGE CHECK: resolve settle()'s wake without the jitter timer and
+    // the first assertion below goes red.
+    const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
+    const late = hold();
+    publishHere();
+    await vi.advanceTimersByTimeAsync(LONG_POLL_COALESCE_MS + 140);
+    expect(late.outcome.wake).toBeNull();
+    await vi.advanceTimersByTimeAsync(15);
+    expect(late.outcome.wake).toBe("changed");
+
+    random.mockReturnValue(0);
+    const prompt = hold({ since: token });
+    publishHere();
+    await vi.advanceTimersByTimeAsync(LONG_POLL_COALESCE_MS + 1);
+    expect(prompt.outcome.wake).toBe("changed");
+    random.mockRestore();
   });
 
   it("every woken request lands inside its jitter window", async () => {

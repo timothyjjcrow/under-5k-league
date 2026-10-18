@@ -14,7 +14,8 @@ import { NextRequest } from "next/server";
 // - a version moved where no publish here ran (the other release slot) is
 //   caught by the watch;
 // - a held request ends at the room's next clock, and the poll that wakes
-//   resolves the work that came due;
+//   resolves the work that came due; a signed-out one, which can't, never
+//   wakes early to retry it;
 // - a client that goes away ends its hold and gets no poll;
 // - looping clients make about one request per change, plus one per hold.
 
@@ -327,6 +328,26 @@ describe("the long-poll: a held request ends by itself", () => {
     expect(Date.now() - acceptEndsAt.getTime()).toBeLessThan(
       INHOUSE.LONG_POLL_CLOCK_GRACE_MS + INHOUSE.LONG_POLL_DUE_RETRY_MS + INSTANT_MS,
     );
+  });
+
+  it("a signed-out request never retries due work: it holds to its hold", async () => {
+    // The ready check ran out and nothing resolved it. A signed-in hold ends
+    // by LONG_POLL_DUE_RETRY_MS to retry that work (above); a signed-out
+    // poll can't run it, so its hold waits for the publish of whoever does,
+    // or its own end, instead of polling every 2.25s for nothing.
+    // SABOTAGE CHECK: `maintains: true` in holdInhouseRoomPoll ends this at
+    // LONG_POLL_DUE_RETRY_MS.
+    const { acceptEndsAt, version } = await readyCheckEnding(200);
+    await sleep(
+      Math.max(0, acceptEndsAt.getTime() + INHOUSE.LONG_POLL_CLOCK_GRACE_MS + 50 - Date.now()),
+    );
+    const HOLD_MS = INHOUSE.LONG_POLL_DUE_RETRY_MS + 1_000;
+    const reply = await heldPoll(null, version, HOLD_MS);
+    expect(reply.status).toBe(200);
+    expect(reply.ms).toBeGreaterThanOrEqual(HOLD_MS - 20);
+    expect(reply.json?.roomVersion).toBe(version);
+    // Still unresolved: nobody signed in polled.
+    expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.READY_CHECK } })).toBe(1);
   });
 
   it("when its client goes away: no poll, nothing left held", async () => {
