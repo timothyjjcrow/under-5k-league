@@ -318,7 +318,7 @@ export function syncPingSkipsPage(pathname: string | null): boolean {
 
 /**
  * Leaving a skipped page wakes the ping at once instead of after the idle
- * wait it was sleeping, so a match night's one-minute watch carries on; any
+ * wait it was sleeping, so a match night's watch cadence carries on; any
  * other navigation keeps its schedule (the new page was just rendered).
  */
 export function syncPingWakesOnNavigation(

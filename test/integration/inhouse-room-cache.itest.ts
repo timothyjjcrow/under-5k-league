@@ -257,11 +257,17 @@ async function room(session: SessionUser | null, body: Record<string, unknown>) 
   return { status: res.status, json: await res.json() };
 }
 
-/** A room poll through the route, as the browser makes it. */
+/**
+ * A room poll through the route, as the browser makes it: the room state,
+ * without the `roomVersion` the route adds for the long-poll (compared with
+ * getInhouseState's replies below, which have none).
+ */
 async function poll(session: SessionUser | null) {
   const res = await room(session, { action: "state" });
   expect(res.status).toBe(200);
-  return res.json as Awaited<ReturnType<typeof getInhouseState>>;
+  const { roomVersion, ...state } = res.json as Record<string, unknown>;
+  expect(typeof roomVersion).toBe("string");
+  return state as Awaited<ReturnType<typeof getInhouseState>>;
 }
 
 /** The fresh read-only reply, as JSON, for comparison with a poll's. */

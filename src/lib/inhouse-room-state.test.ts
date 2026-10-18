@@ -87,6 +87,55 @@ describe("the room poll's source", () => {
     expect(route).not.toContain("claimThrottle(");
   });
 
+  it("the route holds a request only before it polls, then reads the session and version again", () => {
+    const route = code(sourceFile("src/app/api/inhouse/route.ts").text);
+    const branch = route.slice(
+      route.indexOf('if (action === "state")'),
+      route.indexOf("requireSameOrigin(req)"),
+    );
+    const read = /Promise\.all\(\[\s*getSessionUser\(\),\s*readInhouseRoomVersion\(\),\s*\]\)/g;
+    const reads = [...branch.matchAll(read)].map((m) => m.index!);
+    expect(reads).toHaveLength(2);
+    const generation = branch.indexOf("inhouseRoomLocalGeneration()");
+    const hold = branch.indexOf("holdInhouseRoomPoll(");
+    const poll = branch.indexOf("pollInhouseState(user, version)");
+    // The publish count before the first read (a racing publish re-checks
+    // the hold), the hold between the reads, the poll after both.
+    expect(generation).toBeGreaterThan(-1);
+    expect(generation).toBeLessThan(reads[0]);
+    expect(hold).toBeGreaterThan(reads[0]);
+    expect(reads[1]).toBeGreaterThan(hold);
+    expect(poll).toBeGreaterThan(reads[1]);
+    // Only a client that shows the version just read is held.
+    expect(branch).toMatch(
+      /if \(hold && hold\.since === inhouseRoomVersionToken\(version\)\)/,
+    );
+    // A client that went away gets no poll.
+    expect(branch.slice(hold, reads[1])).toMatch(
+      /if \(wake === "aborted"\) return new NextResponse\(null, \{ status: 204 \}\);/,
+    );
+    // The reply names the version read before its rows.
+    expect(branch).toMatch(/roomVersion: inhouseRoomVersionToken\(version\)/);
+  });
+
+  it("the hold reads only the snapshot and writes nothing", () => {
+    const state = code(sourceFile("src/lib/inhouse-room-state.ts").text);
+    const body = fn(state, "holdInhouseRoomPoll");
+    expect(body.length).toBeGreaterThan(0);
+    expect(body).toContain("roomCache.get(o.version)");
+    expect(body).toContain("waitForInhouseRoomChange(");
+    for (const forbidden of [
+      "touchQueueHeartbeat(",
+      "claimThrottle(",
+      "publishInhouseRoomChange(",
+      "getInhouseState(",
+      "syncInhouseBoard(",
+      "loadViewerExtras(",
+    ]) {
+      expect(body, forbidden).not.toContain(forbidden);
+    }
+  });
+
   it("the resolvers decide with the due check's predicates", () => {
     const service = code(sourceFile("src/lib/inhouse-service.ts").text);
     const expectations: [string, string[]][] = [

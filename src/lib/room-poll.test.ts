@@ -1,6 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { draftPollCadence, inhousePollCadence } from "./room-poll";
-import { DEFAULTS, DRAFT_ROOM, INHOUSE, INHOUSE_STATUS, ROOM_POLL_FAIL_THRESHOLD } from "./constants";
+import {
+  draftPollCadence,
+  inhouseLongPoll,
+  inhousePollCadence,
+  inhousePollDelay,
+} from "./room-poll";
+import {
+  DEFAULTS,
+  DRAFT_ROOM,
+  INHOUSE,
+  INHOUSE_STATUS,
+  ROOM_POLL_FAIL_THRESHOLD,
+  ROOM_POLL_TIMEOUT_MS,
+} from "./constants";
 
 // Two ~1800-line client components' poll loops, with no unit-testable surface
 // of their own (the vitest env is `node` — no jsdom), so these rules were
@@ -27,19 +39,26 @@ describe("inhousePollCadence", () => {
       ...base, hidden: false, hasStake: true, lobbyStatus: INHOUSE_STATUS.READY,
     })).toEqual({ skip: false, delayMs: INHOUSE.POLL_SETUP_MS });
     // Waiting is a long state: a queue that takes an afternoon to fill must
-    // not poll like a ready check (the hosting budget, constants.ts).
-    expect(INHOUSE.POLL_QUEUE_MS).toBeGreaterThanOrEqual(10_000);
+    // not poll like a ready check (the one box both leagues share,
+    // constants.ts), yet the fallback still shows a forming ready check
+    // within seconds of its 90s window.
+    expect(INHOUSE.POLL_QUEUE_MS).toBeGreaterThan(FAST);
+    expect(INHOUSE.POLL_QUEUE_MS).toBeLessThanOrEqual(5_000);
   });
 
-  it("refreshes a player's own game in progress at the game rate, tab hidden or not", () => {
-    for (const hidden of [false, true]) {
-      expect(inhousePollCadence({
-        ...base, hidden, hasStake: true, inLobby: true,
-        lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
-      })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_MS });
-    }
-    // Nothing in a game is timed, and all ten players are in the Dota client.
-    expect(INHOUSE.POLL_GAME_MS).toBeGreaterThanOrEqual(30_000);
+  it("refreshes a player's own game in progress at the game rate, slower once hidden", () => {
+    expect(inhousePollCadence({
+      ...base, hidden: false, hasStake: true, inLobby: true,
+      lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_MS });
+    // Hidden: all ten players are in the Dota client.
+    expect(inhousePollCadence({
+      ...base, hidden: true, hasStake: true, inLobby: true,
+      lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_KEEPALIVE_MS });
+    // Nothing in a game is timed: slower than the queue, faster hidden-less.
+    expect(INHOUSE.POLL_GAME_MS).toBeGreaterThan(INHOUSE.POLL_QUEUE_MS);
+    expect(INHOUSE.POLL_GAME_KEEPALIVE_MS).toBeGreaterThan(INHOUSE.POLL_GAME_MS);
   });
 
   it("polls a queued player by their queue, not by the game they are shown", () => {
@@ -94,9 +113,9 @@ describe("inhousePollCadence", () => {
     expect(inhousePollCadence({ ...ready, activeMs: 8000, serverNow: scanOpensAt - 1 })).toEqual({
       skip: false, delayMs: 8000,
     });
-    // Setup is minutes of joining a lobby, with no clock: well above the fast
+    // Setup is minutes of joining a lobby, with no clock: above the fast
     // rate, yet quick enough that the Start answer or a cancel shows promptly.
-    expect(INHOUSE.POLL_SETUP_MS).toBeGreaterThanOrEqual(3 * FAST);
+    expect(INHOUSE.POLL_SETUP_MS).toBeGreaterThan(FAST);
     expect(INHOUSE.POLL_SETUP_MS).toBeLessThanOrEqual(INHOUSE.POLL_QUEUE_MS);
     // The window only speaks for READY: a draft past it is still a draft.
     expect(inhousePollCadence({
@@ -123,7 +142,7 @@ describe("inhousePollCadence", () => {
     })).toEqual({ skip: false, delayMs: INHOUSE.POLL_QUEUE_KEEPALIVE_MS });
     expect(inhousePollCadence({
       ...base, hidden: true, hasStake: true, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS,
-    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_MS });
+    })).toEqual({ skip: false, delayMs: INHOUSE.POLL_GAME_KEEPALIVE_MS });
   });
 
   it("polls FAST for anyone with a stake — in a lobby OR in the queue", () => {
@@ -163,7 +182,13 @@ describe("inhousePollCadence", () => {
     // The binding case is a live game: all ten tabs are hidden (everyone is in
     // the Dota client), so the keepalive is the ONLY thing holding ten queue
     // spots — and Chrome clamps hidden timers toward once a minute.
-    for (const ms of [INHOUSE.POLL_KEEPALIVE_MS, INHOUSE.POLL_QUEUE_KEEPALIVE_MS, INHOUSE.POLL_GAME_MS]) {
+    for (const ms of [
+      INHOUSE.POLL_KEEPALIVE_MS,
+      INHOUSE.POLL_QUEUE_KEEPALIVE_MS,
+      INHOUSE.POLL_GAME_KEEPALIVE_MS,
+      // A held request is the same heartbeat, at most this long apart.
+      INHOUSE.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
+    ]) {
       expect(ms).toBeLessThan(INHOUSE.QUEUE_AWAY_SECONDS * 1000);
     }
   });
@@ -218,11 +243,11 @@ describe("inhousePollCadence", () => {
     }
   });
 
-  it("recovers at the recovery rate, not the slower spectator rate", () => {
-    // The idle rate slowed for the hosting budget; a 429's back-off and a
-    // disconnected room's first backed-off retry kept their 10 seconds.
+  it("recovers at the recovery rate, never faster than idling", () => {
+    // A 429's back-off and a disconnected room's first backed-off retry keep
+    // their 10 seconds whatever the spectator rate is.
     const room = { hidden: false, hasStake: false, activeMs: FAST };
-    expect(INHOUSE.POLL_IDLE_MS).toBeGreaterThan(INHOUSE.POLL_RECOVERY_MS);
+    expect(INHOUSE.POLL_IDLE_MS).toBeGreaterThanOrEqual(INHOUSE.POLL_RECOVERY_MS);
     expect(inhousePollCadence({ ...room, rateLimited: true }).delayMs).toBe(
       INHOUSE.POLL_RECOVERY_MS,
     );
@@ -281,6 +306,135 @@ describe("inhousePollCadence", () => {
       inhousePollCadence({ hidden: false, hasStake: false, activeMs: FAST })
         .delayMs,
     ).toBe(INHOUSE.POLL_IDLE_MS);
+  });
+});
+
+describe("inhouseLongPoll", () => {
+  const V = "3b2f6a1e-version";
+  const calm = { version: V, urgent: false };
+
+  it("holds only a request that can send back the version it shows", () => {
+    // The first request has nothing to send; an old slot's reply carries no
+    // version. Either way the server must answer at once, so the room never
+    // hot-loops on a server that ignores `since`.
+    for (const version of [null, undefined, ""]) {
+      expect(inhouseLongPoll({ ...calm, version })).toBeNull();
+    }
+    expect(inhouseLongPoll({ ...calm, lobbyStatus: null })).toEqual({
+      since: V,
+      holdMs: INHOUSE.LONG_POLL_HOLD_MS,
+      timeoutMs: INHOUSE.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
+    });
+  });
+
+  it("answers at once while something waits on the reply", () => {
+    // A resync after going offline, an action in flight or awaiting its
+    // reconciliation: their controls stay locked until a reply lands.
+    expect(inhouseLongPoll({ ...calm, urgent: true })).toBeNull();
+    // A retry has to diagnose a broken connection quickly.
+    expect(inhouseLongPoll({ ...calm, failureCount: 1 })).toBeNull();
+    expect(inhouseLongPoll({ ...calm, failureCount: 0 })).not.toBeNull();
+  });
+
+  it("asks for the short hold only in the member's own clocked stages", () => {
+    for (const lobbyStatus of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+    ]) {
+      for (const inLobby of [true, undefined]) {
+        expect(inhouseLongPoll({ ...calm, lobbyStatus, inLobby })?.holdMs).toBe(
+          INHOUSE.LONG_POLL_TIMED_HOLD_MS,
+        );
+      }
+      // Someone else's clock (a queued player shown another game's draft).
+      expect(inhouseLongPoll({ ...calm, lobbyStatus, inLobby: false })?.holdMs).toBe(
+        INHOUSE.LONG_POLL_HOLD_MS,
+      );
+    }
+    // Setup, a game being played and the queue have no clock of theirs.
+    for (const lobbyStatus of [INHOUSE_STATUS.READY, INHOUSE_STATUS.IN_PROGRESS, null]) {
+      expect(inhouseLongPoll({ ...calm, lobbyStatus, inLobby: true })?.holdMs).toBe(
+        INHOUSE.LONG_POLL_HOLD_MS,
+      );
+    }
+  });
+
+  it("gives every held request its hold plus the poll deadline", () => {
+    for (const lobbyStatus of [INHOUSE_STATUS.DRAFTING, null]) {
+      const lp = inhouseLongPoll({ ...calm, lobbyStatus })!;
+      expect(lp.timeoutMs).toBe(lp.holdMs + ROOM_POLL_TIMEOUT_MS);
+      // The server never holds longer than it grants.
+      expect(lp.holdMs).toBeLessThanOrEqual(INHOUSE.LONG_POLL_HOLD_MS);
+    }
+    // The clocked stages notice a dead connection inside the vote window.
+    expect(INHOUSE.LONG_POLL_TIMED_HOLD_MS + ROOM_POLL_TIMEOUT_MS).toBeLessThan(
+      INHOUSE.VOTE_SECONDS * 1000,
+    );
+    expect(INHOUSE.LONG_POLL_TIMED_HOLD_MS).toBeLessThan(INHOUSE.LONG_POLL_HOLD_MS);
+  });
+});
+
+describe("inhousePollDelay", () => {
+  const FAST = 1500;
+  const settled = { activeMs: FAST, reached: true, hidden: false, hasStake: true };
+
+  it("re-issues a long-poll straight away once its request has run the gap", () => {
+    for (const startedAgoMs of [INHOUSE.LONG_POLL_MIN_GAP_MS, 25_000]) {
+      expect(inhousePollDelay({ ...settled, longPoll: true, startedAgoMs })).toBe(0);
+    }
+    // A hidden tab with a stake long-polls too: its chime and title arrive
+    // with the change, and no clamped timer stands in the way.
+    expect(
+      inhousePollDelay({ ...settled, hidden: true, longPoll: true, startedAgoMs: 5_000 }),
+    ).toBe(0);
+  });
+
+  it("never starts two requests closer than the gap, so it can't hot-loop", () => {
+    for (const startedAgoMs of [-50, 0, 1, 40, 999]) {
+      const delay = inhousePollDelay({ ...settled, longPoll: true, startedAgoMs });
+      expect(delay).toBeGreaterThan(0);
+      expect(Math.max(0, startedAgoMs) + delay).toBe(INHOUSE.LONG_POLL_MIN_GAP_MS);
+    }
+    // Never faster than the clocked stages' fast poll.
+    expect(INHOUSE.LONG_POLL_MIN_GAP_MS).toBeLessThanOrEqual(FAST);
+  });
+
+  it("falls back to the ladder whenever the next request can't be held", () => {
+    // No version (an old slot during a release), something urgent, a failure:
+    // inhouseLongPoll was null, and the ladder's rate is the delay, exactly.
+    const cases = [
+      { lobbyStatus: null },
+      { lobbyStatus: INHOUSE_STATUS.IN_PROGRESS, inLobby: true },
+      { lobbyStatus: INHOUSE_STATUS.READY },
+      { lobbyStatus: INHOUSE_STATUS.DRAFTING },
+      { hidden: true },
+      { hasStake: false },
+      { hasStake: false, hidden: true },
+      { reached: false, failureCount: 2 },
+      { rateLimited: true },
+      { offline: true },
+    ];
+    for (const extra of cases) {
+      const o = { ...settled, ...extra };
+      expect(inhousePollDelay({ ...o, longPoll: false, startedAgoMs: 30_000 })).toBe(
+        inhousePollCadence(o).delayMs,
+      );
+    }
+  });
+
+  it("uses the ladder after a 429, a failure, offline or a hidden spectator, even mid long-poll", () => {
+    for (const extra of [
+      { rateLimited: true },
+      { reached: false },
+      { offline: true },
+      { hidden: true, hasStake: false },
+    ]) {
+      const o = { ...settled, ...extra };
+      expect(inhousePollDelay({ ...o, longPoll: true, startedAgoMs: 30_000 })).toBe(
+        inhousePollCadence(o).delayMs,
+      );
+    }
   });
 });
 

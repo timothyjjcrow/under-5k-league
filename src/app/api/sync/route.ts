@@ -19,8 +19,8 @@ export async function GET() {
         // The payload is viewer-independent. Browsers always revalidate, while
         // Vercel's CDN answers every tab in a region from one origin snapshot
         // for 30 seconds: a CDN hit is no function call, on a hosting budget
-        // both leagues share. Parked tabs ping at most once a minute, so a
-        // result reaches them within about a minute and a half.
+        // both leagues share. Parked tabs ping every WATCH_POLL_SECONDS while
+        // something is live, so a result reaches them within about a minute.
         // On the self-hosted box no edge caches this route: only Vercel reads
         // `vercel-cdn-cache-control`, and Cloudflare caches no dynamic route
         // without a Cache Rule, which the zone deliberately lacks
