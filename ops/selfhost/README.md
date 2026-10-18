@@ -18,7 +18,9 @@ ssh ggd2l-1 sudo -n ggd2l-agent status
 
 **Secrets never travel through argv, logs, stdout, commits or chat.** Move them
 file to file (`scp -p` into a 0700 folder, then `shred -u` the source); psql
-passwords go on stdin; healthchecks ping URLs go to curl on stdin.
+passwords go on stdin; healthchecks ping URLs go to curl on stdin; the Discord
+alert webhook reaches only units' environments (`EnvironmentFile=`) and
+Wrangler's stdin.
 
 ## Layout
 
@@ -41,7 +43,8 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 | Release agent | `/usr/local/sbin/ggd2l-agent` (runs `/usr/local/lib/ggd2l/ggd2l-agent.mjs`) |
 | Agent modules, env contract, renderers | `/usr/local/lib/ggd2l/` |
 | SQL (parity, grants, scrub, identity) | `/usr/local/lib/ggd2l/sql/<name>.sql` |
-| Shell helpers | `/usr/local/lib/ggd2l/{provision-league-db,backup-league,drill-league,heartbeat,config-archive}.sh` |
+| Shell helpers | `/usr/local/lib/ggd2l/{provision-league-db,backup-league,drill-league,heartbeat,config-archive}.sh`, `discord-alert.mjs` |
+| Alert state (Discord) | `/var/lib/ggd2l-alerts/` (one JSON file per alert, `ggd2l-ops`) |
 | Releases, slots, live pointer | `/srv/ggd2l/<lg>/releases/<id>/`, `/srv/ggd2l/<lg>/slots/{a,b}`, `/var/lib/ggd2l/<lg>/live.json` |
 | Union static files (14-day prune) | `/srv/ggd2l/<lg>/static/_next/static/` |
 | Tools clones (migrate, attest, drill) | `/srv/ggd2l/tools/<sha12>/`, `/srv/ggd2l/tools/current` |
@@ -55,7 +58,9 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 Units: `ggd2l-us@{a,b}.service`, `ggd2l-eu@{a,b}.service` (only the live slot is
 enabled), `cloudflared-ggd2l.service`, `ggd2l-backup@<lg>.timer`,
 `ggd2l-drill@<lg>.timer`, `ggd2l-heartbeat.timer`, `ggd2l-config-archive.timer`,
-`ggd2l-bot.service`, and the caddy package's `caddy.service` with the kit's
+`ggd2l-bot.service`, `ggd2l-alert@<key>.service` (started by the backup,
+drill and config-archive units, never enabled), and the caddy package's
+`caddy.service` with the kit's
 drop-in `caddy.service.d/10-ggd2l.conf`: the packaged unit never restarts, so
 the drop-in adds `Restart=on-failure` (every 2 s, never giving up) and
 `OOMScoreAdjust=-500` (the kernel kills a build or a slot before Caddy;
@@ -116,31 +121,36 @@ heartbeat), `ggd2l-bot`.
   per 5xx in Caddy's log, plus a bare `warn` row for each slot journal line
   that looks like a Next error, with no message text. Read the text itself in
   the journal.
-- **Alerts: not configured yet.** Nothing alerts anyone today: the checks
-  below don't exist and `/etc/ggd2l/healthchecks.env` is not on the box, so the
-  heartbeat, backups, drills and the config archive log their results and ping
-  nothing (a check without a URL is skipped). Tim creates the checks at
-  healthchecks.io (periods and graces in PRODUCTION-OPERATIONS' Alerts table),
-  the URLs go file to file into `/etc/ggd2l/healthchecks.env` (see Backups),
-  and a test `/fail` proves the email arrives. Until then read `agent status`
-  and the journals by hand. Once set up, healthchecks.io alerts by email:
+- **Alerts** post to Discord, into the admin channel through one webhook, and
+  ping nobody unless `ALERT_PING_USER_ID` is set. Each problem posts once, a
+  reminder each day it lasts, and once more when it clears (🔴, then 🟢):
 
-  | Check | Means | First look |
+  | Posted by | When | First look |
   |---|---|---|
-  | `box` | A live league's `/api/health/ready` failed through Cloudflare, `/` is 85% full, MemAvailable is under 150 MB, swap use is over 1.5 GB, or a unit has failed. The `/fail` body names which. | `ggd2l-agent status`; `systemctl --failed` |
-  | `automation` | No healthy `/api/health/automation` for 30 min | the scheduler Worker; the slot's journal |
-  | `backup-us`, `backup-eu` | No successful backup for 2 h, or a `/fail` naming the step | `journalctl -u ggd2l-backup@us` |
-  | `drill` | A weekly restore drill failed (the `/fail` body names the league and step), or none passed for 8 days | `journalctl -u ggd2l-drill@us -u ggd2l-drill@eu` |
-  | `bot` | `ggd2l-bot` inactive for 20 min | `journalctl -u ggd2l-bot` |
-  | `config` | The daily config archive failed or never ran | `journalctl -u ggd2l-config-archive` |
+  | Each league's scheduler Worker, from Cloudflare | 3 scheduled passes in a row failed (10 between 09:00 and 09:15 UTC, the reboot window): the box, the tunnel, Caddy, the slot or the database is down, or the pass itself fails. Clears after 2 passes in a row. The message names the kind of failure (`HTTP 530: the tunnel to the box is down`). | `ggd2l-agent status`; the live slot's journal; the Worker's logs in Cloudflare |
+  | `ggd2l-alert@backup-<lg>` | A backup run failed, with the step (`at step upload (exit 1)`) or how it was killed. Clears at the next good run. | `journalctl -u ggd2l-backup@<lg>` |
+  | `ggd2l-alert@drill-<lg>` | A weekly restore drill failed, with the step | `journalctl -u ggd2l-drill@<lg>` |
+  | `ggd2l-alert@config-archive` | The daily config archive failed, with the step | `journalctl -u ggd2l-config-archive` |
+  | The heartbeat | `/` is 85% full (at once); MemAvailable under 150 MB or swap use over 1.5 GB for three beats; a unit failed for two beats (a backup, drill or config archive only when its own alert didn't get out); a league's site answers but `/api/health/automation` has said stale for three beats (the Worker isn't firing); an enabled `ggd2l-bot` inactive for four beats. One beat's posts share a message. | `ggd2l-agent status`; `systemctl --failed` |
 
-  A failed unit keeps `box` red until it is cleared. After you have fixed the
-  cause, run `sudo systemctl reset-failed <unit>`.
+  A league the box can't reach through Cloudflare is the Worker's to report,
+  so one outage posts once. A failed unit stays failed until it runs again or
+  you clear it: after fixing the cause, `sudo systemctl reset-failed <unit>`.
+  Each Worker and the box post a 👋 hello the first time they see a webhook;
+  `sudo systemctl start ggd2l-alert@test` posts a test alert and its recovery
+  through the box's path. Settings: [Discord alerts](#discord-alerts) below.
+
+  healthchecks.io pings still go out where `healthchecks.env` names a check
+  (below), as they always did: `box`, `automation`, `backup-us`, `backup-eu`,
+  `drill`, `bot` and `config`.
 - **The 09:00 UTC reboot** brings back exactly the enabled (live) slots. The
-  `box` check's 15-minute grace covers it.
+  Workers' reboot window (10 failed passes before an alert until 09:15 UTC)
+  covers it.
 - **Maintenance page:** `sudo -n ggd2l-agent mode <lg> maintenance`, and
-  `mode <lg> proxy` to reopen. During a planned maintenance window `box` goes
-  red for that league; pause the check in healthchecks for the window.
+  `mode <lg> proxy` to reopen. The page answers the scheduler with a 503, so
+  a maintenance window with the scheduler running posts that league as
+  failing after 3 minutes and back after the reopening; pause the scheduler
+  first when that isn't wanted (a migration does anyway).
 - **During the cutover day** the heartbeat probes only the leagues listed in
   `GGD2L_HEARTBEAT_LEAGUES` (in `healthchecks.env`, default `us eu`). Set it to
   `us` until Europe moves, then remove it.
@@ -329,6 +339,27 @@ sudo -u ggd2l-ops sh -c 'f=$(mktemp) && echo diag > "$f" && rclone --config /etc
 
 (`us/hourly/` expires after 7 days, so the test object needs no cleanup.)
 
+<a id="discord-alerts"></a>**Discord alerts.** `/etc/ggd2l/alerts.env` (root, 0600; the units read it
+through `EnvironmentFile=-`, so no script needs to open it) holds:
+
+```ini
+ALERT_DEPLOY_ENV=production
+ALERT_DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/<id>/<token>
+# optional: the one Discord user a failure pings
+ALERT_PING_USER_ID=<user id>
+```
+
+Anything but exactly `production` posts nothing, so a copy of the box
+restored for testing must say `staging` or lose the file. Install it file to
+file, never pasted: `ssh ggd2l-1 'sudo install -m 0600 -o root -g root
+/dev/stdin /etc/ggd2l/alerts.env' < <0600 file>`, then run the config archive.
+The same webhook is each scheduler Worker's `ALERT_DISCORD_WEBHOOK_URL`
+secret (and `ALERT_PING_USER_ID`, if set), put through stdin
+([PRODUCTION-OPERATIONS](../../docs/PRODUCTION-OPERATIONS.md#discord-alerts-from-the-workers)).
+`discord-alert.mjs` keeps its state in `/var/lib/ggd2l-alerts` (the units'
+`StateDirectory=`); deleting a file there forgets that alert, and deleting
+`hello.json` makes the next heartbeat say hello again.
+
 `/etc/ggd2l/healthchecks.env` (0600) holds one ping URL per check:
 `HC_PING_BOX`, `HC_PING_AUTOMATION`, `HC_PING_BOT`, `HC_PING_BACKUP_US`,
 `HC_PING_BACKUP_EU`, `HC_PING_DRILL` (both leagues' drills ping the one
@@ -419,8 +450,9 @@ written after the dump is lost, so say so in the incident record):
    unchanged, so traffic returns once it connects.
 8. Enable the backup, drill, heartbeat and config-archive timers, start one
    backup and then one drill per league and check `Result=success` (see
-   Backups), and watch healthchecks go green (once the checks exist: see
-   Alerts).
+   Backups), and watch the admin channel for the box's 👋 hello (the first
+   heartbeat after the restored `alerts.env`), then
+   `sudo systemctl start ggd2l-alert@test`.
 
 ## Origin CA fallback (if the tunnel cannot be used)
 
@@ -546,8 +578,7 @@ leftover plaintext copy to `shred -u`.
 
 ## Tim's monthly hour
 
-- Once alerts are set up (see Alerts; they are not yet), read the healthchecks
-  dashboard: every check green, no silent one.
+- Scroll the admin channel: every 🔴 has its 🟢, or you know why not.
 - `ssh ggd2l-1 sudo -n ggd2l-agent status`: live SHAs match
   `https://{us,eu}.ggd2l.com/api/health/release`, no failed unit, no pending
   reboot stuck for days, `serverErrors24h` near 0 (`maintenance503s24h` counts

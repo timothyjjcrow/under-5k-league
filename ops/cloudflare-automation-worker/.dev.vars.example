@@ -1,2 +1,5 @@
 # Copy to .dev.vars for local Wrangler testing. Never commit the real values.
 AUTOMATION_SECRET="replace-with-the-same-random-value-as-the-league-cron-secret"
+# The Discord alert secrets (ALERT_DISCORD_WEBHOOK_URL, ALERT_PING_USER_ID) are
+# optional and never go here: wrangler dev loads only secrets.required, and
+# only the deployed Workers, calling the canonical routes, post alerts.

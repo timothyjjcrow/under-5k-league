@@ -1,6 +1,8 @@
 # Hourly backup of one league database (design §5.1, D18): dump as the app
 # role (so receipts keep matching), verify, gzip, age-encrypt to Tim's offline
 # key, upload to R2, prune, ping healthchecks. %i is the league, us or eu.
+# Every run ends in ggd2l-alert@backup-%i.service, which posts to Discord when
+# a run fails and when the next one passes (ggd2l-alert@.service).
 #
 # The env file holds only DIRECT_URL (app role) and BACKUP_DIR, never
 # BACKUP_RECEIPT_SECRET. The working directory has no .env for the backup
@@ -9,6 +11,8 @@
 Description=GGD2L %i database backup
 After=network-online.target postgresql@18-main.service
 Wants=network-online.target
+OnFailure=ggd2l-alert@backup-%i.service
+OnSuccess=ggd2l-alert@backup-%i.service
 
 [Service]
 Type=oneshot

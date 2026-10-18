@@ -1,0 +1,33 @@
+# A Discord alert for one backup, drill or config-archive run (ops/selfhost/
+# README.md "Alerts"). Those units start it through OnFailure= and OnSuccess=;
+# %i is the alert key: backup-us, backup-eu, drill-us, drill-eu or
+# config-archive. A failed run posts once, naming the step its script logged;
+# the next good run posts the recovery; a good run after a good run posts
+# nothing. `systemctl start ggd2l-alert@test` posts a test alert and its
+# recovery.
+#
+# discord-alert.mjs exits 0 whatever happens, so this unit never fails, and it
+# has no OnFailure= of its own. It posts only when /etc/ggd2l/alerts.env sets
+# ALERT_DEPLOY_ENV=production and a Discord webhook; without that file it only
+# logs. It keeps one small state file per key in /var/lib/ggd2l-alerts, shared
+# with the heartbeat.
+[Unit]
+Description=GGD2L Discord alert for %i
+
+[Service]
+Type=oneshot
+User=ggd2l-ops
+Group=ggd2l-ops
+# To read the failed run's "FAILED at step <step> (exit <n>)" line: only those
+# two tokens are taken from the journal.
+SupplementaryGroups=systemd-journal
+EnvironmentFile=-/etc/ggd2l/alerts.env
+ExecStart=/usr/bin/node /usr/local/lib/ggd2l/discord-alert.mjs unit %i
+StateDirectory=ggd2l-alerts
+TimeoutStartSec=2min
+MemoryMax=128M
+UMask=0077
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

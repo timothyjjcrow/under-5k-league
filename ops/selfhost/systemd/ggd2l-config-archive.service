@@ -6,11 +6,15 @@
 # archive (provision-ggd2l.sh prints the steps).
 #
 # Runs as root because those directories are root-only; the only path it may
-# write is its own output folder. config-archive.sh takes no lock.
+# write is its own output folder. config-archive.sh takes no lock. Every run
+# ends in ggd2l-alert@config-archive.service, which posts to Discord when the
+# archive fails and when the next one passes.
 [Unit]
 Description=GGD2L configuration archive
 After=network-online.target
 Wants=network-online.target
+OnFailure=ggd2l-alert@config-archive.service
+OnSuccess=ggd2l-alert@config-archive.service
 
 [Service]
 Type=oneshot

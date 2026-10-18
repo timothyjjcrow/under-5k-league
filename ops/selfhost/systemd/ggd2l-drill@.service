@@ -2,11 +2,14 @@
 # dump into the scratch database ld2l_restore_test as ggd2l_rehearsal, migrate
 # it with the current tools, check it, drop it, ping healthchecks. %i is the
 # league. drill.env holds only PG_RESTORE_TEST_URL; the drill never sees a
-# league role's password.
+# league role's password. Every run ends in ggd2l-alert@drill-%i.service, which
+# posts to Discord when a drill fails and when the next one passes.
 [Unit]
 Description=GGD2L %i backup restore drill
 After=network-online.target postgresql@18-main.service
 Wants=network-online.target
+OnFailure=ggd2l-alert@drill-%i.service
+OnSuccess=ggd2l-alert@drill-%i.service
 
 [Service]
 Type=oneshot
