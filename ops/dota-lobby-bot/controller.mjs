@@ -107,6 +107,11 @@ export const MAX_RESYNCS_PER_JOB = 3;
 // A started game with no end seen this long after Start gets one resync: no
 // in-house game runs that long, so the bot's picture of it is likely stale.
 export const STARTED_BACKSTOP_MS = 3 * 60 * 60_000;
+// A check that found a game's lobby still running stands for this long. A
+// later Release or BUSY Create may then ask again (within resync()'s limits),
+// so an end Dota showed and the bot never got (2026-10-18) holds the bot
+// about this long past the check, not until the backstop.
+export const RECHECK_AFTER_MS = 15 * 60_000;
 
 /** Named invite targets must be on the request's own roster. */
 export function validInviteTargets(spec) {
@@ -183,6 +188,12 @@ function safeToLeave(lobby, job, now) {
 }
 
 /** A game Dota still shows running, with no sign of its end. */
+/** Whether a game's lobby may be checked (resync) again: never checked, or
+ * its last check is RECHECK_AFTER_MS old. resync() keeps its own limits. */
+function checkDue(job, now) {
+  return job.verifiedAt === undefined || now - job.verifiedAt >= RECHECK_AFTER_MS;
+}
+
 const stillRunning = (lobby) => lobby.state === 2 && !atPostgame(lobby);
 
 const hasMatchId = (lobby) => !!lobby.matchId && lobby.matchId !== "0";
@@ -509,12 +520,12 @@ export class LobbyController {
           (this.lobby ? stillRunning(this.lobby) : !this.absenceConfirmed)
         ) {
           job.releasing = true;
-          // One check per game: once a resync's welcome has shown this lobby
-          // still there, a later Release (the site sends one on every close,
-          // and on a BUSY) only waits for the game's end or the backstop,
-          // never cycling a live game's session again. A lobby the bot can't
-          // see is always checked.
-          const check = !this.lobby || job.verifiedAt === undefined;
+          // One check per RECHECK_AFTER_MS: once a resync's welcome has shown
+          // this lobby still there, a later Release (the site sends one on
+          // every close, and on a BUSY) only waits for the game's end, the
+          // next check or the backstop, never cycling a live game's session
+          // more often. A lobby the bot can't see is always checked.
+          const check = !this.lobby || checkDue(job, this.now());
           if (check) job.resyncWanted = "release";
           this.save();
           this.log("release-pending", { key: spec.key, lobbyState: this.lobby?.state ?? null });
@@ -567,7 +578,7 @@ export class LobbyController {
    * limits. */
   checkLeftover() {
     const done = finishedJob(this.data.jobs, this.lobby);
-    if (done && stillRunning(this.lobby) && done.verifiedAt === undefined)
+    if (done && stillRunning(this.lobby) && checkDue(done, this.now()))
       this.resync(done, "busy");
   }
   /** Send a Leave, saved first with its reason. The first unconfirmed one

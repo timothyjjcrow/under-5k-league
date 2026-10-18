@@ -1779,7 +1779,11 @@ export async function endInhouseGameFromBot(lobbyId: string): Promise<boolean> {
   await publishInhouseRoomChange();
   invalidateAutomationGateBestEffort();
   releaseInhouseBotAfterClose(lobbyId);
-  await maybeFormLobby();
+  // The freed slot may form the next game, whose accept clock is new
+  // automated work; formOneLobby publishes it but doesn't wake the gate, and
+  // this path's callers (the panel's read, the result scan) have no trailing
+  // expiry of their own.
+  if (await maybeFormLobby()) invalidateAutomationGateBestEffort();
   return true;
 }
 

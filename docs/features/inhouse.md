@@ -1161,9 +1161,14 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
   admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
-  The bot-driven transitions (the auto-end at the bot's postgame, the
-  IN_PROGRESS stamp, releases on close, BUSY's self-heal) are raced in
-  `test/integration/inhouse-bot-lifecycle.itest.ts` and `dota-lobby.itest.ts`.
+  The bot-driven transitions are covered in
+  `test/integration/inhouse-bot-lifecycle.itest.ts`: the auto-end at the
+  bot's postgame by its seam tests (`inhouse.endInhouseGameFromBot.beforeClaim`)
+  plus raced tests against a cancel, a Game over press and the abandon sweep;
+  releases on close and BUSY's self-heal by ordinary integration tests. The
+  IN_PROGRESS stamp is covered in `dota-lobby.itest.ts`, including a game
+  closed while the bot's reply is in flight (an in-fetch interleave, its
+  mutation-ratchet killer), and the "busy elsewhere" read there too.
   `e2e/zz4-inhouse.spec.ts` also checks the room's one header row in every
   stage at 375 and 1280 (one stage strip on the right step, Sound on its
   line, no sideways scroll).

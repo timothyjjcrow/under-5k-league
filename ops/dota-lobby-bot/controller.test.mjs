@@ -10,6 +10,7 @@ import {
   LEAVE_CONFIRM_MS,
   LobbyController,
   MAX_RESYNCS_PER_JOB,
+  RECHECK_AFTER_MS,
   RESYNC_MIN_INTERVAL_MS,
   STARTED_BACKSTOP_MS,
   rosterMatches,
@@ -1438,6 +1439,50 @@ test("a welcome still showing the game running is its one check: later Releases 
   welcome(early.controller, [stillRunning]);
   early.controller.request("release", spec);
   assert.equal(resyncs(early.calls), 1);
+});
+
+test("a check that found the game running expires: a phantom end still frees the bot about 15 minutes later, three checks at most", (t) => {
+  // 2026-10-18 review: with one check per game, a game checked mid-game whose
+  // end then never reached the bot held it BUSY until three hours after Start.
+  const { controller: c, calls } = setup(t);
+  const time = clock(c);
+  running(c);
+  const stillRunning = snapshot({ state: 2, matchId: MATCH });
+  c.request("release", spec);
+  time.at += 3000;
+  welcome(c, [stillRunning]);
+  assert.equal(resyncs(calls), 1);
+  // Inside RECHECK_AFTER_MS of that check a Release only waits.
+  time.at += RECHECK_AFTER_MS - 1;
+  c.request("release", lifecycle);
+  assert.equal(resyncs(calls), 1);
+  // Past it, the next Release checks again, and still within the cap: the
+  // game is still running, so it waits once more.
+  time.at += 1;
+  c.request("release", lifecycle);
+  assert.equal(resyncs(calls), 2);
+  time.at += 3000;
+  welcome(c, [stillRunning]);
+  // The game then ends unseen (the lobby is gone): the next due check frees
+  // the bot, and Create works.
+  time.at += RECHECK_AFTER_MS;
+  c.request("release", lifecycle);
+  assert.equal(resyncs(calls), 3);
+  time.at += 3000;
+  welcome(c);
+  assert.equal(c.data.active, null);
+  assert.equal(c.request("create", nextGame).state, "creating");
+  // Never more than MAX_RESYNCS_PER_JOB checks of one game.
+  const other = setup(t);
+  const at = clock(other.controller);
+  running(other.controller);
+  for (let i = 0; i < 6; i++) {
+    other.controller.request("release", lifecycle);
+    at.at += 3000;
+    welcome(other.controller, [stillRunning]);
+    at.at += RECHECK_AFTER_MS;
+  }
+  assert.equal(resyncs(other.calls), MAX_RESYNCS_PER_JOB);
 });
 
 test("a Release inside the minute after a resync waits for it, then gets its own", (t) => {

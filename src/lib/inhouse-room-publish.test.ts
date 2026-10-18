@@ -219,7 +219,7 @@ describe("rule P: the publish sites, in order", () => {
     // Before the bot release and the formation ping.
     [
       "endInhouseGameFromBot",
-      ["data: { status: INHOUSE_STATUS.AWAITING_RESULT, finishedAt }", "if (ended.count === 0) return false;", PUBLISH, "releaseInhouseBotAfterClose(", "maybeFormLobby()"],
+      ["data: { status: INHOUSE_STATUS.AWAITING_RESULT, finishedAt }", "if (ended.count === 0) return false;", PUBLISH, "releaseInhouseBotAfterClose(", "maybeFormLobby()", "invalidateAutomationGateBestEffort()"],
     ],
     // The bot's own reads in the result lookup come before OpenDota's.
     [
