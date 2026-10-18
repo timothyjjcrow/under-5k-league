@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { LOBBY_RECOVERY_POLL_MS } from "@/lib/dota-lobby";
 import { DotaLobbyControls } from "./dota-lobby-controls";
 import { buttonClasses } from "./ui";
 
@@ -51,12 +52,13 @@ export function DotaLobbyRecovery() {
   useEffect(() => {
     const abort = new AbortController();
     const initial = setTimeout(() => void check(false, abort.signal), 0);
-    // A background refresh of the status line, once a minute: each check is a
-    // function call and a relay round trip, on a hosting budget both leagues
-    // share. "Check bot connection" asks at once.
+    // A background refresh of the status line while the tab is visible
+    // (LOBBY_RECOVERY_POLL_MS), so a bot that drops offline, or one still
+    // attached to a closed game, shows within seconds. Mounted for admins
+    // only; "Check bot connection" asks at once.
     const interval = setInterval(() => {
       if (document.visibilityState === "visible") void check(false, abort.signal);
-    }, 60_000);
+    }, LOBBY_RECOVERY_POLL_MS);
     return () => {
       clearTimeout(initial);
       clearInterval(interval);

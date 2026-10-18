@@ -29,6 +29,7 @@ import {
   resolveAbandonedLobby,
   setInhouseRoles,
 } from "@/lib/inhouse-service";
+import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
 import { makeSeason, makeUser, raceAll, sessionFor } from "./factories";
 
 // "Game over" (finishGame → AWAITING_RESULT) and inhouse positions. OpenDota
@@ -93,9 +94,12 @@ beforeEach(() => {
   mockSession.mockResolvedValue(null);
   botCalls.length = 0;
 });
-afterEach(() => {
+afterEach(async () => {
   setRaceHook(null);
   beforeCancelPlayersRead = null;
+  // A close's bot release runs on after the action answers: let it finish
+  // against this test's stubs, never the real fetch.
+  await settleInhouseBotReleases();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
 });
@@ -506,7 +510,13 @@ describe("inhouse Game over — marking a game over", () => {
       expect((await lobbyRow(lobby.id)).status).toBe(
         INHOUSE_STATUS.AWAITING_RESULT,
       );
-      expect(botCalls).toHaveLength(1);
+      // The status read, then (after the press answered) one release of
+      // THIS game's bot job, so a bot still attached lets go.
+      await settleInhouseBotReleases();
+      expect(botCalls.map((c) => [c.action, c.spec.key])).toEqual([
+        ["status", `${keyPrefix}inhouse:${lobby.id}:1`],
+        ["release", `${keyPrefix}inhouse:${lobby.id}:1`],
+      ]);
     },
   );
 
