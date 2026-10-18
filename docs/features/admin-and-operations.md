@@ -356,6 +356,23 @@ respect there:
   since Next keeps tag state only in memory and a leftover entry could serve
   an old automation-gate snapshot. Never rely on the fetch cache surviving a
   release or a restart.
+- **A slot writes only `RELEASE_WRITABLE_DIRS`** (`ops/selfhost/agent/layout.mjs`):
+  `.next/cache` (the fetch and image caches) and `.next/server/route-cache`,
+  where Next 16 keeps its response cache for prerendered routes (a copy of
+  each build seed, and every re-render after a `revalidatePath`). The rest of
+  the release is read-only, so a write elsewhere fails, usually with only a
+  warning (`Failed to update prerender cache`, cutover day). The build creates
+  the folders, the units name them, and CI's boot step fails a build that
+  writes anywhere else. The route cache is kept across restarts: it holds
+  only `/manifest.webmanifest`, `/robots.txt` and the global error page, all
+  fixed per build. A prerendered route that reads data would need it wiped at
+  start like the fetch cache.
+- **One Prisma client per process.** `src/lib/prisma.ts` keeps it on
+  `globalThis` in every environment: Next loads the module once per server
+  bundle, and a client held in the module opened a pool per bundle (two per
+  process on the box, `prisma.test.ts`). `connection_limit=8` is therefore per
+  process; four processes in a release overlap use 32 of the 47 usable
+  connections.
 - **Never call `/api/sync` or `/api/health/automation` against a
   candidate.** They cache automation state in the candidate's own process;
   the agent's `check` refuses a candidate whose fetch cache holds those tags.

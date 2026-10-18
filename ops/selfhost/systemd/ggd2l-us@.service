@@ -8,7 +8,8 @@
 # disables, starts and stops slots, never this file.
 #
 # Runs `next start` from the release the slot symlink names, as the league's
-# own unprivileged user, which can write nothing but the release's .next/cache.
+# own unprivileged user, which can write nothing but the release folders
+# `next start` writes at runtime (RELEASE_WRITABLE_DIRS in agent/layout.mjs).
 [Unit]
 Description=GGD2L %j web, slot %i
 After=network-online.target postgresql@18-main.service
@@ -45,7 +46,12 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
+# The data and image caches, then Next's response cache for prerendered
+# routes. The build creates both for the league user; "-" lets a release built
+# before route-cache existed still start (its response-cache writes fail, as
+# they always did).
 ReadWritePaths=/srv/ggd2l/%j/slots/%i/.next/cache
+ReadWritePaths=-/srv/ggd2l/%j/slots/%i/.next/server/route-cache
 
 [Install]
 WantedBy=multi-user.target
