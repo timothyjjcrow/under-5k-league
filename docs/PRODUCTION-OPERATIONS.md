@@ -1093,8 +1093,15 @@ Settings, the hello and the test post are in `ops/selfhost/README.md`
 after both leagues opened (both slots, Postgres, cloudflared and Caddy; the bot
 is not on the box yet). Measure again once the bot moves. A release briefly
 adds a candidate, which swap absorbs. A build runs with a 3 GB
-Node heap (`NODE_OPTIONS=--max-old-space-size=3072`) and peaks around 1.6 GB:
-never cap a build's memory below that, or the kernel kills it. A build needs 5
+Node heap (`NODE_OPTIONS=--max-old-space-size=3072`) under the unit limits in
+`agent/build.mjs`: `MemoryHigh=1200M` holds it near 1.1 GiB and pushes the
+rest, 0.7-0.8 GB, into swap; `MemoryMax=1800M` stays above the 1.54 GB the
+2026-10-15 trial build peaked at outside those limits. Never cap a build's
+memory below that, or the kernel kills it. Each build's real peak is the
+release record's Peak RSS MB (`peakRssMb`): its unit's cgroup `memory.peak`,
+read as the unit stops. systemd-run's own `Memory peak:` line in the build
+log is only what systemd 255 last read while the unit ran, often as it
+started (2.4M for the c5de9952 builds). A build needs 5
 GB free; each release takes about 1.2 GB and `box_agent prune <lg>` keeps the
 live, previous and newest. Check `df -h` monthly.
 
@@ -1102,7 +1109,10 @@ live, previous and newest. Check `df -h` monthly.
 `journalctl -u ggd2l-us@<slot>` for the live slot, which `box_agent status`
 names (`leagues.<lg>.live.slot`; each release flips it). Caddy writes a JSON access log per host under
 `/var/log/caddy/` (rolled at 50 MiB, ten kept); it holds player IP addresses,
-so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`, and
+so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`
+(the line npm ci and the build each print as they stop, `ggd2l cgroup: …`,
+holds that unit's real memory and swap peak, limits and memory events, and
+the agent's `==` line after systemd-run's summary gives the peaks in MB), and
 the output of `attest`, `preflight`, `migrate` and `drill <lg> <sha>` in
 `/var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log` (0640 `root:ggd2l`),
 with every environment value redacted.

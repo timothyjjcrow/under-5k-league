@@ -1,12 +1,14 @@
 // `fetch` and `build <lg> <sha>` (design §2.2): an exact CI-green SHA becomes a
 // locked-down release folder plus its static files in the league's union dir.
 //
-// npm ci and the build run as ggd2l-build inside systemd-run units at low CPU,
-// I/O and OOM priority. The league env reaches the build only through
+// npm ci and the build run as ggd2l-build inside systemd-run units at low CPU
+// and OOM priority (and an I/O weight the box's disk ignores: BUILD_PROPERTIES),
+// the build under memory limits. The league env reaches the build only through
 // `-p EnvironmentFile=`; the build log is written with every env value of 8 or
 // more characters replaced by [redacted].
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { parseCgroupReport } from "./cgroup-report.mjs";
 import { loadLeagueEnv, openRedactedLog, writeJsonAtomic } from "./context.mjs";
 import { AgentError, BIN, MIN_BUILD_FREE_BYTES, RELEASE_WRITABLE_DIRS, USERS, makeReleaseId } from "./layout.mjs";
 import { asUser, must, systemdRunArgs } from "./runner.mjs";
@@ -14,9 +16,14 @@ import { asUser, must, systemdRunArgs } from "./runner.mjs";
 export const ENV_GATE_LINE = "Production environment validation passed.";
 export const SCHEMA_GATE_LINE = "Production schema attestation passed";
 export const BUILD_NODE_OPTIONS = "--max-old-space-size=3072";
-// Low priority so the live slots keep answering while a build runs. MemoryHigh
-// pushes the build into swap rather than OOM-killing it; MemoryMax stays above
-// the 1.6 GB peak measured on the box (2026-10-15).
+// Low priority so the live slots keep answering while a build runs; the box
+// holds every build to these (checked in an identical unit, 2026-10-18).
+// MemoryHigh pushes the build into swap rather than OOM-killing it: two
+// builds (2026-10-17/18) sat near 1.1 GiB with 0.7-0.8 GB in swap. MemoryMax
+// stays above the 1.54 GB the 2026-10-15 trial build peaked at outside these
+// limits. A build's own peak is its unit's memory.peak (reportOnStop).
+// IOWeight needs io.cost or BFQ, and the box's disk runs mq-deadline, so
+// there it sets io.weight and nothing more.
 export const BUILD_PROPERTIES = Object.freeze([
   "CPUWeight=20",
   "IOWeight=20",
@@ -168,12 +175,19 @@ function requireRealDirs(dir, relative) {
   }
 }
 
-/** systemd-run's own summary: "Memory peak: 1.5G" (systemd 255), in MB. */
-export function parseMemoryPeak(line) {
-  const match = /Memory peak:\s*([\d.]+)([BKMGT])/.exec(line);
-  if (!match) return null;
-  const scale = { B: 1 / 1024 ** 2, K: 1 / 1024, M: 1, G: 1024, T: 1024 ** 2 }[match[2]];
-  return Math.round(Number(match[1]) * scale);
+/**
+ * Each unit prints its own cgroup as it stops (cgroup-report.mjs), so the
+ * record holds the build's real memory peak, never systemd-run's "Memory
+ * peak", which systemd 255 can repeat from the unit's first second. "-": a
+ * report that fails never fails the unit.
+ */
+const reportOnStop = (ctx) => `ExecStopPost=-${BIN.node} ${ctx.layout.helper("cgroup-report.mjs")}`;
+
+/** The log's summary of a unit's report, after systemd-run's own. */
+function memoryLine(step, report) {
+  if (report?.peakMb == null) return `== ${step} memory peak unknown (no cgroup report)`;
+  const swap = report.swapPeakMb == null ? "" : `, swap peak ${report.swapPeakMb} MB`;
+  return `== ${step} memory peak ${report.peakMb} MB${swap}, read from the unit's cgroup as it stopped`;
 }
 
 export async function buildRelease(ctx, lg, commit) {
@@ -218,29 +232,35 @@ export async function buildRelease(ctx, lg, commit) {
       user: USERS.build,
       cwd: dir,
       unsetEnv: ["NODE_ENV"],
-      properties: INSTALL_PROPERTIES,
+      properties: [...INSTALL_PROPERTIES, reportOnStop(ctx)],
       setEnv: await buildUserEnv(ctx),
       command: BIN.npm,
       args: ["ci", "--include=dev", "--no-audit", "--no-fund", "--prefer-offline"],
     });
     log.write(`== npm ci (${new Date(ctx.now()).toISOString()})`);
-    if ((await runner.run(BIN.systemdRun, install, { onLine: log.write, capture: false })).code !== 0)
-      throw new AgentError("install_failed");
+    let installReport = null;
+    const onInstallLine = (line) => {
+      installReport = parseCgroupReport(line) ?? installReport;
+      log.write(line);
+    };
+    const installed = await runner.run(BIN.systemdRun, install, { onLine: onInstallLine, capture: false });
+    log.write(memoryLine("npm ci", installReport));
+    if (installed.code !== 0) throw new AgentError("install_failed");
 
     // 5. Build with the league env, NODE_ENV=production and no in-build type check.
     const gates = { env: false, schema: false };
-    let peakRssMb = null;
+    let report = null;
     const onLine = (line) => {
       if (line.includes(ENV_GATE_LINE)) gates.env = true;
       if (line.includes(SCHEMA_GATE_LINE)) gates.schema = true;
-      peakRssMb = parseMemoryPeak(line) ?? peakRssMb;
+      report = parseCgroupReport(line) ?? report;
       log.write(line);
     };
     const build = systemdRunArgs({
       user: USERS.build,
       cwd: dir,
       envFiles: [layout.leagueEnv(lg)],
-      properties: BUILD_PROPERTIES,
+      properties: [...BUILD_PROPERTIES, reportOnStop(ctx)],
       setEnv: {
         ...(await buildUserEnv(ctx)),
         NODE_ENV: "production",
@@ -256,7 +276,9 @@ export async function buildRelease(ctx, lg, commit) {
     log.write(`== build (${new Date(buildStarted).toISOString()})`);
     const built = await runner.run(BIN.systemdRun, build, { onLine, capture: false });
     record.buildSeconds = Math.round((ctx.now() - buildStarted) / 1000);
-    record.peakRssMb = peakRssMb;
+    // The build cgroup's memory.peak; kept on a FAILED record too (an OOM kill).
+    record.peakRssMb = report?.peakMb ?? null;
+    log.write(memoryLine("build", report));
     if (built.code !== 0) throw new AgentError("build_failed");
 
     // 6. Without NODE_ENV=production both gates skip silently: require their lines.
