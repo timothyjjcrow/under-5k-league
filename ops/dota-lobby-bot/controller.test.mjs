@@ -928,7 +928,7 @@ test("server.mjs settles every GC welcome through the controller, forgetting the
   assert.ok(ended > 0 && ended < forget);
   assert.doesNotMatch(handler, /absenceConfirmed\s*=|controller\.lobby\s*=/);
 });
-test("server.mjs resyncs through gc-resync.mjs, and restarts when no welcome follows", () => {
+test("server.mjs resyncs through gc-resync.mjs, and restarts when no welcome follows unless Steam was stopped", () => {
   const server = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
   const start = server.indexOf("const resync = gcResync({");
   assert.ok(start > 0);
@@ -1397,50 +1397,103 @@ test("a Leave Dota doesn't confirm within 20 s gets exactly one resync", (t) => 
   assert.equal(c.request("create", nextGame).state, "creating");
 });
 
-test("resyncs stay one a minute and three a job, and a welcome still showing the game starts no loop", (t) => {
-  const { controller: c, calls, logs, options } = setup(t);
+test("a welcome still showing the game running is its one check: later Releases resync no more", (t) => {
+  const { controller: c, calls, options } = setup(t);
   const time = clock(c);
   running(c);
   const stillRunning = snapshot({ state: 2, matchId: MATCH });
   c.request("release", spec);
   assert.equal(resyncs(calls), 1);
-  // The welcome replays the running game: no Leave, and no other resync
-  // however long the clock runs.
+  // The welcome replays the running game: checked, saved, and no Leave.
+  time.at += 3000;
   welcome(c, [stillRunning]);
+  assert.equal(new LobbyController(options).data.jobs[spec.key].verifiedAt, time.at);
+  // The site releases on every close and every BUSY: each only marks the
+  // release pending, however long the game runs.
   for (let i = 0; i < 10; i++) {
-    time.at += 30_000;
+    time.at += RESYNC_MIN_INTERVAL_MS;
+    assert.equal(c.request("release", lifecycle).releasing, true);
     c.tick();
   }
   assert.equal(resyncs(calls), 1);
-  assert.equal(c.data.jobs[spec.key].releasing, true);
+  assert.equal(c.data.jobs[spec.key].resyncWanted, undefined);
   assert.ok(!calls.includes("leave"));
-  // A Release inside the minute waits for it, then gets its resync.
-  time.at = c.data.lastResyncAt + RESYNC_MIN_INTERVAL_MS - 1;
+  // A welcome that leaves the lobby unseen is no such check: a Release then
+  // asks again.
+  welcome(c, [], false);
+  assert.equal(c.lobby, null);
+  c.request("release", spec);
+  assert.equal(resyncs(calls), 2);
+  // ...and the game's postgame still settles it.
+  welcome(c, [stillRunning]);
+  c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 3 }));
+  assert.deepEqual(calls.filter((call) => call === "leave"), ["leave"]);
+  c.departed("destroy");
+  assert.equal(c.data.active, null);
+  assert.equal(c.request("create", nextGame).state, "creating");
+  // Only a resync's welcome is that check: an ordinary reconnect's, early in
+  // the game, never stops a later Release from asking.
+  const early = setup(t);
+  running(early.controller);
+  welcome(early.controller, [stillRunning]);
+  early.controller.request("release", spec);
+  assert.equal(resyncs(early.calls), 1);
+});
+
+test("a Release inside the minute after a resync waits for it, then gets its own", (t) => {
+  const { controller: c, calls, options } = setup(t);
+  const time = clock(c);
+  running(c);
+  // Another job's resync a second ago (the minute is the bot's, not a job's).
   c.data.lastResyncAt = time.at - 1000;
   c.request("release", spec);
-  assert.equal(resyncs(calls), 1);
+  assert.equal(resyncs(calls), 0);
   assert.equal(new LobbyController(options).data.jobs[spec.key].resyncWanted, "release");
-  time.at = c.data.lastResyncAt + RESYNC_MIN_INTERVAL_MS;
+  time.at = c.data.lastResyncAt + RESYNC_MIN_INTERVAL_MS - 1;
   c.tick();
-  assert.equal(resyncs(calls), 2);
-  welcome(c, [stillRunning]);
-  time.at += RESYNC_MIN_INTERVAL_MS;
-  c.request("release", spec);
-  assert.equal(resyncs(calls), MAX_RESYNCS_PER_JOB);
-  welcome(c, [stillRunning]);
-  // Three for this job: every later Release and clock run sends none, and
+  assert.equal(resyncs(calls), 0);
+  time.at += 1;
+  c.tick();
+  assert.equal(resyncs(calls), 1);
+  assert.equal(c.data.jobs[spec.key].resyncWanted, undefined);
+});
+
+test("resyncs stay one a minute and three a job, and a welcome replaying an unconfirmed Leave starts no loop", (t) => {
+  const { controller: c, calls, logs, options } = setup(t);
+  const time = clock(c);
+  running(c);
+  // Dota shows the postgame but never confirms the bot's Leave, and every
+  // resync's welcome replays the same postgame.
+  const postgame = snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 });
+  c.snapshot(postgame);
+  time.at += LEAVE_CONFIRM_MS;
+  c.tick();
+  assert.equal(resyncs(calls), 1);
+  for (let n = 2; n <= MAX_RESYNCS_PER_JOB; n++) {
+    // Its welcome replays the postgame: the Leave goes again, on a fresh
+    // clock...
+    welcome(c, [postgame]);
+    assert.equal(calls.at(-1), "leave");
+    // ...whose deadline passes inside the minute, which holds.
+    time.at += LEAVE_CONFIRM_MS;
+    c.tick();
+    assert.equal(resyncs(calls), n - 1, `resync ${n}`);
+    time.at = c.data.lastResyncAt + RESYNC_MIN_INTERVAL_MS;
+    c.tick();
+    assert.equal(resyncs(calls), n, `resync ${n}`);
+  }
+  welcome(c, [postgame]);
+  // Three for this job: every later clock run and Release sends none, and
   // the bot says so once.
   for (let i = 0; i < 5; i++) {
     time.at += RESYNC_MIN_INTERVAL_MS;
-    c.request("release", spec);
     c.tick();
+    c.request("release", spec);
   }
   assert.equal(resyncs(calls), MAX_RESYNCS_PER_JOB);
   assert.equal(logs.filter((line) => line.includes(" leave-not-confirmed ")).length, 1);
   assert.equal(new LobbyController(options).data.jobs[spec.key].resyncs, MAX_RESYNCS_PER_JOB);
-  // The game's postgame still settles it.
-  c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 3 }));
-  assert.deepEqual(calls.filter((call) => call === "leave"), ["leave"]);
+  // Dota's confirmation still settles it.
   c.departed("destroy");
   assert.equal(c.data.active, null);
   assert.equal(c.request("create", nextGame).state, "creating");
@@ -1603,7 +1656,7 @@ test("Dota's end of a played game, whichever way it shows, leaves, frees the bot
   const ends = {
     postgame: { state: 3, matchOutcome: 2 },
     "RUN with a winner": { state: 2, matchOutcome: 3 },
-    "RUN at the post-game state": { state: 2, gameState: 6 },
+    "RUN with a winner, at the post-game state": { state: 2, gameState: 6, matchOutcome: 2 },
   };
   for (const [path, end] of Object.entries(ends)) {
     const { controller: c, calls } = setup(t);
@@ -1615,11 +1668,85 @@ test("Dota's end of a played game, whichever way it shows, leaves, frees the bot
     assert.equal(job.leaveReason, "postgame", path);
     assert.equal(job.postgameAt, c.now(), path);
     assert.deepEqual(c.status(spec.key, lifecycle), { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true }, path);
+    // A Release now leaves at once: the game is over, however it reads.
+    c.request("release", spec);
+    assert.deepEqual(calls, ["create", "start", "leave", "leave"], path);
+    assert.equal(job.leaveReason, "release", path);
     c.departed("removed");
     assert.equal(c.data.active, null, path);
     // Still over once the bot has gone, so the site can end the game late.
     assert.equal(c.status(spec.key, lifecycle).over, true, path);
     assert.equal(c.request("create", nextGame).state, "creating", path);
+  }
+});
+
+test("the post-game game state at RUN leaves, but only a named winner reads over", (t) => {
+  const { controller: c, calls } = setup(t);
+  running(c);
+  c.snapshot(snapshot({ state: 2, gameState: 6, matchId: MATCH }));
+  assert.deepEqual(calls, ["create", "start", "leave"]);
+  const job = c.data.jobs[spec.key];
+  assert.equal(job.leaveReason, "postgame");
+  assert.equal(job.postgameSeen, undefined);
+  assert.deepEqual(c.status(spec.key, lifecycle), { state: "started", lobbyId: LOBBY, matchId: MATCH });
+  // An outcome-less postgame is still no winner.
+  c.snapshot(snapshot({ state: 3, gameState: 6, matchId: MATCH }));
+  assert.equal(job.postgameSeen, true);
+  assert.equal(c.status(spec.key, lifecycle).over, undefined);
+  // The winner, once Dota names it.
+  c.snapshot(snapshot({ state: 3, gameState: 6, matchId: MATCH, matchOutcome: 2 }));
+  assert.deepEqual(c.status(spec.key, lifecycle), { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true });
+});
+
+test("a launch at the post-game state with no outcome yet still fails, and never reads over", (t) => {
+  // Someone fails to load: Dota's server reaches its post-game state before
+  // the lobby has an outcome, then calls it not scored or drops it back.
+  const after = {
+    "back on the lobby screen": { state: 0 },
+    "back on the lobby screen, not scored": { state: 0, matchOutcome: 64 },
+    "a not-scored postgame": { state: 3, matchOutcome: 67 },
+  };
+  for (const [path, end] of Object.entries(after)) {
+    const { controller: c } = setup(t);
+    running(c);
+    c.snapshot(snapshot({ state: 2, gameState: 6, matchId: MATCH }));
+    assert.equal(c.status(spec.key, lifecycle).over, undefined, path);
+    assert.equal(c.snapshot(snapshot({ gameState: 6, matchId: MATCH, ...end })), true, path);
+    assert.equal(c.data.jobs[spec.key].launchFailed, true, path);
+    assert.deepEqual(c.status(spec.key, lifecycle), { state: "blocked", lobbyId: LOBBY, matchId: undefined, releasing: true }, path);
+    c.departed("destroy");
+    assert.deepEqual(c.status(spec.key, lifecycle), { state: "released", lobbyId: LOBBY, matchId: undefined }, path);
+  }
+  // An outcome-less postgame, then a not-scored outcome: the known one wins.
+  {
+    const { controller: c } = setup(t);
+    running(c);
+    c.snapshot(snapshot({ state: 3, matchId: MATCH }));
+    assert.equal(c.status(spec.key, lifecycle).over, undefined);
+    assert.equal(c.snapshot(snapshot({ state: 0, matchId: MATCH, matchOutcome: 65 })), true);
+    assert.equal(c.data.jobs[spec.key].postgameOutcome, 65);
+    assert.equal(c.status(spec.key, lifecycle).state, "blocked");
+  }
+  // A not-scored outcome is never replaced by an unknown one: the failed
+  // launch stays failed when its lobby comes back with no outcome.
+  {
+    const { controller: c } = setup(t);
+    running(c);
+    assert.equal(c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 67 })), true);
+    c.snapshot(snapshot({ state: 0, matchId: MATCH }));
+    assert.equal(c.data.jobs[spec.key].postgameOutcome, 67);
+    assert.equal(c.status(spec.key, lifecycle).state, "blocked");
+    c.departed("destroy");
+    assert.equal(c.status(spec.key, lifecycle).state, "released");
+  }
+  // A winner is never replaced: a played game stays played and over.
+  {
+    const { controller: c } = setup(t);
+    running(c);
+    c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+    assert.equal(c.snapshot(snapshot({ state: 0, matchId: MATCH, matchOutcome: 64 })), false);
+    assert.equal(c.data.jobs[spec.key].postgameOutcome, 2);
+    assert.deepEqual(c.status(spec.key, lifecycle), { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true });
   }
 });
 
@@ -1661,6 +1788,13 @@ test("releasing and over appear only for a request with withLifecycle", (t) => {
   other.snapshot(snapshot());
   other.request("release", spec);
   assert.deepEqual(other.request("status", lifecycle), { state: "ready", lobbyId: LOBBY, matchId: undefined, releasing: true });
+  // A job the bot no longer reads as started (a stranger's lobby turned up
+  // before the departure) never reads over: a confused bot ends no game.
+  const confused = setup(t).controller;
+  running(confused);
+  confused.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+  confused.snapshot(snapshot({ state: 0, gameName: "Someone else's lobby" }));
+  assert.deepEqual(confused.request("status", lifecycle), { state: "blocked", lobbyId: LOBBY, matchId: MATCH });
 });
 
 test("every lifecycle reply passes the relay's reply check", (t) => {
@@ -1742,11 +1876,218 @@ test("an orphan Leave Dota doesn't confirm resyncs too", (t) => {
   time.at += LEAVE_CONFIRM_MS;
   c.tick();
   assert.deepEqual(calls, ["create", "start", "leave", "resync"]);
-  // The welcome finds no lobby: the orphan's departure, and Create works.
+  // The welcome finds no lobby: the orphan's departure, recorded as this
+  // welcome's (not the one that freed the claim), and Create works.
+  time.at += 3000;
   welcome(c);
   assert.equal(c.data.jobs[spec.key].departedBy, "welcome");
+  assert.equal(c.data.jobs[spec.key].departedAt, time.at);
   assert.equal(c.data.jobs[spec.key].leavePendingAt, undefined);
   assert.equal(c.request("create", nextGame).state, "creating");
+  // The same when Dota's own Destroy freed the claim: the welcome is now the
+  // departure on record.
+  {
+    const { controller: d, calls: sent } = setup(t);
+    const at = clock(d);
+    running(d);
+    const postgame = snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 });
+    d.snapshot(postgame);
+    d.departed("destroy");
+    d.snapshot(postgame);
+    at.at += LEAVE_CONFIRM_MS;
+    d.tick();
+    assert.equal(resyncs(sent), 1);
+    welcome(d);
+    assert.equal(d.data.jobs[spec.key].departedBy, "welcome");
+  }
+});
+
+test("a played game's end that turns up after a welcome freed its claim still reads over", (t) => {
+  for (const end of [{ state: 3, matchOutcome: 2 }, { state: 2, matchOutcome: 3 }]) {
+    const { controller: c, calls, options } = setup(t);
+    running(c);
+    assert.equal(welcome(c), true);
+    c.snapshot(snapshot({ state: 2, matchId: MATCH }));
+    assert.equal(c.status(spec.key, lifecycle).over, undefined);
+    c.snapshot(snapshot({ matchId: MATCH, ...end }));
+    assert.deepEqual(calls, ["create", "start", "leave"]);
+    assert.deepEqual(c.status(spec.key, lifecycle), { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true });
+    assert.equal(new LobbyController(options).data.jobs[spec.key].postgameAt, c.now());
+  }
+  // Recorded and saved even where the bot doesn't leave: a relaunch of the
+  // finished game's lobby, its winner still on it, in server allocation.
+  {
+    const { controller: c, calls, options } = setup(t);
+    running(c);
+    welcome(c);
+    c.snapshot(snapshot({ state: 6, matchId: MATCH, matchOutcome: 2 }));
+    assert.deepEqual(calls, ["create", "start"]);
+    assert.equal(new LobbyController(options).data.jobs[spec.key].postgameOutcome, 2);
+    assert.equal(c.status(spec.key, lifecycle).over, true);
+  }
+  // A not-scored end never reads over, nor a released lobby's.
+  {
+    const { controller: c } = setup(t);
+    running(c);
+    welcome(c);
+    c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 66 }));
+    assert.equal(c.status(spec.key, lifecycle).over, undefined);
+  }
+  {
+    const { controller: c } = setup(t);
+    c.request("create", spec);
+    c.snapshot(snapshot());
+    c.request("release", spec);
+    c.departed("destroy");
+    c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+    assert.equal(c.data.jobs[spec.key].postgameSeen, undefined);
+    assert.deepEqual(c.status(spec.key, lifecycle), { state: "released", lobbyId: LOBBY, matchId: undefined });
+  }
+});
+
+test("a finished job's leftover lobby is left only on the lobby screen or at its end", (t) => {
+  for (const state of [1, 4, 5, 6, 2]) {
+    const { controller: c, calls } = setup(t);
+    running(c);
+    welcome(c);
+    // A player relaunches it (allocation), or it still runs.
+    c.snapshot(snapshot({ state, matchId: MATCH }));
+    assert.deepEqual(calls, ["create", "start"], String(state));
+    c.snapshot(snapshot({ state: 0, matchId: MATCH }));
+    assert.deepEqual(calls, ["create", "start", "leave"], String(state));
+  }
+});
+
+test("a Create that finds the bot claimless in a finished game's lobby still at RUN checks it once", (t) => {
+  // 2026-10-18 without its claim: a welcome freed it, the lobby's cache then
+  // turned up running, and its end never reached the bot.
+  const { controller: c, calls, logs } = setup(t);
+  const time = clock(c);
+  running(c);
+  assert.equal(welcome(c), true);
+  const run = snapshot({ state: 2, matchId: MATCH });
+  c.snapshot(run);
+  assert.throws(() => c.handle("create", nextGame), /BUSY/);
+  assert.deepEqual(calls, ["create", "start", "resync"]);
+  assert.ok(logs.some((line) => / resync key=season:fixture:1 reason=busy n=1$/.test(line)));
+  // Its welcome finds no lobby: Create works.
+  time.at += 3000;
+  welcome(c);
+  assert.equal(c.request("create", nextGame).state, "creating");
+  assert.deepEqual(calls, ["create", "start", "resync", "create"]);
+  // One whose welcome still shows the game: never again for that game, and
+  // its postgame then frees the bot as usual.
+  {
+    const { controller: d, calls: sent } = setup(t);
+    const at = clock(d);
+    running(d);
+    welcome(d);
+    d.snapshot(run);
+    assert.throws(() => d.request("create", nextGame), /BUSY/);
+    welcome(d, [run]);
+    for (let i = 0; i < 5; i++) {
+      at.at += RESYNC_MIN_INTERVAL_MS;
+      assert.throws(() => d.request("create", nextGame), /BUSY/);
+    }
+    assert.equal(resyncs(sent), 1);
+    d.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+    d.departed("destroy");
+    assert.equal(d.request("create", nextGame).state, "creating");
+  }
+  // A welcome that shows a stranger's lobby instead is no check of this one.
+  {
+    const { controller: d, calls: sent } = setup(t);
+    const at = clock(d);
+    running(d);
+    welcome(d);
+    d.snapshot(run);
+    assert.throws(() => d.request("create", nextGame), /BUSY/);
+    welcome(d, [snapshot({ state: 2, gameName: "Someone else's lobby" })]);
+    d.departed("destroy");
+    d.snapshot(run);
+    at.at += RESYNC_MIN_INTERVAL_MS;
+    assert.throws(() => d.request("create", nextGame), /BUSY/);
+    assert.equal(resyncs(sent), 2);
+  }
+  // Never for a stranger's lobby, nor a leftover lobby whose Leave is out,
+  // and never on a read.
+  {
+    const { controller: d, calls: sent } = setup(t);
+    d.snapshot(snapshot({ state: 2, gameName: "Someone else's lobby" }));
+    assert.throws(() => d.request("create", nextGame), /BUSY/);
+    assert.deepEqual(sent, []);
+  }
+  {
+    const { controller: d, calls: sent } = setup(t);
+    running(d);
+    welcome(d);
+    d.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+    assert.throws(() => d.request("create", nextGame), /BUSY/);
+    d.request("status", spec);
+    assert.deepEqual(sent, ["create", "start", "leave"]);
+  }
+});
+
+test("a claimless leftover lobby still at RUN three hours after its Start gets the backstop", (t) => {
+  const { controller: c, calls, logs } = setup(t);
+  const time = clock(c);
+  running(c);
+  const started = c.data.jobs[spec.key].startedAt;
+  assert.equal(welcome(c), true);
+  c.snapshot(snapshot({ state: 2, matchId: MATCH }));
+  time.at = started + STARTED_BACKSTOP_MS - 1;
+  c.tick();
+  assert.equal(resyncs(calls), 0);
+  time.at = started + STARTED_BACKSTOP_MS;
+  c.tick();
+  assert.equal(resyncs(calls), 1);
+  assert.ok(logs.some((line) => / resync key=season:fixture:1 reason=backstop n=1$/.test(line)));
+  welcome(c);
+  assert.equal(c.request("create", nextGame).state, "creating");
+});
+
+test("the backstop counts from the game's start, not from the Create", (t) => {
+  // A player took the lead and launched the lobby twenty minutes in.
+  const { controller: c, calls } = setup(t);
+  const time = clock(c);
+  c.request("create", spec);
+  const created = time.at;
+  c.snapshot(snapshot({ leaderId: ids[0] }));
+  time.at += 20 * 60_000;
+  c.snapshot(snapshot({ leaderId: ids[0], state: 6 }));
+  c.snapshot(snapshot({ leaderId: ids[0], state: 2, matchId: MATCH }));
+  const job = c.data.jobs[spec.key];
+  assert.equal(job.state, "started");
+  assert.equal(job.startedAt, time.at);
+  time.at = created + STARTED_BACKSTOP_MS;
+  c.tick();
+  assert.equal(resyncs(calls), 0);
+  time.at = job.startedAt + STARTED_BACKSTOP_MS;
+  c.tick();
+  assert.equal(resyncs(calls), 1);
+});
+
+test("the postgame's Leave after one sent at RUN gets its own 20 s", (t) => {
+  const { controller: c, calls } = setup(t);
+  const time = clock(c);
+  running(c);
+  // The server's post-game state arrives first, still at RUN: Dota may
+  // ignore this Leave.
+  c.snapshot(snapshot({ state: 2, gameState: 6, matchId: MATCH }));
+  const first = time.at;
+  // The postgame 18 s later: the Leave Dota acts on.
+  time.at = first + 18_000;
+  c.snapshot(snapshot({ state: 3, gameState: 6, matchId: MATCH, matchOutcome: 2 }));
+  const second = time.at;
+  assert.deepEqual(calls, ["create", "start", "leave", "leave"]);
+  time.at = first + LEAVE_CONFIRM_MS;
+  c.tick();
+  time.at = second + LEAVE_CONFIRM_MS - 1;
+  c.tick();
+  assert.equal(resyncs(calls), 0);
+  time.at = second + LEAVE_CONFIRM_MS;
+  c.tick();
+  assert.equal(resyncs(calls), 1);
 });
 
 test("a welcome that replays the lobby restarts the Leave's deadline from the Leave it sends again", (t) => {
@@ -1780,9 +2121,15 @@ test("an incomplete welcome keeps an unconfirmed Leave on its old deadline", (t)
   time.at += 5000;
   assert.equal(welcome(c, [], false), false);
   assert.equal(c.data.jobs[spec.key].leavePendingAt, sent);
+  // The lobby turns up again on the lobby screen: the Leave goes again in the
+  // same state, which doesn't move the clock.
+  time.at += 1000;
+  c.snapshot(snapshot());
+  assert.deepEqual(calls, ["create", "leave", "leave"]);
+  assert.equal(c.data.jobs[spec.key].leavePendingAt, sent);
   time.at = sent + LEAVE_CONFIRM_MS;
   c.tick();
-  assert.deepEqual(calls, ["create", "leave", "resync"]);
+  assert.deepEqual(calls, ["create", "leave", "leave", "resync"]);
   // The resync's welcome is complete: the released lobby is gone.
   assert.equal(welcome(c), true);
   assert.equal(c.status(spec.key).state, "released");

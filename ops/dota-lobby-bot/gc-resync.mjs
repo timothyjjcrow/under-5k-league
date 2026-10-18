@@ -9,7 +9,9 @@
 // It sends no lobby command. If no welcome comes within welcomeMs, noWelcome()
 // runs: server.mjs exits non-zero so launchd (KeepAlive) or systemd
 // (Restart=on-failure) starts a fresh process, whose welcome settles it, as
-// the restart on 2026-10-18 did.
+// the restart on 2026-10-18 did. Never after a deliberate Steam stop (wrong
+// account, unsaved session, the account playing elsewhere): those need an
+// operator, and a restart would only repeat them (watchdog.mjs's rule).
 export const RESYNC_RELAUNCH_MS = 2000;
 export const RESYNC_WELCOME_MS = 30_000;
 const DOTA = 570;
@@ -26,7 +28,10 @@ export function gcResync({
     start() {
       // Armed before anything that could throw.
       clearTimeout(deadline);
-      deadline = setTimeout(noWelcome, welcomeMs);
+      deadline = setTimeout(() => {
+        deadline = undefined;
+        if (!stopped()) noWelcome();
+      }, welcomeMs);
       user.gamesPlayed([]);
       setTimeout(() => {
         if (!stopped()) user.gamesPlayed([DOTA], false);

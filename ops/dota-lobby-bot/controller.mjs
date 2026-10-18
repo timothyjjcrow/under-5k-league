@@ -144,11 +144,31 @@ const notScored = (outcome) => outcome >= 64 && outcome <= 69;
 // DOTA_GameState's DOTA_GAMERULES_STATE_POST_GAME.
 const POST_GAME = 6;
 
-/** Dota shows the game's end: its postgame (lobby state 3), or a lobby still
- * reading RUN whose outcome or game state already says the game ended. */
+/** Dota shows the game's end, so the bot may leave: its postgame (lobby state
+ * 3), or a lobby still reading RUN whose outcome or game state already says
+ * the game ended. Leaving only: a RUN lobby at the post-game game state with
+ * no outcome yet says nothing about the result (recordEnd). */
 const atPostgame = (lobby) =>
   lobby.state === 3 ||
   (lobby.state === 2 && (won(lobby.matchOutcome) || lobby.gameState === POST_GAME));
+
+/** Record the game's end on its job: its postgame (lobby state 3), or a
+ * winner however it arrives. Never the post-game game state alone, at RUN with
+ * no outcome yet: a launch Dota then calls not scored, or sends back to the
+ * lobby screen, must still read as failed, never as played or `over`. Any
+ * later snapshot's outcome replaces an unknown (none yet, or 0) or not-scored
+ * one; a winner is never replaced, so a played game stays played. True when
+ * it changed the job. */
+function recordEnd(job, lobby, now) {
+  const before = [job.postgameSeen, job.postgameOutcome, job.postgameAt];
+  if (lobby.state === 3 || won(lobby.matchOutcome)) {
+    job.postgameSeen = true;
+    job.postgameAt ??= now;
+  }
+  if (job.postgameSeen === true && !won(job.postgameOutcome) && lobby.matchOutcome)
+    job.postgameOutcome = lobby.matchOutcome;
+  return [job.postgameSeen, job.postgameOutcome, job.postgameAt].some((value, i) => value !== before[i]);
+}
 
 /** Leave now? Never during RUN: the Game Coordinator ignores a Leave while
  * the game runs (every played game through 2026-10-18 kept the bot until its
@@ -161,6 +181,9 @@ function safeToLeave(lobby, job, now) {
     launchStalled(lobby, job, now)
   );
 }
+
+/** A game Dota still shows running, with no sign of its end. */
+const stillRunning = (lobby) => lobby.state === 2 && !atPostgame(lobby);
 
 const hasMatchId = (lobby) => !!lobby.matchId && lobby.matchId !== "0";
 
@@ -203,15 +226,14 @@ function played(lobby, job) {
   );
 }
 
-/** The site's `over`: this job's game was played and Dota showed its end.
- * Never a failed launch, never a not-scored end. */
+/** The site's `over`: this job's game was played and Dota showed its end
+ * with a winner (recordEnd keeps an outcome only once the end was seen).
+ * Never a not-scored end, or an end whose outcome Dota hasn't named yet,
+ * which a not-scored one can still replace: the site ends the game on it, so
+ * it must never be wrong. Never a failed launch either: that never reads
+ * started (failLaunch), and a winner undoes the failure (showsGame). */
 function gameOver(job) {
-  return (
-    job.state === "started" &&
-    !job.launchFailed &&
-    job.postgameSeen === true &&
-    !notScored(job.postgameOutcome)
-  );
+  return job.state === "started" && won(job.postgameOutcome);
 }
 
 /** The launch is over without a game: back on the lobby screen, stuck before
@@ -241,6 +263,12 @@ const showsGame = (lobby) =>
   won(lobby.matchOutcome) ||
   ([2, 3].includes(lobby.state) &&
     !(atPostgame(lobby) && notScored(lobby.matchOutcome)));
+
+/** No Leave is waiting on Dota's confirmation. */
+function clearLeaveClock(job) {
+  delete job.leavePendingAt;
+  delete job.leavePendingState;
+}
 
 const sameLobby = (lobby, job) =>
   lobby.gameName === job.spec.name && lobby.passKey === job.spec.password;
@@ -428,7 +456,10 @@ export class LobbyController {
     let job = this.data.jobs[spec.key];
     if (action === "create") {
       if (job && job.state !== "released") return this.status(spec.key, spec);
-      if (this.data.active || this.lobby) throw new BotError("BUSY");
+      if (this.data.active || this.lobby) {
+        if (!this.data.active) this.checkLeftover();
+        throw new BotError("BUSY");
+      }
       // A GC welcome can omit an up-to-date cache. Online alone does not
       // establish that the account has no existing lobby.
       if (!this.absenceConfirmed) throw new BotError("STATE");
@@ -475,15 +506,19 @@ export class LobbyController {
         // complete welcome with no lobby frees the bot at once.
         if (
           job.state === "started" &&
-          (this.lobby
-            ? this.lobby.state === 2 && !atPostgame(this.lobby)
-            : !this.absenceConfirmed)
+          (this.lobby ? stillRunning(this.lobby) : !this.absenceConfirmed)
         ) {
           job.releasing = true;
-          job.resyncWanted = "release";
+          // One check per game: once a resync's welcome has shown this lobby
+          // still there, a later Release (the site sends one on every close,
+          // and on a BUSY) only waits for the game's end or the backstop,
+          // never cycling a live game's session again. A lobby the bot can't
+          // see is always checked.
+          const check = !this.lobby || job.verifiedAt === undefined;
+          if (check) job.resyncWanted = "release";
           this.save();
           this.log("release-pending", { key: spec.key, lobbyState: this.lobby?.state ?? null });
-          this.resync(job, "release");
+          if (check) this.resync(job, "release");
           return this.status(spec.key, spec);
         }
         // Immediately after Launch, the last snapshot can still say UI.
@@ -524,14 +559,31 @@ export class LobbyController {
     }
     return this.status(spec.key, spec);
   }
+  /** A Create found the bot with no claim but still in a finished job's
+   * lobby that reads running. Dota ignores a Leave there and only the game's
+   * postgame brings one, so a lobby whose end never reached the bot would
+   * answer BUSY to every Create until a restart (2026-10-18, claimless). Ask
+   * the Game Coordinator once whether it still exists; resync() keeps its
+   * limits. */
+  checkLeftover() {
+    const done = finishedJob(this.data.jobs, this.lobby);
+    if (done && stillRunning(this.lobby) && done.verifiedAt === undefined)
+      this.resync(done, "busy");
+  }
   /** Send a Leave, saved first with its reason. The first unconfirmed one
-   * starts the confirmation clock (LEAVE_CONFIRM_MS); a repeat doesn't push
-   * it back. */
+   * starts the confirmation clock (LEAVE_CONFIRM_MS), and so does one sent in
+   * another lobby state than the Leave that started it: Dota ignores a Leave
+   * at RUN, so the postgame's Leave after a RUN one gets its own 20 s. A
+   * repeat in the same state doesn't push the clock back. */
   leave(job, reason) {
     const now = this.now();
+    const lobbyState = this.lobby?.state ?? null;
     job.leaveSentAt = now;
     job.leaveReason = reason;
-    job.leavePendingAt ??= now;
+    if (job.leavePendingAt === undefined || job.leavePendingState !== lobbyState) {
+      job.leavePendingAt = now;
+      job.leavePendingState = lobbyState;
+    }
     this.save();
     this.log("leave-sent", { key: job.spec.key, reason, lobbyState: this.lobby?.state ?? null });
     this.transport.leave();
@@ -569,8 +621,14 @@ export class LobbyController {
       const done = finishedJob(this.data.jobs, lobby);
       if (!done) return;
       if (!(done.launchFailed && showsGame(lobby))) {
-        // Never during RUN, when Dota ignores it: the postgame brings it.
-        if (!(lobby.state === 2 && !atPostgame(lobby))) this.leave(done, "orphan");
+        // A played game's end, seen after its claim was freed, still reaches
+        // the site as `over`.
+        const recorded = done.state === "started" && recordEnd(done, lobby, now);
+        // Never during RUN, when Dota ignores it (the postgame brings it),
+        // nor during server allocation: only on the lobby screen or at the
+        // game's end.
+        if (lobby.state === 0 || atPostgame(lobby)) this.leave(done, "orphan");
+        else if (recorded) this.save();
         return;
       }
       // That reconnect gave up on a launch Dota now shows as a game: claim it
@@ -594,20 +652,14 @@ export class LobbyController {
     // start (launchStalled).
     if (lobby.state === 0) delete job.leftLobbyAt;
     else job.leftLobbyAt ??= now;
-    // The game's end as Dota shows it: its postgame, a RUN lobby whose
-    // outcome or game state says it ended, or a winner however it arrives.
-    if (atPostgame(lobby) || won(lobby.matchOutcome)) {
-      job.postgameSeen = true;
-      job.postgameOutcome = lobby.matchOutcome;
-      job.postgameAt ??= now;
-    }
+    recordEnd(job, lobby, now);
     // Given up too soon (a Dota update late past the settle clock): a game
     // Dota now shows running, or played, is a game after all, back on the
     // normal path (the bot stays with a running game until it ends).
     if (job.launchFailed && showsGame(lobby)) {
       delete job.launchFailed;
       delete job.releasing;
-      delete job.leavePendingAt;
+      clearLeaveClock(job);
       if (job.failedMatchId) job.matchId = job.failedMatchId;
       this.log("launch-undone", { key: job.spec.key, lobbyState: lobby.state });
     }
@@ -698,11 +750,12 @@ export class LobbyController {
   /** Ask the Game Coordinator again which lobby the bot is in: transport
    * .resync() cycles the GC session and its welcome replays every cache
    * (welcoming/welcomed). It sends no create, start or leave. Never while a
-   * lobby is being set up or its server allocated, at most one a minute, and
-   * at most three per job; then the bot logs that the leave went unconfirmed
-   * and waits for the next postgame or welcome. True when it started one.
-   * A resync in flight is offline until its welcome, so it never starts a
-   * second. */
+   * lobby is being set up (creating, ready or starting, unless it is being
+   * released: then its Leave on the lobby screen should already have worked)
+   * or its server allocated, at most one a minute, and at most three per job;
+   * then the bot logs that the leave went unconfirmed and waits for the next
+   * postgame or welcome. True when it started one. A resync in flight is
+   * offline until its welcome, so it never starts a second. */
   resync(job, reason) {
     const now = this.now();
     if (
@@ -744,7 +797,8 @@ export class LobbyController {
   }
   /** The resyncs no GC message drives: a Release waiting on one, a Leave
    * unconfirmed past LEAVE_CONFIRM_MS, and a started game with no end seen
-   * three hours after Start. */
+   * three hours after Start, whether it still holds the claim or is a
+   * finished job's leftover lobby. */
   resyncClock(now) {
     const job = this.leavingJob();
     if (!job) return false;
@@ -753,7 +807,6 @@ export class LobbyController {
       (job.leavePendingAt !== undefined && now - job.leavePendingAt >= LEAVE_CONFIRM_MS
         ? "leave-unconfirmed"
         : job.state === "started" &&
-            this.data.active === job.spec.key &&
             !job.postgameSeen &&
             job.backstopAt === undefined &&
             now - (job.startedAt ?? job.changedAt) >= STARTED_BACKSTOP_MS
@@ -823,9 +876,9 @@ export class LobbyController {
     const job = this.leavingJob();
     this.welcomeLeave =
       job?.leavePendingAt !== undefined
-        ? { key: job.spec.key, at: job.leavePendingAt }
+        ? { key: job.spec.key, at: job.leavePendingAt, state: job.leavePendingState }
         : null;
-    if (job) delete job.leavePendingAt;
+    if (job) clearLeaveClock(job);
     this.lobby = null;
   }
   /** Settle a GC welcome once its out-of-date caches have replayed as
@@ -843,8 +896,10 @@ export class LobbyController {
       const leaving = this.data.jobs[pending.key];
       // Neither proof (an incomplete welcome that replayed no lobby): the
       // Leave is still unconfirmed, on its old clock.
-      if (leaving && !this.lobby && !this.absenceConfirmed)
-        leaving.leavePendingAt ??= pending.at;
+      if (leaving && !this.lobby && !this.absenceConfirmed && leaving.leavePendingAt === undefined) {
+        leaving.leavePendingAt = pending.at;
+        leaving.leavePendingState = pending.state;
+      }
       // The lobby a Leave was out for, with no claim, is provably gone.
       if (leaving && leaving !== job && this.absenceConfirmed) {
         leaving.departedAt = now;
@@ -853,6 +908,10 @@ export class LobbyController {
     }
     // This welcome is the check a Release asked for.
     if (job && (this.lobby || this.absenceConfirmed)) delete job.resyncWanted;
+    // A resync's welcome that shows the job's lobby still there: the one
+    // check a later Release or BUSY needn't repeat for this game.
+    const checked = resync && this.lobby ? this.data.jobs[resync.key] : undefined;
+    if (checked && sameLobby(this.lobby, checked)) checked.verifiedAt = now;
     // A drop can swallow the departure from a launched game or a released
     // lobby, and its claim then answers BUSY to every next Create. Neither
     // has anything to replay, so proven absence is that departure: the one a
@@ -889,7 +948,7 @@ export class LobbyController {
         job.state = job.releasing ? "released" : "blocked";
       job.departedAt = now;
       job.departedBy = source;
-      delete job.leavePendingAt;
+      clearLeaveClock(job);
       delete job.resyncWanted;
       // An unexplained missing lobby never authorizes a replay. Keep the
       // claim until a captain deliberately releases the ambiguous operation.
@@ -908,7 +967,7 @@ export class LobbyController {
       if (done) {
         done.departedAt = now;
         done.departedBy = source;
-        delete done.leavePendingAt;
+        clearLeaveClock(done);
         this.save();
       }
       this.log("departed", { key: done?.spec.key ?? null, source });

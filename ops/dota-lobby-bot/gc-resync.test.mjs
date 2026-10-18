@@ -60,15 +60,27 @@ test("a throwing quit still leaves the restart countdown armed", (t) => {
   assert.equal(exits, 1);
 });
 
-test("a deliberate Steam stop keeps Dota closed", (t) => {
+test("a deliberate Steam stop keeps Dota closed and never asks for a restart", (t) => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   const user = fakeUser();
   let stopped = false;
-  const resync = gcResync({ user, stopped: () => stopped, noWelcome: () => {} });
+  let exits = 0;
+  const resync = gcResync({ user, stopped: () => stopped, noWelcome: () => (exits += 1) });
   resync.start();
   stopped = true;
   t.mock.timers.tick(RESYNC_RELAUNCH_MS);
   assert.deepEqual(user.played, [[[], undefined]]);
+  // The stop's own welcome never comes (server.mjs ignores one once
+  // stopped): the deadline passes without an exit, which needs an operator.
+  t.mock.timers.tick(RESYNC_WELCOME_MS);
+  assert.equal(exits, 0);
+  // Stopped after the relaunch, too.
+  stopped = false;
+  resync.start();
+  t.mock.timers.tick(RESYNC_RELAUNCH_MS);
+  stopped = true;
+  t.mock.timers.tick(RESYNC_WELCOME_MS);
+  assert.equal(exits, 0);
 });
 
 test("the installed adapters drop the GC session on the quit and say hello again on the launch", (t) => {
