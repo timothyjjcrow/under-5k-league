@@ -2,7 +2,7 @@
 
 The bot runs on the league's own box (`ggd2l-1`, the DigitalOcean droplet that serves both sites) as `ggd2l-bot.service`, and connects to the sites through the Cloudflare relay as before. **Status: planned:** it moves there from this Mac after both leagues have moved to the box ([DOTA-LOBBY-BOT: On the box](DOTA-LOBBY-BOT.md#on-the-box)); until then it runs on the Mac. The box costs nothing extra for the bot, so no separate VM is needed.
 
-One bot hosts the in-house games one Dota lobby at a time (it leaves each game once it is running, so two can run at once), with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
+One bot hosts the in-house games one Dota lobby at a time, until that game's postgame (Dota doesn't let it leave a running game, so a second game at the same time is hosted by hand; [DECISIONS 2026-10-18](DECISIONS.md)), with Captains Mode, US East and league ticket 20004. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
 
 The approved Europe plan can share this same worker and relay, with one lobby
 at a time across both leagues. Set `DOTA_GAME_SERVER_REGIONS="2,3"` only after

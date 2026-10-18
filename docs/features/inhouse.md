@@ -237,7 +237,12 @@ itself when the bot sees Dota's postgame (below).
   during set-up. Unlike `inhouseScanStatus` an unknown window is closed.
 - **Refused while the bot holds an unlaunched lobby** for that game and is
   online (creating, ready or starting: `botHoldsUnlaunchedLobby` over the
-  bounded `inhouseBotGameStatus` read; unknown never blocks). Once the game
+  bounded `inhouseBotGameStatus` read; unknown never blocks). A pending
+  release (`releasing`) doesn't hold it: the bot is already leaving, and its
+  Start and invites refuse while Release is hidden. The refusal
+  (`botGameOverRefusal`) names "Start game with bot" and "Release bot…" only
+  for a ready lobby, where both show; while the bot creates or starts the
+  lobby it says to try again in a minute. Once the game
   left the room nobody but an admin could release it, and it answers BUSY to
   every other game. "Blocked" doesn't hold it back: an offline bot reports
   it too, when its Release can't work either. Bot recovery
@@ -264,6 +269,9 @@ itself when the bot sees Dota's postgame (below).
   no longer playable), and the result scan's own bot read in
   `lookUpLobbyGame` (the backstop when no tab is open; it also marks a READY
   game IN_PROGRESS when the bot saw it running, `markInhouseGameStartedFromBot`).
+  Both callers catch and log a failure there (the claim, or the formation
+  and ping after it), so it never costs the panel its answer, or the scan
+  that game's OpenDota lookup and the rest of its pass.
   The claim loses cleanly to a result, a cancel, the abandon sweep or a
   press that landed first (seam `inhouse.endInhouseGameFromBot.beforeClaim`,
   plus raced tests, in `test/integration/inhouse-bot-lifecycle.itest.ts`),
@@ -635,9 +643,14 @@ Every transition is a guarded claim; keep it that way (general rules:
   released: any captain or admin can press Create, and every other panel must
   see it); every 15s (`LOBBY_PANEL_STARTED_POLL_MS`) once Dota reports the
   game "started"; not at all once the bot says `over`. A tab coming back
-  reads at once. `/api/dota-lobby` allows 60 reads a minute per player, and
-  the admin's bot line (`DotaLobbyRecovery`) checks every 15s
-  (`LOBBY_RECOVERY_POLL_MS`).
+  reads at once, and a panel whose first read failed (a bot restarting
+  refuses connections for half a minute) retries every 15s by itself
+  (`lobbyPanelPollMs`'s `unanswered`). The idle rate lasts a whole
+  hand-hosted game (DECISIONS counts it). `/api/dota-lobby` allows 60 reads a
+  minute per player (three visible panels), and the admin's bot line
+  (`DotaLobbyRecovery`) checks every 15s (`LOBBY_RECOVERY_POLL_MS`) without
+  holding its "Check bot connection" button (a press wins over a background
+  check); `/api/dota-lobby/recovery` allows 30 checks a minute per admin.
   - **One bot read per game, not per panel.** A browser status read goes
     through a per-process single-flight cache
     (`src/lib/lobby-bot-status-cache.ts`, 2s TTL, keyed by bot, job key and
@@ -653,7 +666,13 @@ Every transition is a guarded claim; keep it that way (general rules:
     holds the lock that disables the buttons and cancels a read in flight,
     and a read sent before an action never lands after it. A poll used to
     share the lock, so a read in flight disabled the buttons and dropped a
-    click.
+    click. An action's failure is toasted (`pushToast`), never set inline:
+    the next 3s read would clear the line, and with it what the failure
+    asked the presser to do. Only a read's failure shows inline.
+  - **Requests are bounded by `requestSignal`** (`src/lib/request-signal.ts`:
+    a timer and the cancels on one AbortController, unhooked by `done()`
+    once the body is read). Never `AbortSignal.any`: Safari before 17.4 has
+    none, and calling it there failed every read of the panel.
   - The first "started" answer stamps the lobby IN_PROGRESS
     (`markInhouseGameStartedFromBot`, guarded on READY); the result scan's
     own bot read does the same, so it needs no open tab.
@@ -661,7 +680,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   and the reply's `releasing` and `over` are read strictly (only `true`
   counts; anything else is unknown, so absent) and passed to the panel.
   `releasing` reads "Leaving the Dota lobby…" with no second "Release bot…"
-  (`releaseOpen`); `over` reads "Game over in Dota — the result records
+  (`releaseOpen`), and no "Start game with bot" or invite button
+  (`startOpen`, `reinviteMissingOpen`, `selfInviteOpen`: the bot refuses
+  both on a lobby it is leaving); `over` reads "Game over in Dota — the result records
   itself from OpenDota", and the site marks the game over (see "Game over").
   The status line comes from `lobbyStatusLabel`.
 - **BUSY says why, and frees a bot left on a closed game.** BUSY's copy says
@@ -669,8 +690,15 @@ Every transition is a guarded claim; keep it that way (general rules:
   When Create answers BUSY, the route reads the bot's health once; if its
   active job is this league's in-house game and the database shows it closed
   (COMPLETED, CANCELLED or AWAITING_RESULT, the lookup admin recovery uses),
-  it sends that job's release and answers "Freeing the bot from finished
-  game #1234. Press “Create Dota lobby” again in a few seconds."
+  it sends that job's release and says what the release did
+  (`freeBotFromClosedInhouseGame`, `freeingBotMessage`): "Freeing the bot
+  from finished game #1234. Press “Create Dota lobby” again in a few
+  seconds." when the bot is leaving now; "Asked the bot to leave finished
+  game #1234. It leaves as soon as Dota lets it…" when that game still runs
+  in Dota (`started`: an early "Game over" press, an admin cancel) or the
+  release's answer was lost. A release the bot refuses (it can't leave yet,
+  isn't running, or a player's Dota account is gone) changed nothing, so the
+  BUSY answer stands.
 - **How the site reaches the bot** (`lobbyBotConnection`, DECISIONS
   2026-10-18): https to any host (the relay), or in production plain http
   only to exactly `http://127.0.0.1:<port>` or `http://[::1]:<port>`, the bot

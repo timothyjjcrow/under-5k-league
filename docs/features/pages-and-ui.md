@@ -1011,11 +1011,13 @@ the league is already draftable and many visitors have joined. Write for both.
   their page.
 - **The panel's seat list shows only while the bot reported seats, with the
   lobby ready or Dota starting the game (`lobbyListVisible`), and its invite
-  copy and buttons only while it is ready** (`docs/DOTA-LOBBY-BOT.md#lobby-invites`;
+  copy and buttons only while it is ready, the invite and Start buttons only
+  with no release pending** (`docs/DOTA-LOBBY-BOT.md#lobby-invites`;
   source guard `dota-lobby-controls.test.ts`). Otherwise, as from an older
   bot, the "Join through Dota → Play → Custom Lobbies" line stays. Its
-  background reads never disable a button (the panel's rates and its action
-  lock: [inhouse](inhouse.md#game-setup)). "Who's in
+  background reads never disable a button, and an action's failure toasts
+  rather than showing inline, where the next read would clear it (the
+  panel's rates and its action lock: [inhouse](inhouse.md#game-setup)). "Who's in
   the lobby" is a list of `lobbyPlayerRow` texts ("(you)" on the viewer's);
   "Re-invite missing players" and "Send me an invite" render only through
   `reinviteMissingOpen` and `selfInviteOpen`; invite results toast through
