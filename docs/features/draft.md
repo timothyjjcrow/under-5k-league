@@ -236,9 +236,13 @@ In the Captains & draft card on `/admin` and inside the room
   for `draftViewerStake` (captains and admins at `POLL_KEEPALIVE_MS`, a pool
   player at `POLL_WATCH_KEEPALIVE_MS`). A failed poll in a live auction
   retries at the viewer's live rate, never the waiting-room rate, so
-  `disconnected` trips promptly. At a clock's zero only a signed-in tab polls
-  at once (only its poll can settle the lot); a signed-out tab waits for its
-  next poll.
+  `disconnected` trips promptly. At a clock's zero only a captain's or an
+  admin's tab polls at once (`draftPollsAtClockZero`): they have controls
+  waiting on the settled lot, and only a signed-in poll can settle it. Every
+  other tab (signed out, a spectator, a pool player) sees the sale on its next
+  poll, at most `POLL_WATCH_MS` later. When every signed-in tab polled at zero,
+  a full US room sent about 63 polls at once per sale, about 2.2 s of the
+  box's one vCPU each time (measured 2026-10-17).
 - **The poll reads only what the room shows:** the pool's display fields,
   the nominee's profile and contact in one extra read, the run's id and
   provenance, and the last 8 sales while the auction runs (`readDraftSales`

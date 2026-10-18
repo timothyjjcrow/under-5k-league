@@ -354,6 +354,17 @@ describe("live rooms delegate their poll policy", () => {
     );
   });
 
+  it("draft-room polls at a clock's zero only through draftPollsAtClockZero", () => {
+    // Every signed-in tab polling at zero was ~63 simultaneous polls per sale
+    // in a full US room on the one-vCPU box; only captains and admins have
+    // controls waiting on the settled lot.
+    const src = code("draft-room.tsx");
+    const body = /const reconcileExpiredClock = useCallback\(\(\) => \{([\s\S]*?)\n  \}, \[/.exec(src);
+    expect(body, "reconcileExpiredClock moved").not.toBeNull();
+    expect(body![1]).toContain("draftPollsAtClockZero(");
+    expect(body![1]).not.toMatch(/if \(state\?\.me\.userId\) setPollKick/);
+  });
+
   it("draft-room computes its cadence only through draftPollCadence", () => {
     const src = code("draft-room.tsx");
     expect(src).toContain("draftPollCadence(");

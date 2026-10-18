@@ -84,7 +84,7 @@ import {
   seedDraftFeed,
   type FeedLine,
 } from "@/lib/draft-feed";
-import { draftPollCadence } from "@/lib/room-poll";
+import { draftPollCadence, draftPollsAtClockZero } from "@/lib/room-poll";
 import {
   draftRoomNeedsRefresh,
   type DraftRoomPhase,
@@ -762,11 +762,19 @@ export function DraftRoom({
   const reconcileExpiredClock = useCallback(() => {
     if (settlingClockKey === currentClockKey) return;
     setSettlingClockKey(currentClockKey);
-    // Only a signed-in poll can settle the lot (the tick route runs the
-    // resolvers for those alone), so a signed-out tab waits for its next
-    // poll instead of joining every open tab's request at zero.
-    if (state?.me.userId) setPollKick((value) => value + 1);
-  }, [currentClockKey, settlingClockKey, state?.me.userId]);
+    // Only a captain's or an admin's tab polls at once (draftPollsAtClockZero):
+    // every other tab waits for its next poll instead of joining every open
+    // tab's request at zero.
+    if (
+      state &&
+      draftPollsAtClockZero({
+        signedIn: !!state.me.userId,
+        canAct: state.me.isAdmin || !!state.me.myTeamId,
+      })
+    ) {
+      setPollKick((value) => value + 1);
+    }
+  }, [currentClockKey, settlingClockKey, state]);
 
   useEffect(() => {
     if (!soldFlash) return;
