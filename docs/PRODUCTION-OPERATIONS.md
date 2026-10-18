@@ -644,12 +644,38 @@ straight to local development.
 **The limiter.** `src/lib/rate-limit.ts` keeps its buckets in each process.
 On the box one process serves a league (two during a release's 90-second
 overlap), so the limits hold league-wide, and Cloudflare's own DDoS protection
-sits in front. No Cloudflare rate-limiting rule is part of the setup; add one
-only with a reviewed reason, scoped by method and path, never on the cron path
-or an OAuth callback. Test normal room cadence, duplicate tabs, invalid bodies,
-callbacks and a controlled flood against a closed rehearsal; evidence must show
-the database plateaus and legitimate venue traffic stays usable. Any exception
-or bypass must have an owner, expiry, and monitor.
+sits in front. That limiter covers only the JSON route handlers, so page renders
+had no throttle: about 3 to 5 heavy pages a second from one client pin the one
+vCPU both leagues share (audit, 2026-10-17).
+
+**The zone's one rate-limiting rule** (Free plan: one rule, matched on the URI
+path only, counted per IP, a 10-second period and a 10-second block). Since
+2026-10-18 it reads "Page loads per IP (both leagues)". It counts every request
+to any zone host whose path is not under `/api/`, `/_next/`, `/brand/`,
+`/ranks/` or `/merch/` and is not one of the root static files: `/favicon.ico`,
+`/icon.svg`, `/apple-icon.png`, `/apple-touch-icon.png`,
+`/apple-touch-icon-precomposed.png`, `/opengraph-image.png`,
+`/twitter-image.png`, `/manifest.webmanifest`, `/robots.txt`, `/sitemap.xml`
+and `/hero-loop.mp4`. Above 40 such requests in 10 seconds from one IP, it
+blocks that IP's matching requests (429) for 10 seconds. Everything under
+`/api/` stays out of it: the cron path, the OAuth callbacks, the health probes,
+and the draft and inhouse rooms' polls and actions. That leaves those to the
+in-process limiter.
+
+Its test, on 2026-10-18 from Tim's Mac:
+- 60 quick requests to `/recap`: 44 answered 307, then 16 answered 429.
+  Cloudflare's counters lag by a few seconds, so a burst gets a little past 40.
+- A page during the block: 429. `/api/health/live` meanwhile: 200.
+- 15 seconds later: 200 on both leagues.
+
+To change it: Security, then Security rules, then Rate limiting rules on the
+`ggd2l.com` zone. Keep `/api/` excluded, never put the cron path or an OAuth
+callback under a rule, and retest normal room cadence, duplicate tabs and a
+controlled burst after any change. Any further exception or bypass must have an
+owner, an expiry and a monitor. Break-glass during an attack: turn on Under
+Attack mode for the zone, which challenges every visitor's page load. The cron
+path also sees the challenge, so watch the schedulers' passes and turn it off
+again as soon as you can.
 
 **The zone.** SSL/TLS Full (strict); Always Use HTTPS on; Automatic HTTPS
 Rewrites, Rocket Loader and Email Address Obfuscation off (they rewrite pages);
@@ -664,7 +690,11 @@ bearer check and the independent non-2xx alert. Before a league's point of no
 return, prove the rule from the allowlisted Mac:
 `curl -sS -o /dev/null -w '%{http_code} %header{cf-mitigated}\n' -A ggd2l-automation-scheduler -H 'accept: application/json' https://us.ggd2l.com/api/cron/automation`
 (and the same for `eu.ggd2l.com`) must print the app's own `401` with an
-empty `cf-mitigated`, never `challenge`.
+empty `cf-mitigated`, never `challenge`. Checked on 2026-10-18: the dashboard
+listed no custom rules at all (0/5), yet this check printed `401` with an empty
+`cf-mitigated` on both leagues, and the schedulers' passes answer 200. Browser
+Integrity Check does not challenge the scheduler today. Create the skip rule
+above if the check ever shows `challenge`.
 
 **No edge cache for dynamic routes.** The zone has **no Cache Rules** and
 never "Cache Everything". The `vercel-cdn-cache-control` headers in the code
