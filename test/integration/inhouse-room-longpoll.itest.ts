@@ -468,8 +468,11 @@ describe("the long-poll's request volume", () => {
     // For the record: the fallback ladder over the same 6s would be 2 polls
     // queued (3s), 1 spectating (10s), 4 in a clocked stage (1.5s); the
     // ladder before 2026-10-18 0-1 queued (10s) and 0-1 spectating (30s).
-    process.stdout.write(
-      `[long-poll volume] ${viewers.length} viewers, ${changes} changes in ${RUN_MS / SEC}s: requests ${counts.join(", ")}\n`,
+    // Through the console, never process.stdout: `--silent` drops it, and
+    // the mutation guard reads Vitest's JSON report from stdout, which a raw
+    // write corrupts (its preflight then reads as a runner failure).
+    console.info(
+      `[long-poll volume] ${viewers.length} viewers, ${changes} changes in ${RUN_MS / SEC}s: requests ${counts.join(", ")}`,
     );
   });
 });
