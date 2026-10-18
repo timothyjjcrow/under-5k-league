@@ -148,6 +148,15 @@ jobs:
       # three commits while passing in a faithful local clean-room run.
       - name: Unit tests
         run: npm test -- --reporter=github-actions --reporter=default
+      # The lobby bot and its relay are separate packages with their own
+      # lockfiles. Neither suite touches Steam, Dota or Cloudflare: the bot's
+      # runs a fake Game Coordinator transport, the relay's runs in Miniflare.
+      - name: Lobby bot and relay tests
+        run: |
+          npm ci --prefix ops/dota-lobby-bot
+          npm test --prefix ops/dota-lobby-bot
+          npm ci --prefix ops/dota-lobby-relay
+          npm test --prefix ops/dota-lobby-relay
       - name: Integration tests
         run: npm run test:integration -- --reporter=github-actions --reporter=default
       - name: Create build database schema

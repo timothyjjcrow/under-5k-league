@@ -28,7 +28,7 @@ Browser ─> Cloudflare edge ─> tunnel (outbound from the box) ─> cloudflare
                            ├─ eu.ggd2l.com      ─> 3011 (eu@a) | 3012 (eu@b)
                            └─ ggd2l.com, www    ─> 302 https://us.ggd2l.com{uri}
 PostgreSQL 18 127.0.0.1:5432: ggd2l_us, ggd2l_eu (ld2l_restore_test only during drills)
-Lobby bot 127.0.0.1:8090 ─> the relay Worker (unchanged)
+Lobby bot 127.0.0.1:8090 <─ the sites over loopback once it moves here (the relay Worker until then)
 Cloudflare Workers: the minute scheduler ─> https://{us,eu}.ggd2l.com/api/cron/automation
 R2 bucket ggd2l-backups: age-encrypted dumps and config archives
 ```
@@ -70,6 +70,15 @@ heartbeat), `ggd2l-bot`.
 - Never probe `/api/sync` or `/api/health/automation` on a candidate slot.
 - Every unit refuses to start without a valid `LEAGUE_DEPLOY_ENV`; only
   `production` lets the site write to Discord.
+- `ggd2l-bot.service` refuses to start on an env that breaks the bot's
+  contract (`env-contract.mjs --bot`, names only): `DOTA_BOT_STATE_DIR`
+  exactly `/var/lib/ggd2l-bot`, a 32+ character `DOTA_LOBBY_BOT_SECRET`, no
+  `STEAM_BOT_PASSWORD`, and `NODE_ENV`, `HOST` and `PORT` in `bot.env` only
+  as the unit's own `production`, `127.0.0.1` and `8090` (any other value
+  would override the unit's). Check a file before installing it with
+  `node /usr/local/lib/ggd2l/env-contract.mjs --bot --file <path>`. Five
+  failed starts in ten minutes leave the unit failed instead of restarting
+  forever.
 - A slot can write only the release folders `next start` writes at runtime,
   `RELEASE_WRITABLE_DIRS` in `agent/layout.mjs` (`.next/cache`, and
   `.next/server/route-cache` for Next's response cache). The build creates
@@ -140,7 +149,14 @@ reach the box only through `install-kit.sh <sha>` run from root's own clone
 (`sudo git -C /root/ggd2l-kit fetch origin`, check out `<sha>`, then
 `sudo bash /root/ggd2l-kit/ops/selfhost/install-kit.sh <sha>`), as a separate,
 recorded operation. Never run it from a tools clone: it refuses any clone, or
-folder above it, that a user other than root could change.
+folder above it, that a user other than root could change. Before it changes
+anything it checks both live `/etc/ggd2l/<lg>.env` files with the new kit's
+env contract (names only) and stops on a problem, since every slot's
+ExecStartPre would run that contract at its next start; fix the file, then run
+it again. The first install after 2026-10-18 brings the production
+`DOTA_LOBBY_BOT_URL` rule (unset, `http://127.0.0.1:8090`, or exactly
+`https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`): record that check's
+output in the install's evidence.
 
 ## Rollback
 
@@ -412,9 +428,12 @@ and delete the plaintext.
 
 **`cutover/env-partial.mjs` and `cutover/compose-env.sh`** build a league's
 `/etc/ggd2l/<lg>.env` file to file. On the Mac,
-`GGD2L_REPO=<main checkout> node ops/selfhost/cutover/env-partial.mjs <lg> staging|production [--without-bot] [--webhooks]`
+`GGD2L_REPO=<main checkout> node ops/selfhost/cutover/env-partial.mjs <lg> staging|production [--without-bot] [--webhooks] [--bot-via-relay]`
 reads the local secret files and installs the partial on the box through ssh's
-stdin (it prints only key names). Then on the box,
+stdin (it prints only key names). A production partial points the site at the
+lobby bot on the box (`DOTA_LOBBY_BOT_URL=http://127.0.0.1:8090`);
+`--bot-via-relay` keeps the relay's URL while the bot still runs on the Mac.
+The env contract accepts only those two in production. Then on the box,
 `sudo bash /root/ggd2l-kit/ops/selfhost/cutover/compose-env.sh <lg> [--keep-secrets]`
 adds the app-role database URL and fresh AUTH, CRON and BACKUP_RECEIPT secrets
 (or, with `--keep-secrets`, the current ones), keeps the server-action key, and

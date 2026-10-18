@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
@@ -64,8 +64,23 @@ export function GameSetupCard({
   manualStart?: React.ReactNode;
 }) {
   const [bot, setBot] = useState<LobbyBotAvailability>("checking");
+  // The bot was hosting another game when this card looked (one bot, one
+  // game at a time): this game goes by hand, and stays so for this card even
+  // once the bot frees up, so its ten never get a second lobby name midway.
+  const [handHosted, setHandHosted] = useState(false);
+  const onAvailability = useCallback((next: LobbyBotAvailability) => {
+    setBot(next);
+    if (next === "busy") setHandHosted(true);
+  }, []);
   const botOn = bot === "on";
-  const showBotPanel = me.isAdmin || botOn || bot === "unavailable";
+  // The bot as this game's way in: the by-hand steps fold away under it.
+  const botFirst = botOn && !handHosted;
+  const showBotPanel =
+    me.isAdmin ||
+    botOn ||
+    bot === "unavailable" ||
+    bot === "busy" ||
+    handHosted;
   // Each live game has its own voice channels and hand-hosted lobby name, so
   // two games set up at once never meet in the same place.
   const voiceByTeam = (team: number) => inhouseVoiceChannel(lobby.slot, team);
@@ -203,10 +218,10 @@ export function GameSetupCard({
           key={lobby.id}
           kind="inhouse"
           id={lobby.id}
-          onAvailability={setBot}
+          onAvailability={onAvailability}
         />
       </div>
-      {botOn ? (
+      {botFirst ? (
         <>
           {voiceStep(false)}
           <details className="group border-t border-line">

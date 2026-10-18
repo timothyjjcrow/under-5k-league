@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { guardJsonMutation, readBoundedJsonObject } from "@/lib/json-mutation";
 import {
+  botBusyElsewhere,
   callLobbyBot,
+  freeBotFromClosedInhouseGame,
+  freeingBotMessage,
   InviteOutcomeUnknownError,
+  LobbyBotBusyError,
   lobbyBotConnection,
   lobbyBotKindEnabled,
   resolveDotaLobby,
@@ -15,12 +19,27 @@ import {
 } from "@/lib/dota-lobby";
 import { UserFacingError } from "@/lib/user-facing-error";
 import { rateLimit } from "@/lib/rate-limit";
-import { prisma } from "@/lib/prisma";
-import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
-import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
+import {
+  endInhouseGameFromBot,
+  markInhouseGameStartedFromBot,
+} from "@/lib/inhouse-service";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
+
+/**
+ * Status reads per viewer per minute. One visible panel at the 3s rate
+ * (LOBBY_PANEL_POLL_MS) reads 20 times a minute, so this covers three at once:
+ * a player's game on two devices, or an admin watching two games' setup on
+ * one page. A fourth (an admin with both games open on two visible devices)
+ * gets an occasional 429, which its panel shows until the next read clears
+ * it. A hidden tab never polls. The route serves every read of a game from
+ * one short-lived bot read (the status cache in dota-lobby-service.ts), so
+ * this bounds the site's work, not the bot's.
+ */
+const READS_PER_MINUTE = 60;
+/** Creates, starts, releases and invites per viewer per minute. */
+const WRITES_PER_MINUTE = 10;
 
 export async function POST(req: NextRequest) {
   const guard = guardJsonMutation(req);
@@ -48,7 +67,10 @@ export async function POST(req: NextRequest) {
   if (
     !rateLimit(
       `dota-lobby:${viewer.id}:${action === "status" ? "read" : "write"}`,
-      { limit: action === "status" ? 30 : 10, windowMs: 60_000 },
+      {
+        limit: action === "status" ? READS_PER_MINUTE : WRITES_PER_MINUTE,
+        windowMs: 60_000,
+      },
       Date.now(),
     ).allowed
   ) {
@@ -105,43 +127,73 @@ export async function POST(req: NextRequest) {
           ? "Only a live in-house game's bot can invite players, once its teams are locked."
           : "This match is not open for play.",
       );
-    const status = await callLobbyBot(
-      spec,
-      action === "status" ? undefined : (action as LobbyAction),
-      {
-        withPlayers: true,
-        // A player's own invite goes to the account they play Dota on, and
-        // only to them; a captain's or admin's goes to everyone missing.
-        invite:
-          action === "invite" && inviteScope === "self"
-            ? [...new Set(roster.filter((p) => p.self).map((p) => p.steamId))]
-            : undefined,
-      },
-    );
-    if (kind === "inhouse" && playable && status.state === "started") {
-      // The GC has confirmed a running game. A cancelled/replaced lobby can
-      // never be resurrected by this delayed response.
-      const started = await prisma.inhouseLobby.updateMany({
-        where: { id, status: "READY" },
-        data: { status: "IN_PROGRESS", startedAt: new Date() },
-      });
-      // The game's clocks moved (the abandon floor now runs from startedAt).
-      // Room polls no longer run maintenance every 2s, so nothing else would
-      // tell the automation gate; and the room shows the game as started
-      // (rule P: publish after the commit, before the response).
-      if (started.count > 0) {
-        await publishInhouseRoomChange();
-        invalidateAutomationGateBestEffort();
+    let status;
+    try {
+      status = await callLobbyBot(
+        spec,
+        action === "status" ? undefined : (action as LobbyAction),
+        {
+          withPlayers: true,
+          // A player's own invite goes to the account they play Dota on, and
+          // only to them; a captain's or admin's goes to everyone missing.
+          invite:
+            action === "invite" && inviteScope === "self"
+              ? [...new Set(roster.filter((p) => p.self).map((p) => p.steamId))]
+              : undefined,
+        },
+      );
+    } catch (error) {
+      // BUSY: the bot holds another game's lobby. When that game is one of
+      // this league's in-house games and already closed, free the bot from
+      // it (one health read, one release) and say what the release did; a
+      // refused release leaves the BUSY answer as it is.
+      if (action === "create" && error instanceof LobbyBotBusyError) {
+        const freed = await freeBotFromClosedInhouseGame();
+        // Progress, not a failure: the panel words it as information.
+        if (freed)
+          return NextResponse.json(
+            { error: freeingBotMessage(freed), freeing: true },
+            { status: 400, headers: { "Cache-Control": "no-store" } },
+          );
+      }
+      throw error;
+    }
+    let stillPlayable = playable;
+    if (kind === "inhouse" && playable) {
+      // Each is a guarded claim that publishes its own commit before this
+      // response (rule P), so a cancelled or finished game is never
+      // resurrected by a delayed answer. Dota's postgame ends the game (Tim's
+      // call 2026-10-18); a running game marks it started. The worker's
+      // result scan does the same from its own bot read, so a failure here
+      // only delays it: the panel still gets the bot's answer.
+      try {
+        if (status.over) {
+          stillPlayable = false;
+          await endInhouseGameFromBot(id);
+        } else if (status.state === "started") {
+          await markInhouseGameStartedFromBot(id);
+        }
+      } catch {
+        console.error("[dota-lobby] bot-driven game update failed");
       }
     }
     // The bot's list carries Steam ids: the browser gets the roster's names
     // with each seat, and the status alone, never the reply as it came.
     const players = lobbyPlayerViews(roster, status.players);
+    // A playable game with no bot lobby of its own: say whether the one bot
+    // is another game's (one shared health read per cache TTL), so its card
+    // can send this game to the by-hand steps instead of a bot that is busy.
+    const busyElsewhere =
+      stillPlayable &&
+      (status.state === "idle" || status.state === "released")
+        ? await botBusyElsewhere(spec)
+        : null;
     return NextResponse.json(
       {
         enabled: true,
-        canControl: canControl && playable,
+        canControl: canControl && stillPlayable,
         canRelease: canControl,
+        playable: stillPlayable,
         name: spec.name,
         password: spec.password,
         leagueId: spec.leagueId,
@@ -152,8 +204,11 @@ export async function POST(req: NextRequest) {
           state: status.state,
           lobbyId: status.lobbyId,
           matchId: status.matchId,
+          ...(status.releasing ? { releasing: true } : {}),
+          ...(status.over ? { over: true } : {}),
         },
         ...(players ? { players } : {}),
+        ...(busyElsewhere ? { busyElsewhere } : {}),
         ...(action === "invite" && status.invited !== undefined
           ? { invited: status.invited }
           : {}),

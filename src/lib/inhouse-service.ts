@@ -50,8 +50,12 @@ import {
   type OpenDotaMatch,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
-import { botReportedMatchId, inhouseBotGameStatus } from "./dota-lobby-service";
-import { botHoldsUnlaunchedLobby } from "./dota-lobby";
+import {
+  botReportedMatchId,
+  inhouseBotGameStatus,
+  releaseInhouseBotAfterClose,
+} from "./dota-lobby-service";
+import { botGameOverRefusal } from "./dota-lobby";
 import { effectiveInhouseRoles, parseRoleKeys } from "./roles";
 import { classifyGame } from "./match-import";
 import {
@@ -1714,13 +1718,8 @@ export async function finishGame(
         : NO_GAME_TO_FINISH,
     };
   }
-  if (botHoldsUnlaunchedLobby(await inhouseBotGameStatus(lobby))) {
-    return {
-      ok: false,
-      error:
-        "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
-    };
-  }
+  const botRefusal = botGameOverRefusal(await inhouseBotGameStatus(lobby));
+  if (botRefusal) return { ok: false, error: botRefusal };
   // Seam: a result, an admin cancel or the abandon sweep landing between the
   // read above and the claim — the claim must lose to each of them.
   await raceHook("inhouse.finishGame.beforeClaim");
@@ -1742,10 +1741,80 @@ export async function finishGame(
     if (current?.status === INHOUSE_STATUS.CANCELLED && !(requeue && isMember)) {
       return { ok: false, error: "That game was cancelled" };
     }
+  } else {
+    // The bot may still be attached to this game's Dota lobby (a started
+    // job waits for Dota's postgame): let it go, without waiting on it.
+    releaseInhouseBotAfterClose(lobby.id);
   }
   if (requeue && isMember) return joinQueue(viewer, 0);
   await maybeFormLobby();
   return { ok: true };
+}
+
+/**
+ * The lobby bot saw this game running ("started"): a READY game becomes
+ * IN_PROGRESS, stamping `startedAt`, as if someone pressed Start. Called by
+ * the bot panel's read (/api/dota-lobby) and by the result scan's own bot
+ * read, so a bot game is marked started without a visible tab. Guarded on
+ * READY: a game cancelled, finished or already started meanwhile is left
+ * alone, so a late reply never resurrects it. Publishes the room and wakes
+ * the automation gate (the abandon floor now runs from `startedAt`) only when
+ * it moved the game. Returns whether it did.
+ */
+export async function markInhouseGameStartedFromBot(
+  lobbyId: string,
+): Promise<boolean> {
+  const started = await prisma.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: INHOUSE_STATUS.READY },
+    data: { status: INHOUSE_STATUS.IN_PROGRESS, startedAt: new Date() },
+  });
+  if (started.count === 0) return false;
+  // Rule P: the room shows the game started.
+  await publishInhouseRoomChange();
+  invalidateAutomationGateBestEffort();
+  return true;
+}
+
+/**
+ * The lobby bot saw Dota's postgame for this game, played and scored (its
+ * `over` flag; Tim's call 2026-10-18): the site marks it over as if "Game
+ * over" were pressed, requeuing nobody. Its ten and its game slot are free at
+ * once, the bot is released, and the result still records itself from
+ * OpenDota (AWAITING_RESULT). "Game over — queue again" stays as the
+ * fallback, and still requeues its presser.
+ *
+ * The claim is finishGame's: a game being played (READY or IN_PROGRESS)
+ * moves to AWAITING_RESULT with `finishedAt`, so it loses cleanly to a
+ * result, an admin cancel, the abandon sweep or a "Game over" press that
+ * landed first, and then changes nothing. Called by the bot panel's read
+ * (/api/dota-lobby, the fast path) and the result scan's bot read (the
+ * backstop). Then the follow-ups finishGame's press gets: publish the room
+ * (its next signed-in poll repaints the Discord board), wake the automation
+ * gate (the game's clocks moved) and offer the freed slot to the queue.
+ * Returns whether this call marked it over.
+ */
+export async function endInhouseGameFromBot(lobbyId: string): Promise<boolean> {
+  // Seam: a result, a cancel, the abandon sweep or a "Game over" press
+  // landing after the caller read the game as playing — the claim must lose
+  // to each of them.
+  await raceHook("inhouse.endInhouseGameFromBot.beforeClaim");
+  // Hoisted so the claim's data stays a flat literal (scripts/mutation-guard).
+  const finishedAt = new Date();
+  const ended = await prisma.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: { in: INHOUSE_PLAYING_STATUSES } },
+    data: { status: INHOUSE_STATUS.AWAITING_RESULT, finishedAt },
+  });
+  if (ended.count === 0) return false;
+  // Rule P: the room drops the game before anything slower runs.
+  await publishInhouseRoomChange();
+  invalidateAutomationGateBestEffort();
+  releaseInhouseBotAfterClose(lobbyId);
+  // The freed slot may form the next game, whose accept clock is new
+  // automated work; formOneLobby publishes it but doesn't wake the gate, and
+  // this path's callers (the panel's read, the result scan) have no trailing
+  // expiry of their own.
+  if (await maybeFormLobby()) invalidateAutomationGateBestEffort();
+  return true;
 }
 
 /**
@@ -2095,6 +2164,8 @@ async function applyResult(
   // Rule P: COMPLETED (and, when finalized, its Elo swing, which the room's
   // post-game banner shows) is committed; the delivery below is Discord.
   await publishInhouseRoomChange();
+  // The game is closed: a bot still attached to its Dota lobby lets go.
+  releaseInhouseBotAfterClose(lobbyId);
   if (!finalized) return "closed";
 
   // Preserve the immediate announcement when Discord is healthy, but only
@@ -2262,12 +2333,30 @@ async function lookUpLobbyGame(
   );
   // The bot read never throws: no bot, an unreachable one, or a game it didn't
   // host all come back without a match id, and the history scan runs as ever.
-  const botMatchId = botReportedMatchId(
-    await inhouseBotGameStatus(
-      { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
-      options,
-    ),
+  const botStatus = await inhouseBotGameStatus(
+    { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
+    options,
   );
+  // What the bot saw needs no open tab: a game Dota showed over is marked
+  // over (the bot panel's read does the same, sooner), and a READY game it
+  // saw running is marked started. Both are guarded claims that publish
+  // their own commit before the OpenDota lookup below. A failure in either
+  // (the claim, or the formation and ping after it) only delays what the
+  // next pass or panel read does again: it never costs this game's lookup or
+  // the rest of the pass.
+  if ((INHOUSE_PLAYING_STATUSES as readonly string[]).includes(lobby.status)) {
+    try {
+      if (botStatus?.over) await endInhouseGameFromBot(lobby.id);
+      else if (
+        botStatus?.state === "started" &&
+        lobby.status === INHOUSE_STATUS.READY
+      )
+        await markInhouseGameStartedFromBot(lobby.id);
+    } catch {
+      console.error("[inhouse] bot-driven game update failed");
+    }
+  }
+  const botMatchId = botReportedMatchId(botStatus);
   if (botMatchId) {
     const od = await fetchOpenDotaMatch(botMatchId, options);
     if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
@@ -2814,6 +2903,8 @@ export async function voidLastResult(
   // After the cursor stamp: a board check that sees the new version must
   // also see the moved cursor, or it settles on the pre-void stats.
   await publishInhouseRoomChange();
+  // A voided game is closed: a bot still attached to its lobby lets go.
+  releaseInhouseBotAfterClose(last.id);
 
   // Post-claim, so only the winner of a concurrent void writes the record —
   // the cancelLobby ordering. The lobby reads CANCELLED like any abandoned
@@ -2962,6 +3053,10 @@ export async function cancelLobby(
           : "The lobby just finished — its result is in, nothing to cancel.",
     };
   }
+  // A cancelled game's bot lets go of its Dota lobby: a ready lobby that
+  // players still sit in would otherwise hold the bot until its idle clock
+  // ran out, answering BUSY to the next game.
+  releaseInhouseBotAfterClose(lobby.id);
   // Every successful admin cancellation is destructive and therefore gets an
   // audit row. Written after the claim so a losing cancel logs nothing.
   await logAdminAction({
@@ -3011,6 +3106,7 @@ export async function giveUpOnResult(
       error: "That game's result just came in, so there is nothing to give up on.",
     };
   }
+  releaseInhouseBotAfterClose(lobbyId);
   await logAdminAction({
     action: "cancelLobby",
     summary: `Gave up on the result of inhouse #${inhouseLobbyCode(lobbyId)} (marked over; nobody requeued)`,

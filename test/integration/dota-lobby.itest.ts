@@ -19,6 +19,8 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { getSessionUser } from "@/lib/auth";
 import { POST } from "@/app/api/dota-lobby/route";
 import { readInhouseRoomVersion } from "@/lib/inhouse-room-version";
+import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
+import { resetLobbyBotStatusCacheForTests } from "@/lib/lobby-bot-status-cache";
 vi.mock("@/lib/auth", () => ({ getSessionUser: vi.fn() }));
 // The bot's IN_PROGRESS write expires the automation gate (the abandon floor
 // moves to startedAt); spied so the test can see when.
@@ -34,7 +36,10 @@ beforeEach(() => {
   vi.stubEnv("DOTA_INHOUSE_LEAGUE_ID", "54321");
   vi.stubEnv("DOTA_SEASON_LOBBY_BOT_ENABLED", "");
 });
-afterEach(() => {
+afterEach(async () => {
+  // A close's bot release runs on after the action answers: let it finish
+  // against this test's stubs, never the real fetch.
+  await settleInhouseBotReleases();
   vi.unstubAllEnvs();
   vi.unstubAllGlobals();
   vi.clearAllMocks();
@@ -375,7 +380,9 @@ describe("Dota lobby authorization and settings", () => {
     expect(gate).not.toHaveBeenCalled();
     expect(await readInhouseRoomVersion()).toBeNull();
 
-    // A fresh Response per call: a body can be read once.
+    // A fresh Response per call: a body can be read once. The status cache
+    // serves the failed read above for its TTL; start this read fresh.
+    resetLobbyBotStatusCacheForTests();
     vi.stubGlobal(
       "fetch",
       vi.fn().mockImplementation(async () => Response.json({ state: "started" })),
@@ -713,9 +720,13 @@ describe("lobby invites and the seat report", () => {
     expect(bot.calls[0].action).toBe("status");
     expect(bot.calls[0].spec).not.toHaveProperty("withPlayers");
     expect(bot.calls[0].spec).not.toHaveProperty("invite");
-    // The request is exactly the spec an older bot reads.
+    // The request is the spec an older bot reads, plus `withLifecycle`
+    // (every request asks for the release and game-over flags; an older bot
+    // ignores the key).
+    expect(bot.calls[0].spec.withLifecycle).toBe(true);
     expect(Object.keys(bot.calls[0].spec).sort()).toEqual(
       [
+        "withLifecycle",
         "key",
         "name",
         "password",
@@ -960,12 +971,20 @@ describe("lobby invites and the seat report", () => {
     const unknown =
       "The lobby bot didn't confirm, but the invites may have gone out. Check the list before sending again.";
     // The relay answers OFFLINE for a reply it lost after delivery, too.
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "https://relay.example");
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => new Response(JSON.stringify({ code: "OFFLINE" }), { status: 409 })),
     );
     let body = await (await inhouse(lobby.id, "invite")).json();
     expect(body).toEqual({ error: unknown, unknown: true });
+    // On loopback nothing sits between the site and the bot: its OFFLINE is
+    // the bot's own word, a definite refusal.
+    vi.stubEnv("DOTA_LOBBY_BOT_URL", "http://127.0.0.1:8090");
+    body = await (await inhouse(lobby.id, "invite")).json();
+    expect(body).toEqual({
+      error: "The bot is not connected to Dota yet. Try again shortly.",
+    });
     // No answer at all.
     vi.stubGlobal(
       "fetch",
@@ -1080,5 +1099,124 @@ describe("lobby invites and the seat report", () => {
     // Targets travel only on an invite.
     await callLobbyBot(spec, "create", { invite: [spec.radiant[0]] });
     expect(bot.calls[0].spec).not.toHaveProperty("invite");
+  });
+});
+
+// 2026-10-18 review: one bot hosts one game at a time, so on a two-game night
+// game 2's panel must say the bot is game 1's (and send game 2 by hand)
+// instead of offering a bot that can only answer BUSY.
+describe("the panel says when the bot is hosting another game", () => {
+  type BotCall = { action: string; spec?: { key: string } };
+
+  /** This game's job is `state`; the bot's health names `activeKey`. */
+  function busyBot(activeKey: string | null, state = "idle") {
+    const calls: BotCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as BotCall;
+        calls.push(body);
+        if (body.action === "health")
+          return Response.json({
+            online: true,
+            steamId: null,
+            activeKey,
+            lobbyId: null,
+            gameMode: null,
+            serverRegion: null,
+            leagueId: null,
+          });
+        return Response.json({ state });
+      }),
+    );
+    return calls;
+  }
+
+  /** A game in `status`; live ones (READY, IN_PROGRESS) each need their own slot. */
+  async function game(status: string, slot = 1) {
+    const captain = await makeUser(`Captain ${status} ${slot}`);
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status,
+        slot,
+        radiantTeam: 1,
+        players: { create: [{ userId: captain.id, team: 1, isCaptain: true }] },
+      },
+    });
+    return { lobby, captain };
+  }
+  const keyOf = (id: string) => `${keyPrefix}inhouse:${id}:1`;
+  async function read(id: string) {
+    const response = await POST(request({ kind: "inhouse", id, action: "status" }));
+    expect(response.status).toBe(200);
+    return (await response.json()) as { busyElsewhere?: unknown };
+  }
+
+  beforeEach(() => resetLobbyBotStatusCacheForTests());
+
+  it("names the other game still being played, and whether the site closed it", async () => {
+    const { inhouseLobbyCode } = await import("@/lib/inhouse");
+    const { lobby, captain } = await game("READY", 2);
+    const other = await game("IN_PROGRESS", 1);
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+
+    busyBot(keyOf(other.lobby.id));
+    expect((await read(lobby.id)).busyElsewhere).toEqual({
+      game: `#${inhouseLobbyCode(other.lobby.id)}`,
+      closed: false,
+    });
+
+    await prisma.inhouseLobby.update({
+      where: { id: other.lobby.id },
+      data: { status: "COMPLETED" },
+    });
+    resetLobbyBotStatusCacheForTests();
+    expect((await read(lobby.id)).busyElsewhere).toEqual({
+      game: `#${inhouseLobbyCode(other.lobby.id)}`,
+      closed: true,
+    });
+  });
+
+  it("names no game for a job that isn't this league's in-house game", async () => {
+    const { lobby, captain } = await game("READY");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    const foreign = `${keyPrefix ? "" : "eu:"}inhouse:somewhereelse:1`;
+    busyBot(foreign);
+    expect((await read(lobby.id)).busyElsewhere).toEqual({ game: null, closed: false });
+  });
+
+  it("says nothing when the bot is free, is this game's, or this game has its lobby", async () => {
+    const { lobby, captain } = await game("READY");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    busyBot(null);
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    resetLobbyBotStatusCacheForTests();
+    busyBot(keyOf(lobby.id));
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    // This game's own lobby is up: no health read at all.
+    resetLobbyBotStatusCacheForTests();
+    const calls = busyBot("inhouse:other:1", "ready");
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    expect(calls.map((c) => c.action)).not.toContain("health");
+  });
+
+  it("never asks about a game that is no longer playable", async () => {
+    const { lobby, captain } = await game("COMPLETED");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    const calls = busyBot("inhouse:other:1");
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    expect(calls.map((c) => c.action)).not.toContain("health");
+  });
+
+  it("shares one health read between the panels of every game for the cache's TTL", async () => {
+    const first = await game("READY", 1);
+    const second = await game("READY", 2);
+    const other = await game("COMPLETED");
+    const calls = busyBot(keyOf(other.lobby.id));
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(first.captain));
+    await read(first.lobby.id);
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(second.captain));
+    await read(second.lobby.id);
+    expect(calls.filter((c) => c.action === "health")).toHaveLength(1);
   });
 });

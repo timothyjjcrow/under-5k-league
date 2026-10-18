@@ -7,13 +7,21 @@ import SteamUser from "steam-user";
 import { Dota2User } from "dota2-user";
 import protos from "dota2-user/protobufs/index.js";
 import protobuf from "protobufjs";
-import { LobbyController, BotError } from "./controller.mjs";
+import { LobbyController, BotError, LEAVE_CONFIRM_MS } from "./controller.mjs";
+import { eventLog, gcMessageEvent, stamp } from "./event-log.mjs";
+import { gcResync } from "./gc-resync.mjs";
 import { readSteamAuth, writeSteamAuth } from "./auth-store.mjs";
 import { RelayClient, relayConnection } from "./relay-client.mjs";
 import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegions } from "./region.mjs";
 import { lobbyHealth } from "./health.mjs";
 import { offlineWatchdog, OFFLINE_RESTART_MS } from "./watchdog.mjs";
+
+// Timestamped, secret-free lines (event-log.mjs). launchd's log files carry
+// no time of their own; journald adds one, and these read the same either way.
+const log = eventLog();
+const say = (message) => console.log(stamp(message));
+const warn = (message) => console.error(stamp(message));
 
 const serverRegions = gameServerRegions(process.env.DOTA_GAME_SERVER_REGIONS, process.env.DOTA_GAME_SERVER_REGION);
 const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
@@ -48,8 +56,19 @@ function send(id, type, data = {}) {
     Buffer.from(message.encode(message.create(data)).finish()),
   );
 }
+// A resync cycles the Game Coordinator session (gc-resync.mjs); the welcome
+// handler below settles it, and no welcome in 30 s exits for a restart.
+const resync = gcResync({
+  user,
+  stopped: () => steamStopped,
+  noWelcome: () => {
+    warn("[dota-bot] No Game Coordinator welcome 30 seconds after a resync; exiting so the service restarts.");
+    exitForRestart();
+  },
+});
 const controller = new LobbyController({
   serverRegions,
+  log,
   file: resolve(stateDir, "lobbies.json"),
   transport: {
     steamId: () => user.steamID?.getSteamID64(),
@@ -72,7 +91,13 @@ const controller = new LobbyController({
         },
       }),
     start: () => send(7041, "Empty"),
-    leave: () => send(7040, "Empty"),
+    // The clock runs again just past the Leave's confirmation deadline, so an
+    // unconfirmed Leave resyncs in about 20 s, not at the next 30 s tick.
+    leave: () => {
+      send(7040, "Empty");
+      setTimeout(runClock, LEAVE_CONFIRM_MS + 1000).unref();
+    },
+    resync: () => resync.start(),
     removeBotFromTeam: () =>
       send(8047, "KickFromTeam", { accountId: user.steamID.accountid }),
     // Dota2User's own encoder: the fixed64 Steam ID goes as a string, and
@@ -85,12 +110,24 @@ const controller = new LobbyController({
 function control(request) {
   try {
     const { action, spec } = request;
-    if (action === "active") return { status: 200, body: { key: controller.data.active ?? null } };
-    if (action === "health") return {
-      status: 200,
-      body: lobbyHealth(controller, user.steamID?.getSteamID64()),
-    };
-    return { status: 200, body: controller.request(action, spec) };
+    const at = controller.now();
+    if (action === "active") {
+      const key = controller.data.active ?? null;
+      controller.logAnswer("active", null, { activeKey: key }, at);
+      return { status: 200, body: { key } };
+    }
+    if (action === "health") {
+      const body = lobbyHealth(controller, user.steamID?.getSteamID64());
+      // Never the Steam ID it carries.
+      controller.logAnswer("health", null, {
+        result: body.online ? "online" : "offline",
+        activeKey: body.activeKey,
+        lobbyId: body.lobbyId,
+      }, at);
+      return { status: 200, body };
+    }
+    // handle() logs each answer (event-log.mjs): never the spec itself.
+    return { status: 200, body: controller.handle(action, spec) };
   } catch (error) {
     return { status: error instanceof BotError ? 409 : 400, body: { code: error instanceof BotError ? error.code : "INVALID" } };
   }
@@ -98,6 +135,7 @@ function control(request) {
 const relay = new RelayClient({
   connection: relayConnection(process.env.DOTA_LOBBY_RELAY_URL, process.env.DOTA_RELAY_WORKER_SECRET, process.env.NODE_ENV !== "production"),
   handle: control,
+  log: say,
 });
 
 const { ESOMsg, EGCBaseClientMsg, EGCBaseMsg, CSODOTALobby } = protos;
@@ -108,7 +146,7 @@ function stopSteam(message) {
   steamStopped = true;
   controller.online = false;
   pendingRefreshToken = undefined;
-  console.error(message);
+  warn(message);
   user.logOff();
 }
 function saveRefreshToken(refreshToken, steamId, accountName) {
@@ -125,7 +163,7 @@ function objectUpdate(obj) {
     obj.typeId === LOBBY_TYPE_ID &&
     controller.snapshot(CSODOTALobby.decode(obj.objectData))
   )
-    console.log("[dota-bot] Launch came back to the lobby screen without a game; releasing the bot");
+    say("[dota-bot] Launch came back to the lobby screen without a game; releasing the bot");
 }
 function subscribed(cache) {
   for (const object of cache.objects ?? []) {
@@ -133,24 +171,26 @@ function subscribed(cache) {
       objectUpdate({ typeId: object.typeId, objectData });
   }
 }
-function removed(obj) {
+function removed(obj, source) {
   if (obj.typeId !== LOBBY_TYPE_ID) return;
   const removedLobby = CSODOTALobby.decode(obj.objectData);
   if (!controller.lobby || removedLobby.lobbyId === controller.lobby.lobbyId)
-    controller.departed();
+    controller.departed(source);
 }
 dota.router.on(EGCBaseClientMsg.k_EMsgGCClientWelcome, (welcome) => {
   if (steamStopped) return;
-  controller.lobby = null;
+  resync.welcomed();
+  // Forget the lobby: the welcome's replay is the truth.
+  controller.welcoming();
   for (const cache of welcome.outofdateSubscribedCaches ?? [])
     subscribed(cache);
   const freed = controller.welcomed(
     (welcome.uptodateSubscribedCaches ?? []).length === 0,
   );
   controller.online = true;
-  console.log("[dota-bot] Game Coordinator connected");
+  say("[dota-bot] Game Coordinator connected");
   if (freed)
-    console.log("[dota-bot] Reconnected in no lobby; free for the next one");
+    say("[dota-bot] Reconnected in no lobby; free for the next one");
 });
 dota.router.on(ESOMsg.k_ESOMsg_CacheSubscribed, subscribed);
 dota.router.on(ESOMsg.k_ESOMsg_Create, objectUpdate);
@@ -164,33 +204,41 @@ user.on("receivedFromGC", (appid, type, payload) => {
     try {
       created = protos.CMsgInvitationCreated.decode(payload);
     } catch {
-      return console.error("[dota-bot] Unreadable lobby invite answer from the Game Coordinator");
+      return warn("[dota-bot] Unreadable lobby invite answer from the Game Coordinator");
     }
-    console.log(`[dota-bot] Lobby invite created${created.userOffline ? " (player offline)" : ""}`);
+    say(`[dota-bot] Lobby invite created${created.userOffline ? " (player offline)" : ""}`);
     controller.inviteCreated(created.steamId, created.userOffline);
   }
 });
-dota.router.on(ESOMsg.k_ESOMsg_Destroy, removed);
+dota.router.on(ESOMsg.k_ESOMsg_Destroy, (obj) => removed(obj, "destroy"));
 dota.router.on(ESOMsg.k_ESOMsg_UpdateMultiple, (update) => {
   for (const obj of [...update.objectsAdded, ...update.objectsModified])
     objectUpdate(obj);
-  for (const obj of update.objectsRemoved) removed(obj);
+  for (const obj of update.objectsRemoved) removed(obj, "removed");
 });
 dota.router.on(ESOMsg.k_ESOMsg_CacheUnsubscribed, (cache) => {
   if (controller.lobby && cache.ownerSoid?.id === controller.lobby.lobbyId)
-    controller.departed();
+    controller.departed("unsubscribed");
+  // Only the owner's type: its id can be the bot's own Steam ID.
+  else log("unsubscribed-other", { owner: cache.ownerSoid?.type ?? null });
 });
+// The opt-in GC trace: message types only, never a payload (event-log.mjs).
+if (process.env.DOTA_BOT_GC_LOG === "1")
+  user.on("debug", (message) => {
+    const event = gcMessageEvent(message);
+    if (event) log("gc-message", event);
+  });
 dota.on("disconnectedFromGC", () => {
   controller.online = false;
-  console.log("[dota-bot] Game Coordinator disconnected");
+  say("[dota-bot] Game Coordinator disconnected");
 });
 user.on("disconnected", (eresult) => {
   controller.online = false;
-  console.log(`[dota-bot] Steam disconnected (result ${eresult}); waiting for automatic reconnect`);
+  say(`[dota-bot] Steam disconnected (result ${eresult}); waiting for automatic reconnect`);
 });
 user.on("error", () => {
   controller.online = false;
-  console.error(
+  warn(
     "[dota-bot] Steam login/connection failed; check the bot account and Steam Guard.",
   );
 });
@@ -225,7 +273,7 @@ user.on("playingState", (blocked) => {
 });
 user.on("steamGuard", (_domain, callback, lastCodeWrong) => {
   if (!process.stdin.isTTY) {
-    console.error(
+    warn(
       "[dota-bot] Steam Guard required. Run interactively once with the same persistent state directory.",
     );
     process.exitCode = 1;
@@ -274,6 +322,7 @@ const server = createServer(async (req, res) => {
     const result = control(JSON.parse(Buffer.concat(chunks).toString("utf8")));
     reply(result.status, result.body);
   } catch (error) {
+    log("request", { code: "INVALID", reason: "unreadable-body" });
     reply(error instanceof BotError ? 409 : 400, {
       code: error instanceof BotError ? error.code : "INVALID",
     });
@@ -284,30 +333,42 @@ server.headersTimeout = 10_000;
 server.listen(
   Number(process.env.PORT ?? 8090),
   process.env.HOST ?? "127.0.0.1",
-  () => console.log("[dota-bot] Control service listening"),
+  () => say("[dota-bot] Control service listening"),
 );
 relay.start();
 // A Launch Dota never shows, and a lobby nobody starts, are released on a
-// clock (controller.tick), so neither can hold the one bot for good.
-setInterval(() => {
+// clock (controller.tick), so neither can hold the one bot for good. The same
+// clock resyncs a Leave Dota never confirmed.
+function runClock() {
   try {
     if (controller.tick())
-      console.log("[dota-bot] Released a lobby that was not going to start");
+      say("[dota-bot] Released a lobby that was not going to start");
   } catch {
     // A send that throws (Steam dropping) must never kill the worker.
-    console.error("[dota-bot] Lobby clock check failed; trying again in 30 seconds");
+    warn("[dota-bot] Lobby clock check failed; trying again in 30 seconds");
   }
-}, 30_000).unref();
+}
+setInterval(runClock, 30_000).unref();
+// Exit non-zero so launchd/systemd start a fresh process with a fresh Steam
+// session: after a stalled reconnect (watchdog.mjs) or a resync no welcome
+// answered.
+let exiting = false;
+function exitForRestart() {
+  if (exiting) return;
+  exiting = true;
+  controller.online = false;
+  relay.stop();
+  user.logOff();
+  server.close(() => process.exit(1));
+  setTimeout(() => process.exit(1), 3000).unref();
+}
 // A dropped Steam connection that never recovers leaves a live, silent, offline
 // process. Exit non-zero so launchd/systemd start a fresh one (see watchdog.mjs).
 const offlineTooLong = offlineWatchdog();
 setInterval(() => {
   if (!offlineTooLong({ online: controller.online, stopped: steamStopped })) return;
-  console.error(`[dota-bot] Offline for ${OFFLINE_RESTART_MS / 60_000} minutes after losing Steam; exiting so the service restarts.`);
-  relay.stop();
-  user.logOff();
-  server.close(() => process.exit(1));
-  setTimeout(() => process.exit(1), 3000).unref();
+  warn(`[dota-bot] Offline for ${OFFLINE_RESTART_MS / 60_000} minutes after losing Steam; exiting so the service restarts.`);
+  exitForRestart();
 }, 30_000).unref();
 user.logOn(savedAuth ? {
   refreshToken: savedAuth.refreshToken,
