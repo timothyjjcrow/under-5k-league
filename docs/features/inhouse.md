@@ -117,7 +117,8 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     sees the new version reads the post-void stats). The
     bot's IN_PROGRESS write when it lands. The outbox reconcile when it
     committed (its `eloDeltas` show in `lastResult`). `/api/test/cache`. The
-    login upsert, the Steam refresh and the signup save.
+    login upsert, the Steam refresh and the signup save. An admin's inhouse
+    MMR and medal (`saveInhouseRating`, after its commit).
   - **`src/lib/inhouse-room-publish.test.ts` guards them.** Every src file
     outside the engine that writes the room's tables publishes. Every importer
     of an engine writer publishes or imports only self-publishing ones. No
@@ -476,11 +477,15 @@ Every transition is a guarded claim; keep it that way (general rules:
   simultaneous joins all land. A repeat join keeps position and idle deadline.
   Outsiders may queue during a live lobby (for the next game). The tenth join
   tries formation at once.
-- **MMR trust chain:** latest `Registration.mmr` (used as-is, so an admin
-  override survives) > the typed value clamped to the medal > the last lobby
-  snapshot (clamped), so a blank "Run it back" join keeps a known MMR. Client
-  MMR alone never decides captaincy for a registered player. The signup MMR
-  and the medal are read by `loadInhouseJoinFacts`, for the join and the page.
+- **MMR trust chain:** an admin's inhouse MMR (`User.inhouseMmr`, used
+  as-is; see "An admin's inhouse MMR and medal" below) > latest
+  `Registration.mmr` (used as-is, so an admin override survives) > the typed
+  value clamped to the medal > the last lobby snapshot (clamped), so a blank
+  "Run it back" join keeps a known MMR. The first two are the fixed MMR
+  (`inhouseFixedMmr`, `src/lib/inhouse-mmr-cap.ts`), which nothing typed
+  changes. Client MMR alone never decides captaincy for a registered or
+  admin-rated player. The admin MMR, the signup MMR and the medal are read by
+  `loadInhouseJoinFacts`, for the join and the page.
 - **The MMR cap (Tim, 2026-10-11).** `joinQueue` refuses a Divine 3 or higher
   medal whatever is typed, and an MMR over `HARD_MMR_CEILING` (5,000, the
   line league signups enforce): `inhouseJoinRefusal` in
@@ -489,14 +494,15 @@ Every transition is a guarded claim; keep it that way (general rules:
   anything is written, the positions too. No medal is no opinion: the typed
   number stands (Tim's call), so an account OpenDota shows unranked can still
   get in by typing low. Unlike `registrationGate`, an ACTIVE league signup is
-  no medal exemption (Tim's call too): every join is judged. A medal is corrected through
-  `setPlayerRank`, which needs a signup. It is judged at the join only: a
+  no medal exemption (Tim's call too): every join is judged. A medal is
+  corrected through `setPlayerRank` (on a signup) or `/admin/inhouse-players`
+  (anyone's, below). It is judged at the join only: a
   medal that changes while a player is queued or in a game removes nobody,
   and the requeues (`cancelLobby`, a failed ready check) only put back
   players who were in a game. "Game over — queue again" ends the game and
   then gets the join's refusal.
 - **Offer no join the cap refuses.** `/inhouse` reads the same facts and rule
-  (`inhouseJoinRefusalBeforeTyping`: the medal, or a signup MMR over the
+  (`inhouseJoinRefusalBeforeTyping`: the medal, or a fixed MMR over the
   line) and the room shows the reason, in the accent colour, where Join, the
   MMR box and the positions would be, and drops "Run it back"; a queued
   player keeps Leave. A typed number is judged when sent, and the MMR box
@@ -506,12 +512,47 @@ Every transition is a guarded claim; keep it that way (general rules:
   built in `src/app/inhouse/page.tsx`, shown by
   `src/components/inhouse/queue-view.tsx`; on a phone right under the filled
   card, to keep the card on the first screen). It renders only for a medal-holder
-  with no signup MMR who is under the cap, and explains why a typed value
+  with no fixed MMR who is under the cap, and explains why a typed value
   outside the medal's window is clamped and that nothing over the cap joins
-  (the window shown stops at it). A registered player gets no MMR input at all, only "Joining at N
-  MMR, from your league signup", which is what explains that override (on a
-  phone's filled queue card it reads "N MMR" over "from your signup" beside
+  (the window shown stops at it). A player with a fixed MMR gets no MMR input
+  at all, only "Joining at N MMR, from your league signup" (or "set by an
+  admin"), which is what explains that override (on a phone's filled queue
+  card it reads "N MMR" over "from your signup" or "set by an admin" beside
   the positions, with "Joining at" kept for screen readers).
+- **An admin's inhouse MMR and medal (Tim, 2026-10-17): any player, signed
+  up for the league or not,** on `/admin/inhouse-players`, linked from the
+  room's admin controls ("Admin: players' medal & MMR") and /admin's
+  "Inhouse players". It lists the queue, the latest players and anyone else
+  already rated, and finds a player by name (any case), Steam ID, or a
+  Steam, OpenDota or Dotabuff link. `setInhouseRating` (`inhouse-admin.ts`)
+  over `saveInhouseRating` (`src/lib/inhouse-rating-service.ts`); the form's
+  rules and words are `src/lib/inhouse-rating.ts`.
+  - **The MMR is for inhouse only and beats everything else there:** a
+    league signup's and anything typed. It never touches a signup; blank
+    clears it, and the join falls back to the chain. Over the cap is allowed
+    on purpose (an admin marking a player too strong): the join refuses it
+    in the cap's words ("an admin set your inhouse MMR to 6,000").
+  - **The medal is the site-wide one,** `rankTier` and `rankTierManual` as
+    `setPlayerRank` writes them, so a manual medal shows on every page and
+    outlives OpenDota refreshes. Going back to OpenDota fetches the medal
+    before the transaction, or changes nothing.
+  - **The claim is the stored rating the editor showed,** plus the Dota
+    account link (`saveInhouseRating::inhouseMmr+rankTier+rankTierManual`):
+    a second admin's save, the worker's medal refresh or a relink landing
+    first refuses the save (seam `inhouseRating.saveInhouseRating.beforeClaim`).
+  - **A set MMR rewrites the player's queue spot in the same transaction;
+    a cleared one leaves it** until their next join (what they typed is
+    gone). `joinQueue` re-reads `inhouseMmr` inside its Serializable
+    transaction (seam `inhouse.joinQueue.beforeWrite`) and the save runs
+    Serializable too, so a first join still on its way in, whose row the
+    rewrite can't find, still lands at the admin's number. The requeues
+    (`cancelLobby`, a failed ready check) put a player back at an admin's
+    number saved during the game, else at the game's snapshot. A live game
+    keeps its snapshot.
+  - **Judged at the join, like the cap:** a save that puts a queued player
+    over it removes nobody, and its toast says to remove them from the room.
+    Tests: `test/integration/inhouse-rating.itest.ts`, `inhouse-rating.test.ts`,
+    `e2e/admin-inhouse-rating.spec.ts`.
 - **Order by exact keys, never row order.** Queue reads and formation sort
   `[joinedAt, userId]`; formation copies `joinedAt` to
   `InhouseLobbyPlayer.queuedAt`, and later sorts use `[queuedAt, userId]`.

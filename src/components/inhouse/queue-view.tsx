@@ -14,6 +14,7 @@ import { avgKnownMmr, queueSlots } from "@/lib/inhouse";
 import { HARD_MMR_CEILING, INHOUSE } from "@/lib/constants";
 import { roleCoverage } from "@/lib/pool-stats";
 import { parseRoleOrder } from "@/lib/roles";
+import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { RolePicker } from "@/components/inhouse/role-picker";
 
@@ -37,7 +38,12 @@ type QueueControlProps = {
    * when they can. A queued viewer keeps Leave whatever it says.
    */
   joinRefusal: string | null;
-  signupMmr: number;
+  /**
+   * The MMR every join uses whatever is typed (an admin's, else the league
+   * signup's: inhouseFixedMmr), shown as plain text in place of the MMR box;
+   * null when the viewer types theirs.
+   */
+  fixedMmr: InhouseFixedMmr | null;
   act: (body: Record<string, unknown>) => void;
   nextGame?: boolean;
 };
@@ -106,14 +112,14 @@ function QueueAction({
   mmr,
   setMmr,
   joinRefusal,
-  signupMmr,
+  fixedMmr,
   act,
   nextGame = false,
   join,
   compact = false,
 }: Pick<
   QueueControlProps,
-  "me" | "pending" | "mmr" | "setMmr" | "joinRefusal" | "signupMmr" | "act" | "nextGame"
+  "me" | "pending" | "mmr" | "setMmr" | "joinRefusal" | "fixedMmr" | "act" | "nextGame"
 > & { join: QueueJoin; compact?: boolean }) {
   const mmrInputId = useId();
   // A phone's size: a 44px button, not 48 (40, the kit's small control
@@ -152,8 +158,9 @@ function QueueAction({
       </p>
     );
   }
-  // joinQueue always uses the league signup MMR when there is one, so an
-  // input there would be a control that does nothing.
+  // joinQueue always uses a fixed MMR (an admin's, else the league signup's)
+  // when there is one, so an input there would be a control that does
+  // nothing.
   const joinButton = (
     <button
       type="button"
@@ -162,13 +169,13 @@ function QueueAction({
       className={buttonClasses(
         "accent",
         "lg",
-        cn(big, compact && signupMmr <= 0 && PHONE_GRID.join),
+        cn(big, compact && !fixedMmr && PHONE_GRID.join),
       )}
     >
       {nextGame ? "Join next-game queue →" : "Join queue →"}
     </button>
   );
-  if (signupMmr > 0) return joinButton;
+  if (fixedMmr) return joinButton;
   return (
     <div
       className={cn(
@@ -227,17 +234,18 @@ function QueueAction({
 }
 
 /**
- * Which MMR a league signup joins at, shown under its Join button. `phoneCell`
- * is the filled card's phone context cell: two short lines ("4,350 MMR",
- * "from your signup") beside the positions, the same words for a screen
+ * Which MMR a viewer with a fixed MMR joins at (an admin's, else their league
+ * signup's), shown under its Join button. `phoneCell` is the filled card's
+ * phone context cell: two short lines ("4,350 MMR", then "from your signup"
+ * or "set by an admin") beside the positions, the same words for a screen
  * reader.
  */
-function SignupMmrNote({
-  signupMmr,
+function FixedMmrNote({
+  fixedMmr,
   className,
   phoneCell = false,
 }: {
-  signupMmr: number;
+  fixedMmr: InhouseFixedMmr;
   className?: string;
   phoneCell?: boolean;
 }) {
@@ -251,13 +259,17 @@ function SignupMmrNote({
     >
       <span>
         <span className={cn(phoneCell && "max-md:sr-only")}>Joining at </span>
-        <span className="tabular-nums text-fg">{formatMmr(signupMmr)}</span> MMR
+        <span className="tabular-nums text-fg">{formatMmr(fixedMmr.mmr)}</span> MMR
         <span className={cn(phoneCell && "max-md:sr-only")}>,</span>
       </span>{" "}
-      <span className={cn(phoneCell && "max-md:text-[11px]")}>
-        from your <span className={cn(phoneCell && "max-md:hidden")}>league </span>
-        signup
-      </span>
+      {fixedMmr.source === "admin" ? (
+        <span className={cn(phoneCell && "max-md:text-[11px]")}>set by an admin</span>
+      ) : (
+        <span className={cn(phoneCell && "max-md:text-[11px]")}>
+          from your <span className={cn(phoneCell && "max-md:hidden")}>league </span>
+          signup
+        </span>
+      )}
     </p>
   );
 }
@@ -360,7 +372,7 @@ function QueueControls({
   setRolesDraft,
   mmrHint,
   joinRefusal,
-  signupMmr,
+  fixedMmr,
   act,
   nextGame = false,
   phoneCompact = false,
@@ -383,7 +395,7 @@ function QueueControls({
       mmr={mmr}
       setMmr={setMmr}
       joinRefusal={joinRefusal}
-      signupMmr={signupMmr}
+      fixedMmr={fixedMmr}
       act={act}
       nextGame={nextGame}
       join={join}
@@ -392,10 +404,10 @@ function QueueControls({
   return (
     <div>
       <div className="flex flex-wrap items-center justify-center gap-3">
-        {me.isLoggedIn && !me.inQueue && signupMmr > 0 && !refused ? (
+        {me.isLoggedIn && !me.inQueue && fixedMmr && !refused ? (
           <div className="flex flex-col items-center gap-2">
             {action}
-            <SignupMmrNote signupMmr={signupMmr} className="text-center" />
+            <FixedMmrNote fixedMmr={fixedMmr} className="text-center" />
           </div>
         ) : (
           action
@@ -434,7 +446,7 @@ export function NextGameQueueCard({
   setRolesDraft,
   mmrHint,
   joinRefusal,
-  signupMmr,
+  fixedMmr,
   act,
 }: Omit<QueueControlProps, "me" | "nextGame"> & { state: InhouseState }) {
   const titleId = useId();
@@ -469,7 +481,7 @@ export function NextGameQueueCard({
             setRolesDraft={setRolesDraft}
             mmrHint={mmrHint}
             joinRefusal={joinRefusal}
-            signupMmr={signupMmr}
+            fixedMmr={fixedMmr}
             act={act}
             nextGame
           />
@@ -488,7 +500,7 @@ export function QueueView({
   setRolesDraft,
   mmrHint,
   joinRefusal,
-  signupMmr,
+  fixedMmr,
   firstGame,
   act,
   nextGame = false,
@@ -502,7 +514,8 @@ export function QueueView({
   mmrHint: string | null;
   /** The MMR cap's reason, in place of Join (QueueControlProps). */
   joinRefusal: string | null;
-  signupMmr: number;
+  /** The MMR no typed number changes (QueueControlProps). */
+  fixedMmr: InhouseFixedMmr | null;
   firstGame: boolean;
   act: (body: Record<string, unknown>) => void;
   /** Shown beside a live game: the queue for the game after it. */
@@ -538,7 +551,7 @@ export function QueueView({
   const join = useQueueJoin({ me, mmr, rolesDraft });
   // Over the MMR cap and not queued: the reason takes the controls' place.
   const refused = me.isLoggedIn && !me.inQueue && joinRefusal != null;
-  const mmrForm = me.isLoggedIn && !me.inQueue && signupMmr <= 0 && !refused;
+  const mmrForm = me.isLoggedIn && !me.inQueue && !fixedMmr && !refused;
   // Phone-sized coverage pills (16px), in the "Who's playing" row.
   const smallPill = "max-md:h-4 max-md:min-w-4 max-md:px-0.5 max-md:text-[10px]";
   // A phone's slot pills, 14px: the slot's second line is 14px high, so a
@@ -555,7 +568,7 @@ export function QueueView({
       setRolesDraft={setRolesDraft}
       mmrHint={mmrHint}
       joinRefusal={joinRefusal}
-      signupMmr={signupMmr}
+      fixedMmr={fixedMmr}
       act={act}
       nextGame={nextGame}
       phoneCompact
@@ -701,16 +714,16 @@ export function QueueView({
                     mmr={mmr}
                     setMmr={setMmr}
                     joinRefusal={joinRefusal}
-                    signupMmr={signupMmr}
+                    fixedMmr={fixedMmr}
                     act={act}
                     nextGame={nextGame}
                     join={join}
                     compact
                   />
                 </div>
-                {me.isLoggedIn && !me.inQueue && signupMmr > 0 && !refused ? (
-                  <SignupMmrNote
-                    signupMmr={signupMmr}
+                {me.isLoggedIn && !me.inQueue && fixedMmr && !refused ? (
+                  <FixedMmrNote
+                    fixedMmr={fixedMmr}
                     phoneCell
                     className={cn("col-span-full md:w-full md:text-center", PHONE_GRID.context)}
                   />

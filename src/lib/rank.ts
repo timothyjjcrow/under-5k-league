@@ -21,6 +21,18 @@ export function isEditableRankTier(value: number): boolean {
   return Number.isInteger(value) && medal >= 1 && medal <= 7 && stars >= 1 && stars <= 5;
 }
 
+/**
+ * Every medal a manual correction can choose, in ladder order: Unranked (0),
+ * Herald 1 through Divine 5, then Immortal (80). The admin editors' options.
+ */
+export const EDITABLE_RANK_TIERS: readonly number[] = [
+  0,
+  ...RANK_MEDALS.slice(1, 8).flatMap((_, index) =>
+    [1, 2, 3, 4, 5].map((stars) => (index + 1) * 10 + stars),
+  ),
+  80,
+];
+
 // The accepted MMR ladder (Dota 2 wiki / rank guides, stable for years):
 // 154 per star and 770 per medal from Herald through Ancient, then Divine's
 // five stars are 200 each (4620/4820/5020/5220/5420), and Immortal starts at

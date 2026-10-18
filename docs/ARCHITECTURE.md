@@ -480,8 +480,9 @@ stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
-1. **Queue** — `joinQueue` (MMR trust chain: league registration > clamped
-   typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
+1. **Queue** — `joinQueue` (MMR trust chain: an admin's inhouse MMR
+   (`User.inhouseMmr`, set on `/admin/inhouse-players`) > league registration >
+   clamped typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
    refuses a Divine 3+ medal or an MMR over `HARD_MMR_CEILING`) into the
    userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
@@ -1107,6 +1108,9 @@ box-score issues) and `/admin/health` (one season's signups and seats, check-in
 rate, standin bookings and their lead time, Discord links and posts, and new
 accounts per week, as counts; `?season=` picks any season;
 `league-health-service.ts` over the pure `league-health.ts`).
+Off-page with edits of its own: `/admin/inhouse-players`, any player's inhouse
+MMR and medal, signed up for the league or not (`setInhouseRating` over
+`inhouse-rating-service.ts`; [inhouse](features/inhouse.md#queue)).
 
 ## 9. External integrations
 

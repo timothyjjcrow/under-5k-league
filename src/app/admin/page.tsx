@@ -555,6 +555,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     // Season-independent: inhouse alerts and the queue board are most
     // important in the offseason, when inhouse is the live mode.
     { id: "adm-inhouse-night", label: "Inhouse night" },
+    { id: "adm-inhouse-players", label: "Inhouse players" },
     { id: "adm-discord", label: "Discord" },
     { id: "adm-activity", label: "Activity" },
     { id: "adm-poll", label: "Match night poll" },
@@ -736,6 +737,28 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <Suspense fallback={<CardSkeleton rows={2} />}>
         <AdminInhouseNight />
       </Suspense>
+
+      {/* Any player's inhouse MMR and medal, signed up for the league or not:
+          a page of its own, since it lists and searches every player. */}
+      <AdminSection
+        id="adm-inhouse-players"
+        title="Inhouse players"
+        subtitle="Set any player's inhouse MMR and medal, signed up for the league or not."
+      >
+        <CardBody className="space-y-3">
+          <p className="text-sm text-muted">
+            Every inhouse join uses an MMR set there, over the player&apos;s
+            league signup&apos;s and anything they type. The medal is the one
+            shown across the site.
+          </p>
+          <Link
+            href="/admin/inhouse-players"
+            className={buttonClasses("secondary", "sm")}
+          >
+            Open inhouse players
+          </Link>
+        </CardBody>
+      </AdminSection>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
           not belong to a season; every inhouse control stays usable in the

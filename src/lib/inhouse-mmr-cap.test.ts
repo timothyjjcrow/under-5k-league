@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import { sourceFile, stripLineComments } from "../../test/support/source-files";
 import { HARD_MMR_CEILING } from "./constants";
 import {
+  INHOUSE_ADMIN_MMR_MAX,
+  adminInhouseMmr,
+  inhouseFixedMmr,
   inhouseJoinRefusal,
   inhouseJoinRefusalBeforeTyping,
 } from "./inhouse-mmr-cap";
@@ -74,6 +77,9 @@ describe("inhouseJoinRefusal — the MMR", () => {
     expect(inhouseJoinRefusal({ mmr: 6000, source: "last-game", rankTier: null })).toMatch(
       /your last inhouse had you at 6,000 MMR\. Type your MMR to join\.$/,
     );
+    expect(inhouseJoinRefusal({ mmr: 6000, source: "admin", rankTier: null })).toBe(
+      "Inhouses are for players up to 5,000 MMR, the same as the league: an admin set your inhouse MMR to 6,000.",
+    );
   });
 
   it("is pinned to the league's hard ceiling", () => {
@@ -84,23 +90,75 @@ describe("inhouseJoinRefusal — the MMR", () => {
   });
 });
 
+describe("inhouseFixedMmr — the MMR no typed number changes", () => {
+  it("takes an admin's number over the league signup's", () => {
+    expect(inhouseFixedMmr({ adminMmr: 4100, signupMmr: 2600 })).toEqual({
+      mmr: 4100,
+      source: "admin",
+    });
+    expect(inhouseFixedMmr({ adminMmr: 1200, signupMmr: 0 })).toEqual({
+      mmr: 1200,
+      source: "admin",
+    });
+  });
+
+  it("falls back to the league signup's, then to nothing (the player types)", () => {
+    expect(inhouseFixedMmr({ adminMmr: null, signupMmr: 2600 })).toEqual({
+      mmr: 2600,
+      source: "signup",
+    });
+    expect(inhouseFixedMmr({ adminMmr: null, signupMmr: 0 })).toBeNull();
+  });
+
+  it("reads anything saveInhouseRating never writes as no admin number", () => {
+    for (const stored of [0, -5, 2.5, INHOUSE_ADMIN_MMR_MAX + 1, Number.NaN]) {
+      expect(adminInhouseMmr(stored), `stored ${stored}`).toBeNull();
+      expect(inhouseFixedMmr({ adminMmr: stored, signupMmr: 3000 })?.source).toBe("signup");
+    }
+    expect(adminInhouseMmr(null)).toBeNull();
+    expect(adminInhouseMmr(undefined)).toBeNull();
+    expect(adminInhouseMmr(1)).toBe(1);
+    expect(adminInhouseMmr(INHOUSE_ADMIN_MMR_MAX)).toBe(INHOUSE_ADMIN_MMR_MAX);
+  });
+});
+
 describe("inhouseJoinRefusalBeforeTyping — what the room shows in place of Join", () => {
-  it("refuses a medal over the line with no signup", () => {
-    expect(inhouseJoinRefusalBeforeTyping({ signupMmr: 0, rankTier: 74 })).toMatch(
-      /Divine 4 medal/,
-    );
+  it("refuses a medal over the line with no fixed MMR", () => {
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: null, signupMmr: 0, rankTier: 74 }),
+    ).toMatch(/Divine 4 medal/);
   });
 
   it("refuses a league signup's MMR over the line", () => {
-    expect(inhouseJoinRefusalBeforeTyping({ signupMmr: 5200, rankTier: null })).toMatch(
-      /league signup has you at 5,200/,
-    );
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: null, signupMmr: 5200, rankTier: null }),
+    ).toMatch(/league signup has you at 5,200/);
+  });
+
+  it("judges an admin's number, over the signup's, by the same line", () => {
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: 5600, signupMmr: 3000, rankTier: null }),
+    ).toMatch(/an admin set your inhouse MMR to 5,600\.$/);
+    // Under the line, an admin's number lets in a signup over it.
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: 4800, signupMmr: 5400, rankTier: null }),
+    ).toBeNull();
+    // The medal still refuses, whatever number an admin set.
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: 3000, signupMmr: 0, rankTier: 75 }),
+    ).toMatch(/Divine 5 medal/);
   });
 
   it("offers Join to everyone else: the typed number is judged when it's sent", () => {
-    expect(inhouseJoinRefusalBeforeTyping({ signupMmr: 0, rankTier: null })).toBeNull();
-    expect(inhouseJoinRefusalBeforeTyping({ signupMmr: 0, rankTier: 72 })).toBeNull();
-    expect(inhouseJoinRefusalBeforeTyping({ signupMmr: 4500, rankTier: 65 })).toBeNull();
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: null, signupMmr: 0, rankTier: null }),
+    ).toBeNull();
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: null, signupMmr: 0, rankTier: 72 }),
+    ).toBeNull();
+    expect(
+      inhouseJoinRefusalBeforeTyping({ adminMmr: null, signupMmr: 4500, rankTier: 65 }),
+    ).toBeNull();
   });
 });
 
@@ -114,9 +172,11 @@ describe("the MMR cap's call sites", () => {
     expect(start).toBeGreaterThan(-1);
     const body = service.slice(start, service.indexOf("\nexport ", start + 1));
     const facts = body.indexOf("await loadInhouseJoinFacts(viewer.id)");
+    const fixed = body.indexOf("inhouseFixedMmr({ adminMmr, signupMmr })");
     const refusal = body.indexOf("inhouseJoinRefusal({ mmr: claimed, source, rankTier })");
     expect(facts).toBeGreaterThan(-1);
-    expect(refusal).toBeGreaterThan(facts);
+    expect(fixed).toBeGreaterThan(facts);
+    expect(refusal).toBeGreaterThan(fixed);
     expect(body.indexOf("if (refusal) return { ok: false, error: refusal };")).toBeGreaterThan(refusal);
     // The positions save and the queue write both come after it.
     expect(body.indexOf("setInhouseRoles(viewer, roles)")).toBeGreaterThan(refusal);
@@ -127,9 +187,11 @@ describe("the MMR cap's call sites", () => {
     const page = stripLineComments(sourceFile("src/app/inhouse/page.tsx").text);
     expect(page).toContain("loadInhouseJoinFacts(user.id)");
     expect(page).toContain("inhouseJoinRefusalBeforeTyping(joinFacts)");
+    expect(page).toContain("inhouseFixedMmr(joinFacts)");
     expect(page.match(/joinRefusal=\{joinRefusal\}/g)).toHaveLength(1);
-    // No signup MMR or medal read of its own to drift from joinQueue's.
-    expect(page).not.toMatch(/registration\.findFirst|rankTier: true/);
+    // No admin MMR, signup MMR or medal read of its own to drift from
+    // joinQueue's.
+    expect(page).not.toMatch(/registration\.findFirst|rankTier: true|inhouseMmr: true/);
   });
 
   it("the room draws the reason in place of Join, and no Run it back", () => {
@@ -142,7 +204,7 @@ describe("the MMR cap's call sites", () => {
     const queue = sourceFile("src/components/inhouse/queue-view.tsx").text;
     const action = queue.slice(
       queue.indexOf("function QueueAction("),
-      queue.indexOf("function SignupMmrNote("),
+      queue.indexOf("function FixedMmrNote("),
     );
     const answered = action.indexOf("if (joinRefusal) {");
     expect(answered).toBeGreaterThan(action.indexOf("if (me.inQueue) {"));
