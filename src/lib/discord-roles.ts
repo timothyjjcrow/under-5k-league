@@ -911,6 +911,7 @@ export async function getDiscordReach(seasonId: string | null): Promise<{
 export {
   discordChaseMessage,
   discordReachWarning,
+  withReachabilityNote,
   type DiscordReachFunnel,
   type ReachPlayer,
 } from "./discord-reach";

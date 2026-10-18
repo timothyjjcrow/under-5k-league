@@ -386,6 +386,20 @@ describe("match page admin tools", () => {
   });
 });
 
+describe("match page stakes card", () => {
+  it("says tonight only on match day, judged once on the server", () => {
+    const BANNER = CARD("stakes-banner.tsx");
+    expect(BANNER).toContain(
+      "title={stakesCardTitle(match.scheduledAt, nowMs)}",
+    );
+    expect(BANNER).not.toContain("title=\"Tonight's stakes\"");
+    // The preview's one request time, not a second clock read per card.
+    expect(CARD("match-preview.tsx")).toMatch(
+      /<StakesBanner[\s\S]*?nowMs=\{previewNow\}/,
+    );
+  });
+});
+
 describe("match page tale of the tape", () => {
   const TAPE = CARD("tale-of-the-tape.tsx");
 

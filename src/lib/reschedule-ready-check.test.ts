@@ -254,6 +254,19 @@ describe("optionStatusLine", () => {
     );
     expect(optionStatusLine(all, names)).toBe("Everyone's in");
   });
+
+  it("never doubles the article for a team named 'The …'", () => {
+    const tally = tallyOption(T1, { home, away }, votes(T1, ["hc", "h1"]), 5);
+    expect(
+      optionStatusLine(tally, { home: "Raccoons", away: "The Couriers" }),
+    ).toBe(
+      "Waiting on The Couriers captain · 8 more players needed for full lineups",
+    );
+    const homeWaiting = tallyOption(T1, { home, away }, votes(T1, ["ac"]), 5);
+    expect(
+      optionStatusLine(homeWaiting, { home: "the Owls", away: "Raccoons" }),
+    ).toMatch(/^Waiting on the Owls captain · /);
+  });
 });
 
 describe("suggestRescheduleTimes", () => {

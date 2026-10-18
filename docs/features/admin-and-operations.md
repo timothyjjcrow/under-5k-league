@@ -39,9 +39,12 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   best-effort (a failed log never fails the mutation), actor from the session
   (`actor` only for a break-glass action that revokes its own cookie), and a
   summary that carries the destructive numbers, since the row is the whole
-  record. **Consequential corrections write their audit INSIDE the
-  transaction** (`removeGame`, `import-progress.ts`, `recordHistoryAction`,
-  game identity corrections) so a failed audit rolls the correction back.
+  record. Pass the `seasonId` of season work (a service returns it when the
+  action doesn't know it, as the standin services do), or /admin/activity
+  files it as season-independent. **Consequential corrections write their
+  audit INSIDE the transaction** (`removeGame`, `import-progress.ts`,
+  `recordHistoryAction`, game identity corrections) so a failed audit rolls
+  the correction back.
 - **`AdminAction` has no foreign key to `Season` and denormalizes
   `actorName`:** a deletion's record must outlive what it deleted, and a Steam
   rename must not rewrite history.

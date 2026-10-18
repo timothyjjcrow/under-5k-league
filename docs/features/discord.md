@@ -392,7 +392,10 @@ actions: `src/app/actions/admin-discord.ts`.
   isn't listed. Names go through `pasteSafeName`.
 - **`reachabilityNote(userId)`** rides the assign-standin (captain and admin)
   and free-agent toasts when the post can't reach the player: silent on
-  unknown, raced against 2.5 s, never throws.
+  unknown, raced against 2.5 s, never throws. Join it with
+  `withReachabilityNote` (`discord-reach.ts`), which ends the toast's sentence
+  first; plain `+` printed "Standin assigned Heads up: …" (source-guarded in
+  `discord-reach.test.ts`).
 - **Quote copy that follows a JSX expression onto a new line** (`{" text"}`);
   JSX trims the plain space ("(@gone4)isn't").
 - **Coverage limit:** the dashboard join card has no render test. Check it with

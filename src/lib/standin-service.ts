@@ -43,6 +43,8 @@ export type StandinServiceResult =
        * log has no foreign keys, so an id written there can never be read back.
        */
       summary: string;
+      /** The match's season, so the admin log files the entry under it. */
+      seasonId: string;
       announcement: string;
       /** Who the announcement is FOR — the action passes it to the send. */
       mentions?: MentionAllowlist;
@@ -555,6 +557,7 @@ export async function assignStandinGuarded(opts: {
       homeName: match.homeTeam.name,
       awayName: match.awayTeam.name,
     })}${mmrNote ? ` — ${mmrNote}` : ""}`,
+    seasonId: match.seasonId,
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
     // happening to visit the site. Which is why it MENTIONS them: a plain
@@ -699,6 +702,7 @@ export async function removeStandinGuarded(opts: {
         awayName: assignment.match.awayTeam.name,
       },
     )}`,
+    seasonId: assignment.match.seasonId,
     // They were told to show up; they need to hear that they no longer are.
     // An admin's removal also reaches the captain, whose seat is open again.
     mentions: mentionsOf([

@@ -3,6 +3,8 @@
 // standings/schedule/team surfaces render. Pages stay thin.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { LEAGUE_CONFIG } from "./league-config";
+import { wallTime, zoneFormatter } from "./zoned-time";
 import { scenarioReport, type ScenarioMatch, type ScenarioReport } from "./scenarios";
 import { pickBracketSize } from "./schedule";
 import type { ClinchStatus, MatchLike, TeamStanding } from "./standings";
@@ -183,4 +185,25 @@ export function playoffOutlookShown(
     (m) =>
       m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
   );
+}
+
+/**
+ * The match page's stakes card title. The card shows from the moment the
+ * night decides something, often days ahead, so it says "Tonight's stakes"
+ * only when the match kicks off today on the league's clock, and "What's at
+ * stake" otherwise (an untimed fixture has no tonight). Computed on the
+ * server from one request time, so nothing re-renders it in the browser.
+ */
+export function stakesCardTitle(
+  kickoff: Date | null | undefined,
+  nowMs: number,
+  timeZone: string = LEAGUE_CONFIG.timeZone,
+): string {
+  if (!kickoff) return "What's at stake";
+  const clock = zoneFormatter(timeZone);
+  const leagueDay = (ms: number) =>
+    Math.floor(wallTime(new Date(ms), clock) / 86_400_000);
+  return leagueDay(kickoff.getTime()) === leagueDay(nowMs)
+    ? "Tonight's stakes"
+    : "What's at stake";
 }

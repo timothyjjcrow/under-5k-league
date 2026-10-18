@@ -735,10 +735,11 @@ describe("accepting a reschedule reports what it invalidated", () => {
   });
 
   // The week's reminder already went out quoting the OLD kickoff, and a Discord
-  // edit notifies nobody. Dropping the marker lets it re-fire with the new time.
-  it("releases the week-reminder marker so it can re-announce the new time", async () => {
+  // edit notifies nobody. The old kickoff's marker goes once nothing kicks off
+  // there; the new kickoff is its own cluster, so the reminder re-fires there.
+  it("releases the old kickoff's week-reminder marker", async () => {
     const { home, away, match, season } = await withRsvps(1);
-    const key = `weekReminder:${season.id}:${match.week}`;
+    const key = `weekReminder:${season.id}:${match.week}:${match.scheduledAt!.getTime()}`;
     await prisma.setting.create({ data: { key, value: "already-sent" } });
 
     await proposeReschedule(home.captainId, match.id, NIGHT);
@@ -773,7 +774,7 @@ describe("accepting a reschedule reports what it invalidated", () => {
 
   it("leaves the marker alone when the proposal is DECLINED", async () => {
     const { home, away, match, season } = await withRsvps(2);
-    const key = `weekReminder:${season.id}:${match.week}`;
+    const key = `weekReminder:${season.id}:${match.week}:${match.scheduledAt!.getTime()}`;
     await prisma.setting.create({ data: { key, value: "already-sent" } });
 
     await proposeReschedule(home.captainId, match.id, NIGHT);

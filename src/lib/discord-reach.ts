@@ -176,3 +176,16 @@ export function discordChaseMessage(
   if (blocks.length === 0) return null;
   return `League Discord check:\n\n${blocks.join("\n\n")}`;
 }
+
+/**
+ * A success toast plus the reachabilityNote that may follow it ("" when the
+ * player is reachable or it can't tell). The note is its own sentence ("Heads
+ * up: …"), so the toast before it gets the full stop it lacks; without one the
+ * two ran together ("Standin assigned Heads up: …").
+ */
+export function withReachabilityNote(message: string, note: string): string {
+  const extra = note.trim();
+  if (!extra) return message;
+  const lead = message.trimEnd();
+  return `${/[.!?]$/.test(lead) ? lead : `${lead}.`} ${extra}`;
+}
