@@ -126,7 +126,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     provider call.
   - **Writers that never publish show within the 15s max age, and wake no
     held request:** a long-polling viewer sees them when something else
-    publishes or their hold ends (25s). They are admin display edits, the
+    publishes, or else within about 40s: a hold that ends by itself (25s)
+    may still be served a snapshot up to 15s old, and the next hold is
+    another 25s. They are admin display edits, the
     worker's rank refresh and profile writes outside the room's flows, such
     as a relinked Dota account's medal (`docs/DECISIONS.md`). So does a lost
     publish. During a release's overlap the old slot's writes reach a held
@@ -166,26 +168,39 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     past, each after up to `LONG_POLL_JITTER_MS` (150ms) more at random
     (Prisma's pool is four). While anything is held one timer re-reads the
     version every `LONG_POLL_WATCH_MS` (2s): the other slot's publishes
-    during a release's overlap, and writes outside the process. The route
-    reads the publish count before the version, so a publish racing that
-    read re-checks the hold instead of being missed.
+    during a release's overlap, and writes outside the process.
+  - **A publish racing the route's version read re-checks the hold at
+    once.** A publish counts itself twice, when its statement starts
+    (`generation`, the snapshot's fence) and when it has run (`landed`, in
+    its wake). The route reads both (`inhouseRoomHoldMark()`) before the
+    version, and a hold that finds the mark moved by the time it registers
+    re-checks after `LONG_POLL_COALESCE_MS` rather than trust that read. That
+    covers a publish that started before the read and whose wake ran before
+    the hold registered, when nothing was held to wake. Only a publish in
+    another process waits for the 2s watch.
   - **A release's overlap is safe both ways.** A new slot's held requests
     see the old slot's publishes through the watch, and the old slot answers
     its own within a hold (25s, inside the 90s overlap). An old slot answers
     `since` at once with no `roomVersion`, and the room falls back to its
     ladder (below), never a hot loop.
   - **Tests:** `src/lib/inhouse-room-wait.test.ts` (the registry: publish,
-    coalescing, the watch, abort, deadlines, jitter bounds, two module
-    instances sharing it and a per-module copy missing it),
-    `inhouse-room-version.test.ts` (the publish wakes held requests only
-    after its statement; deleting that call fails it),
+    coalescing, the watch, abort, deadlines, the jitter's bounds and its
+    wait, the mark's two counts, two module instances sharing it and a
+    per-module copy missing it), `inhouse-room-version.test.ts` (the publish
+    wakes held requests only after its statement, and a publish already
+    running at the route's read still wakes promptly; deleting the wake call
+    or the `landed` count fails them),
     `inhouse-room-wake.test.ts` (each clock against `inhouseRoomDue`),
     `src/app/api/inhouse/route.test.ts` (hold, re-read, abort) and
     `test/integration/inhouse-room-longpoll.itest.ts` (through the real
     route: a join, a server action in another module instance and a version
     moved elsewhere each answering a held request well under a second, the
-    clock and the claim retry, an abort, and about one request per change
-    plus one per hold).
+    clock and the claim retry, a signed-out hold that never retries due
+    work, an abort, and about one request per change plus one per hold).
+    A second PROCESS in an itest is a module graph loaded through
+    `loadAsAnotherProcessForTests` (`inhouse-room-wait.ts`); a plain
+    `vi.resetModules()` graph shares this process's registry and publish
+    count, as a `next start` process's two module instances do.
 - **Give every new lobby or queue clock a wake-up in
   `src/lib/automation-gate.ts`,** which schedules the worker for accept, vote
   and pick deadlines, the detect window, abandonment floors and queue
@@ -912,13 +927,24 @@ Every transition is a guarded claim; keep it that way (general rules:
   - **The long-poll:** each request sends back the `roomVersion` of the last
     poll reply `apply()` took (`since`), with the hold it can wait:
     `LONG_POLL_TIMED_HOLD_MS` (10s) for a member in their own game's clocked
-    stages (ready check, vote, draft), so a dead connection there still
-    shows inside the vote, else `LONG_POLL_HOLD_MS` (25s). Its fetch
-    deadline is the hold plus `ROOM_POLL_TIMEOUT_MS`. The next request leaves
-    straight from the reply's continuation (`reissue()`, no timer for a
-    hidden tab to clamp, so a hidden queued tab's chime and title arrive with
-    the change), never sooner than `LONG_POLL_MIN_GAP_MS` (1s) after the
-    previous one started, so a moving version can't hot-loop.
+    stages (ready check, vote, draft), else `LONG_POLL_HOLD_MS` (25s). Its
+    fetch deadline is the hold plus `ROOM_POLL_TIMEOUT_MS`. The next request
+    leaves straight from the reply's continuation (`reissue()`, no timer for
+    a hidden tab to clamp, so a hidden queued tab's chime and title arrive
+    with the change), never sooner than `LONG_POLL_MIN_GAP_MS` (1s) after
+    the previous one started, so a moving version can't hot-loop.
+  - **A dead connection shows later while held (accepted, 2026-10-18).**
+    `usePollHealth` locks the room and says "Connection lost" at
+    `ROOM_POLL_FAIL_THRESHOLD` (3) failures in a row, and a request that
+    hangs fails only at its deadline. So the worst case is about 43s in a
+    clocked stage and 58s elsewhere (the held request's hold plus 10s, then
+    two unheld retries at 1.5s plus 10s each), against about 34.5s and
+    36-43s on the ladder. The shorter clocked hold starts the fast retries
+    15s sooner where a clock runs. Neither path is inside the 25s vote; a
+    click on a dead connection locks the room on its own once the action
+    times out (`ROOM_ACTION_TIMEOUT_MS`, 15s: "checking", never "failed").
+    `room-poll.test.ts` states the numbers; change them only with the
+    DECISIONS row.
   - **A request answers at once instead** (no `since`, on the ladder below)
     when the last reply carried no version (the first request, or an old
     slot during a release), after a failure, and while something waits on

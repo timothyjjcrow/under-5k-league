@@ -354,10 +354,14 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   that sends back its reply's `roomVersion` is held (`holdInhouseRoomPoll`),
   and only a reply with no version or a request that must answer at once
   falls back to the ladder.
-- **Keep per-process server state on `globalThis`** under a `Symbol.for` key
-  (the long-poll's `inhouse-room-wait.ts`): a `next start` process loads
-  `src/lib` twice, once for route handlers and once for pages and server
-  actions, so module-scope state is two copies that never hear each other.
+- **Put state that route handlers and server actions must both see on
+  `globalThis`** under a `Symbol.for` key: a `next start` process loads
+  `src/lib` twice (route handlers; pages and server actions), so a
+  module-scope signal or fence is two copies that never hear each other.
+  The long-poll's waiter registry and publish count do this
+  (`inhouse-room-wait.ts`). A cache each instance may keep for itself (the
+  room snapshot, the board memo, the rate-limit buckets) stays in module
+  scope.
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
   signed-in room poll runs maintenance only when it wins a `claimThrottle`,
@@ -369,7 +373,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   instance serves the room from a snapshot while the room version is
   unchanged, and a publish is what wakes the held requests, so a writer that
   skips it shows stale rows for up to 15s, and to a long-polling tab for up
-  to its 25s hold (`inhouse-room-publish.test.ts` guards the sites;
+  to about 40s (its 25s hold, then a snapshot up to 15s old)
+  (`inhouse-room-publish.test.ts` guards the sites;
   [inhouse](docs/features/inhouse.md#scope-and-where-it-runs)).
 - **Give every new server-side clock or deadline a wake-up in
   `src/lib/automation-gate.ts`,** and after a mutation that creates or moves
