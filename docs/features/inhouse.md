@@ -201,11 +201,15 @@ be marked over.
 - **Elo stays correct with overlap.** `summarizeInhouse` rates in formation
   order (id breaks a tie), and since the two games' players are disjoint, a
   later-formed game finishing first never changes the other's deltas.
-- **One bot hosts both, one after the other** (docs/DOTA-LOBBY-BOT.md). The
-  Steam account holds one Dota lobby, but only until launch: it leaves each
-  game once Dota reports it running with a match id, keeping the id for the
-  result lookup. The other game's captain gets BUSY meanwhile, or hosts by
-  hand under its own lobby name.
+- **One bot hosts one game at a time, until that game's postgame**
+  (docs/DOTA-LOBBY-BOT.md; DECISIONS 2026-10-18, superseding the 2026-10-09
+  "leaves each game once it runs"). Dota's Game Coordinator ignores a leave
+  while a game runs, so the Steam account stays in a game's lobby until Dota
+  shows it over, keeping the match id for the result lookup. The other
+  game's Create answers BUSY for that whole game ("hosts one game at a time
+  and is free again when that game ends"), so its captains host it by hand
+  under its own lobby name. Never word the bot as free "once that game
+  starts".
 
 ## Game over (result pending)
 
@@ -214,8 +218,9 @@ OpenDota publishes it, and the queue used to refuse its ten (and hold its
 slot) until then. That night's game (2026-10-10 UTC) ended about 00:50 and
 recorded at 01:11, and the night stalled. OpenDota can't be hurried: its
 match page needs Valve's sequence-number feed (`GET /matches` is empty until
-then, and `POST /request` only queues a replay parse), and the bot leaves at
-launch, so it never sees the end.
+then, and `POST /request` only queues a replay parse). A player's press was
+the only signal until 2026-10-18; since then a bot-hosted game also ends by
+itself when the bot sees Dota's postgame (below).
 
 - **"Game over — queue again" (`finishGame`, action `finish`)** moves a game
   being played (READY or IN_PROGRESS) to AWAITING_RESULT and stamps the
@@ -236,8 +241,9 @@ launch, so it never sees the end.
   left the room nobody but an admin could release it, and it answers BUSY to
   every other game. "Blocked" doesn't hold it back: an offline bot reports
   it too, when its Release can't work either. Bot recovery
-  (`recoverableInhouseBotLobby`) treats AWAITING_RESULT as closed, so an admin
-  releases it later. A launch that fails (someone can't load, the server never
+  (`recoverableInhouseBotLobby`) and Create's BUSY self-heal treat
+  AWAITING_RESULT as closed (one lookup, `closedInhouseLobbyForBotKey`), so
+  the bot is released later. A launch that fails (someone can't load, the server never
   starts, Dota calls it not scored) releases the bot itself, so the bot never
   holds the press back, and the captains can instead press "Create Dota
   lobby" to try again
@@ -246,6 +252,35 @@ launch, so it never sees the end.
   `inhouse.finishGame.beforeClaim`; it loses to a result, a cancel or the
   abandon sweep. Lost to a result or another press, the presser still
   queues; lost to a cancel, they were already requeued.
+- **The bot's postgame ends a bot-hosted game (Tim's call, 2026-10-18).**
+  When the bot reports `over` for a game being played (it saw Dota's
+  postgame, played and not "not scored"), `endInhouseGameFromBot` makes
+  finishGame's claim with no requeue: AWAITING_RESULT and `finishedAt`, its
+  ten and its slot free at once. Then the follow-ups finishGame's press
+  gets: publish the room (its next signed-in poll repaints the board), wake
+  the automation gate, release the bot, and `maybeFormLobby` for the freed
+  slot. Two callers: `/api/dota-lobby`, when a panel's read shows `over` for
+  a playable game (seconds after the end; the reply then says the game is
+  no longer playable), and the result scan's own bot read in
+  `lookUpLobbyGame` (the backstop when no tab is open; it also marks a READY
+  game IN_PROGRESS when the bot saw it running, `markInhouseGameStartedFromBot`).
+  The claim loses cleanly to a result, a cancel, the abandon sweep or a
+  press that landed first (seam `inhouse.endInhouseGameFromBot.beforeClaim`,
+  plus raced tests, in `test/integration/inhouse-bot-lifecycle.itest.ts`),
+  and then changes nothing. The press stays as the fallback and still
+  requeues its presser. Its data is a flat literal for the mutation ratchet.
+- **Every close releases the bot, after its commit and without waiting on
+  it** (`releaseInhouseBotAfterClose` in `dota-lobby-service.ts`): Game
+  over, the bot's game over, `cancelLobby`, `giveUpOnResult`,
+  `voidLastResult` (the room's banner and the history page's form alike) and
+  a recorded result (`applyResult`, so the scan, "Check now" and a pasted
+  id). It reads the game's spec and sends `release` in the background, a
+  no-op before any read when no bot is configured, never inside a
+  transaction; a Game over or a cancel answers at once. A cancelled READY
+  game's ready lobby, which players still sit in, would otherwise hold the
+  bot until its idle clock ran out. `src/lib/dota-lobby-service.test.ts`
+  pins the call sites; integration tests settle the releases with
+  `settleInhouseBotReleases()` before they unstub fetch.
 - **A result must have started before its players' next game formed**
   (`nextGameCeilingSeconds` over `inhouseResultCeilingSeconds`, in
   `findInhouseGame` and `checkMatchForLobby`, so the scan, the bot's id and a
@@ -590,16 +625,63 @@ Every transition is a guarded claim; keep it that way (general rules:
   copy tells a player with no popup to untick "Block party invites from
   non-friends": a blocked invite looks sent to the bot. A bot without invites
   reports no seats, so the panel shows no list and keeps the Custom Lobbies
-  line.
-- **The bot panel re-reads the bot every 5s only while it sets a lobby up**
-  (`lobbyPanelPollMs` in `src/lib/dota-lobby.ts`, source-guarded in the
-  panel): once a minute once Dota reports the game "started", never with no
-  bot lobby. Each read is a request to the site that also asks the bot
-  through the relay, and the panel stays mounted for the whole game for its
-  players and admins: on 2026-10-13, on Vercel, ten players' panels at 5s made
-  a fifth of the US site's Active CPU. On the box the same reads are server
-  work and relay traffic that buy nothing once the game runs. The first "started" answer, read at 5s, is the one that
-  stamps the lobby IN_PROGRESS; the minute read is its safety net.
+  line. The list also shows while Dota is starting the game
+  (`lobbyListVisible`: ready and starting, the two states the bot reports
+  seats in), with its own line instead of the invite copy.
+- **The panel's rates (DECISIONS 2026-10-18, superseding the 2026-10-12
+  row for the panel):** `lobbyPanelPollMs` in `src/lib/dota-lobby.ts`,
+  source-guarded in the panel. Every 3s (`LOBBY_PANEL_POLL_MS`) while the bot
+  sets a lobby up, and while a playable game has no bot lobby (idle or
+  released: any captain or admin can press Create, and every other panel must
+  see it); every 15s (`LOBBY_PANEL_STARTED_POLL_MS`) once Dota reports the
+  game "started"; not at all once the bot says `over`. A tab coming back
+  reads at once. `/api/dota-lobby` allows 60 reads a minute per player, and
+  the admin's bot line (`DotaLobbyRecovery`) checks every 15s
+  (`LOBBY_RECOVERY_POLL_MS`).
+  - **One bot read per game, not per panel.** A browser status read goes
+    through a per-process single-flight cache
+    (`src/lib/lobby-bot-status-cache.ts`, 2s TTL, keyed by bot, job key and
+    seat report, held on `globalThis` because one `next start` process loads
+    lib modules more than once). Writes always ask the bot and store their
+    reply, so the next read shows what the action did, and an older read in
+    flight never overwrites it. Per-viewer fields (`self`, the invite scope)
+    are computed after the cache. The worker's bounded read
+    (`inhouseBotGameStatus`) never uses it.
+  - **Polls never hold the action lock.** The panel's `read` (background
+    polls, the first read, "Refresh bot status") skips while an action or
+    another read is in flight; `act` (Create, Start, an invite, Release)
+    holds the lock that disables the buttons and cancels a read in flight,
+    and a read sent before an action never lands after it. A poll used to
+    share the lock, so a read in flight disabled the buttons and dropped a
+    click.
+  - The first "started" answer stamps the lobby IN_PROGRESS
+    (`markInhouseGameStartedFromBot`, guarded on READY); the result scan's
+    own bot read does the same, so it needs no open tab.
+- **The bot's lifecycle flags.** Every request carries `withLifecycle: true`,
+  and the reply's `releasing` and `over` are read strictly (only `true`
+  counts; anything else is unknown, so absent) and passed to the panel.
+  `releasing` reads "Leaving the Dota lobby…" with no second "Release bot…"
+  (`releaseOpen`); `over` reads "Game over in Dota — the result records
+  itself from OpenDota", and the site marks the game over (see "Game over").
+  The status line comes from `lobbyStatusLabel`.
+- **BUSY says why, and frees a bot left on a closed game.** BUSY's copy says
+  the bot hosts one game at a time and is free again when that game ends.
+  When Create answers BUSY, the route reads the bot's health once; if its
+  active job is this league's in-house game and the database shows it closed
+  (COMPLETED, CANCELLED or AWAITING_RESULT, the lookup admin recovery uses),
+  it sends that job's release and answers "Freeing the bot from finished
+  game #1234. Press “Create Dota lobby” again in a few seconds."
+- **How the site reaches the bot** (`lobbyBotConnection`, DECISIONS
+  2026-10-18): https to any host (the relay), or in production plain http
+  only to exactly `http://127.0.0.1:<port>` or `http://[::1]:<port>`, the bot
+  on the box (5s timeout instead of 15s). A refused connection is "the bot
+  isn't running" (nothing was sent, so an invite is a failure, not unknown);
+  a timeout or reset after sending stays unknown. Every reply goes through
+  `readBotReply` (`src/lib/lobby-bot-transport.ts`: 8 KiB cap, only 200, 400
+  and 409), and lobby and match ids that aren't digits are dropped. Through
+  the relay an invite's OFFLINE stays unknown (the relay says it for a lost
+  answer); on loopback it is the bot's own word. `resolveDotaLobby` and the
+  release select only the spec's fields, never whole user rows.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
   share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`
