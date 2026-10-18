@@ -270,8 +270,8 @@ export function checkBotEnv(env, { mode = "file" } = {}) {
   // lives on the box.
   if (has("STEAM_BOT_PASSWORD")) problems.push("STEAM_BOT_PASSWORD: not allowed on the box");
   // bot.env's values override the unit's. A file may repeat the unit's own
-  // value (docs/DOTA-LOBBY-BOT.md's bot.env carries HOST and PORT), which
-  // changes nothing, but never set another.
+  // value, which changes nothing (docs/DOTA-LOBBY-BOT.md's key whitelist
+  // leaves them out), but never set another.
   for (const [key, value] of Object.entries(BOT_UNIT_ENV)) {
     if (mode === "file") {
       if (has(key) && env[key] !== value)

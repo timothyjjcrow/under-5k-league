@@ -2,12 +2,19 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { LOBBY_RECOVERY_POLL_MS } from "@/lib/dota-lobby";
+import { inhouseLobbyCode } from "@/lib/inhouse";
 import { requestSignal } from "@/lib/request-signal";
 import { DotaLobbyControls } from "./dota-lobby-controls";
 import { buttonClasses } from "./ui";
 
 /** A check gives up after this long. */
 const CHECK_TIMEOUT_MS = 20_000;
+
+/** A failed check's line when the route gave no message of its own. */
+const CHECK_FAILED = "Could not check bot recovery. Confirm the bot is online, then try again.";
+
+/** The route's own fixed message: the only error text an admin sees. */
+class RouteError extends Error {}
 
 /** Mounted for admins only; the API independently verifies their session. */
 export function DotaLobbyRecovery() {
@@ -42,7 +49,8 @@ export function DotaLobbyRecovery() {
       });
       const body = await response.json();
       if (stale()) return;
-      if (!response.ok) throw new Error(body.error ?? "Could not check bot recovery.");
+      if (!response.ok)
+        throw new RouteError(typeof body?.error === "string" ? body.error : CHECK_FAILED);
       setEnabled(body.enabled === true);
       setOnline(body.online === true);
       setSteamId(typeof body.steamId === "string" ? body.steamId : null);
@@ -55,7 +63,9 @@ export function DotaLobbyRecovery() {
         setOnline(null);
         setSteamId(null);
         setId(null);
-        if (manual) setError(error instanceof Error ? error.message : "Could not check bot recovery.");
+        // Never a caught browser error's text (a timeout, a dropped
+        // connection, an unreadable body): only the route's own message.
+        if (manual) setError(error instanceof RouteError ? error.message : CHECK_FAILED);
       }
     } finally {
       request.done();
@@ -111,7 +121,11 @@ export function DotaLobbyRecovery() {
       {id ? (
         <>
           <p className="text-sm text-muted">
-            The bot is still attached to a closed in-house game. Check its Dota lobby before releasing it for the next game.
+            The bot is still attached to closed game #{inhouseLobbyCode(id)}. It
+            leaves by itself as soon as Dota lets it: at once if that lobby is
+            gone, otherwise when that game ends in Dota. If the panel below
+            still offers “Release bot…”, check that Dota lobby before you
+            press it.
           </p>
           <DotaLobbyControls key={id} kind="inhouse" id={id} recoveryOnly />
         </>

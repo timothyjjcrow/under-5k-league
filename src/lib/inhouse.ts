@@ -430,9 +430,10 @@ export function inhouseAlerts(
 
 /**
  * The toast for a player whose game was just marked over, or null. Someone in
- * it pressed "Game over" (or an admin did): the room drops them back to the
- * queue on their next poll, and without a word that reads as a crash or a
- * cancel. Keyed on THEIR live game turning up in `pendingIds`, so an admin
+ * it pressed "Game over" (or an admin did), or the lobby bot saw Dota's
+ * postgame and the site marked it over by itself (endInhouseGameFromBot,
+ * which requeues nobody): the room drops them back to the queue on their next
+ * poll, and without a word that reads as a crash or a cancel. Keyed on THEIR live game turning up in `pendingIds`, so an admin
  * cancel (which leaves no pending row) stays silent, as it always has.
  */
 export function gameMarkedOverToast(

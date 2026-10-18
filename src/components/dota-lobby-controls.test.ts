@@ -82,10 +82,34 @@ describe("DotaLobbyControls invite controls (source)", () => {
       /const players =\s*view\?\.enabled && lobbyListVisible\(state\) && view\.players\?\.length/,
     );
     expect(code).toMatch(/\{players \? \(/);
-    // The invite copy is for a ready lobby only: Dota starting the game has
-    // its own line.
+    // The invite copy is for a ready lobby with no release pending (it names
+    // the invite buttons, which a pending release hides); Dota starting the
+    // game has its own line.
     expect(code).toMatch(
-      /\{state === "ready" \? \(\s*<p className="text-xs text-muted">\s*The bot invites everyone/,
+      /\{state === "ready" && releasing \? null : state === "ready" \? \(\s*<p className="text-xs text-muted">\s*The bot invites everyone/,
+    );
+  });
+
+  // 2026-10-18 review: on a two-game night the bot hosts game 1 for its whole
+  // length, and game 2's panel showed the bot's lobby name and Create as if
+  // the bot could host it.
+  it("says which other game holds the bot, and offers Create only through createOpen", () => {
+    expect(code).toMatch(/const busy = view\?\.status \? lobbyBusyElsewhere\(view\) : null;/);
+    expect(code).toMatch(/\? busy\s*\? lobbyBusyLabel\(busy\)\s*: lobbyStatusLabel\(view\.status\)/);
+    expect(code).toMatch(/lobbyBusyNote\(busy, view\.canControl\)/);
+    // No bot lobby will exist, so its name and password stay off the card.
+    expect(code).toMatch(/\{busyLive \? null : \(\s*<dl/);
+    expect(code).toMatch(
+      /\{!recoveryOnly && createOpen\(view\) \? \(\s*<button(?:(?!<\/button>)[^])*>\s*Create Dota lobby\s*<\/button>/,
+    );
+    expect(code.match(/Create Dota lobby\s*<\/button>/g)).toHaveLength(1);
+    // "busy" makes the setup card send the game to its by-hand steps.
+    expect(code).toMatch(/\? busyLive\s*\? "busy"\s*: "on"/);
+  });
+
+  it("toasts BUSY's self-heal as progress, not as a failure", () => {
+    expect(code).toMatch(
+      /else if \(body\?\.freeing === true\)\s*pushToast\("info", routeError\(body\)\)/,
     );
   });
 

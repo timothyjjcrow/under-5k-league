@@ -1101,3 +1101,122 @@ describe("lobby invites and the seat report", () => {
     expect(bot.calls[0].spec).not.toHaveProperty("invite");
   });
 });
+
+// 2026-10-18 review: one bot hosts one game at a time, so on a two-game night
+// game 2's panel must say the bot is game 1's (and send game 2 by hand)
+// instead of offering a bot that can only answer BUSY.
+describe("the panel says when the bot is hosting another game", () => {
+  type BotCall = { action: string; spec?: { key: string } };
+
+  /** This game's job is `state`; the bot's health names `activeKey`. */
+  function busyBot(activeKey: string | null, state = "idle") {
+    const calls: BotCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as BotCall;
+        calls.push(body);
+        if (body.action === "health")
+          return Response.json({
+            online: true,
+            steamId: null,
+            activeKey,
+            lobbyId: null,
+            gameMode: null,
+            serverRegion: null,
+            leagueId: null,
+          });
+        return Response.json({ state });
+      }),
+    );
+    return calls;
+  }
+
+  /** A game in `status`; live ones (READY, IN_PROGRESS) each need their own slot. */
+  async function game(status: string, slot = 1) {
+    const captain = await makeUser(`Captain ${status} ${slot}`);
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status,
+        slot,
+        radiantTeam: 1,
+        players: { create: [{ userId: captain.id, team: 1, isCaptain: true }] },
+      },
+    });
+    return { lobby, captain };
+  }
+  const keyOf = (id: string) => `${keyPrefix}inhouse:${id}:1`;
+  async function read(id: string) {
+    const response = await POST(request({ kind: "inhouse", id, action: "status" }));
+    expect(response.status).toBe(200);
+    return (await response.json()) as { busyElsewhere?: unknown };
+  }
+
+  beforeEach(() => resetLobbyBotStatusCacheForTests());
+
+  it("names the other game still being played, and whether the site closed it", async () => {
+    const { inhouseLobbyCode } = await import("@/lib/inhouse");
+    const { lobby, captain } = await game("READY", 2);
+    const other = await game("IN_PROGRESS", 1);
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+
+    busyBot(keyOf(other.lobby.id));
+    expect((await read(lobby.id)).busyElsewhere).toEqual({
+      game: `#${inhouseLobbyCode(other.lobby.id)}`,
+      closed: false,
+    });
+
+    await prisma.inhouseLobby.update({
+      where: { id: other.lobby.id },
+      data: { status: "COMPLETED" },
+    });
+    resetLobbyBotStatusCacheForTests();
+    expect((await read(lobby.id)).busyElsewhere).toEqual({
+      game: `#${inhouseLobbyCode(other.lobby.id)}`,
+      closed: true,
+    });
+  });
+
+  it("names no game for a job that isn't this league's in-house game", async () => {
+    const { lobby, captain } = await game("READY");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    const foreign = `${keyPrefix ? "" : "eu:"}inhouse:somewhereelse:1`;
+    busyBot(foreign);
+    expect((await read(lobby.id)).busyElsewhere).toEqual({ game: null, closed: false });
+  });
+
+  it("says nothing when the bot is free, is this game's, or this game has its lobby", async () => {
+    const { lobby, captain } = await game("READY");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    busyBot(null);
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    resetLobbyBotStatusCacheForTests();
+    busyBot(keyOf(lobby.id));
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    // This game's own lobby is up: no health read at all.
+    resetLobbyBotStatusCacheForTests();
+    const calls = busyBot("inhouse:other:1", "ready");
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    expect(calls.map((c) => c.action)).not.toContain("health");
+  });
+
+  it("never asks about a game that is no longer playable", async () => {
+    const { lobby, captain } = await game("COMPLETED");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(captain));
+    const calls = busyBot("inhouse:other:1");
+    expect((await read(lobby.id)).busyElsewhere).toBeUndefined();
+    expect(calls.map((c) => c.action)).not.toContain("health");
+  });
+
+  it("shares one health read between the panels of every game for the cache's TTL", async () => {
+    const first = await game("READY", 1);
+    const second = await game("READY", 2);
+    const other = await game("COMPLETED");
+    const calls = busyBot(keyOf(other.lobby.id));
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(first.captain));
+    await read(first.lobby.id);
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(second.captain));
+    await read(second.lobby.id);
+    expect(calls.filter((c) => c.action === "health")).toHaveLength(1);
+  });
+});

@@ -2,10 +2,14 @@
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
+  createOpen,
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_OVER_NOTE,
   LOBBY_RELEASING_NOTE,
+  lobbyBusyElsewhere,
+  lobbyBusyLabel,
+  lobbyBusyNote,
   lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
@@ -33,7 +37,12 @@ const REQUEST_TIMEOUT_MS = 20_000;
 
 /** What /api/dota-lobby answers: a view, or an error and its unknown flag. */
 type RouteBody =
-  | (Partial<DotaLobbyView> & { error?: unknown; unknown?: unknown })
+  | (Partial<DotaLobbyView> & {
+      error?: unknown;
+      unknown?: unknown;
+      /** Create's BUSY self-heal sent a closed game's release: progress. */
+      freeing?: unknown;
+    })
   | null;
 
 /** The route's own fixed message, never a caught error's text. */
@@ -44,10 +53,16 @@ function routeError(body: unknown): string {
 
 /**
  * Whether the bot can host this game, for a page that lays itself out around
- * the panel: still asking, not set up at all, answering with a lobby state, or
- * set up but failing (its error explains why).
+ * the panel: still asking, not set up at all, answering with a lobby state,
+ * set up but failing (its error explains why), or hosting ANOTHER game still
+ * being played while this one has no bot lobby ("busy": host it by hand).
  */
-export type LobbyBotAvailability = "checking" | "off" | "on" | "unavailable";
+export type LobbyBotAvailability =
+  | "checking"
+  | "off"
+  | "on"
+  | "unavailable"
+  | "busy";
 
 /**
  * Who the panel is for. "host": the people who make the lobby (inhouse
@@ -65,7 +80,7 @@ export function lobbyPanelVisible(
   audience: LobbyPanelAudience,
   availability: LobbyBotAvailability,
 ): boolean {
-  return audience === "host" || availability === "on";
+  return audience === "host" || availability === "on" || availability === "busy";
 }
 
 export function DotaLobbyControls({
@@ -190,6 +205,9 @@ export function DotaLobbyControls({
           // The bot's leg lost the answer: the invites may have gone out.
           if (inviteScope && body?.unknown === true)
             pushToast("info", inviteUnknownToast(inviteScope));
+          // Create freed the bot from a closed game: press it again shortly.
+          else if (body?.freeing === true)
+            pushToast("info", routeError(body));
           else pushToast("error", routeError(body));
           return;
         }
@@ -227,11 +245,16 @@ export function DotaLobbyControls({
   }, [read]);
   const state = view?.status?.state;
   const over = view?.status?.over === true;
+  const busy = view?.status ? lobbyBusyElsewhere(view) : null;
+  // The bot is another game's, still being played: this one is hand-hosted.
+  const busyLive = busy !== null && !busy.closed;
   const availability: LobbyBotAvailability =
     view?.enabled === false
       ? "off"
       : view?.enabled && state
-        ? "on"
+        ? busyLive
+          ? "busy"
+          : "on"
         : error
           ? "unavailable"
           : "checking";
@@ -292,7 +315,9 @@ export function DotaLobbyControls({
       ) : null}
       <p role="status" className="text-sm">
         {view?.status && state
-          ? lobbyStatusLabel(view.status)
+          ? busy
+            ? lobbyBusyLabel(busy)
+            : lobbyStatusLabel(view.status)
           : pending || reading
             ? "Checking bot status…"
             : ""}
@@ -304,25 +329,37 @@ export function DotaLobbyControls({
       ) : null}
       {view?.enabled && state ? (
         <>
-          <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-            <div className="min-w-0">
-              <dt className="text-xs text-muted">Lobby name</dt>
-              <dd className="break-words font-mono">{view.name}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-xs text-muted">Password</dt>
-              <dd className="break-words font-mono">{view.password}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-xs text-muted">Radiant</dt>
-              <dd className="break-words">{view.radiantName}</dd>
-            </div>
-            <div className="min-w-0">
-              <dt className="text-xs text-muted">Dire</dt>
-              <dd className="break-words">{view.direName}</dd>
-            </div>
-          </dl>
-          {joiner && ["idle", "released"].includes(state) ? (
+          {busy ? (
+            <p className="text-xs text-muted">
+              {lobbyBusyNote(busy, view.canControl)}
+            </p>
+          ) : null}
+          {/* No bot lobby will exist for a game the bot can't host now, so
+              its name and password stay off the card (the by-hand steps
+              carry the lobby to join). */}
+          {busyLive ? null : (
+            <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Lobby name</dt>
+                <dd className="break-words font-mono">{view.name}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Password</dt>
+                <dd className="break-words font-mono">{view.password}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Radiant</dt>
+                <dd className="break-words">{view.radiantName}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Dire</dt>
+                <dd className="break-words">{view.direName}</dd>
+              </div>
+            </dl>
+          )}
+          {/* Anyone who can't press Create (a player, not a captain) waits
+              for a captain's lobby; the hosts get the Create button. */}
+          {!view.canControl && !busy && ["idle", "released"].includes(state) ? (
             <p className="text-xs text-muted">
               Once a captain creates it, join with this name and password.
             </p>
@@ -334,7 +371,7 @@ export function DotaLobbyControls({
           ) : null}
           {players ? (
             <>
-              {state === "ready" ? (
+              {state === "ready" && releasing ? null : state === "ready" ? (
                 <p className="text-xs text-muted">
                   The bot invites everyone in Dota once the lobby is ready:
                   accept the invite (no password needed), then take a slot on
@@ -390,7 +427,7 @@ export function DotaLobbyControls({
                 </ul>
               </div>
             </>
-          ) : (
+          ) : over || busyLive ? null : (
             <p className="text-xs text-muted">
               Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
               The bot checks the ticket, mode, region, and rosters before
@@ -425,7 +462,7 @@ export function DotaLobbyControls({
             </p>
           ) : null}
           <div className="flex flex-wrap gap-2">
-            {!recoveryOnly && view.canControl && ["idle", "released"].includes(state) ? (
+            {!recoveryOnly && createOpen(view) ? (
               <button
                 type="button"
                 disabled={pending}

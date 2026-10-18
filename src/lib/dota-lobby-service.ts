@@ -24,6 +24,7 @@ import {
   parseLobbyDigits,
   parseLobbyLeagueId,
   parseLobbyLifecycle,
+  type BotBusyElsewhere,
   type DotaLobbyBotPlayer,
   type DotaLobbySpec,
   type LobbyKind,
@@ -328,6 +329,51 @@ export function freeingBotMessage(freed: FreedBot) {
   return freed.leavingNow
     ? `Freeing the bot from finished game ${game}. Press “Create Dota lobby” again in a few seconds.`
     : `Asked the bot to leave finished game ${game}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
+}
+
+/** The status cache's key for the shared health read (no job key looks like it). */
+const HEALTH_CACHE_KEY = "health";
+
+/**
+ * For a panel whose own game has no bot lobby: the other game the one bot is
+ * hosting, if any. Reads the bot's health through the status cache, so every
+ * panel in this process shares one health read per TTL. This league's
+ * in-house job names its game (`#1234`) and whether the site has closed it;
+ * any other job (a season match, the other league's game) is `game: null`.
+ * Null when the bot holds nothing, holds this game, or can't be read: the
+ * panel then shows what it shows today. Never throws, never changes the bot.
+ */
+export async function botBusyElsewhere(
+  spec: Pick<DotaLobbySpec, "key">,
+): Promise<BotBusyElsewhere | null> {
+  try {
+    const connection = lobbyBotConnection();
+    if (!connection) return null;
+    const health = await cachedLobbyBotStatus(HEALTH_CACHE_KEY, () =>
+      readLobbyBotHealth(connection),
+    );
+    if (
+      health === "offline" ||
+      health.activeKey === null ||
+      health.activeKey === spec.key
+    )
+      return null;
+    const key = ownLobbyKey(health.activeKey);
+    if (key?.kind !== "inhouse") return { game: null, closed: false };
+    const lobby = await prisma.inhouseLobby.findUnique({
+      where: { id: key.id },
+      select: { id: true, status: true },
+    });
+    if (!lobby) return { game: null, closed: true };
+    return {
+      game: `#${inhouseLobbyCode(lobby.id)}`,
+      closed: (CLOSED_INHOUSE_STATUSES as readonly string[]).includes(
+        lobby.status,
+      ),
+    };
+  } catch {
+    return null;
+  }
 }
 
 /** What an in-house bot spec is built from: the lobby's id, sides and roster. */

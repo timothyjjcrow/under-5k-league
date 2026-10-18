@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   botGameOverRefusal,
   botHoldsUnlaunchedLobby,
+  createOpen,
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_INVITES,
@@ -10,6 +11,9 @@ import {
   LOBBY_PANEL_STARTED_POLL_MS,
   LOBBY_RECOVERY_POLL_MS,
   LOBBY_SEATS,
+  lobbyBusyElsewhere,
+  lobbyBusyLabel,
+  lobbyBusyNote,
   lobbyInviteScope,
   lobbyListVisible,
   lobbyPanelPollMs,
@@ -189,6 +193,16 @@ describe("the panel's lifecycle wording and controls", () => {
     }
   });
 
+  // Once Dota shows the game over the bot leaves at the postgame by itself,
+  // and a release after that answers STATE ("This lobby cannot perform that
+  // action"): no button for it.
+  it("never offers Release once Dota showed the game over", () => {
+    expect(
+      releaseOpen({ canRelease: true, status: { state: "started", over: true } }),
+    ).toBe(false);
+    expect(releaseOpen({ canRelease: true, status: { state: "started" } })).toBe(true);
+  });
+
   // The bot refuses Start on a lobby it is leaving (STATE), so the button
   // must not show while a release is pending.
   it("offers Start to a captain or admin on a ready lobby, never while a release is pending", () => {
@@ -205,6 +219,51 @@ describe("the panel's lifecycle wording and controls", () => {
     ).toEqual(["ready"]);
     expect(open("ready", { releasing: true })).toBe(false);
     expect(open("ready", { canControl: false })).toBe(false);
+  });
+});
+
+// 2026-10-18 review: one bot hosts one game at a time, so on a two-game night
+// game 2's panel must say the bot is game 1's and send it to the by-hand steps.
+describe("the bot hosting another game", () => {
+  const live = { game: "#4110", closed: false };
+  const closed = { game: "#4110", closed: true };
+  const view = (
+    state: DotaLobbyStatus["state"],
+    busyElsewhere?: { game: string | null; closed: boolean },
+    canControl = true,
+  ) => ({ canControl, status: { state }, ...(busyElsewhere ? { busyElsewhere } : {}) });
+
+  it("counts only while this game's own job has no lobby", () => {
+    for (const state of Object.keys(LOBBY_STATES) as DotaLobbyStatus["state"][]) {
+      const busy = lobbyBusyElsewhere(view(state, live));
+      expect(busy, state).toEqual(state === "idle" || state === "released" ? live : null);
+    }
+    expect(lobbyBusyElsewhere(view("idle"))).toBeNull();
+  });
+
+  it("names the game, or another game when it isn't this league's in-house game", () => {
+    expect(lobbyBusyLabel(live)).toBe("The bot is hosting game #4110");
+    expect(lobbyBusyLabel(closed)).toBe("The bot is still leaving finished game #4110");
+    expect(lobbyBusyLabel({ game: null, closed: false })).toBe("The bot is hosting another game");
+  });
+
+  it("sends a game still being played to the by-hand steps, and a closed one to Create", () => {
+    expect(lobbyBusyNote(live, true)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(live, false)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(closed, true)).toMatch(/^Press “Create Dota lobby”/);
+    expect(lobbyBusyNote(closed, false)).toMatch(/A captain's “Create Dota lobby”/);
+  });
+
+  it("offers Create only where it would work", () => {
+    expect(createOpen(view("idle"))).toBe(true);
+    expect(createOpen(view("released"))).toBe(true);
+    // A game still being played keeps the bot: Create would only answer BUSY.
+    expect(createOpen(view("idle", live))).toBe(false);
+    // A closed game's hold: Create frees the bot from it first.
+    expect(createOpen(view("idle", closed))).toBe(true);
+    expect(createOpen(view("idle", undefined, false))).toBe(false);
+    for (const state of ["creating", "ready", "starting", "started", "blocked"] as const)
+      expect(createOpen(view(state)), state).toBe(false);
   });
 });
 

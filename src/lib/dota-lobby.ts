@@ -153,21 +153,24 @@ export const LOBBY_OVER_NOTE =
 
 /** The line under a pending release. */
 export const LOBBY_RELEASING_NOTE =
-  "The bot leaves the moment Dota lets it: at once on the lobby screen, or when the game ends. Nothing more to press.";
+  "The bot leaves the moment Dota lets it: at once on the lobby screen, or when the game ends. Nothing more to press to free the bot.";
 
 /**
  * "Release bot…": a captain or admin, while the bot holds a lobby (ready,
- * blocked or started), and not while a release is already pending: a second
- * press would change nothing.
+ * blocked or started), not while a release is already pending (a second
+ * press would change nothing), and not once Dota showed the game over: the
+ * bot leaves at the postgame by itself, and a release after that answers
+ * that the lobby can't.
  */
 export function releaseOpen(
   view: Pick<DotaLobbyView, "canRelease"> & {
-    status: Pick<DotaLobbyStatus, "state" | "releasing">;
+    status: Pick<DotaLobbyStatus, "state" | "releasing" | "over">;
   },
 ): boolean {
   return (
     view.canRelease &&
     !view.status.releasing &&
+    !view.status.over &&
     (view.status.state === "ready" ||
       view.status.state === "blocked" ||
       view.status.state === "started")
@@ -186,6 +189,62 @@ export function startOpen(
 ): boolean {
   return (
     view.canControl && view.status.state === "ready" && !view.status.releasing
+  );
+}
+
+/**
+ * The other game the bot is hosting while this one has no bot lobby, or null.
+ * Only while this game's own job is idle or released: once it has a lobby the
+ * bot is this game's.
+ */
+export function lobbyBusyElsewhere(
+  view: Pick<DotaLobbyView, "busyElsewhere"> & {
+    status: Pick<DotaLobbyStatus, "state">;
+  },
+): BotBusyElsewhere | null {
+  const state = view.status.state;
+  return (state === "idle" || state === "released") && view.busyElsewhere
+    ? view.busyElsewhere
+    : null;
+}
+
+/** The status line while the bot is another game's (see lobbyBusyElsewhere). */
+export function lobbyBusyLabel(busy: BotBusyElsewhere): string {
+  const game = busy.game ? `game ${busy.game}` : "another game";
+  return busy.closed
+    ? `The bot is still leaving finished ${game}`
+    : `The bot is hosting ${game}`;
+}
+
+/**
+ * The line under it. A game still being played keeps the one bot until it
+ * ends in Dota, so this game is hosted by hand (the card's steps, unfolded);
+ * a closed one is freed by this game's Create.
+ */
+export function lobbyBusyNote(busy: BotBusyElsewhere, canControl: boolean): string {
+  if (busy.closed)
+    return canControl
+      ? "Press “Create Dota lobby”: it frees the bot from that game first."
+      : "A captain's “Create Dota lobby” frees the bot from that game first.";
+  return "The bot hosts one game at a time and is free again when that game ends in Dota. Host this game by hand with the steps on this card.";
+}
+
+/**
+ * "Create Dota lobby": a captain or admin on a playable game whose job has no
+ * lobby, unless the bot is hosting another game still being played (its
+ * Create would only answer BUSY). A closed game's hold stays creatable:
+ * Create frees the bot from it.
+ */
+export function createOpen(
+  view: Pick<DotaLobbyView, "canControl" | "busyElsewhere"> & {
+    status: Pick<DotaLobbyStatus, "state">;
+  },
+): boolean {
+  const busy = lobbyBusyElsewhere(view);
+  return (
+    view.canControl &&
+    (view.status.state === "idle" || view.status.state === "released") &&
+    !(busy && !busy.closed)
   );
 }
 
@@ -268,6 +327,22 @@ export type DotaLobbyView = {
   players?: DotaLobbyPlayerView[];
   /** An invite's reply only: how many invites the bot sent. */
   invited?: number;
+  /**
+   * The one bot holds ANOTHER game's lobby while this game has none (state
+   * idle or released): which game, as players know it (`#1234`, or null for
+   * a season match or the other league's game), and whether the site has
+   * already closed it. Absent otherwise, or when the bot's health can't be
+   * read.
+   */
+  busyElsewhere?: BotBusyElsewhere;
+};
+
+/** See `DotaLobbyView.busyElsewhere`. */
+export type BotBusyElsewhere = {
+  /** `#1234` for this league's in-house game, null for any other job. */
+  game: string | null;
+  /** The site closed that game: Create frees the bot from it (BUSY's self-heal). */
+  closed: boolean;
 };
 
 /** The bot reports at most this many players: two sides of ten. */

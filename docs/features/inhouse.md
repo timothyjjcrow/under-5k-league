@@ -620,7 +620,13 @@ Every transition is a guarded claim; keep it that way (general rules:
   (`DotaLobbyControls` `onAvailability` is "on"), its panel is the path and
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
-  its status line. See `docs/DOTA-LOBBY-BOT.md`.
+  its status line. See `docs/DOTA-LOBBY-BOT.md`. While the one bot is
+  hosting ANOTHER game still being played (one bot, one game at a time: the
+  route's `busyElsewhere`, from one shared health read), availability is
+  "busy": the panel says which game (`#1234`), hides the bot's lobby name and
+  Create, and the card unfolds the by-hand steps, and keeps them unfolded for
+  that game even once the bot frees up, so its ten never get a second lobby
+  name midway. A closed game's hold keeps Create, which frees the bot first.
 - **The bot invites the ten once its lobby is ready** (Tim's call,
   2026-10-10; `docs/DOTA-LOBBY-BOT.md#lobby-invites`), once per game.
   Accepting joins without the password but lands the player on neither side,

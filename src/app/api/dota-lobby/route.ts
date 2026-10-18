@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSessionUser } from "@/lib/auth";
 import { guardJsonMutation, readBoundedJsonObject } from "@/lib/json-mutation";
 import {
+  botBusyElsewhere,
   callLobbyBot,
   freeBotFromClosedInhouseGame,
   freeingBotMessage,
@@ -148,7 +149,12 @@ export async function POST(req: NextRequest) {
       // refused release leaves the BUSY answer as it is.
       if (action === "create" && error instanceof LobbyBotBusyError) {
         const freed = await freeBotFromClosedInhouseGame();
-        if (freed) throw new UserFacingError(freeingBotMessage(freed));
+        // Progress, not a failure: the panel words it as information.
+        if (freed)
+          return NextResponse.json(
+            { error: freeingBotMessage(freed), freeing: true },
+            { status: 400, headers: { "Cache-Control": "no-store" } },
+          );
       }
       throw error;
     }
@@ -174,6 +180,14 @@ export async function POST(req: NextRequest) {
     // The bot's list carries Steam ids: the browser gets the roster's names
     // with each seat, and the status alone, never the reply as it came.
     const players = lobbyPlayerViews(roster, status.players);
+    // A playable game with no bot lobby of its own: say whether the one bot
+    // is another game's (one shared health read per cache TTL), so its card
+    // can send this game to the by-hand steps instead of a bot that is busy.
+    const busyElsewhere =
+      stillPlayable &&
+      (status.state === "idle" || status.state === "released")
+        ? await botBusyElsewhere(spec)
+        : null;
     return NextResponse.json(
       {
         enabled: true,
@@ -194,6 +208,7 @@ export async function POST(req: NextRequest) {
           ...(status.over ? { over: true } : {}),
         },
         ...(players ? { players } : {}),
+        ...(busyElsewhere ? { busyElsewhere } : {}),
         ...(action === "invite" && status.invited !== undefined
           ? { invited: status.invited }
           : {}),

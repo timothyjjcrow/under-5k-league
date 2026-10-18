@@ -802,7 +802,9 @@ function OpenDotaGuide({
           <li className="flex gap-3">
             <GuideStep n={4} />
             <span>
-              Play your inhouse. When it ends, press{" "}
+              Play your inhouse. A game the lobby bot hosts is marked over by
+              itself when Dota shows its end; then press <b>Join queue</b> to queue
+              again. Otherwise, when it ends, press{" "}
               <b>Game over — queue again</b> to play the next one straight
               away. The result is fetched from OpenDota by itself (usually 10
               to 30 minutes after the game), or anyone in the game can paste
