@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { checkLeagueEnv, checkSlotEnv, parseContractArgs, parseEnvFile } from "./env-contract.mjs";
+import { checkBotEnv, checkLeagueEnv, checkSlotEnv, parseContractArgs, parseEnvFile } from "./env-contract.mjs";
 
 const CLI = fileURLToPath(new URL("./env-contract.mjs", import.meta.url));
 const PASSWORD = "5f".repeat(32);
@@ -212,9 +212,115 @@ test("staging refuses every Discord credential, webhook and lobby bot setting", 
     "DOTA_LOBBY_BOT_SECRET",
   ]) {
     refuses({ ...STAGING_SAFE, [key]: "https://example.invalid/x" }, key);
-    // Production may hold them.
-    assert.deepEqual(problemsFor({ ...VALID_US, [key]: "https://example.invalid/x" }), []);
+    // Production may hold them (the bot's URL only where the next test says).
+    const value = key === "DOTA_LOBBY_BOT_URL" ? "http://127.0.0.1:8090" : "https://example.invalid/x";
+    assert.deepEqual(problemsFor({ ...VALID_US, [key]: value }), []);
   }
+});
+
+const EU_OVERRIDES = Object.freeze({
+  DATABASE_URL: DB.replaceAll("ggd2l_us", "ggd2l_eu"),
+  DIRECT_URL: DB.replaceAll("ggd2l_us", "ggd2l_eu"),
+  APP_URL: "https://eu.ggd2l.com",
+  NEXT_PUBLIC_SITE_URL: "https://eu.ggd2l.com",
+  NEXT_PUBLIC_LEAGUE_REGION: "eu",
+});
+
+test("production reaches the lobby bot on this box or through the relay, nowhere else", () => {
+  for (const url of [
+    "http://127.0.0.1:8090",
+    "http://127.0.0.1:8090/",
+    "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev",
+    "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev/",
+    // Unset, or set empty: no bot.
+    "",
+  ])
+    for (const lg of ["us", "eu"]) {
+      const env = lg === "us" ? VALID_US : { ...VALID_US, ...EU_OVERRIDES };
+      assert.deepEqual(problemsFor({ ...env, DOTA_LOBBY_BOT_URL: url }, lg), [], `${lg} ${url}`);
+    }
+  assert.deepEqual(problemsFor(VALID_US), []);
+  for (const url of [
+    "http://localhost:8090",
+    "http://[::1]:8090",
+    "http://127.0.0.1:8091",
+    "http://127.0.0.1",
+    "http://10.0.0.5:8090",
+    "https://relay.example",
+    "http://ggd2l-dota-lobby-relay.ggd2l.workers.dev",
+    "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev/lobby",
+    "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev?x=1",
+    "https://user:pw@ggd2l-dota-lobby-relay.ggd2l.workers.dev",
+    "not a url",
+  ])
+    refuses({ ...VALID_US, DOTA_LOBBY_BOT_URL: url }, "DOTA_LOBBY_BOT_URL");
+  // The refusal names the key and the two accepted origins, never the value.
+  const [problem] = problemsFor({ ...VALID_US, DOTA_LOBBY_BOT_URL: "https://secret-host.invalid" });
+  assert.ok(!problem.includes("secret-host"));
+});
+
+test("the lobby bot's own env: its state directory, its secret, no Steam password, the unit's settings left alone", () => {
+  const BOT_SECRET = "b0t-secret-".repeat(4);
+  const file = Object.freeze({
+    DOTA_LOBBY_BOT_SECRET: BOT_SECRET,
+    DOTA_BOT_STATE_DIR: "/var/lib/ggd2l-bot",
+    DOTA_LOBBY_RELAY_URL: "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev",
+    DOTA_RELAY_WORKER_SECRET: "relay-secret-".repeat(3),
+    DOTA_GAME_SERVER_REGIONS: "2",
+  });
+  const unit = Object.freeze({ ...file, NODE_ENV: "production", HOST: "127.0.0.1", PORT: "8090" });
+  const has = (problems, name) => problems.some((problem) => problem.startsWith(`${name}:`));
+  assert.deepEqual(checkBotEnv(file), []);
+  assert.deepEqual(checkBotEnv(unit, { mode: "unit" }), []);
+  // The Mac's .env copied whole: a relative state directory, and the unit's
+  // own settings, which bot.env would override.
+  for (const [key, value] of [["DOTA_BOT_STATE_DIR", "./state"], ["HOST", "127.0.0.1"], ["PORT", "8090"], ["NODE_ENV", "production"]])
+    assert.ok(has(checkBotEnv({ ...file, [key]: value }), key), key);
+  assert.ok(has(checkBotEnv(without(file, "DOTA_BOT_STATE_DIR")), "DOTA_BOT_STATE_DIR"));
+  assert.ok(has(checkBotEnv({ ...file, STEAM_BOT_PASSWORD: "hunter2" }), "STEAM_BOT_PASSWORD"));
+  assert.ok(has(checkBotEnv({ ...unit, STEAM_BOT_PASSWORD: "hunter2" }, { mode: "unit" }), "STEAM_BOT_PASSWORD"));
+  for (const secret of [undefined, "short", `${"x".repeat(40)} y`])
+    assert.ok(has(checkBotEnv({ ...file, DOTA_LOBBY_BOT_SECRET: secret }), "DOTA_LOBBY_BOT_SECRET"));
+  // In the unit's environment, an override from bot.env shows as a changed value.
+  for (const [key, value] of [["HOST", "0.0.0.0"], ["PORT", "80"], ["NODE_ENV", "development"], ["DOTA_BOT_STATE_DIR", "./state"]])
+    assert.ok(has(checkBotEnv({ ...unit, [key]: value }, { mode: "unit" }), key), key);
+});
+
+test("the bot CLI checks the unit's environment or a file, by names only", () => {
+  assert.deepEqual(parseContractArgs(["--bot"]), { bot: true });
+  assert.deepEqual(parseContractArgs(["--bot", "--file", "/etc/ggd2l/bot.env"]), { bot: true, file: "/etc/ggd2l/bot.env" });
+  assert.equal(parseContractArgs(["--bot", "--league", "us"]), null);
+  assert.equal(parseContractArgs(["--bot", "--file"]), null);
+  const value = "bot-secret-that-must-not-print-0123456789";
+  const env = {
+    PATH: process.env.PATH,
+    DOTA_LOBBY_BOT_SECRET: value,
+    DOTA_BOT_STATE_DIR: "./state",
+    NODE_ENV: "production",
+    HOST: "127.0.0.1",
+    PORT: "8090",
+  };
+  const bad = spawnSync(process.execPath, [CLI, "--bot"], { encoding: "utf8", env });
+  assert.equal(bad.status, 1);
+  assert.deepEqual(JSON.parse(bad.stderr), {
+    ok: false,
+    bot: true,
+    problems: ["DOTA_BOT_STATE_DIR: must be exactly /var/lib/ggd2l-bot"],
+  });
+  assert.ok(!(bad.stdout + bad.stderr).includes(value));
+  const good = spawnSync(process.execPath, [CLI, "--bot"], {
+    encoding: "utf8",
+    env: { ...env, DOTA_BOT_STATE_DIR: "/var/lib/ggd2l-bot" },
+  });
+  assert.equal(good.status, 0);
+  assert.deepEqual(JSON.parse(good.stdout), { ok: true, bot: true, problems: [] });
+  const dir = mkdtempSync(path.join(tmpdir(), "ggd2l-bot-env-"));
+  const file = path.join(dir, "bot.env");
+  writeFileSync(file, `DOTA_LOBBY_BOT_SECRET=${value}\nDOTA_BOT_STATE_DIR=/var/lib/ggd2l-bot\nPORT=8090\n`);
+  const fromFile = spawnSync(process.execPath, [CLI, "--bot", "--file", file], { encoding: "utf8" });
+  assert.equal(fromFile.status, 1);
+  assert.deepEqual(JSON.parse(fromFile.stderr).problems, ["PORT: set by the unit, not bot.env"]);
+  assert.ok(!(fromFile.stdout + fromFile.stderr).includes(value));
 });
 
 test("the region, dev login and secret distinctness rules", () => {

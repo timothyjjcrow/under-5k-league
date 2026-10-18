@@ -4,6 +4,8 @@
 //   ExecStartPre   node env-contract.mjs --league us --slot a      (the unit's own env)
 //   envcheck       node env-contract.mjs --league us --file /etc/ggd2l/us.env
 //   the agent      import { checkLeagueEnv } before every build and attest
+//   the bot        node env-contract.mjs --bot                      (ggd2l-bot's ExecStartPre)
+//                  node env-contract.mjs --bot --file /etc/ggd2l/bot.env
 //
 // A file is the league env as written (/etc/ggd2l/<lg>.env): the keys the unit
 // or release sets (NODE_ENV, PORT, LEAGUE_RELEASE_SHA...) must not be in it. A
@@ -49,6 +51,14 @@ const STAGING_FORBIDDEN = [
   "DOTA_LOBBY_BOT_SECRET",
 ];
 
+// Where a production league reaches the lobby bot: the bot on this box over
+// loopback (ggd2l-bot.service binds 127.0.0.1:8090), or the Cloudflare relay
+// until the bot moves here. Unset is fine (no bot). Anything else would send
+// the bot's bearer secret somewhere new, or over plain http off the box.
+export const BOT_LOOPBACK_ORIGIN = "http://127.0.0.1:8090";
+export const BOT_RELAY_ORIGIN = "https://ggd2l-dota-lobby-relay.ggd2l.workers.dev";
+const PRODUCTION_BOT_ORIGINS = new Set([BOT_LOOPBACK_ORIGIN, BOT_RELAY_ORIGIN]);
+
 const TEST_DATABASES = new Set(["ld2l_test", "ld2l_pgtest", "ld2l_restore_test"]);
 const DISTINCT_SECRETS = ["AUTH_SECRET", "CRON_SECRET", "BACKUP_RECEIPT_SECRET"];
 const KEY_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -84,6 +94,24 @@ export function parseEnvFile(text) {
     env[key] = value;
   });
   return { env, problems };
+}
+
+/**
+ * The bot URL's origin when it is a bare origin (the site's own rule: no
+ * path past "/", no query, fragment or credentials), else null. A trailing
+ * "/" is the same origin.
+ */
+function botOriginOf(value) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.username || url.password || url.search || url.hash || url.pathname !== "/")
+    return null;
+  if (value !== url.origin && value !== `${url.origin}/`) return null;
+  return url.origin;
 }
 
 function strictBase64Of32Bytes(value) {
@@ -167,6 +195,13 @@ export function checkLeagueEnv(env, lg, { mode = "file" } = {}) {
       if (has(key)) problems.push(`${key}: not allowed in staging`);
   }
 
+  if (deployEnv === "production" && has("DOTA_LOBBY_BOT_URL") && env.DOTA_LOBBY_BOT_URL !== "") {
+    if (!PRODUCTION_BOT_ORIGINS.has(botOriginOf(env.DOTA_LOBBY_BOT_URL)))
+      problems.push(
+        `DOTA_LOBBY_BOT_URL: must be unset, exactly ${BOT_LOOPBACK_ORIGIN} or exactly ${BOT_RELAY_ORIGIN}`,
+      );
+  }
+
   if (has("ALLOW_DEV_LOGIN") && env.ALLOW_DEV_LOGIN !== "false")
     problems.push("ALLOW_DEV_LOGIN: must be unset or exactly false");
 
@@ -208,7 +243,59 @@ export function checkEnvFile(file, lg, read = readFileSync) {
   return { env, problems: [...problems, ...checkLeagueEnv(env, lg, { mode: "file" })] };
 }
 
+// The lobby bot's env (design §7). ggd2l-bot.service sets NODE_ENV, HOST and
+// PORT and then reads /etc/ggd2l/bot.env, whose values OVERRIDE the unit's
+// (systemd lets EnvironmentFile= win over Environment=): a bot.env copied
+// from the Mac's .env would bring DOTA_BOT_STATE_DIR="./state", a path under
+// the read-only release, and the bot would never start.
+export const BOT_STATE_DIR = "/var/lib/ggd2l-bot";
+const BOT_UNIT_ENV = { NODE_ENV: "production", HOST: "127.0.0.1", PORT: "8090" };
+
+/**
+ * The rules for the bot's env: bot.env as written (`mode: "file"`), or the
+ * whole environment the unit hands the bot (`mode: "unit"`, its
+ * ExecStartPre). Names only, never a value.
+ */
+export function checkBotEnv(env, { mode = "file" } = {}) {
+  const problems = [];
+  const has = (key) => Object.hasOwn(env, key) && env[key] !== undefined;
+  // The login helper run by hand (systemd-run) gets none of the unit's
+  // Environment=, so the file carries the state directory itself.
+  if (env.DOTA_BOT_STATE_DIR !== BOT_STATE_DIR)
+    problems.push(`DOTA_BOT_STATE_DIR: must be exactly ${BOT_STATE_DIR}`);
+  const secret = env.DOTA_LOBBY_BOT_SECRET ?? "";
+  if (secret.length < 32 || secret.length > 512 || /\s/.test(secret))
+    problems.push("DOTA_LOBBY_BOT_SECRET: must be 32 to 512 characters with no whitespace");
+  // The bot signs in with its saved Steam session; the password never
+  // lives on the box.
+  if (has("STEAM_BOT_PASSWORD")) problems.push("STEAM_BOT_PASSWORD: not allowed on the box");
+  for (const [key, value] of Object.entries(BOT_UNIT_ENV)) {
+    if (mode === "file") {
+      if (has(key)) problems.push(`${key}: set by the unit, not bot.env`);
+    } else if (env[key] !== value) {
+      problems.push(`${key}: must be ${value}`);
+    }
+  }
+  return problems;
+}
+
+export function checkBotEnvFile(file, read = readFileSync) {
+  let text;
+  try {
+    text = read(file, "utf8");
+  } catch {
+    return { env: null, problems: ["file: unreadable"] };
+  }
+  const { env, problems } = parseEnvFile(text);
+  return { env, problems: [...problems, ...checkBotEnv(env, { mode: "file" })] };
+}
+
 export function parseContractArgs(argv) {
+  if (argv[0] === "--bot") {
+    if (argv.length === 1) return { bot: true };
+    if (argv.length === 3 && argv[1] === "--file" && argv[2]) return { bot: true, file: argv[2] };
+    return null;
+  }
   const options = {};
   for (let i = 0; i < argv.length; i += 2) {
     const flag = argv[i];
@@ -227,8 +314,19 @@ export function parseContractArgs(argv) {
 export function runContractCli(argv = process.argv.slice(2), env = process.env, out = console) {
   const options = parseContractArgs(argv);
   if (!options) {
-    out.error("usage: env-contract.mjs --league us|eu (--slot a|b | --file <path>)");
+    out.error(
+      "usage: env-contract.mjs --league us|eu (--slot a|b | --file <path>)\n" +
+        "       env-contract.mjs --bot [--file <path>]",
+    );
     return 2;
+  }
+  if (options.bot) {
+    const problems = options.file
+      ? checkBotEnvFile(options.file).problems
+      : checkBotEnv(env, { mode: "unit" });
+    const report = { ok: problems.length === 0, bot: true, problems };
+    (problems.length ? out.error : out.log)(JSON.stringify(report));
+    return problems.length ? 1 : 0;
   }
   const problems = options.slot
     ? checkSlotEnv(env, options.league, options.slot)

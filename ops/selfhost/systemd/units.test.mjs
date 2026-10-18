@@ -332,6 +332,17 @@ test("the tunnel and the bot run as the design says (§1.5, §7)", () => {
   assert.equal(one(bot, "Service", "RestartSec"), "30");
   assert.equal(one(bot, "Service", "MemoryMax"), "300M");
   assert.deepEqual(all(bot, "Service", "ReadWritePaths"), ["/var/lib/ggd2l-bot"]);
+  // bot.env overrides the unit's Environment=, so the contract checks the
+  // environment the bot actually gets, before it starts.
+  assert.deepEqual(all(bot, "Service", "ExecStartPre"), [
+    "/usr/bin/node /usr/local/lib/ggd2l/env-contract.mjs --bot",
+  ]);
+  // A bot that can't start fails within a few tries instead of restarting
+  // every 30 s forever: the limit's window outlasts the burst of restarts.
+  const window = Number(one(bot, "Unit", "StartLimitIntervalSec"));
+  const burst = Number(one(bot, "Unit", "StartLimitBurst"));
+  assert.ok(burst >= 3 && burst <= 10, `StartLimitBurst=${burst}`);
+  assert.ok(window > burst * Number(one(bot, "Service", "RestartSec")), `StartLimitIntervalSec=${window}`);
 });
 
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {
