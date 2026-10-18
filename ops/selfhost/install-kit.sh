@@ -102,6 +102,7 @@ head="$(git_kit rev-parse HEAD)"
 REQUIRED="
 agent/ggd2l-agent.mjs
 agent/env-contract.mjs
+agent/cgroup-report.mjs
 backup/backup-league.sh
 backup/drill-league.sh
 backup/heartbeat.sh
