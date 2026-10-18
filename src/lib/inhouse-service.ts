@@ -80,7 +80,12 @@ import {
 } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
-import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
+import {
+  adminInhouseMmr,
+  inhouseFixedMmr,
+  inhouseJoinRefusal,
+  type InhouseMmrSource,
+} from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { raceHook } from "./race-hook";
@@ -414,6 +419,7 @@ async function failReadyCheck(
           mmr: true,
           acceptedAt: true,
           queuedAt: true,
+          user: { select: { inhouseMmr: true } },
         },
       },
     },
@@ -449,7 +455,9 @@ async function failReadyCheck(
       where: { userId: p.userId },
       create: {
         userId: p.userId,
-        mmr: p.mmr,
+        // An admin's inhouse MMR saved since the game formed beats the game's
+        // snapshot, as it would at a join.
+        mmr: adminInhouseMmr(p.user.inhouseMmr) ?? p.mmr,
         joinedAt,
         lastSeenAt,
         idleExpiresAt,
@@ -1231,20 +1239,23 @@ export async function makePick(
 
 /**
  * What a queue join knows about a player's MMR before anything is typed: the
- * newest league signup's MMR (0 = none) and the medal. joinQueue resolves its
- * number from these, and /inhouse reads the same two to decide whether to
- * offer Join at all (inhouseJoinRefusalBeforeTyping), so the page never
- * offers a join the server refuses.
+ * inhouse MMR an admin set (null = none), the newest league signup's MMR
+ * (0 = none) and the medal. joinQueue resolves its number from these, and
+ * /inhouse reads the same three to decide whether to offer Join at all
+ * (inhouseJoinRefusalBeforeTyping) and whether to ask for an MMR, so the page
+ * never offers a join the server refuses.
  */
-export async function loadInhouseJoinFacts(
-  userId: string,
-): Promise<{ signupMmr: number; rankTier: number | null }> {
+export async function loadInhouseJoinFacts(userId: string): Promise<{
+  adminMmr: number | null;
+  signupMmr: number;
+  rankTier: number | null;
+}> {
   // MMR drives captain selection, auto-pick order, and the balance meter — so
-  // prefer the league-trusted number (their registration, which admins see and
-  // the season cap gates) over the free-typed client value. The typed value
-  // only seeds players who never registered for a season; a blank re-join
-  // ("Run it back") falls back to their last lobby's snapshot instead of
-  // silently resetting them to unknown.
+  // prefer the trusted numbers over the free-typed client value: an admin's
+  // inhouse MMR for the player, then their registration (which admins see and
+  // the season cap gates). The typed value only seeds players with neither; a
+  // blank re-join ("Run it back") falls back to their last lobby's snapshot
+  // instead of silently resetting them to unknown.
   const [reg, user] = await Promise.all([
     prisma.registration.findFirst({
       where: { userId, mmr: { gt: 0 } },
@@ -1253,10 +1264,14 @@ export async function loadInhouseJoinFacts(
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rankTier: true },
+      select: { rankTier: true, inhouseMmr: true },
     }),
   ]);
-  return { signupMmr: reg?.mmr ?? 0, rankTier: user?.rankTier ?? null };
+  return {
+    adminMmr: adminInhouseMmr(user?.inhouseMmr),
+    signupMmr: reg?.mmr ?? 0,
+    rankTier: user?.rankTier ?? null,
+  };
 }
 
 /** Add the current user to the inhouse queue (or refresh their seed MMR). */
@@ -1270,18 +1285,21 @@ export async function joinQueue(
    */
   roles?: unknown,
 ): Promise<InhouseActionResult> {
-  const { signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
-  // A registration MMR is league-approved as-is — clamped against the medal
-  // at its own save, or deliberately set by an admin override (the escape
-  // hatch for stale medals, which this path must not silently undo). Only
+  const { adminMmr, signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
+  // A fixed MMR is used as it stands (inhouseFixedMmr): an admin's inhouse
+  // MMR for the player (their call, the escape hatch for a smurf or a stale
+  // medal), else the registration MMR, which is league-approved as-is —
+  // clamped against the medal at its own save, or deliberately set by an
+  // admin override, which this path must not silently undo. Only
   // SELF-reported numbers get the medal check: the free-typed value and the
   // old lobby snapshot (which may predate medal validation). A blank-but-
   // medaled player seeds at the medal floor instead of unknown.
+  const fixed = inhouseFixedMmr({ adminMmr, signupMmr });
   let claimed: number;
   let source: InhouseMmrSource;
-  if (signupMmr > 0) {
-    claimed = signupMmr;
-    source = "signup";
+  if (fixed) {
+    claimed = fixed.mmr;
+    source = fixed.source;
   } else {
     claimed = Number.isFinite(mmr) ? Math.max(0, Math.floor(mmr)) : 0;
     source = "typed";
@@ -1302,8 +1320,7 @@ export async function joinQueue(
   // below can only lower it. Refused before anything is written.
   const refusal = inhouseJoinRefusal({ mmr: claimed, source, rankTier });
   if (refusal) return { ok: false, error: refusal };
-  const safeMmr =
-    source === "signup" ? claimed : clampMmrToRank(claimed, rankTier).mmr;
+  const safeMmr = fixed ? claimed : clampMmrToRank(claimed, rankTier).mmr;
   if (roles !== undefined) {
     const saved = await setInhouseRoles(viewer, roles);
     if (!saved.ok) return saved;
@@ -1321,11 +1338,24 @@ export async function joinQueue(
   // player's InhouseLobbyPlayer row between the check and the upsert, leaving
   // them rostered in the live lobby AND queued for the next one. Serializable
   // makes the two conflict, and the loser aborts with P2034.
+  await raceHook("inhouse.joinQueue.beforeWrite");
   let joined: boolean | null = null;
   for (let attempt = 0; attempt < QUEUE_WRITE_RETRY_ATTEMPTS; attempt += 1) {
     try {
       joined = await prisma.$transaction(
         async (tx) => {
+          // An admin's inhouse MMR as it stands now, so one saved since the
+          // read above still lands (saveInhouseRating). That save also
+          // rewrites a queued row's MMR, but finds no row for a first join
+          // that is still on its way in. Both run Serializable and each
+          // reads what the other writes, so a crossing pair aborts one and
+          // the retry sees the other's commit. Cleared since the read: the
+          // number judged above stands, as for a join just before the clear.
+          const current = await tx.user.findUnique({
+            where: { id: viewer.id },
+            select: { inhouseMmr: true },
+          });
+          const queueMmr = adminInhouseMmr(current?.inhouseMmr) ?? safeMmr;
           const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
             where: {
               userId: viewer.id,
@@ -1348,10 +1378,10 @@ export async function joinQueue(
           }
           await tx.inhouseQueueEntry.upsert({
             where: { userId: viewer.id },
-            create: { userId: viewer.id, mmr: safeMmr, idleExpiresAt },
+            create: { userId: viewer.id, mmr: queueMmr, idleExpiresAt },
             // A duplicate request is presence, not a composition change. Keep
             // both the original queue position and shared idle deadline.
-            update: { mmr: safeMmr, lastSeenAt: new Date(now) },
+            update: { mmr: queueMmr, lastSeenAt: new Date(now) },
           });
           return true;
         },
@@ -2856,7 +2886,12 @@ export async function cancelLobby(
   }
   const players = await prisma.inhouseLobbyPlayer.findMany({
     where: { lobbyId: lobby.id },
-    select: { userId: true, mmr: true, queuedAt: true },
+    select: {
+      userId: true,
+      mmr: true,
+      queuedAt: true,
+      user: { select: { inhouseMmr: true } },
+    },
   });
   const requeuePlayers = [...players].sort(
     (a, b) =>
@@ -2896,7 +2931,9 @@ export async function cancelLobby(
         where: { userId: p.userId },
         create: {
           userId: p.userId,
-          mmr: p.mmr,
+          // An admin's inhouse MMR saved since the game formed beats the
+          // game's snapshot, as it would at a join.
+          mmr: adminInhouseMmr(p.user.inhouseMmr) ?? p.mmr,
           // Stagger joins so queue order stays deterministic.
           joinedAt: new Date(now + i),
           lastSeenAt: requeueLastSeenAt(now),

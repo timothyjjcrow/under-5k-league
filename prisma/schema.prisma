@@ -64,6 +64,12 @@ model User {
   // chosen, so the latest league signup's roles (an unordered set) stand in;
   // "" = deliberately none. Read live by the inhouse room.
   inhouseRoles        String?
+  // The inhouse MMR an admin set for this player (/admin/inhouse-players,
+  // saveInhouseRating). Every queue join uses it as-is, over the newest league
+  // signup's, a typed number and the last game's (inhouseFixedMmr). Null =
+  // not set, so that chain decides. Only an admin writes it; it never touches
+  // the player's league signups.
+  inhouseMmr          Int?
   role                String    @default("USER") // USER | ADMIN
   createdAt           DateTime  @default(now())
   updatedAt           DateTime  @updatedAt

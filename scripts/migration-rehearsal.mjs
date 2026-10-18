@@ -33,6 +33,7 @@ const INHOUSE_GAME_SLOTS_MIGRATION = "20261009000000_inhouse_game_slots";
 const INHOUSE_RESULT_PENDING_ROLES_MIGRATION =
   "20261010000000_inhouse_result_pending_roles";
 const INHOUSE_TIME_RSVP_MIGRATION = "20261010120000_inhouse_time_rsvp";
+const INHOUSE_ADMIN_MMR_MIGRATION = "20261017120000_inhouse_admin_mmr";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -169,6 +170,7 @@ async function rehearseFreshDatabase(url) {
           INHOUSE_GAME_SLOTS_MIGRATION,
           INHOUSE_RESULT_PENDING_ROLES_MIGRATION,
           INHOUSE_TIME_RSVP_MIGRATION,
+          INHOUSE_ADMIN_MMR_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -430,6 +432,7 @@ async function rehearseExistingLegacyDatabase(url) {
           INHOUSE_GAME_SLOTS_MIGRATION,
           INHOUSE_RESULT_PENDING_ROLES_MIGRATION,
           INHOUSE_TIME_RSVP_MIGRATION,
+          INHOUSE_ADMIN_MMR_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );
