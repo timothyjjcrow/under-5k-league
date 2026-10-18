@@ -265,7 +265,8 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
 - **Draw medals from the 72px copies** (`public/ranks/72`, behind a
   year-long immutable cache header in `next.config.ts`): `RankMedal` at its
   24px default used the 256px masters, 374KB on `/players`. The share
-  pictures (`og-assets.ts`) keep the masters.
+  pictures (`og-assets.ts`) keep the masters, which browsers keep a day
+  ([pages-and-ui](pages-and-ui.md#static-files-and-icons)).
 
 ## Live rooms: connection health and fetch deadlines
 

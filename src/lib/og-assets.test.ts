@@ -5,12 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { REPO_ROOT } from "../../test/support/source-files";
 import { OgPlayerCard } from "@/components/og-card";
 import {
+  drawOgImage,
   fallbackOgImage,
   fetchOgImage,
   loadRankMedal,
-  renderOgImage,
+  ogImageResponse,
 } from "./og-assets";
-import { OG_CACHE_CONTROL } from "./og-image";
+import { OG_CACHE_CONTROL, OG_CACHE_TTL_MS } from "./og-image";
 
 const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
 const CREST = "https://i.imgur.com/crest.png";
@@ -77,28 +78,52 @@ describe("fetchOgImage", () => {
   });
 });
 
-describe("renderOgImage", () => {
-  it("draws the picture with a five-minute cache", async () => {
-    const res = await renderOgImage(
+describe("drawOgImage and ogImageResponse", () => {
+  it("draw the picture and send it with a five-minute cache", async () => {
+    const png = await drawOgImage(
       createElement(
         "div",
         { style: { display: "flex", width: 1200, height: 630, background: "#0b0f17" } },
         "GGD2L",
       ),
     );
+    expect(png).not.toBeNull();
+    const res = ogImageResponse(png!);
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toBe("image/png");
     expect(res.headers.get("cache-control")).toBe(OG_CACHE_CONTROL);
+    expect(res.headers.get("age")).toBe("0");
     const bytes = new Uint8Array(await res.arrayBuffer());
     expect(bytes.slice(0, 4)).toEqual(PNG.slice(0, 4));
   });
 
-  it("draws a player's season card with its medal", async () => {
+  it("keep a picture in process as long as the header lets a browser keep it", () => {
+    // The box's picture cache (og-share-images.tsx) stands in for the CDN
+    // Vercel had: the same five minutes.
+    const maxAge = Number(/(?:^|, )max-age=(\d+)/.exec(OG_CACHE_CONTROL)?.[1]);
+    expect(OG_CACHE_TTL_MS).toBe(maxAge * 1000);
+    expect(OG_CACHE_TTL_MS).toBe(5 * 60_000);
+  });
+
+  it("answer any number of requests from one kept picture, with its age", async () => {
+    // The picture cache hands the same bytes to every request: a Response
+    // copies them, so reading one never empties the next.
+    const kept = PNG.slice().buffer;
+    const first = ogImageResponse(kept, 61_999);
+    expect(new Uint8Array(await first.arrayBuffer())).toEqual(PNG);
+    const second = ogImageResponse(kept, 120_000);
+    expect(new Uint8Array(await second.arrayBuffer())).toEqual(PNG);
+    expect(first.headers.get("age")).toBe("61");
+    expect(second.headers.get("age")).toBe("120");
+    expect(kept.byteLength).toBe(PNG.byteLength);
+  });
+
+  it("draw a player's season card with its medal", async () => {
     // Satori is strict (a box with two children needs display: flex, a
     // missing glyph is fetched from the internet), and a refused drawing
     // quietly becomes the league's picture, so the real card is drawn here.
     const medal = await loadRankMedal(64);
-    const res = await renderOgImage(
+    const png = await drawOgImage(
       createElement(OgPlayerCard, {
         emblem: null,
         leagueName: "GGD2L",
@@ -111,13 +136,13 @@ describe("renderOgImage", () => {
         facts: ["Grade A", "Axe", "Invoker · pubs", "3 Match MVPs"],
       }),
     );
-    expect(res.status).toBe(200);
-    expect(res.headers.get("content-type")).toBe("image/png");
+    expect(png).not.toBeNull();
+    expect([...new Uint8Array(png!).subarray(0, 4)]).toEqual([...PNG.subarray(0, 4)]);
   });
 
-  it("sends the league's own picture when the drawing fails", async () => {
+  it("draw nothing when the drawing fails, so the caller sends the league's picture", async () => {
     // Satori refuses a <div> with two children and no display: flex.
-    const res = await renderOgImage(
+    const png = await drawOgImage(
       createElement(
         "div",
         { style: { width: 1200, height: 630 } },
@@ -125,10 +150,9 @@ describe("renderOgImage", () => {
         createElement("span", null, "b"),
       ),
     );
+    expect(png).toBeNull();
+    const res = fallbackOgImage();
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toBe(
-      fallbackOgImage().headers.get("location"),
-    );
     expect(res.headers.get("location")).toMatch(/^\/.*\.png$/);
     expect(res.headers.get("cache-control")).toBe("no-store");
   });

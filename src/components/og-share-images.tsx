@@ -13,10 +13,13 @@ import {
   loadTeamCard,
 } from "@/lib/link-preview-images";
 import {
+  drawOgImage,
   fallbackOgImage,
   loadLeagueEmblem,
-  renderOgImage,
+  ogImageResponse,
 } from "@/lib/og-assets";
+import { OG_CACHE_TTL_MS } from "@/lib/og-image";
+import { createPictureCache, type PictureCache } from "@/lib/picture-cache";
 import {
   OgInhouseNightCard,
   OgMatchCard,
@@ -40,48 +43,89 @@ function notFoundImage(): Response {
   });
 }
 
-/** Reads, then draws; a failed read gets the league's own picture. */
+/**
+ * What a picture body settles on: the drawn PNG; null for the league's own
+ * picture (one that couldn't be drawn, or a page that keeps the league's);
+ * or "missing" for no such page. Only a drawn PNG is kept.
+ */
+type SharePicture = ArrayBuffer | null | "missing";
+
+// Drawing a picture costs about a second of the box's one vCPU, which both
+// leagues and Postgres share, and no CDN caches it (docs/DECISIONS.md,
+// Hosting). So a production process keeps each drawn picture for five
+// minutes, what the CDN gave it on Vercel, keyed by its page's address: a
+// page's opengraph-image and twitter-image share one entry, and a burst of
+// unfurls draws once. Per process on purpose: a picture up to five minutes
+// stale is fine, and the two processes of a release's overlap each draw
+// their own. On globalThis so every route's bundle shares the one cache. Not
+// in development, where a layout edit must show on the next request.
+const PICTURE_CACHE_MAX_ENTRIES = 100;
+const PICTURE_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const host = globalThis as typeof globalThis & {
+  ggd2lSharePictures?: PictureCache<SharePicture>;
+};
+function sharePictureCache(): PictureCache<SharePicture> | null {
+  if (process.env.NODE_ENV !== "production") return null;
+  return (host.ggd2lSharePictures ??= createPictureCache<SharePicture>({
+    ttlMs: OG_CACHE_TTL_MS,
+    maxEntries: PICTURE_CACHE_MAX_ENTRIES,
+    maxBytes: PICTURE_CACHE_MAX_BYTES,
+    keepBytes: (picture) =>
+      picture && picture !== "missing" ? picture.byteLength : null,
+  }));
+}
+
+/**
+ * Reads, then draws, or serves the picture kept for `page` (the page's own
+ * address, no query); a failed read gets the league's own picture.
+ */
 async function sharePicture(
-  draw: () => Promise<Response | null>,
+  page: string,
+  draw: () => Promise<SharePicture>,
 ): Promise<Response> {
   try {
-    return (await draw()) ?? notFoundImage();
+    const cache = sharePictureCache();
+    const { value, ageMs } = cache
+      ? await cache.get(page, draw)
+      : { value: await draw(), ageMs: 0 };
+    if (value === "missing") return notFoundImage();
+    return value ? ogImageResponse(value, ageMs) : fallbackOgImage();
   } catch {
     return fallbackOgImage();
   }
 }
 
 export function matchShareImage(id: string): Promise<Response> {
-  return sharePicture(async () => {
+  return sharePicture(`/matches/${id}`, async () => {
     const card = await loadMatchCard(id, Date.now());
-    if (!card) return null;
-    return renderOgImage(<OgMatchCard {...card} {...await brand()} />);
+    if (!card) return "missing";
+    return drawOgImage(<OgMatchCard {...card} {...await brand()} />);
   });
 }
 
 export function teamShareImage(id: string): Promise<Response> {
-  return sharePicture(async () => {
+  return sharePicture(`/teams/${id}`, async () => {
     const card = await loadTeamCard(id, Date.now());
-    if (!card) return null;
-    return renderOgImage(<OgTeamCard {...card} {...await brand()} />);
+    if (!card) return "missing";
+    return drawOgImage(<OgTeamCard {...card} {...await brand()} />);
   });
 }
 
 export function playerShareImage(id: string): Promise<Response> {
-  return sharePicture(async () => {
+  return sharePicture(`/players/${id}`, async () => {
     const card = await loadPlayerCard(id);
-    if (!card) return null;
+    if (!card) return "missing";
     // An account that only signed in keeps the plain preview its page has.
-    if (card === "unjoined") return fallbackOgImage();
-    return renderOgImage(<OgPlayerCard {...card} {...await brand()} />);
+    if (card === "unjoined") return null;
+    return drawOgImage(<OgPlayerCard {...card} {...await brand()} />);
   });
 }
 
 export function seasonShareImage(id: string): Promise<Response> {
-  return sharePicture(async () => {
+  return sharePicture(`/seasons/${id}`, async () => {
     const card = await loadSeasonCard(id);
-    if (!card) return null;
-    return renderOgImage(<OgSeasonCard {...card} {...await brand()} />);
+    if (!card) return "missing";
+    return drawOgImage(<OgSeasonCard {...card} {...await brand()} />);
   });
 }
 
@@ -91,9 +135,9 @@ export function seasonShareImage(id: string): Promise<Response> {
  * always had, never a 404.
  */
 export function inhouseShareImage(): Promise<Response> {
-  return sharePicture(async () => {
+  return sharePicture("/inhouse", async () => {
     const card = await loadInhouseNightCard(Date.now());
-    if (!card) return fallbackOgImage();
-    return renderOgImage(<OgInhouseNightCard {...card} {...await brand()} />);
+    if (!card) return null;
+    return drawOgImage(<OgInhouseNightCard {...card} {...await brand()} />);
   });
 }
