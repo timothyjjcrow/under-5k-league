@@ -1,5 +1,5 @@
 import { prisma } from "./prisma";
-import { REGISTRATION_STATUS } from "./constants";
+import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
 import { getInhousePingRoleId } from "./discord";
 import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
@@ -930,12 +930,23 @@ export {
  */
 export async function getDiscordReachFunnel(
   seasonId: string | null,
+  /**
+   * PLAYER signups only, for the Start-draft confirm: its line reads "of N
+   * signed-up players" beside readiness counts over the same players, and
+   * counting standins too made it say 65 next to 62. The Discord reach card
+   * and the admin banners keep every active signup, standins included.
+   */
+  { playersOnly = false }: { playersOnly?: boolean } = {},
 ): Promise<DiscordReachFunnel> {
   if (!seasonId) {
     return { registered: 0, linked: 0, unlinkedNames: [], guild: null };
   }
   const regs = await prisma.registration.findMany({
-    where: { seasonId, status: REGISTRATION_STATUS.ACTIVE },
+    where: {
+      seasonId,
+      status: REGISTRATION_STATUS.ACTIVE,
+      ...(playersOnly ? { type: REGISTRATION_TYPE.PLAYER } : {}),
+    },
     select: {
       user: { select: { name: true, discordId: true, discordName: true } },
     },

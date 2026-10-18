@@ -127,7 +127,9 @@ export type AdminNextStep = {
 function discordChaseNote(i: AdminPhaseInput): string {
   const unlinked = i.unlinkedDiscordCount ?? 0;
   if (unlinked === 0) return "";
-  return ` Also: ${unlinked} signed-up player${unlinked === 1 ? " hasn't" : "s haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord reach card names them).`;
+  // Every active signup, standins included (the Discord reach card's count),
+  // so it says so: the Start-draft confirm counts players only.
+  return ` Also: ${unlinked} signed-up ${unlinked === 1 ? "player or standin hasn't" : "players and standins haven't"} linked Discord — chase that before draft night so captains can reach their rosters (the Discord reach card names them).`;
 }
 
 /**

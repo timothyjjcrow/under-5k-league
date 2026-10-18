@@ -364,10 +364,16 @@ actions: `src/app/actions/admin-discord.ts`.
   "reload fixes it" for unknowns (the memo window, or a kicked bot forever).
 - **Start draft warns without slowing /admin:** `discordReachWarning` (names
   only) via the Suspense-wrapped `StartDraftControl`
-  (`admin-start-draft.tsx`), whose fallback is the same working button.
-  `adminNextStep`'s two Start-draft steps take `unlinkedDiscordCount`, counted
-  over all ACTIVE registrations in `loadSeasonAdminData` so banner and card
-  agree.
+  (`admin-start-draft.tsx`), whose fallback is the same working button. Its
+  funnel counts PLAYER signups only (`getDiscordReachFunnel(id, {
+  playersOnly: true })`): the line says "of N signed-up players" beside
+  readiness counts over the same players, and counting standins too made it
+  read "0 of 62 ready" then "of 65 signed-up players"
+  (`admin-start-draft.test.ts` guards the call). `adminNextStep`'s two
+  Start-draft steps and Needs attention take `unlinkedDiscordCount` /
+  `unlinkedSignups`, counted over all ACTIVE registrations in
+  `loadSeasonAdminData` so banner and card agree, and say "players and
+  standins" because that is who they count.
 - **The chase post** (`discordChaseMessage` + `<ChaseCopy>`) names everyone
   (invite for missing, rules nudge for pending, profile link for unlinked, who
   are told being in the server isn't enough), with the origin read at click

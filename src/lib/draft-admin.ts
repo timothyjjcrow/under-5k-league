@@ -55,6 +55,47 @@ export function hasToolbarControl(c: DraftToolbarControls | null): boolean {
 export type UndoSale = { name: string; teamName: string; price: number };
 
 /**
+ * The sale an Undo button names, plus the roster row behind it. Both Undo
+ * forms post `membershipId` as `expectedSaleMembershipId`, and undoLastSale
+ * refuses unless that row is still the newest auction purchase: /admin
+ * doesn't poll during an auction, so a confirm rendered at sale #5 used to
+ * revert sale #12.
+ */
+export type UndoTarget = UndoSale & { membershipId: string };
+
+/** A roster row as `undoSaleTarget` reads it. */
+export type UndoCandidate = {
+  id: string;
+  isCaptain: boolean;
+  price: number;
+  createdAt: Date;
+};
+
+/**
+ * The roster row "Undo last sale" reverts: the newest AUCTION purchase.
+ * The same rule as undoLastSale's own query: not a captain row, `price > 0`
+ * ($0 rows are free-agent signings), newest `createdAt`, then the highest id.
+ * A released player's row is gone, so their sale is never offered (the
+ * room's "Recent sales" still lists it as history). Null when nothing sold.
+ */
+export function undoSaleTarget<T extends UndoCandidate>(
+  rows: readonly T[],
+): T | null {
+  let best: T | null = null;
+  for (const row of rows) {
+    if (row.isCaptain || row.price <= 0) continue;
+    if (
+      !best ||
+      row.createdAt.getTime() > best.createdAt.getTime() ||
+      (row.createdAt.getTime() === best.createdAt.getTime() && row.id > best.id)
+    ) {
+      best = row;
+    }
+  }
+  return best;
+}
+
+/**
  * The Undo confirm. Undoing from a FINISHED auction is the case that needs the
  * warning: undoLastSale writes the draft back to live with a fresh nomination
  * clock, and if the buyer doesn't nominate in time the draft auto-nominates
@@ -71,7 +112,8 @@ export function undoSaleConfirm(o: {
   const what = o.sale
     ? `the most recent sale (${o.sale.name} → ${o.sale.teamName}, $${o.sale.price})`
     : "the most recent auction sale";
-  const buyer = o.sale ? o.sale.teamName : "The buying team";
+  // Mid-sentence ("and the buying team gets the money back"), so lowercase.
+  const buyer = o.sale ? o.sale.teamName : "the buying team";
   const effect = `The player goes back to the pool, and ${buyer} gets the money back and nominates next.`;
   return o.draftComplete
     ? `Undo ${what}? This reopens the finished auction with a live ${DEFAULTS.NOMINATION_TIMER_SECONDS}-second nomination clock. ${effect} If nobody nominates in time, the draft picks a player for them. The draft completes again on its own when the open seats are filled or the pool runs out.`

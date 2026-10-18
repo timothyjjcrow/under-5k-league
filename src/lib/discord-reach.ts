@@ -67,7 +67,9 @@ function nameRun(players: ReachPlayer[], total: number): string {
  * since their names are already on the Discord card and a confirm has to stay
  * readable. `unknown` players appear as a caveat, not as missing. Empty string
  * when there is nothing to warn about, so the confirm is byte-identical to
- * what shipped before this existed.
+ * what shipped before this existed. Pass a PLAYER-only funnel
+ * (`getDiscordReachFunnel(id, { playersOnly: true })`): "signed-up players"
+ * sits beside the confirm's readiness counts, which count only players.
  */
 export function discordReachWarning(reach: DiscordReachFunnel): string {
   const parts: string[] = [];

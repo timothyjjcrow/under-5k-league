@@ -327,7 +327,20 @@ describe("adminAttention", () => {
       unlinkedRostered: 9,
     });
     expect(signups.map((item) => item.text)).toEqual([
-      "1 signed-up player hasn't linked Discord, so pings can't reach them.",
+      "1 signed-up player or standin hasn't linked Discord, so pings can't reach them.",
+    ]);
+    // The count is every active signup, standins included (the Discord
+    // reach card's population), and the words say so.
+    expect(
+      adminAttention({
+        ...base,
+        seasonStatus: "SIGNUPS",
+        draftComplete: false,
+        unlinkedSignups: 3,
+        unlinkedRostered: 0,
+      }).map((item) => item.text),
+    ).toEqual([
+      "3 signed-up players and standins haven't linked Discord, so pings can't reach them.",
     ]);
     const drafted = adminAttention({
       ...base,

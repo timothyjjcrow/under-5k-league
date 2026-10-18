@@ -482,6 +482,23 @@ describe("live rooms delegate their alert triggers", () => {
     }
   });
 
+  it("draft-room refreshes the layout's render only through draftRoomNeedsRefresh", () => {
+    // The header chip and phase nav are the root layout's render. A parked
+    // tab said "Signups open" through a whole auction; refreshing on EVERY
+    // poll instead would re-render the layout and page every 2s per tab on
+    // the one box both leagues share. One refresh, behind the tested rule.
+    const src = code("draft-room.tsx");
+    expect(src).toMatch(
+      /if \(draftRoomNeedsRefresh\(renderedPhaseRef\.current, polled\)\) \{\s*router\.refresh\(\);\s*\}\s*renderedPhaseRef\.current = polled;/,
+    );
+    expect(src.split("router.refresh()").length - 1).toBe(1);
+    // Seeded from the page's render, so a Start before the first poll counts.
+    expect(src).toMatch(/useRef<DraftRoomPhase \| null>\(\s*renderedPhase \?\? null,?\s*\)/);
+    expect(appCode("draft/page.tsx")).toMatch(
+      /renderedPhase=\{\{\s*seasonStatus: season\.status,\s*draftStatus: renderedDraftStatus \?\? DRAFT_STATUS\.NOT_STARTED,?\s*\}\}/,
+    );
+  });
+
   it("draft-room decides the outbid latch through outbidLatchAfter", () => {
     const src = code("draft-room.tsx");
     expect(src).toContain("outbidLatchAfter(");

@@ -177,7 +177,8 @@ initial failure, delayed sync, paused, waiting, completed, and short-roster
 completion each have distinct UI states.
 
 The room directly offers `pauseDraft`/`resumeDraft`, `voidCurrentLot` (paused
-active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase),
+active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase,
+only while it is the sale the confirm named: `expectedSaleMembershipId`),
 plus a link to `/admin` for typed-confirmation Abort. Abort is one Serializable
 pre-season reset: it preserves registrations, teams, authoritative
 `Team.captainId` captains, draft settings/night/readiness; removes every other

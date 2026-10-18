@@ -4,8 +4,14 @@ import {
   hasToolbarControl,
   profileSyncAllowed,
   undoSaleConfirm,
+  undoSaleTarget,
   voidLotConfirm,
 } from "./draft-admin";
+import {
+  sourceFile,
+  sourceFiles,
+  stripLineComments,
+} from "../../test/support/source-files";
 
 const base = { seasonStatus: "DRAFT", hasSale: true };
 
@@ -96,9 +102,96 @@ describe("undoSaleConfirm", () => {
     expect(undoSaleConfirm({ draftComplete: true, sale: null })).toMatch(
       /^Undo the most recent auction sale\? This reopens/,
     );
+    // Mid-sentence, so lowercase: "and the buying team gets the money back".
     expect(undoSaleConfirm({ draftComplete: false, sale: null })).toContain(
-      "The buying team gets the money back",
+      "and the buying team gets the money back",
     );
+    expect(undoSaleConfirm({ draftComplete: true, sale: null })).not.toContain(
+      "The buying team",
+    );
+  });
+});
+
+describe("undoSaleTarget", () => {
+  const at = (ms: number) => new Date(Date.UTC(2026, 9, 17, 20, 0, 0, ms));
+  const row = (id: string, price: number, ms: number, isCaptain = false) => ({
+    id,
+    price,
+    isCaptain,
+    createdAt: at(ms),
+  });
+
+  it("picks the newest auction purchase", () => {
+    expect(
+      undoSaleTarget([row("a", 5, 1), row("b", 12, 3), row("c", 7, 2)])?.id,
+    ).toBe("b");
+  });
+
+  it("skips $0 free-agent signings and captain rows, even newer ones", () => {
+    // A bought player later made captain keeps their price; undo must never
+    // take a team's captain. A $0 row is a signing, not a sale.
+    expect(
+      undoSaleTarget([
+        row("sale", 9, 1),
+        row("signing", 0, 5),
+        row("captain", 57, 6, true),
+      ])?.id,
+    ).toBe("sale");
+  });
+
+  it("breaks a same-millisecond tie on the highest id, like undoLastSale's query", () => {
+    expect(undoSaleTarget([row("aa", 3, 4), row("ab", 3, 4)])?.id).toBe("ab");
+    expect(undoSaleTarget([row("ab", 3, 4), row("aa", 3, 4)])?.id).toBe("ab");
+  });
+
+  it("is null before anything has sold", () => {
+    expect(undoSaleTarget([])).toBeNull();
+    expect(
+      undoSaleTarget([row("cap", 0, 1, true), row("fa", 0, 2)]),
+    ).toBeNull();
+  });
+});
+
+// Undo reverts only the sale its confirm named: the server refuses unless
+// `expectedSaleMembershipId` is still the newest auction purchase. A form
+// that renders the confirm without posting the id is refused on every click
+// (the action reads a missing id as an out-of-date page), and a confirm that
+// names a different row than the id it posts is the bug this closed.
+describe("every Undo last sale form posts the sale its confirm names", () => {
+  const forms = sourceFiles(
+    ["src/app/**/*.tsx", "src/components/**/*.tsx"],
+    100,
+  )
+    .map((f) => ({ path: f.path, code: stripLineComments(f.text) }))
+    .filter((f) => f.code.includes("undoSaleConfirm("));
+  const formCode = (path: string) =>
+    forms.find((f) => f.path === path)?.code ?? "";
+
+  it("finds both Undo surfaces (guard is not vacuous)", () => {
+    expect(forms.map((f) => f.path).sort()).toEqual([
+      "src/app/admin/page.tsx",
+      "src/components/draft-room.tsx",
+    ]);
+  });
+
+  it("/admin names and posts the row undoSaleTarget picks", () => {
+    const src = formCode("src/app/admin/page.tsx");
+    expect(src).toContain("undoSaleTarget(");
+    expect(src).toMatch(
+      /expectedSaleMembershipId: lastAuctionSale\.membershipId/,
+    );
+    expect(src).toMatch(/sale: lastAuctionSale,/);
+  });
+
+  it("the room names and posts the poll's undoSale, never a Recent sales row", () => {
+    const src = formCode("src/components/draft-room.tsx");
+    expect(src).toMatch(/expectedSaleMembershipId: undoSale\.membershipId/);
+    expect(src).toMatch(/hasSale: !!state\.undoSale/);
+    expect(src).not.toMatch(/recentSales\[0\]/);
+    // …and the poll builds undoSale with the same rule as /admin.
+    expect(
+      stripLineComments(sourceFile("src/lib/draft-service.ts").text),
+    ).toMatch(/const undoRow =[\s\S]{0,120}undoSaleTarget\(/);
   });
 });
 
