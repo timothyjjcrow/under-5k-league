@@ -13,6 +13,7 @@ import {
   boardCheckKey,
   boardMemoAfterCheck,
   boardMemoAfterLostClaim,
+  boardRetryAtMs,
   inhouseRoomDue,
   roomHeartbeatAction,
 } from "./inhouse-room-due";
@@ -129,10 +130,12 @@ async function readInhouseRoomVersionToken(): Promise<string> {
  * the version moving (a publish in this process, or the watch's database
  * read), the room's next clock (inhouseRoomWakeAt, from this instance's
  * snapshot of the rows: a cache hit while the version stands), the hold
- * asked for (at most LONG_POLL_HOLD_MS), or `signal`. `mark` is
+ * asked for (at most LONG_POLL_HOLD_MS), the process stopping, or `signal`.
+ * A clock that ran out after the reply the client shows (`hold.sinceNowMs`)
+ * answers at once: that reply is stale already. `mark` is
  * inhouseRoomHoldMark() read before that version. Reads nothing else
- * and writes nothing: the route polls as usual afterwards, unless the client
- * went away ("aborted").
+ * (this instance's board memo is in memory) and writes nothing: the route
+ * polls as usual afterwards, unless the client went away ("aborted").
  */
 export async function holdInhouseRoomPoll(o: {
   viewer: SessionUser | null;
@@ -146,7 +149,18 @@ export async function holdInhouseRoomPoll(o: {
   const nowMs = Date.now();
   const clockAt = inhouseRoomWakeAt(snap.rows, nowMs, {
     maintains: o.viewer !== null,
+    fromMs: o.hold.sinceNowMs,
+    viewerId: o.viewer?.id ?? null,
+    // A board edit this instance found throttled is retried when the
+    // throttle ends, as the ladder's next poll would have; only a signed-in
+    // poll checks the board, and only where Discord may be changed.
+    boardRetryAtMs:
+      o.viewer !== null && discordMutationsAllowed()
+        ? boardRetryAtMs(readRoomBoardMemo())
+        : null,
   });
+  // A clock ran out after the reply the client shows: answer now.
+  if (clockAt !== null && clockAt <= nowMs) return "deadline";
   const holdMs = Math.min(
     INHOUSE.LONG_POLL_HOLD_MS,
     Math.max(0, o.hold.holdMs),

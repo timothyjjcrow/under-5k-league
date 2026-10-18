@@ -372,7 +372,10 @@ respect there:
   callback. Never swap it for `publicOrigin`.
 - **Keep `after()` work short.** A stopping slot gets 60 seconds
   (`TimeoutStopSec`), which covers the cron's 45-second budget and the
-  `after()` drain; route `maxDuration` exports do nothing on the box.
+  `after()` drain; route `maxDuration` exports do nothing on the box. Held
+  `/inhouse` requests don't add to it: on SIGTERM every hold answers at
+  once (`inhouse-room-wait.ts`), so a stop waits for one ordinary poll, not
+  a 25s hold.
 - **Exactly one clock.** No systemd timer, in-process cron or monitor calls
   `/api/cron/automation`; a new deadline gets a wake-up in
   `src/lib/automation-gate.ts`, never a timer of its own.

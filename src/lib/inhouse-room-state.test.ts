@@ -106,16 +106,38 @@ describe("the room poll's source", () => {
     expect(hold).toBeGreaterThan(reads[0]);
     expect(reads[1]).toBeGreaterThan(hold);
     expect(poll).toBeGreaterThan(reads[1]);
-    // Only a client that shows the version just read is held.
+    // Only a client that shows the version just read is held, and the
+    // reply says whether it was (the client backs off a churning version).
     expect(branch).toMatch(
-      /if \(hold && hold\.since === inhouseRoomVersionToken\(version\)\)/,
+      /const held =\s*hold !== null && hold\.since === inhouseRoomVersionToken\(version\);\s*if \(hold && held\) \{/,
     );
+    expect(branch).toMatch(/roomVersion: inhouseRoomVersionToken\(version\),\s*held,/);
     // A client that went away gets no poll.
     expect(branch.slice(hold, reads[1])).toMatch(
       /if \(wake === "aborted"\) return new NextResponse\(null, \{ status: 204 \}\);/,
     );
     // The reply names the version read before its rows.
     expect(branch).toMatch(/roomVersion: inhouseRoomVersionToken\(version\)/);
+  });
+
+  it("the hold counts clocks from the shown reply, and wakes for the viewer's board retry and banner", () => {
+    const state = code(sourceFile("src/lib/inhouse-room-state.ts").text);
+    const body = fn(state, "holdInhouseRoomPoll");
+    const wake = body.slice(body.indexOf("inhouseRoomWakeAt("), body.indexOf("const holdMs"));
+    expect(wake.length).toBeGreaterThan(0);
+    expect(wake).toMatch(/maintains: o\.viewer !== null/);
+    expect(wake).toMatch(/fromMs: o\.hold\.sinceNowMs/);
+    expect(wake).toMatch(/viewerId: o\.viewer\?\.id \?\? null/);
+    // A throttled board edit's retry, for a signed-in viewer, only where
+    // Discord may be changed (signed-out polls never check the board).
+    expect(wake).toMatch(
+      /boardRetryAtMs:\s*o\.viewer !== null && discordMutationsAllowed\(\)\s*\?\s*boardRetryAtMs\(readRoomBoardMemo\(\)\)\s*:\s*null/,
+    );
+    // A clock already run out answers before anything is held.
+    expect(body).toMatch(/if \(clockAt !== null && clockAt <= nowMs\) return "deadline";/);
+    expect(body.indexOf('return "deadline"')).toBeLessThan(
+      body.indexOf("waitForInhouseRoomChange("),
+    );
   });
 
   it("the hold reads only the snapshot and writes nothing", () => {

@@ -1,3 +1,5 @@
+import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { INHOUSE } from "./constants";
 import {
@@ -9,6 +11,7 @@ import {
   loadAsAnotherProcessForTests,
   parseInhouseHold,
   resetInhouseRoomWaitersForTests,
+  setInhouseRoomStopSourceForTests,
   waitForInhouseRoomChange,
   wakeInhouseRoomWaiters,
   type InhouseRoomWake,
@@ -319,12 +322,149 @@ describe("inhouseRoomWakeJitterMs", () => {
   });
 });
 
+describe("a stopping process", () => {
+  afterEach(() => {
+    setInhouseRoomStopSourceForTests(null);
+  });
+
+  /** A stop source the test fires, counting how often it was installed. */
+  function fakeStop() {
+    const source = { installs: 0, fire: () => {} };
+    setInhouseRoomStopSourceForTests((onStop) => {
+      source.installs += 1;
+      source.fire = onStop;
+    });
+    return source;
+  }
+
+  it("answers every held request at once, and every new one, so the drain is one poll", async () => {
+    // `next start` waits for every request in flight before it exits; a
+    // slot stopped while it holds viewers would otherwise wait up to 25s.
+    // SABOTAGE CHECK: drop the waiters loop in stopHolding and the first
+    // assertion goes red; drop the shuttingDown check in
+    // waitForInhouseRoomChange and the late hold stays held.
+    const stop = fakeStop();
+    const held = [hold(), hold({ untilMs: Date.now() + 60_000 })];
+    expect(heldInhouseRoomRequests()).toBe(2);
+    stop.fire();
+    await vi.advanceTimersByTimeAsync(LONG_POLL_JITTER_MS + 1);
+    expect(held.map((h) => h.outcome.wake)).toEqual(["deadline", "deadline"]);
+    expect(heldInhouseRoomRequests()).toBe(0);
+    const late = hold();
+    expect(heldInhouseRoomRequests()).toBe(0);
+    await Promise.resolve();
+    expect(late.outcome.wake).toBe("deadline");
+    // A test that stopped the process leaves the next one holding again.
+    resetInhouseRoomWaitersForTests();
+    const after = hold();
+    expect(heldInhouseRoomRequests()).toBe(1);
+    await vi.advanceTimersByTimeAsync(SETTLE_MS);
+    expect(after.outcome.wake).toBeNull();
+  });
+
+  it("listens once per process, from the first hold, never at load", async () => {
+    const stop = fakeStop();
+    // Loading the module (another copy, sharing this process's registry)
+    // installs nothing.
+    vi.resetModules();
+    const other = await import("./inhouse-room-wait");
+    expect(stop.installs).toBe(0);
+    const before = process.listenerCount("SIGTERM");
+    await loadAsAnotherProcessForTests(async () => {
+      vi.resetModules();
+      return import("./inhouse-room-wait");
+    });
+    expect(process.listenerCount("SIGTERM")).toBe(before);
+    // The first hold installs it; later holds, through either module
+    // instance, don't stack more.
+    hold();
+    hold();
+    expect(stop.installs).toBe(1);
+    void other.waitForInhouseRoomChange({
+      since: "v1",
+      mark: other.inhouseRoomPublishMark(),
+      untilMs: Date.now() + 1_000,
+      readToken,
+    });
+    expect(stop.installs).toBe(1);
+    expect(heldInhouseRoomRequests()).toBe(3);
+  });
+
+  /** Run `body` in a fresh Node process with the real module loaded as `m`. */
+  function inChild(body: string) {
+    const modulePath = path.resolve(process.cwd(), "src/lib/inhouse-room-wait.ts");
+    const script = `
+      import(${JSON.stringify(modulePath)}).then(async (mod) => {
+        // A CommonJS project: an eval's import() may wrap it in \`default\`.
+        const m = typeof mod.waitForInhouseRoomChange === "function" ? mod : mod.default;
+        const hold = () => m.waitForInhouseRoomChange({
+          since: "v1",
+          mark: m.inhouseRoomPublishMark(),
+          untilMs: Date.now() + 25000,
+          readToken: async () => "v1",
+        });
+        setInterval(() => {}, 1000);
+        ${body}
+      });
+    `;
+    return spawnSync(process.execPath, ["--import", "tsx", "-e", script], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      timeout: 20_000,
+    });
+  }
+
+  it("on SIGTERM beside a server's own handler (Next's), every hold answers and the server exits", () => {
+    // Next's listener closes the server and exits once in-flight requests
+    // have answered; here it waits a little and exits 0.
+    const run = inChild(`
+      process.on("SIGTERM", () => setTimeout(() => process.exit(0), 400));
+      const before = process.listenerCount("SIGTERM");
+      const wakes = [hold(), hold()];
+      console.log("added", process.listenerCount("SIGTERM") - before);
+      Promise.all(wakes).then((w) => console.log("wakes", w.join(",")));
+      setTimeout(() => process.kill(process.pid, "SIGTERM"), 50);
+    `);
+    expect(run.stderr).toBe("");
+    expect(run.stdout).toContain("added 1");
+    expect(run.stdout).toContain("wakes deadline,deadline");
+    expect(run.status).toBe(0);
+  });
+
+  it("on SIGTERM with no other listener (a script, a test worker), Node still exits on it", () => {
+    // A SIGTERM listener turns off Node's default exit; importing the room
+    // must never make a process deaf to SIGTERM.
+    const run = inChild(`
+      hold();
+      setTimeout(() => process.kill(process.pid, "SIGTERM"), 50);
+      setTimeout(() => { console.log("still running"); process.exit(3); }, 5000);
+    `);
+    expect(run.stdout).not.toContain("still running");
+    expect(run.signal).toBe("SIGTERM");
+  });
+});
+
 describe("parseInhouseHold", () => {
   it("holds only a request that sends a usable version", () => {
     for (const since of [undefined, null, 7, "", "x".repeat(65), { v: 1 }]) {
       expect(parseInhouseHold({ action: "state", since })).toBeNull();
     }
     expect(parseInhouseHold({ action: "state", since: "x".repeat(64) })?.since).toHaveLength(64);
+  });
+
+  it("reads the shown reply's clock, clamped to the last two holds and to now", () => {
+    const NOW_MS = Date.UTC(2026, 9, 18, 20, 0, 0);
+    const at = (sinceNow: unknown) =>
+      parseInhouseHold({ action: "state", since: "v", sinceNow }, NOW_MS)?.sinceNowMs;
+    expect(at(NOW_MS - 4_000)).toBe(NOW_MS - 4_000);
+    expect(at(NOW_MS - 4_000.4)).toBe(NOW_MS - 4_000);
+    // Older than two holds: counts from two holds back.
+    expect(at(NOW_MS - 60 * 60_000)).toBe(NOW_MS - 2 * INHOUSE.LONG_POLL_HOLD_MS);
+    // From the future: now, so no clock still ahead is ever skipped.
+    expect(at(NOW_MS + 5_000)).toBe(NOW_MS);
+    for (const odd of [undefined, null, "123", Number.NaN, Infinity, -Infinity]) {
+      expect(at(odd)).toBe(NOW_MS);
+    }
   });
 
   it("clamps the hold to what the server grants", () => {

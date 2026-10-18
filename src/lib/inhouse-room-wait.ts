@@ -30,12 +30,25 @@ import { INHOUSE } from "./constants";
 // once. So a publish that started before the route's read and finished
 // before the hold registered (its wake then found nobody held) is still
 // caught, without waiting for the watch.
+//
+// A STOPPING PROCESS ANSWERS EVERY HOLD AT ONCE. `next start` handles SIGTERM
+// by closing its server and waiting for every request in flight, so a slot
+// stopped while it holds viewers (a rollback right after a promote, a
+// restart of the live slot) would otherwise wait up to a hold, 25s, before
+// it exits. The first held request in a process installs one SIGTERM
+// listener beside Next's own (never at module load: a SIGTERM listener
+// turns off Node's default exit, and build code stays free of side
+// effects); it settles every waiter as "deadline", so each answers through
+// the ordinary poll, and from then on a new hold answers at once.
 
 /** Why a held request ended. */
 export type InhouseRoomWake =
   /** The room version moved past the client's. */
   | "changed"
-  /** The deadline: the hold's end, or the room's next clock. */
+  /**
+   * The deadline: the hold's end, the room's next clock (or one that ran out
+   * since the reply its client shows), or the process stopping.
+   */
   | "deadline"
   /** The client went away; nobody reads the reply. */
   | "aborted";
@@ -61,11 +74,16 @@ type Registry = {
   reading: boolean;
   /** A check was asked for during that read: run one more after it. */
   again: boolean;
+  /** This process is stopping: every hold answers at once. */
+  shuttingDown: boolean;
+  /** The stop listener is installed (once per process, by the first hold). */
+  stopInstalled: boolean;
 };
 
-// v2: `landed` joined the registry. A dev server's hot reload keeps the
-// older shape on globalThis under v1, where it can't be mistaken for this.
-const REGISTRY_KEY = Symbol.for("ggd2l.inhouseRoomWait.v2");
+// v3: `shuttingDown` and `stopInstalled` joined the registry (v2 added
+// `landed`). A dev server's hot reload keeps an older shape on globalThis
+// under its own key, where it can't be mistaken for this.
+const REGISTRY_KEY = Symbol.for("ggd2l.inhouseRoomWait.v3");
 
 /**
  * This module instance's registry: the one already on globalThis, or a new
@@ -84,9 +102,45 @@ const registry: Registry = (() => {
     watch: null,
     reading: false,
     again: false,
+    shuttingDown: false,
+    stopInstalled: false,
   };
   return g[REGISTRY_KEY];
 })();
+
+/** How a process hears that it is stopping. */
+type StopSource = (onStop: () => void) => void;
+
+/**
+ * SIGTERM, once. `next start` has its own listener (it closes the server and
+ * exits once the requests in flight have answered), so this one only settles
+ * the holds. Anywhere nothing else listens (a script, a test worker), it
+ * hands the signal back to Node's default, which exits, so importing the
+ * room never makes a process deaf to SIGTERM.
+ */
+const processStop: StopSource = (onStop) => {
+  process.once("SIGTERM", () => {
+    onStop();
+    if (process.listenerCount("SIGTERM") === 0) {
+      process.kill(process.pid, "SIGTERM");
+    }
+  });
+};
+
+let stopSource: StopSource = processStop;
+
+/** Settle every hold as "deadline", and answer every new one at once. */
+function stopHolding(): void {
+  registry.shuttingDown = true;
+  for (const waiter of [...registry.waiters]) waiter.settle("deadline");
+}
+
+/** Install the stop listener, once per process (both module instances). */
+function listenForStopOnce(): void {
+  if (registry.stopInstalled) return;
+  registry.stopInstalled = true;
+  stopSource(stopHolding);
+}
 
 /** This process's publish count (the room snapshot's local fence). */
 export function inhouseRoomGeneration(): number {
@@ -189,7 +243,8 @@ export function wakeInhouseRoomWaiters(): void {
 
 /**
  * Hold a state request until the room version moves past `since`, `untilMs`,
- * or `signal` aborts. `mark` is inhouseRoomPublishMark() read BEFORE the
+ * the process starts stopping, or `signal` aborts. `mark` is
+ * inhouseRoomPublishMark() read BEFORE the
  * caller read the version it compared with `since`: when it has moved by
  * registration, a publish in this process started or finished around that
  * read, which may have missed it, so the hold re-checks at once instead of
@@ -206,6 +261,9 @@ export function waitForInhouseRoomChange(o: {
   nowMs?: number;
 }): Promise<InhouseRoomWake> {
   if (o.signal?.aborted) return Promise.resolve("aborted");
+  // Stopping: answer now, so the server's drain is one poll, not a hold.
+  if (registry.shuttingDown) return Promise.resolve("deadline");
+  listenForStopOnce();
   const nowMs = o.nowMs ?? Date.now();
   return new Promise<InhouseRoomWake>((resolve) => {
     let settled = false;
@@ -268,7 +326,11 @@ export async function loadAsAnotherProcessForTests<T>(
   }
 }
 
-/** Test-only: end every held request and stop the timers. */
+/**
+ * Test-only: end every held request and stop the timers. The stop listener
+ * stays installed (one per process, or a run's tests would stack them), and
+ * a process a test stopped holds again.
+ */
 export function resetInhouseRoomWaitersForTests(): void {
   for (const waiter of [...registry.waiters]) waiter.settle("aborted");
   if (registry.recheck) clearTimeout(registry.recheck);
@@ -278,19 +340,41 @@ export function resetInhouseRoomWaitersForTests(): void {
   registry.reading = false;
   registry.again = false;
   registry.readToken = null;
+  registry.shuttingDown = false;
 }
 
-/** The hold a state request asks for: its client's version, and how long. */
-export type InhouseHoldRequest = { since: string; holdMs: number };
+/**
+ * Test-only: hear "stopping" from `source` instead of SIGTERM (null: SIGTERM
+ * again). The next hold installs it, as the first hold in a process does.
+ */
+export function setInhouseRoomStopSourceForTests(source: StopSource | null): void {
+  stopSource = source ?? processStop;
+  registry.stopInstalled = false;
+}
 
 /**
- * Read `since` and `holdMs` off a state request's body. No usable `since`
- * (absent, not a string, empty, or longer than any token) means "answer at
- * once", as every request was before the long-poll. The hold is clamped to
- * [0, LONG_POLL_HOLD_MS]; absent or unreadable, it is the longest.
+ * The hold a state request asks for: its client's version, how long, and
+ * the server clock of the reply its client shows (`sinceNowMs`).
+ */
+export type InhouseHoldRequest = {
+  since: string;
+  holdMs: number;
+  sinceNowMs: number;
+};
+
+/**
+ * Read `since`, `holdMs` and `sinceNow` off a state request's body. No
+ * usable `since` (absent, not a string, empty, or longer than any token)
+ * means "answer at once", as every request was before the long-poll. The
+ * hold is clamped to [0, LONG_POLL_HOLD_MS]; absent or unreadable, it is the
+ * longest. `sinceNow` (the shown reply's `now`) is clamped to
+ * [nowMs - 2 * LONG_POLL_HOLD_MS, nowMs]; absent or unreadable, it is
+ * nowMs, and only clocks still ahead count. An old value can only make the
+ * request answer at once, which leaving out `since` does anyway.
  */
 export function parseInhouseHold(
   body: Record<string, unknown>,
+  nowMs: number = Date.now(),
 ): InhouseHoldRequest | null {
   const since = body.since;
   if (typeof since !== "string" || since.length === 0 || since.length > 64) {
@@ -301,5 +385,13 @@ export function parseInhouseHold(
     typeof asked === "number" && Number.isFinite(asked)
       ? Math.min(INHOUSE.LONG_POLL_HOLD_MS, Math.max(0, Math.round(asked)))
       : INHOUSE.LONG_POLL_HOLD_MS;
-  return { since, holdMs };
+  const shown = body.sinceNow;
+  const sinceNowMs =
+    typeof shown === "number" && Number.isFinite(shown)
+      ? Math.min(
+          nowMs,
+          Math.max(nowMs - 2 * INHOUSE.LONG_POLL_HOLD_MS, Math.round(shown)),
+        )
+      : nowMs;
+  return { since, holdMs, sinceNowMs };
 }

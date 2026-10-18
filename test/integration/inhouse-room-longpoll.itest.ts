@@ -16,6 +16,9 @@ import { NextRequest } from "next/server";
 // - a held request ends at the room's next clock, and the poll that wakes
 //   resolves the work that came due; a signed-out one, which can't, never
 //   wakes early to retry it;
+// - a clock that ran out after the reply the client shows answers at once,
+//   and a signed-in hold wakes when a throttled board edit can be retried;
+// - every state reply says whether it was held;
 // - a client that goes away ends its hold and gets no poll;
 // - looping clients make about one request per change, plus one per hold.
 
@@ -60,6 +63,8 @@ import {
   readInhouseRoomVersion,
 } from "@/lib/inhouse-room-version";
 import { heldInhouseRoomRequests } from "@/lib/inhouse-room-wait";
+import { boardMemoAfterCheck } from "@/lib/inhouse-room-due";
+import { writeRoomBoardMemo } from "@/lib/inhouse-room-memo";
 import { SETTING_KEYS } from "@/lib/settings";
 import { POST as inhousePOST } from "@/app/api/inhouse/route";
 import { makeUser, sessionFor } from "./factories";
@@ -112,13 +117,14 @@ async function plainPoll(session: SessionUser | null) {
   return { state: res.json!, version: version as string };
 }
 
-/** A held poll for `since`, still running. */
+/** A held poll for `since`, still running (`sinceNow`: the shown reply's `now`). */
 function heldPoll(
   session: SessionUser | null,
   since: string,
   holdMs: number = INHOUSE.LONG_POLL_HOLD_MS,
+  sinceNow?: number,
 ) {
-  return room(session, { action: "state", since, holdMs });
+  return room(session, { action: "state", since, holdMs, sinceNow });
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -164,8 +170,15 @@ describe("the long-poll: a held request answers when the room changes", () => {
       expect(reply.status).toBe(200);
       expect(reply.json?.roomVersion).not.toBe(signedIn.version);
       expect((reply.json?.queue as unknown[]).length).toBe(1);
+      // Held, then woken: the client's back-off resets on it.
+      expect(reply.json?.held).toBe(true);
     }
     expect(heldInhouseRoomRequests()).toBe(0);
+    // A plain poll, and one whose `since` the room has moved past, were not.
+    expect(signedIn.state.held).toBe(false);
+    const behind = await heldPoll(watcher.session, signedIn.version);
+    expect(behind.ms).toBeLessThan(INSTANT_MS);
+    expect(behind.json?.held).toBe(false);
   });
 
   it("a server action in another module instance wakes the route's held request as fast", async () => {
@@ -348,6 +361,53 @@ describe("the long-poll: a held request ends by itself", () => {
     expect(reply.json?.roomVersion).toBe(version);
     // Still unresolved: nobody signed in polled.
     expect(await prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.READY_CHECK } })).toBe(1);
+  });
+
+  it("at once for a clock that ran out after the reply the client shows, signed in or out", async () => {
+    // A tab back from a hide, or a request after a 429's back-off: the reply
+    // it shows is from before the deadline, so it must not sit out a hold.
+    // SABOTAGE CHECK: drop `fromMs: o.hold.sinceNowMs` from
+    // holdInhouseRoomPoll and the signed-out request holds its whole hold.
+    const { acceptEndsAt, version } = await readyCheckEnding(300);
+    const shown = (await plainPoll(null)).state;
+    expect(Number(shown.now)).toBeLessThan(acceptEndsAt.getTime());
+    await sleep(
+      Math.max(0, acceptEndsAt.getTime() + INHOUSE.LONG_POLL_CLOCK_GRACE_MS + 50 - Date.now()),
+    );
+    const HOLD_MS = 3_000;
+    const reply = await heldPoll(null, version, HOLD_MS, Number(shown.now));
+    expect(reply.status).toBe(200);
+    expect(reply.ms).toBeLessThan(INSTANT_MS);
+    expect(reply.json?.roomVersion).toBe(version);
+    expect(Number(reply.json?.now)).toBeGreaterThan(acceptEndsAt.getTime());
+    // Its next request sends that reply's clock: the deadline is behind it
+    // now, and the request holds (nobody signed in resolves the check).
+    const next = await heldPoll(null, version, 600, Number(reply.json?.now));
+    expect(next.ms).toBeGreaterThanOrEqual(590);
+  });
+
+  it("a signed-in hold wakes when a throttled board edit can be retried; a signed-out one doesn't", async () => {
+    // Two joins inside the board's 10s floor: the second's check came back
+    // throttled. The ladder's next poll used to retry it within 3-10s; a
+    // held request would otherwise wait out its 25s hold.
+    // SABOTAGE CHECK: pass `boardRetryAtMs: null` in holdInhouseRoomPoll and
+    // the signed-in request holds its whole hold.
+    const [a] = await users(1, "BR-");
+    expect((await room(a.session, { action: "join", mmr: 3000 })).status).toBe(200);
+    const { version } = await plainPoll(a.session);
+    await prisma.setting.deleteMany({ where: { key: SETTING_KEYS.INHOUSE_ROOM_MAINTENANCE_AT } });
+    const retryInMs = 1_000;
+    writeRoomBoardMemo(
+      boardMemoAfterCheck("throttled-key", "throttled", Date.now() - INHOUSE.BOARD_MIN_SECONDS * SEC + retryInMs),
+    );
+    const HOLD_MS = 4_000;
+    const [signedIn, signedOut] = await Promise.all([
+      heldPoll(a.session, version, HOLD_MS),
+      heldPoll(null, version, HOLD_MS),
+    ]);
+    expect(signedIn.ms).toBeGreaterThanOrEqual(retryInMs - 50);
+    expect(signedIn.ms).toBeLessThan(retryInMs + INHOUSE.LONG_POLL_CLOCK_GRACE_MS + INSTANT_MS);
+    expect(signedOut.ms).toBeGreaterThanOrEqual(HOLD_MS - 20);
   });
 
   it("when its client goes away: no poll, nothing left held", async () => {

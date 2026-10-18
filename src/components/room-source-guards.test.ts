@@ -344,11 +344,14 @@ describe("live rooms delegate their poll policy", () => {
     // awaiting reconciliation), and a re-issue outside inhousePollDelay is a
     // hot loop against an old slot that answers at once.
     const src = roomText(INHOUSE_ROOM);
-    expect(src).toMatch(/since:\s*longPoll\.since,\s*holdMs:\s*longPoll\.holdMs/);
+    expect(src).toMatch(
+      /since:\s*longPoll\.since,\s*sinceNow:\s*longPoll\.sinceNow,\s*holdMs:\s*longPoll\.holdMs/,
+    );
     expect(src).toMatch(/longPoll \? longPoll\.timeoutMs : ROOM_POLL_TIMEOUT_MS/);
     expect([...src.matchAll(/\bsince:/g)]).toHaveLength(1);
-    // Urgent requests answer at once: resync, actions in flight, reconciling.
-    expect(src).toMatch(/const urgent = \(\) =>\s*resyncPending \|\|\s*actionsInFlightRef\.current > 0 \|\|\s*actionReconcileSeqRef\.current !== null/);
+    // Urgent requests answer at once: resync, actions in flight, reconciling,
+    // and a refocus after a long hide.
+    expect(src).toMatch(/const urgent = \(\) =>\s*resyncPending \|\|\s*actionsInFlightRef\.current > 0 \|\|\s*actionReconcileSeqRef\.current !== null \|\|\s*refocusPending;/);
     for (const call of callArgs(src, "inhouseLongPoll")) {
       expect(call).toMatch(/\bversion:\s*roomVersion\b/);
       expect(call).toMatch(/\burgent:\s*urgent\(\)/);
@@ -371,12 +374,46 @@ describe("live rooms delegate their poll policy", () => {
     expect(src).toMatch(
       /bumpPollRef\.current\s*=\s*\(\)\s*=>\s*\{\s*rerunRequested\s*=\s*true;\s*schedule\(250\);\s*releaseHold\(\);/,
     );
+    // The gap between requests backs off while replies keep coming back
+    // unheld: the streak is counted only by inhouseUnheldStreak, from every
+    // reply the room reads, and handed to inhousePollDelay.
+    expect(src).toMatch(
+      /unheldStreak = inhouseUnheldStreak\(unheldStreak, \{\s*askedHold: longPoll !== null,\s*held: payload\.held,\s*\}\);/,
+    );
+    // (Its declaration aside.)
+    expect([...src.matchAll(/(?<!let )\bunheldStreak =\s/g)]).toHaveLength(1);
+    expect(callArgs(src, "inhousePollDelay")[0]).toMatch(
+      /startedAgoMs:\s*Date\.now\(\) - startedAt,\s*unheldStreak,/,
+    );
     expect(src).toMatch(/const onOnline = \(\) => \{[\s\S]*?releaseHold\(\);\s*tick\(\);/);
     // A released request is not a failure.
     expect(src).toMatch(/\} else if \(hold\?\.released\) \{\s*\} else \{\s*markFailure\(\);/);
     // Actions count themselves in and out around their fetch.
     expect(src).toMatch(/actionsInFlightRef\.current \+= 1;\s*const \{ seq, next: seqNext \} = issueSequence/);
     expect(src).toMatch(/\} finally \{\s*actionsInFlightRef\.current -= 1;/);
+  });
+
+  it("inhouse-room asks afresh, unheld, when a tab comes back from a long hide", () => {
+    // A held request may have died with its connection while the device
+    // slept, and its own deadline is its hold plus ROOM_POLL_TIMEOUT_MS away:
+    // refocus releases it and the next request is unheld, once.
+    const src = roomText(INHOUSE_ROOM);
+    const visibility = src.slice(
+      src.indexOf("const onVisibility = () => {"),
+      src.indexOf("const onOffline = () => {"),
+    );
+    expect(visibility.length).toBeGreaterThan(0);
+    // Hiding is recorded; the threshold is the tested pure rule.
+    expect(visibility).toMatch(/if \(document\.visibilityState !== "visible"\) \{\s*hiddenAt \?\?= Date\.now\(\);\s*return;\s*\}/);
+    expect(visibility).toMatch(
+      /if \(inhouseRefocusResync\(hiddenForMs\)\) \{\s*refocusPending = true;\s*rerunRequested = true;\s*releaseHold\(\);\s*\}\s*tick\(\);/,
+    );
+    expect(visibility).not.toContain("ROOM_POLL_TIMEOUT_MS");
+    // One-shot: cleared only by a reply apply() took.
+    expect([...src.matchAll(/(?<!let )\brefocusPending = false;/g)]).toHaveLength(1);
+    expect(src).toMatch(
+      /if \(applied\) \{\s*roomVersion =[^;]*;\s*refocusPending = false;\s*\}/,
+    );
   });
 
   it("inhouse-room tells the cadence and the tab title when a READY game is being played", () => {

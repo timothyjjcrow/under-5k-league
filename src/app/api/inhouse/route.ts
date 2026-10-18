@@ -70,9 +70,13 @@ const MUTATION_ACTIONS = new Set([
 //
 // `state` replies also carry `roomVersion`, the room version read before the
 // reply's rows (so the rows are at least that new). A client that sends it
-// back as `since` (with the `holdMs` it can wait) is held until the room
-// moves past it, its next clock or the hold's end, and then polled as any
-// other request (holdInhouseRoomPoll). Without `since` it answers at once.
+// back as `since` (with the `holdMs` it can wait, and `sinceNow`, the `now`
+// of the reply it shows) is held until the room moves past it, its next
+// clock or the hold's end, and then polled as any other request
+// (holdInhouseRoomPoll). Without `since` it answers at once. `held` says
+// whether this request was held: false for a `since` the room had already
+// moved past, which the client counts to back off from a version that never
+// stops moving (inhouseLongPollGapMs).
 export async function POST(req: NextRequest) {
   const invalidMediaType = requireJsonContentType(req);
   if (invalidMediaType) return invalidMediaType;
@@ -118,7 +122,8 @@ export async function POST(req: NextRequest) {
       getSessionUser(),
       readInhouseRoomVersion(),
     ]);
-    if (hold && hold.since === inhouseRoomVersionToken(version)) {
+    const held = hold !== null && hold.since === inhouseRoomVersionToken(version);
+    if (hold && held) {
       // The client shows this version: wait for news, then authorize and
       // read again, as a fresh request would.
       const wake = await holdInhouseRoomPoll({
@@ -141,6 +146,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({
         ...polled.state,
         roomVersion: inhouseRoomVersionToken(version),
+        held,
       });
     } finally {
       // Only a signed-in poll that won the 2s maintenance claim, flipped a

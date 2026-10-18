@@ -253,6 +253,13 @@ export function inhousePollCadence(
 export type InhouseLongPoll = {
   /** The `roomVersion` of the last poll reply the room applied. */
   since: string;
+  /**
+   * The server clock of the reply the room shows (`serverNow`), or null.
+   * The server answers at once when one of the room's clocks ran out after
+   * it (parseInhouseHold, inhouseRoomWakeAt's `fromMs`), so a reply from
+   * before a deadline or a result window never sits out a hold.
+   */
+  sinceNow: number | null;
   /** How long the server may hold it (it caps this at LONG_POLL_HOLD_MS). */
   holdMs: number;
   /** The request's own deadline: the hold plus ROOM_POLL_TIMEOUT_MS. */
@@ -270,8 +277,9 @@ export type InhouseLongPoll = {
  *   old slot during a release, which doesn't know `since`): never hot-loop
  *   on a server that answers at once;
  * - something waits on an answer now (`urgent`: a resync after going
- *   offline, an action in flight or awaiting reconciliation), whose controls
- *   stay locked until a reply lands;
+ *   offline, an action in flight or awaiting reconciliation, whose controls
+ *   stay locked until a reply lands, or a refocus after a long hide,
+ *   inhouseRefocusResync);
  * - the last request failed: a retry must be quick to diagnose.
  *
  * A member in their own game's clocked stages asks for the shorter
@@ -298,7 +306,59 @@ export function inhouseLongPoll(
     clocked && ownLobby
       ? INHOUSE.LONG_POLL_TIMED_HOLD_MS
       : INHOUSE.LONG_POLL_HOLD_MS;
-  return { since: o.version, holdMs, timeoutMs: holdMs + ROOM_POLL_TIMEOUT_MS };
+  return {
+    since: o.version,
+    sinceNow:
+      typeof o.serverNow === "number" && Number.isFinite(o.serverNow)
+        ? o.serverNow
+        : null,
+    holdMs,
+    timeoutMs: holdMs + ROOM_POLL_TIMEOUT_MS,
+  };
+}
+
+/**
+ * Long-poll replies in a row that came back UNHELD: the room had already
+ * moved past the `since` the request sent, so the server answered at once
+ * (the reply's `held` is false). A reply that was held resets it to 0. A
+ * request that sent no `since` (`askedHold` false: the first, a retry, an
+ * urgent one), or a reply that doesn't say (an old slot), leaves it as it
+ * was: neither is news about how fast the room moves.
+ */
+export function inhouseUnheldStreak(
+  prev: number,
+  o: { askedHold: boolean; held: unknown },
+): number {
+  if (!o.askedHold || typeof o.held !== "boolean") return prev;
+  return o.held ? 0 : prev + 1;
+}
+
+/**
+ * The shortest wait between the starts of two long-poll requests. Normally
+ * LONG_POLL_MIN_GAP_MS (1s). Every publish wakes every held tab, refused
+ * and no-op mutations included, so one writer that keeps the version moving
+ * (any signed-in account pressing Leave while not queued, up to the route's
+ * 300 mutations a minute) would hold every visible tab at one request a
+ * second, where the ladder costs one per 3-10s. A churned request is never
+ * held, so no server-side floor on wakes would bind it; the bound is here.
+ * From the second unheld reply in a row (`unheldStreak`, inhouseUnheldStreak)
+ * the gap doubles per reply, up to the ladder rate for the current phase
+ * (inhousePollCadence), so churn costs no more than the ladder did; a held
+ * reply puts it back to 1s. A member in their own game's clocked stage
+ * (ready check, vote, draft) keeps 1s: their changes come seconds apart and
+ * each one is a deadline.
+ */
+export function inhouseLongPollGapMs(
+  o: Parameters<typeof inhousePollCadence>[0] & { unheldStreak?: number },
+): number {
+  const min = INHOUSE.LONG_POLL_MIN_GAP_MS;
+  const streak = Math.max(0, Math.floor(o.unheldStreak ?? 0));
+  if (streak < 2) return min;
+  const { clocked, ownLobby } = inhouseRoomPhase(o);
+  if (clocked && ownLobby) return min;
+  const ladder = inhousePollCadence(o).delayMs;
+  const doubled = min * 2 ** Math.min(10, streak - 1);
+  return Math.max(min, Math.min(ladder, doubled));
 }
 
 /**
@@ -306,15 +366,19 @@ export function inhouseLongPoll(
  * one. A request that can long-poll next (`longPoll`: inhouseLongPoll was
  * not null) goes straight away, 0, which the room issues from the reply's
  * own continuation rather than a timer (hidden tabs clamp timers): no more
- * often than LONG_POLL_MIN_GAP_MS after the previous one started
- * (`startedAgoMs`), so a version that keeps moving can't hot-loop. Every
- * other case, and every request that didn't land, a 429, offline and a
- * hidden tab with nothing at stake, waits on the ladder (inhousePollCadence).
+ * often than the long-poll gap (inhouseLongPollGapMs: LONG_POLL_MIN_GAP_MS,
+ * longer while replies keep coming back unheld) after the previous one
+ * started (`startedAgoMs`), so a version that keeps moving can't hot-loop.
+ * Every other case, and every request that didn't land, a 429, offline and
+ * a hidden tab with nothing at stake, waits on the ladder
+ * (inhousePollCadence).
  */
 export function inhousePollDelay(
   o: Parameters<typeof inhousePollCadence>[0] & {
     longPoll: boolean;
     startedAgoMs: number;
+    /** inhouseUnheldStreak's count; absent, 0. */
+    unheldStreak?: number;
   },
 ): number {
   const ladder = inhousePollCadence(o).delayMs;
@@ -327,7 +391,21 @@ export function inhousePollDelay(
   ) {
     return ladder;
   }
-  return Math.max(0, INHOUSE.LONG_POLL_MIN_GAP_MS - Math.max(0, o.startedAgoMs));
+  return Math.max(0, inhouseLongPollGapMs(o) - Math.max(0, o.startedAgoMs));
+}
+
+/**
+ * Whether a tab coming back into view must ask afresh, unheld: after a hide
+ * of ROOM_POLL_TIMEOUT_MS or more (a sleep, a phone in a pocket), a held
+ * request may have died with its connection and given no sign (no `offline`
+ * event, no reset), and its own deadline is up to its hold plus
+ * ROOM_POLL_TIMEOUT_MS away (35s). The room releases it and sends one
+ * unheld request, which restores the ladder's 10s bound on a refocus; a
+ * quick alt-tab out of Dota costs nothing. `hiddenForMs` null: the tab
+ * wasn't seen hidden.
+ */
+export function inhouseRefocusResync(hiddenForMs: number | null): boolean {
+  return hiddenForMs !== null && hiddenForMs >= ROOM_POLL_TIMEOUT_MS;
 }
 
 /**

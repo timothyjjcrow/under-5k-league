@@ -10,31 +10,64 @@ import { inhouseRoomDue, type InhouseRoomDueInput } from "./inhouse-room-due";
 // (inhouseRoomDue mirrors them: the accept, vote and pick deadlines, the
 // abandon floors, the queue's idle reset) or where the reply itself reads
 // differently (a queued player turning away, a played game's result window
-// opening the "Game over" button). The request wakes LONG_POLL_CLOCK_GRACE_MS
-// after it, so the signed-in poll that wakes finds the work due. The
-// automation gate (automation-gate.ts) schedules the worker on the same
+// opening the "Game over" button, the viewer's post-game banner ending), or,
+// for a signed-in viewer, where a throttled Discord board edit can be
+// retried. The request wakes LONG_POLL_CLOCK_GRACE_MS after it, so the
+// signed-in poll that wakes finds the work due. The automation gate
+// (automation-gate.ts) schedules the worker on the same resolver and board
 // clocks; this is the room's copy, read from the room snapshot's rows.
+//
+// Clocks count from the reply the client shows (`fromMs`, its `now`), not
+// from the hold's start: one that ran out in between (a tab back from a
+// hide, a request after a 429's back-off) means that reply is already
+// stale, and the request answers at once.
 
 const HOUR_MS = 3_600_000;
 
+/** The room rows the wake reads: the due check's, and the recent results. */
+export type InhouseRoomWakeInput = InhouseRoomDueInput & {
+  /** Games completed inside the banner window (loadInhouseRoomRows). */
+  recentResults?: readonly {
+    completedAt: Date | null;
+    players: readonly { userId: string }[];
+  }[];
+};
+
 /**
- * The earliest time after `nowMs` a held request for this room should answer
- * by itself, or null when no clock is ahead. `maintains`: the viewer is signed
- * in, so their poll may run due work; when some is due already (another poll
- * holds the 2s claim), the request answers by LONG_POLL_DUE_RETRY_MS so work
- * nobody finished is retried. Signed-out requests never run it and wait for
- * the publish.
+ * The earliest time after `fromMs` a held request for this room should
+ * answer by itself, or null when no clock is ahead. A time at or before
+ * `nowMs` means a clock ran out after the reply the client shows: answer at
+ * once.
+ *
+ * - `maintains`: the viewer is signed in, so their poll may run due work;
+ *   when some is due already (another poll holds the 2s claim), the request
+ *   answers by LONG_POLL_DUE_RETRY_MS so work nobody finished is retried.
+ *   Signed-out requests never run it and wait for the publish.
+ * - `fromMs`: the `now` of the reply the client shows (parseInhouseHold's
+ *   `sinceNowMs`); absent, or later than `nowMs`, it is `nowMs`.
+ * - `boardRetryAtMs`: when this instance's throttled board edit can be
+ *   retried (boardRetryAtMs, inhouse-room-due.ts). Counted only for a
+ *   viewer who `maintains`: only a signed-in poll checks the board.
+ * - `viewerId`: the signed-in viewer, whose post-game banner (the newest
+ *   game they played, LAST_RESULT_WINDOW_MS after it completed) ends on a
+ *   clock too.
  */
 export function inhouseRoomWakeAt(
-  rows: InhouseRoomDueInput,
+  rows: InhouseRoomWakeInput,
   nowMs: number,
-  o: { maintains: boolean },
+  o: {
+    maintains: boolean;
+    fromMs?: number;
+    boardRetryAtMs?: number | null;
+    viewerId?: string | null;
+  },
 ): number | null {
+  const fromMs = Math.min(nowMs, o.fromMs ?? nowMs);
   let next = Infinity;
   const clock = (atMs: number | null | undefined) => {
     if (atMs == null || !Number.isFinite(atMs)) return;
     const wakeMs = atMs + INHOUSE.LONG_POLL_CLOCK_GRACE_MS;
-    if (wakeMs > nowMs && wakeMs < next) next = wakeMs;
+    if (wakeMs > fromMs && wakeMs < next) next = wakeMs;
   };
   const ms = (at: Date | null | undefined) => (at ? at.getTime() : null);
 
@@ -89,5 +122,15 @@ export function inhouseRoomWakeAt(
     // Turning away (queuePresence: strictly more than the cutoff unseen).
     clock(q.lastSeenAt.getTime() + INHOUSE.QUEUE_AWAY_SECONDS * 1000 + 1);
   }
+  if (o.viewerId) {
+    for (const r of rows.recentResults ?? []) {
+      // The banner shows while completedAt >= now - LAST_RESULT_WINDOW_MS
+      // (buildInhouseState), so it is gone 1ms past the window.
+      if (r.completedAt && r.players.some((p) => p.userId === o.viewerId)) {
+        clock(r.completedAt.getTime() + INHOUSE.LAST_RESULT_WINDOW_MS + 1);
+      }
+    }
+  }
+  if (o.maintains) clock(o.boardRetryAtMs);
   return next === Infinity ? null : next;
 }

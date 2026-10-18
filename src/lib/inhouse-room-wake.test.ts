@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { inhouseDetectWindow } from "./inhouse";
-import { inhouseRoomDue, type InhouseRoomDueInput } from "./inhouse-room-due";
-import { inhouseRoomWakeAt } from "./inhouse-room-wake";
+import {
+  boardMemoAfterCheck,
+  boardMemoAfterLostClaim,
+  boardRetryAtMs,
+  inhouseRoomDue,
+  type InhouseRoomDueInput,
+} from "./inhouse-room-due";
+import { inhouseRoomWakeAt, type InhouseRoomWakeInput } from "./inhouse-room-wake";
 
 // When a held state request answers on its own (inhouse-room-wake.ts): each
 // clock is a boundary where the due check or the reply flips, so a request
@@ -35,7 +41,7 @@ const queued = (over: Partial<Queued> = {}): Queued => ({
   idleExpiresAt: new Date(NOW + 3 * HOUR),
   ...over,
 });
-const room = (over: Partial<InhouseRoomDueInput> = {}): InhouseRoomDueInput => ({
+const room = (over: Partial<InhouseRoomWakeInput> = {}): InhouseRoomWakeInput => ({
   queue: [],
   lobbies: [],
   pending: [],
@@ -169,5 +175,113 @@ describe("inhouseRoomWakeAt", () => {
       const wake = inhouseRoomWakeAt(rows, NOW, o);
       if (wake !== null) expect(wake).toBeGreaterThan(NOW);
     }
+  });
+});
+
+describe("inhouseRoomWakeAt from the reply the client shows", () => {
+  it("a clock that ran out after that reply answers at once (a wake at or before now)", () => {
+    // A played game's result window opened while the tab was hidden: the
+    // reply it shows predates "Game over", so it must not sit out a hold.
+    const createdAt = new Date(NOW - 20 * MIN);
+    const rows = room({ lobbies: [lobby({ status: INHOUSE_STATUS.READY, createdAt })] });
+    const opens = inhouseDetectWindow({
+      status: INHOUSE_STATUS.READY,
+      createdAtMs: createdAt.getTime(),
+      startedAtMs: null,
+    })!.opensAtMs;
+    expect(opens).toBeLessThan(NOW);
+    for (const o of [spectator, member]) {
+      const shownAt = opens - 30 * SEC;
+      const wake = inhouseRoomWakeAt(rows, NOW, { ...o, fromMs: shownAt });
+      expect(wake).toBe(opens + GRACE);
+      expect(wake).toBeLessThanOrEqual(NOW);
+      // A reply from after the window opened already shows it: no wake for it.
+      const after = inhouseRoomWakeAt(rows, NOW, { ...o, fromMs: opens + GRACE });
+      if (after !== null) expect(after).toBeGreaterThan(NOW);
+      // Without the shown reply's clock, only clocks still ahead count.
+      const ahead = inhouseRoomWakeAt(rows, NOW, o);
+      if (ahead !== null) expect(ahead).toBeGreaterThan(NOW);
+    }
+  });
+
+  it("each clock run out since the reply answers once: the next reply's clock is past it", () => {
+    const rows = room({
+      lobbies: [lobby({ status: INHOUSE_STATUS.CAPTAIN_VOTE, voteEndsAt: new Date(NOW - 3 * SEC) })],
+    });
+    expect(inhouseRoomWakeAt(rows, NOW, { ...spectator, fromMs: NOW - 10 * SEC })).toBe(
+      NOW - 3 * SEC + GRACE,
+    );
+    // The reply that answered carries a later `now`; the next request sends it.
+    expect(inhouseRoomWakeAt(rows, NOW + 50, { ...spectator, fromMs: NOW })).toBeNull();
+  });
+
+  it("a reply clock from the future counts from now, so it never hides a clock ahead", () => {
+    const rows = room({
+      lobbies: [lobby({ status: INHOUSE_STATUS.READY_CHECK, acceptEndsAt: new Date(NOW + 20 * SEC) })],
+    });
+    expect(inhouseRoomWakeAt(rows, NOW, { ...spectator, fromMs: NOW + HOUR })).toBe(
+      NOW + 20 * SEC + GRACE,
+    );
+  });
+
+  it("the viewer's post-game banner ends on a clock, for the viewer who played that game only", () => {
+    const completedAt = new Date(NOW - INHOUSE.LAST_RESULT_WINDOW_MS + 40 * SEC);
+    const rows = room({
+      recentResults: [{ completedAt, players: [{ userId: "me" }, { userId: "them" }] }],
+    });
+    const end = completedAt.getTime() + INHOUSE.LAST_RESULT_WINDOW_MS + 1;
+    expect(inhouseRoomWakeAt(rows, NOW, { ...member, viewerId: "me" })).toBe(end + GRACE);
+    // buildInhouseState's boundary: shown at the window's last ms, gone 1ms on.
+    expect(completedAt.getTime() >= end - 1 - INHOUSE.LAST_RESULT_WINDOW_MS).toBe(true);
+    expect(completedAt.getTime() >= end - INHOUSE.LAST_RESULT_WINDOW_MS).toBe(false);
+    // Nobody else's reply changes when it ends.
+    expect(inhouseRoomWakeAt(rows, NOW, { ...member, viewerId: "someone-else" })).toBeNull();
+    expect(inhouseRoomWakeAt(rows, NOW, spectator)).toBeNull();
+    // A result with no completedAt never counts.
+    expect(
+      inhouseRoomWakeAt(
+        room({ recentResults: [{ completedAt: null, players: [{ userId: "me" }] }] }),
+        NOW,
+        { ...member, viewerId: "me" },
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("a throttled board edit's retry", () => {
+  const key = "board-key";
+
+  it("is due BOARD_MIN_SECONDS after the throttled check, never inside a lost claim's back-off", () => {
+    const throttled = boardMemoAfterCheck(key, "throttled", NOW);
+    expect(boardRetryAtMs(throttled)).toBe(NOW + INHOUSE.BOARD_MIN_SECONDS * SEC);
+    const lostLate = boardMemoAfterLostClaim(throttled, NOW + INHOUSE.BOARD_MIN_SECONDS * SEC - 500);
+    expect(boardRetryAtMs(lostLate)).toBe(
+      NOW + INHOUSE.BOARD_MIN_SECONDS * SEC - 500 + INHOUSE.BOARD_CLAIM_BACKOFF_MS,
+    );
+    // Only a throttle: a failed edit waits on its own back-off (20s and up),
+    // and every settled outcome waits for the next change.
+    for (const outcome of ["failed", "edited", "unchanged", "off", "no-webhook", "cleared", "gone"] as const) {
+      expect(boardRetryAtMs(boardMemoAfterCheck(key, outcome, NOW))).toBeNull();
+    }
+    expect(boardRetryAtMs(null)).toBeNull();
+    expect(boardRetryAtMs(boardMemoAfterLostClaim(null, NOW))).toBeNull();
+  });
+
+  it("wakes a signed-in hold at the retry; a signed-out one never checks the board", () => {
+    // Two joins 4s apart: the second's board check came back throttled.
+    const rows = room({ queue: [queued(), queued({ lastSeenAt: new Date(NOW) })] });
+    const retryAt = boardRetryAtMs(boardMemoAfterCheck(key, "throttled", NOW - 4 * SEC))!;
+    expect(inhouseRoomWakeAt(rows, NOW, { ...member, boardRetryAtMs: retryAt })).toBe(
+      retryAt + GRACE,
+    );
+    // Well inside the 25s hold the request would otherwise sit out.
+    expect(retryAt + GRACE - NOW).toBeLessThan(INHOUSE.LONG_POLL_HOLD_MS);
+    expect(
+      inhouseRoomWakeAt(rows, NOW, { ...spectator, boardRetryAtMs: retryAt }),
+    ).toBeGreaterThan(NOW + INHOUSE.LONG_POLL_HOLD_MS);
+    // No retry pending: the queue's own clocks only.
+    expect(inhouseRoomWakeAt(rows, NOW, { ...member, boardRetryAtMs: null })).toBe(
+      inhouseRoomWakeAt(rows, NOW, spectator),
+    );
   });
 });

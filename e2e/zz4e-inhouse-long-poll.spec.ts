@@ -221,9 +221,22 @@ test("an action releases the held request and shows its outcome at once", async 
   const clickedAt = Date.now();
   await tab.page.getByRole("button", { name: /Join queue/ }).click();
   await expect(tab.page.getByRole("button", { name: /Leave queue/ })).toBeVisible({ timeout: 3_000 });
-  // The held request was released (it started before the action, so its
-  // reply would be dropped anyway) and a fresh one answered for the action.
-  await expect.poll(() => held.failed, { timeout: 3_000 }).toBe(true);
+  // The held request ended at once, either way round. The action's reply
+  // landed first: bumpPollRef released it. Or the hold woke on the join's
+  // own publish and its reply landed first, showing the join: the room
+  // applied it, which is just as current. Only the order of the two
+  // responses decides which, so the spec accepts both.
+  await expect
+    .poll(
+      () =>
+        held.failed ||
+        (held.end !== null &&
+          held.end >= clickedAt &&
+          !!held.queue?.some((q) => q.name === "LP Actor")),
+      { timeout: 3_000 },
+    )
+    .toBe(true);
+  // And a fresh request answered for the action.
   await expect
     .poll(() => tab.log.some((r) => r.start > clickedAt && r.end !== null && r.end - clickedAt < 3_000), {
       timeout: 5_000,

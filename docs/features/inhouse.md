@@ -147,16 +147,36 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   requests hold too and still only read. A client that went away gets a 204
   and no poll (`req.signal`).
   - **The hold (`holdInhouseRoomPoll`, `src/lib/inhouse-room-state.ts`)
-    reads only this instance's snapshot and writes nothing.** It ends at the
-    earliest of: the version moving, the room's next clock
-    (`inhouseRoomWakeAt`, `src/lib/inhouse-room-wake.ts`: accept, vote and
-    pick deadlines, the result window opening, the abandon floors, the
-    queue's idle reset and each player turning away, all plus
-    `LONG_POLL_CLOCK_GRACE_MS`), the hold, or the abort. A signed-in viewer
-    who finds work already due (another poll holds the 2s claim) is held at
-    most `LONG_POLL_DUE_RETRY_MS` (2.25s), so work nobody finished is retried
-    at a fast poll's pace. A new clock the room's reply or a resolver flips
-    on gets a clause there as well as in the automation gate.
+    reads only this instance's snapshot and board memo, and writes
+    nothing.** It ends at the earliest of: the version moving, the room's
+    next clock (`inhouseRoomWakeAt`, `src/lib/inhouse-room-wake.ts`: accept,
+    vote and pick deadlines, the result window opening, the abandon floors,
+    the queue's idle reset and each player turning away, the viewer's
+    post-game banner ending, `LAST_RESULT_WINDOW_MS` after the game, and for
+    a signed-in viewer a throttled board edit's retry, all plus
+    `LONG_POLL_CLOCK_GRACE_MS`), the hold, the process stopping, or the
+    abort. A signed-in viewer who finds work already due (another poll holds
+    the 2s claim) is held at most `LONG_POLL_DUE_RETRY_MS` (2.25s), so work
+    nobody finished is retried at a fast poll's pace. A new clock the room's
+    reply or a resolver flips on gets a clause there as well as in the
+    automation gate.
+  - **Clocks count from the reply the client shows, not from the hold.**
+    The request sends that reply's `now` as `sinceNow` (`parseInhouseHold`
+    clamps it to the last two holds, and to now); a clock that ran out
+    after it answers at once, since that reply is already stale. That is a
+    tab back from a hide, a request after a 429's back-off or a resumed
+    tab, whose reply predates a deadline or a result window. Each such
+    clock answers once: the next request sends the newer reply's `now`.
+  - **A stopping process answers every hold at once.** `next start` handles
+    SIGTERM by closing the server and waiting for every request in flight,
+    so a slot stopped while it holds viewers (a rollback right after a
+    promote, a restart of the live slot) would wait out a hold, up to 25s.
+    The first hold in a process installs one SIGTERM listener beside Next's
+    own, never at module load (a SIGTERM listener turns off Node's default
+    exit; where nothing else listens it hands the signal back, so a script
+    or a test worker still exits). It settles every waiter as a deadline,
+    so each answers through the ordinary poll, and a new hold answers at
+    once from then on.
   - **The waiter registry is one per process, on `globalThis`**
     (`src/lib/inhouse-room-wait.ts`, a leaf), with the snapshot's publish
     count: a `next start` process loads `src/lib` twice (route handlers in
@@ -186,17 +206,23 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   - **Tests:** `src/lib/inhouse-room-wait.test.ts` (the registry: publish,
     coalescing, the watch, abort, deadlines, the jitter's bounds and its
     wait, the mark's two counts, two module instances sharing it and a
-    per-module copy missing it), `inhouse-room-version.test.ts` (the publish
+    per-module copy missing it, the stop: every hold and every new one
+    answered, one listener per process from the first hold, and a child
+    process stopped beside a server's own handler and without one, and the
+    `sinceNow` clamp), `inhouse-room-version.test.ts` (the publish
     wakes held requests only after its statement, and a publish already
     running at the route's read still wakes promptly; deleting the wake call
     or the `landed` count fails them),
-    `inhouse-room-wake.test.ts` (each clock against `inhouseRoomDue`),
-    `src/app/api/inhouse/route.test.ts` (hold, re-read, abort) and
+    `inhouse-room-wake.test.ts` (each clock against `inhouseRoomDue`, the
+    shown reply's clock, the banner and the board retry),
+    `src/app/api/inhouse/route.test.ts` (hold, re-read, abort, `held`, the
+    `sinceNow` clamp) and
     `test/integration/inhouse-room-longpoll.itest.ts` (through the real
     route: a join, a server action in another module instance and a version
     moved elsewhere each answering a held request well under a second, the
     clock and the claim retry, a signed-out hold that never retries due
-    work, an abort, and about one request per change plus one per hold).
+    work, a clock run out since the shown reply, the board retry, `held`, an
+    abort, and about one request per change plus one per hold).
     A second PROCESS in an itest is a module graph loaded through
     `loadAsAnotherProcessForTests` (`inhouse-room-wait.ts`); a plain
     `vi.resetModules()` graph shares this process's registry and publish
@@ -217,6 +243,11 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     instance's: the room version (a digest of the board input while none
     exists) plus the present ids and the away count, so a presence flip no
     write made still repaints.
+  - **A throttled edit wakes the signed-in holds when it can get through**
+    (`boardRetryAtMs`: `BOARD_MIN_SECONDS` after the check, never inside a
+    lost claim's back-off; at most one wake per 10s per viewer until it
+    lands), as the ladder's next poll used to retry it. A `failed` edit
+    waits for the hold's end: its own back-off is 20s and up.
   - **A lost claim backs this instance off for `BOARD_CLAIM_BACKOFF_MS`
     (2s).** Signed-out polls never check. Don't make every poll sync the
     board to "fix" this.
@@ -225,8 +256,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   `void`, `remove`. The body must be a JSON
   object with a non-empty string `action`, else 400. Lobby actions carry the
   `lobbyId` the room showed. `state` takes an optional `since` (a reply's
-  `roomVersion`, at most 64 characters) and `holdMs`, and its replies carry
-  `roomVersion`; mutation replies carry none. `state` allows 1,200/min
+  `roomVersion`, at most 64 characters), `holdMs` and `sinceNow` (the shown
+  reply's `now`), and its replies carry `roomVersion` and `held` (whether
+  this request was held); mutation replies carry neither. `state` allows 1,200/min
   per IP (a held request counts once); mutations 300/min per signed-in user
   (signed-out attempts are IP-limited, then 401), in a separate bucket so
   poll back-pressure never eats an action allowance.
@@ -914,7 +946,9 @@ Every transition is a guarded claim; keep it that way (general rules:
 
 - **The room long-polls; cadence comes only from pure `inhouseLongPoll`,
   `inhousePollDelay` and `inhousePollCadence`** (`src/lib/room-poll.ts`,
-  sharing `roomPollCadence` with the draft room). A source guard fails if an
+  sharing `roomPollCadence` with the draft room; the long-poll's back-off
+  and refocus rules are `inhouseUnheldStreak`, `inhouseLongPollGapMs` and
+  `inhouseRefocusResync` there too). A source guard fails if an
   `INHOUSE.POLL_*` rate or an `INHOUSE.LONG_POLL_*` value reappears in the
   room, and pins the wiring below.
   - **Every request is CPU on the one box both leagues share,** with the
@@ -922,8 +956,9 @@ Every transition is a guarded claim; keep it that way (general rules:
     and the lobby bot: about 15-25 ms of box CPU each across Node, Postgres,
     Caddy and the tunnel (2026-10-18), not the 1.6-1.9 ms Node-only figure in
     the 2026-10-12 row. So the room asks once per change, not once per tick:
-    polling everyone every 1-2s would cost a tenth to a quarter of the vCPU
-    through an evening (`docs/DECISIONS.md`).
+    polling everyone every 1-2s would cost roughly 9-33% of the vCPU through
+    an evening, against about 1.6-2.7% for a real evening's room requests,
+    both at 15-25 ms (`docs/DECISIONS.md`).
   - **The long-poll:** each request sends back the `roomVersion` of the last
     poll reply `apply()` took (`since`), with the hold it can wait:
     `LONG_POLL_TIMED_HOLD_MS` (10s) for a member in their own game's clocked
@@ -932,7 +967,16 @@ Every transition is a guarded claim; keep it that way (general rules:
     leaves straight from the reply's continuation (`reissue()`, no timer for
     a hidden tab to clamp, so a hidden queued tab's chime and title arrive
     with the change), never sooner than `LONG_POLL_MIN_GAP_MS` (1s) after
-    the previous one started, so a moving version can't hot-loop.
+    the previous one started, so a moving version can't hot-loop. It also
+    sends the shown reply's `now` (`sinceNow`).
+  - **A version that never stops moving backs the gap off.** Every publish
+    wakes every held tab, refused and no-op mutations included, so one
+    account's churn would hold every visible tab at one request a second.
+    From the second reply in a row that comes back unheld (`held: false`,
+    counted by `inhouseUnheldStreak`) the gap doubles per reply up to the
+    ladder rate of the phase (`inhouseLongPollGapMs`), and a held reply puts
+    it back to 1s; a member's own clocked stage keeps 1s. A churned request
+    is never held, so no server-side floor on wakes would bind it.
   - **A dead connection shows later while held (accepted, 2026-10-18).**
     `usePollHealth` locks the room and says "Connection lost" at
     `ROOM_POLL_FAIL_THRESHOLD` (3) failures in a row, and a request that
@@ -940,7 +984,8 @@ Every transition is a guarded claim; keep it that way (general rules:
     clocked stage and 58s elsewhere (the held request's hold plus 10s, then
     two unheld retries at 1.5s plus 10s each), against about 34.5s and
     36-43s on the ladder. The shorter clocked hold starts the fast retries
-    15s sooner where a clock runs. Neither path is inside the 25s vote; a
+    15s sooner where a clock runs, and a refocus after a long hide asks
+    afresh (below). Neither path is inside the 25s vote; a
     click on a dead connection locks the room on its own once the action
     times out (`ROOM_ACTION_TIMEOUT_MS`, 15s: "checking", never "failed").
     `room-poll.test.ts` states the numbers; change them only with the
@@ -949,13 +994,23 @@ Every transition is a guarded claim; keep it that way (general rules:
     when the last reply carried no version (the first request, or an old
     slot during a release), after a failure, and while something waits on
     it (`urgent`): a resync after going offline, an action in flight
-    (`actionsInFlightRef`) or awaiting reconciliation. Those controls stay
-    locked until a reply lands, so it must not be held.
-  - **An action, an offline/online change and unmounting release a held
-    request** (`releaseHold`: its controller, linked to the
-    `AbortSignal.timeout`; `AbortSignal.any` is missing on older Safari). It
-    started before the action, so request-start ordering would drop its
-    reply anyway. A release is not a failure; the rerun latch polls next.
+    (`actionsInFlightRef`) or awaiting reconciliation, whose controls stay
+    locked until a reply lands, or a refocus after a long hide
+    (`refocusPending`).
+  - **An action, an offline/online change, a refocus after a long hide and
+    unmounting release a held request** (`releaseHold`: its controller,
+    linked to the `AbortSignal.timeout`; `AbortSignal.any` is missing on
+    older Safari). After an action, request-start ordering drops that
+    request's reply only if the action's reply lands first; a held reply
+    woken by the action's own publish can land first and is applied, which
+    is harmless (it was read after the commit). A release is not a failure;
+    the rerun latch polls next.
+  - **A tab back from a hide of `ROOM_POLL_TIMEOUT_MS` (10s) or more asks
+    afresh, unheld, once** (`inhouseRefocusResync`): a held request may
+    have died silently with its connection while the device slept, and its
+    own deadline is up to its hold plus 10s away. The room releases it, and
+    `refocusPending` keeps the next request unheld until a reply is
+    applied. A quick alt-tab costs nothing.
 - **The fallback ladder** (`inhousePollCadence`; rates retuned for the box on
   2026-10-18, before them the Vercel Hobby rates): fast (`pollMs`, 1500)
   only for the clocked stages: ready check, vote and draft. Game setup
@@ -980,13 +1035,15 @@ Every transition is a guarded claim; keep it that way (general rules:
     disconnected room's backoff starts from the same 10s, never faster than
     idling. Offline sends nothing.
   - Reschedule from live visibility (refocus mid-fetch snaps back);
-    `visibilitychange → visible` polls at once (a held request in flight is
-    already current); a successful `act()` nudges the loop (`bumpPollRef`)
-    so the action's outcome lands within ~250ms.
+    `visibilitychange → visible` polls at once (a held request in flight
+    after a short hide stays: it is current while its connection lives); a
+    successful `act()` nudges the loop (`bumpPollRef`) so the action's
+    outcome lands within ~250ms.
   - **e2e:** `e2e/zz4e-inhouse-long-poll.spec.ts` (a change in every tab
     within about a second, signed in or out; an idle tab at about one
-    request per hold; offline and actions releasing the hold; a reply with
-    no version on the ladder, never a loop). The poll-resilience specs
+    request per hold; offline releasing the hold; an action's outcome at
+    once, whichever of the held reply and the action's reply lands first; a
+    reply with no version on the ladder, never a loop). The poll-resilience specs
     (`e2e/zz3-room-poll-resilience.spec.ts`) that hold a short poll run on
     the ladder by stripping `roomVersion`, as an old slot answers;
     `e2e/zz4d-inhouse-room-snapshot.spec.ts` publishes through

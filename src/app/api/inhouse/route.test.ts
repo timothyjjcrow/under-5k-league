@@ -156,8 +156,9 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    // The state, plus the version a long-poll sends back.
-    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION });
+    // The state, plus the version a long-poll sends back, and that this
+    // request was not held.
+    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION, held: false });
     expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
     expect(mocks.rateLimit).toHaveBeenCalledWith(
       "inhouse:state:ip:203.0.113.10",
@@ -295,7 +296,7 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION });
+    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION, held: false });
     expect(mocks.getSessionUser).toHaveBeenCalledOnce();
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
     // Maintenance is the poll's call, never the route's own.
@@ -331,7 +332,7 @@ describe("POST /api/inhouse request boundary", () => {
     }
   });
 
-  it("answers at once when the client is behind the room", async () => {
+  it("answers at once when the client is behind the room, and says it was not held", async () => {
     const response = await POST(
       request({ action: "state", since: "an-older-version", holdMs: 25_000 }),
     );
@@ -339,7 +340,11 @@ describe("POST /api/inhouse request boundary", () => {
     expect(response.status).toBe(200);
     expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
-    expect((await response.json()).roomVersion).toBe(VERSION);
+    const json = await response.json();
+    expect(json.roomVersion).toBe(VERSION);
+    // The client counts these to back off from a version that keeps moving
+    // (inhouseUnheldStreak, inhouseLongPollGapMs).
+    expect(json.held).toBe(false);
   });
 
   it("holds a request whose client shows the version, then authorizes and reads again", async () => {
@@ -370,7 +375,8 @@ describe("POST /api/inhouse request boundary", () => {
       return { state, invalidateGate: false };
     });
 
-    const req = request({ action: "state", since: VERSION, holdMs: 10_000 });
+    const shownAt = Date.now() - 4_000;
+    const req = request({ action: "state", since: VERSION, sinceNow: shownAt, holdMs: 10_000 });
     const response = await POST(req);
 
     expect(response.status).toBe(200);
@@ -378,15 +384,17 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledWith({
       viewer: user,
       version: VERSION,
-      hold: { since: VERSION, holdMs: 10_000 },
+      // The shown reply's clock goes to the hold, which answers at once for
+      // a room clock that ran out since (inhouseRoomWakeAt's fromMs).
+      hold: { since: VERSION, holdMs: 10_000, sinceNowMs: shownAt },
       mark: 7,
       signal: req.signal,
     });
     // The poll runs as the session and on the version read AFTER the hold,
-    // and the reply names that version.
+    // and the reply names that version, and that it was held.
     expect(mocks.getSessionUser).toHaveBeenCalledTimes(2);
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(later, "room-version-2");
-    expect(await response.json()).toEqual({ ...state, roomVersion: "room-version-2" });
+    expect(await response.json()).toEqual({ ...state, roomVersion: "room-version-2", held: true });
     // Held or not, a state request never publishes.
     expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
   });
@@ -400,12 +408,34 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledWith(
       expect.objectContaining({
         viewer: null,
-        hold: { since: VERSION, holdMs: 25_000 },
+        hold: { since: VERSION, holdMs: 25_000, sinceNowMs: expect.any(Number) },
       }),
     );
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(null, VERSION);
     expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("clamps the shown reply's clock to the last two holds, and to now", async () => {
+    const at = Date.now();
+    for (const [sinceNow, expected] of [
+      // A clock from long ago counts from two holds back: at worst it
+      // answers at once, which leaving out `since` does anyway.
+      [at - 10 * 60_000, [at - 2 * 25_000, Date.now() - 2 * 25_000 + 1_000]],
+      // A clock from the future (a forged one) counts from now: it can never
+      // make a hold skip a clock still ahead.
+      [at + 60_000, [at, Date.now() + 1_000]],
+      // Missing or unreadable: now, as before.
+      [undefined, [at, Date.now() + 1_000]],
+      ["soon", [at, Date.now() + 1_000]],
+    ] as const) {
+      vi.clearAllMocks();
+      mocks.holdInhouseRoomPoll.mockResolvedValue("deadline");
+      await POST(request({ action: "state", since: VERSION, sinceNow }));
+      const { sinceNowMs } = mocks.holdInhouseRoomPoll.mock.calls[0][0].hold;
+      expect(sinceNowMs).toBeGreaterThanOrEqual(expected[0]);
+      expect(sinceNowMs).toBeLessThanOrEqual(expected[1]);
+    }
   });
 
   it("holds on a database with no version yet, under its token", async () => {

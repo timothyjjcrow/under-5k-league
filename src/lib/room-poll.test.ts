@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   draftPollCadence,
   inhouseLongPoll,
+  inhouseLongPollGapMs,
   inhousePollCadence,
   inhousePollDelay,
+  inhouseRefocusResync,
+  inhouseUnheldStreak,
 } from "./room-poll";
 import {
   DEFAULTS,
@@ -322,9 +325,19 @@ describe("inhouseLongPoll", () => {
     }
     expect(inhouseLongPoll({ ...calm, lobbyStatus: null })).toEqual({
       since: V,
+      sinceNow: null,
       holdMs: INHOUSE.LONG_POLL_HOLD_MS,
       timeoutMs: INHOUSE.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
     });
+  });
+
+  it("sends the server clock of the reply it shows, so a clock run out since answers at once", () => {
+    const shown = Date.UTC(2026, 9, 18, 20, 0, 0);
+    expect(inhouseLongPoll({ ...calm, serverNow: shown })?.sinceNow).toBe(shown);
+    // Unknown is sent as unknown; the server then counts from its own now.
+    for (const serverNow of [null, undefined, Number.NaN]) {
+      expect(inhouseLongPoll({ ...calm, serverNow })?.sinceNow).toBeNull();
+    }
   });
 
   it("answers at once while something waits on the reply", () => {
@@ -483,6 +496,132 @@ describe("inhousePollDelay", () => {
         inhousePollCadence(o).delayMs,
       );
     }
+  });
+});
+
+describe("the long-poll's back-off from a version that never stops moving", () => {
+  const FAST = 1500;
+  const MIN = INHOUSE.LONG_POLL_MIN_GAP_MS;
+  const visible = { activeMs: FAST, reached: true, hidden: false };
+  const queued = { ...visible, hasStake: true, lobbyStatus: null };
+  const spectator = { ...visible, hasStake: false, lobbyStatus: null };
+
+  it("counts unheld long-poll replies in a row, and a held one resets the count", () => {
+    let streak = 0;
+    for (let i = 1; i <= 3; i++) {
+      streak = inhouseUnheldStreak(streak, { askedHold: true, held: false });
+      expect(streak).toBe(i);
+    }
+    expect(inhouseUnheldStreak(streak, { askedHold: true, held: true })).toBe(0);
+    // A request that asked for no hold, or a reply that doesn't say (an old
+    // slot), is no news about the room's pace.
+    expect(inhouseUnheldStreak(3, { askedHold: false, held: false })).toBe(3);
+    expect(inhouseUnheldStreak(3, { askedHold: false, held: true })).toBe(3);
+    for (const held of [undefined, null, "false", 0]) {
+      expect(inhouseUnheldStreak(3, { askedHold: true, held })).toBe(3);
+    }
+  });
+
+  it("keeps the 1s gap for the first unheld reply: one race with a change is normal", () => {
+    for (const unheldStreak of [undefined, 0, 1, -3]) {
+      expect(inhouseLongPollGapMs({ ...queued, unheldStreak })).toBe(MIN);
+    }
+  });
+
+  it("doubles the gap per unheld reply from the second, up to the ladder rate of the phase", () => {
+    // Queued: the ladder polls every POLL_QUEUE_MS (3s).
+    expect(inhouseLongPollGapMs({ ...queued, unheldStreak: 2 })).toBe(2 * MIN);
+    expect(inhouseLongPollGapMs({ ...queued, unheldStreak: 3 })).toBe(
+      Math.min(4 * MIN, INHOUSE.POLL_QUEUE_MS),
+    );
+    // A spectator climbs further, to POLL_IDLE_MS (10s).
+    const climb = [2, 3, 4, 5, 6, 30].map((unheldStreak) =>
+      inhouseLongPollGapMs({ ...spectator, unheldStreak }),
+    );
+    expect(climb).toEqual([2, 4, 8, 10, 10, 10].map((s) => Math.min(s * MIN, INHOUSE.POLL_IDLE_MS)));
+    // In every phase the ceiling is exactly the ladder's rate there: churn
+    // costs no more than the ladder did, and never less than the 1s gap.
+    for (const o of [
+      queued,
+      spectator,
+      { ...queued, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS, inLobby: true },
+      { ...queued, lobbyStatus: INHOUSE_STATUS.READY, inLobby: true },
+      { ...queued, hidden: true },
+      { ...queued, hidden: true, lobbyStatus: INHOUSE_STATUS.IN_PROGRESS, inLobby: true },
+      { ...queued, lobbyStatus: INHOUSE_STATUS.DRAFTING, inLobby: false },
+    ]) {
+      const ladder = inhousePollCadence(o).delayMs;
+      expect(inhouseLongPollGapMs({ ...o, unheldStreak: 50 })).toBe(Math.max(MIN, ladder));
+    }
+  });
+
+  it("a member's own clocked stage keeps its speed under churn", () => {
+    for (const lobbyStatus of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+    ]) {
+      for (const inLobby of [true, undefined]) {
+        expect(
+          inhouseLongPollGapMs({ ...queued, lobbyStatus, inLobby, unheldStreak: 9 }),
+        ).toBe(MIN);
+      }
+    }
+  });
+
+  it("inhousePollDelay waits out the longer gap from the previous request's start", () => {
+    const o = { ...spectator, longPoll: true, unheldStreak: 3 };
+    const gap = inhouseLongPollGapMs(o);
+    expect(gap).toBe(4 * MIN);
+    for (const startedAgoMs of [0, 30, 1_000, 3_999]) {
+      expect(inhousePollDelay({ ...o, startedAgoMs })).toBe(gap - startedAgoMs);
+    }
+    expect(inhousePollDelay({ ...o, startedAgoMs: gap })).toBe(0);
+  });
+
+  it("a churning room settles at the ladder's request rate, and a held reply brings the 1s gap back", () => {
+    // One writer moves the version faster than any request can be held, as
+    // no-op mutations at the route's 300 a minute do. Each request is
+    // answered at once (about 20 ms) with held: false.
+    const simulate = (o: typeof spectator, n: number) => {
+      let streak = 0;
+      let t = 0;
+      const starts: number[] = [];
+      for (let i = 0; i < n; i++) {
+        starts.push(t);
+        streak = inhouseUnheldStreak(streak, { askedHold: true, held: false });
+        t += 20 + inhousePollDelay({ ...o, longPoll: true, startedAgoMs: 20, unheldStreak: streak });
+      }
+      return { starts, streak };
+    };
+    for (const o of [spectator, queued]) {
+      const { starts, streak } = simulate(o, 40);
+      const ladder = inhousePollCadence(o).delayMs;
+      const lastGap = starts[starts.length - 1] - starts[starts.length - 2];
+      expect(lastGap).toBe(ladder);
+      // Over the run: within a few requests of what the ladder would send,
+      // where the bare 1s gap would have sent one a second.
+      const span = starts[starts.length - 1];
+      expect(starts.length).toBeLessThanOrEqual(Math.ceil(span / ladder) + 4);
+      expect(span / starts.length).toBeGreaterThan(2 * MIN);
+      expect(inhouseUnheldStreak(streak, { askedHold: true, held: true })).toBe(0);
+      expect(inhouseLongPollGapMs({ ...o, unheldStreak: 0 })).toBe(MIN);
+    }
+  });
+});
+
+describe("inhouseRefocusResync", () => {
+  it("asks afresh, unheld, only after a hide long enough to hide a dead connection", () => {
+    expect(inhouseRefocusResync(null)).toBe(false);
+    expect(inhouseRefocusResync(0)).toBe(false);
+    expect(inhouseRefocusResync(ROOM_POLL_TIMEOUT_MS - 1)).toBe(false);
+    expect(inhouseRefocusResync(ROOM_POLL_TIMEOUT_MS)).toBe(true);
+    expect(inhouseRefocusResync(8 * 3_600_000)).toBe(true);
+    // A held request's own deadline is its hold plus ROOM_POLL_TIMEOUT_MS,
+    // so a refocus inside that window is where the release pays.
+    expect(ROOM_POLL_TIMEOUT_MS).toBeLessThan(
+      INHOUSE.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
+    );
   });
 });
 
