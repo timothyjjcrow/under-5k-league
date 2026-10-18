@@ -4,6 +4,7 @@ import { resetInhouseRoomPollForTests } from "@/lib/inhouse-room-memo";
 import { resetInhouseRoomCacheForTests } from "@/lib/inhouse-room-cache";
 import { resetLobbyBotStatusCacheForTests } from "@/lib/lobby-bot-status-cache";
 import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
+import { resetInhouseRoomWaitersForTests } from "@/lib/inhouse-room-wait";
 import { ensureSqlitePartialUniqueIndexes, resetDb } from "./factories";
 
 // Every integration test starts from an empty database.
@@ -21,6 +22,8 @@ beforeEach(async () => {
   resetInhouseRoomCacheForTests();
   // The bot status cache would serve one test's stubbed bot to the next.
   resetLobbyBotStatusCacheForTests();
+  // …and any long-poll a test left held, with its timers.
+  resetInhouseRoomWaitersForTests();
 });
 
 afterAll(async () => {

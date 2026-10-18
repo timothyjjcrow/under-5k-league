@@ -121,12 +121,16 @@ more, so a writer that skips Rule P still shows stale rows.
   beforeHeartbeat` sits between the heartbeat decision and
   `touchQueueHeartbeat`: a rival heartbeat writes a distinctive time, and the
   WHERE must refuse to overwrite it. Assert `fired` on both.
-- **Test a second instance with a second module graph.** `vi.resetModules()`
-  then a dynamic `import()` of the route (or `inhouse-room-version.ts`) gives
-  its own snapshot and local publish count over the same database. Warm both,
-  write through one, and the other's next poll must show it
-  (`test/integration/inhouse-room-cache.itest.ts`). A one-instance test passes
-  with the version check deleted, since the local fence alone catches it.
+- **Test a second process with a second module graph loaded through
+  `loadAsAnotherProcessForTests`** (`src/lib/inhouse-room-wait.ts`): inside
+  it, `vi.resetModules()` then a dynamic `import()` of the route (or
+  `inhouse-room-version.ts`) gives its own snapshot and its own publish count
+  over the same database. Warm both, write through one, and the other's next
+  poll must show it (`test/integration/inhouse-room-cache.itest.ts`). A plain
+  `vi.resetModules()` graph is NOT another process: the publish count lives
+  on `globalThis`, so it shares this process's local fence (as a `next start`
+  process's route handlers and server actions do), and like a one-instance
+  test it passes with the version check deleted.
 - **Test the provider window from inside the stub.** Stub the Discord and
   OpenDota transports and, in the stub, assert `readInhouseRoomVersion()`
   already differs from the version taken before the writer ran.

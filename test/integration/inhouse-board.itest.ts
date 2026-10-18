@@ -717,7 +717,9 @@ describe("inhouse board — failure handling", () => {
       SETTING_KEYS.INHOUSE_BOARD_AT,
       new Date(Date.now() - 15_000).toISOString(),
     );
-    await syncInhouseBoard();
+    // Still failing, not a cooldown: "failed", so the room's held requests
+    // wait out their hold instead of waking every 10s through an outage.
+    expect(await syncInhouseBoard()).toBe("failed");
     expect(mockPatch).toHaveBeenCalledTimes(1);
 
     await setSetting(

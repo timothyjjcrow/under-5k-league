@@ -23,8 +23,11 @@ const mocks = vi.hoisted(() => ({
   voidLastResult: vi.fn(),
   removeFromQueue: vi.fn(),
   pollInhouseState: vi.fn(),
+  holdInhouseRoomPoll: vi.fn(),
   readInhouseRoomVersion: vi.fn(),
   publishInhouseRoomChange: vi.fn(),
+  inhouseRoomHoldMark: vi.fn(),
+  inhouseRoomShuttingDown: vi.fn(() => false),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -55,10 +58,18 @@ vi.mock("@/lib/inhouse-service", () => ({
 }));
 vi.mock("@/lib/inhouse-room-state", () => ({
   pollInhouseState: mocks.pollInhouseState,
+  holdInhouseRoomPoll: mocks.holdInhouseRoomPoll,
+}));
+vi.mock("@/lib/inhouse-room-wait", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/inhouse-room-wait")>()),
+  inhouseRoomShuttingDown: mocks.inhouseRoomShuttingDown,
 }));
 vi.mock("@/lib/inhouse-room-version", () => ({
   readInhouseRoomVersion: mocks.readInhouseRoomVersion,
   publishInhouseRoomChange: mocks.publishInhouseRoomChange,
+  inhouseRoomHoldMark: mocks.inhouseRoomHoldMark,
+  // The real token rule: a missing row is "none".
+  inhouseRoomVersionToken: (version: string | null) => version ?? "none",
 }));
 
 import { POST } from "./route";
@@ -117,6 +128,8 @@ beforeEach(() => {
   mocks.getInhouseState.mockResolvedValue(state);
   mocks.readInhouseRoomVersion.mockResolvedValue(VERSION);
   mocks.publishInhouseRoomChange.mockResolvedValue(undefined);
+  mocks.inhouseRoomHoldMark.mockReturnValue(7);
+  mocks.holdInhouseRoomPoll.mockResolvedValue("changed");
   for (const action of actionMocks) action.mockResolvedValue({ ok: true });
 });
 
@@ -148,7 +161,10 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(state);
+    // The state, plus the version a long-poll sends back, and that this
+    // request was not held.
+    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION, held: false });
+    expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
     expect(mocks.rateLimit).toHaveBeenCalledWith(
       "inhouse:state:ip:203.0.113.10",
       { limit: 1200, windowMs: 60_000 },
@@ -285,7 +301,7 @@ describe("POST /api/inhouse request boundary", () => {
     const response = await POST(request({ action: "state" }));
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual(state);
+    expect(await response.json()).toEqual({ ...state, roomVersion: VERSION, held: false });
     expect(mocks.getSessionUser).toHaveBeenCalledOnce();
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
     // Maintenance is the poll's call, never the route's own.
@@ -303,6 +319,148 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
     expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
+  });
+
+  it("answers a request without `since` at once, as every poll was before", async () => {
+    for (const body of [
+      { action: "state" },
+      { action: "state", since: 7 },
+      { action: "state", since: "" },
+      { action: "state", since: "x".repeat(65) },
+    ]) {
+      vi.clearAllMocks();
+      const response = await POST(request(body));
+      expect(response.status).toBe(200);
+      expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
+      expect(mocks.getSessionUser).toHaveBeenCalledOnce();
+      expect(mocks.pollInhouseState).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("answers at once when the client is behind the room, and says it was not held", async () => {
+    const response = await POST(
+      request({ action: "state", since: "an-older-version", holdMs: 25_000 }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(user, VERSION);
+    const json = await response.json();
+    expect(json.roomVersion).toBe(VERSION);
+    // The client counts these to back off from a version that keeps moving
+    // (inhouseUnheldStreak, inhouseLongPollGapMs).
+    expect(json.held).toBe(false);
+  });
+
+  it("holds a request whose client shows the version, then authorizes and reads again", async () => {
+    const order: string[] = [];
+    mocks.inhouseRoomHoldMark.mockImplementation(() => {
+      order.push("mark");
+      return 7;
+    });
+    mocks.readInhouseRoomVersion
+      .mockImplementationOnce(async () => {
+        order.push("version");
+        return VERSION;
+      })
+      .mockImplementationOnce(async () => {
+        order.push("version again");
+        return "room-version-2";
+      });
+    const later = { ...user, role: "ADMIN" };
+    mocks.getSessionUser
+      .mockImplementationOnce(async () => user)
+      .mockImplementationOnce(async () => later);
+    mocks.holdInhouseRoomPoll.mockImplementation(async () => {
+      order.push("hold");
+      return "changed";
+    });
+    mocks.pollInhouseState.mockImplementation(async () => {
+      order.push("poll");
+      return { state, invalidateGate: false };
+    });
+
+    const shownAt = Date.now() - 4_000;
+    const req = request({ action: "state", since: VERSION, sinceNow: shownAt, holdMs: 10_000 });
+    const response = await POST(req);
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["mark", "version", "hold", "version again", "poll"]);
+    expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledWith({
+      viewer: user,
+      version: VERSION,
+      // The shown reply's clock goes to the hold, which answers at once for
+      // a room clock that ran out since (inhouseRoomWakeAt's fromMs).
+      hold: { since: VERSION, holdMs: 10_000, sinceNowMs: shownAt },
+      mark: 7,
+      signal: req.signal,
+    });
+    // The poll runs as the session and on the version read AFTER the hold,
+    // and the reply names that version, and that it was held.
+    expect(mocks.getSessionUser).toHaveBeenCalledTimes(2);
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(later, "room-version-2");
+    expect(await response.json()).toEqual({ ...state, roomVersion: "room-version-2", held: true });
+    // Held or not, a state request never publishes.
+    expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
+  });
+
+  it("holds a signed-out spectator too, who still only reads", async () => {
+    mocks.getSessionUser.mockResolvedValue(null);
+
+    const response = await POST(request({ action: "state", since: VERSION }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        viewer: null,
+        hold: { since: VERSION, holdMs: 25_000, sinceNowMs: expect.any(Number) },
+      }),
+    );
+    expect(mocks.pollInhouseState).toHaveBeenCalledWith(null, VERSION);
+    expect(mocks.publishInhouseRoomChange).not.toHaveBeenCalled();
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("clamps the shown reply's clock to the last two holds, and to now", async () => {
+    const at = Date.now();
+    for (const [sinceNow, expected] of [
+      // A clock from long ago counts from two holds back: at worst it
+      // answers at once, which leaving out `since` does anyway.
+      [at - 10 * 60_000, [at - 2 * 25_000, Date.now() - 2 * 25_000 + 1_000]],
+      // A clock from the future (a forged one) counts from now: it can never
+      // make a hold skip a clock still ahead.
+      [at + 60_000, [at, Date.now() + 1_000]],
+      // Missing or unreadable: now, as before.
+      [undefined, [at, Date.now() + 1_000]],
+      ["soon", [at, Date.now() + 1_000]],
+    ] as const) {
+      vi.clearAllMocks();
+      mocks.holdInhouseRoomPoll.mockResolvedValue("deadline");
+      await POST(request({ action: "state", since: VERSION, sinceNow }));
+      const { sinceNowMs } = mocks.holdInhouseRoomPoll.mock.calls[0][0].hold;
+      expect(sinceNowMs).toBeGreaterThanOrEqual(expected[0]);
+      expect(sinceNowMs).toBeLessThanOrEqual(expected[1]);
+    }
+  });
+
+  it("holds on a database with no version yet, under its token", async () => {
+    mocks.readInhouseRoomVersion.mockResolvedValue(null);
+
+    const response = await POST(request({ action: "state", since: "none" }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdInhouseRoomPoll).toHaveBeenCalledOnce();
+    expect((await response.json()).roomVersion).toBe("none");
+  });
+
+  it("does no poll for a client that went away during the hold", async () => {
+    mocks.holdInhouseRoomPoll.mockResolvedValue("aborted");
+
+    const response = await POST(request({ action: "state", since: VERSION }));
+
+    expect(response.status).toBe(204);
+    expect(mocks.pollInhouseState).not.toHaveBeenCalled();
+    expect(mocks.readInhouseRoomVersion).toHaveBeenCalledOnce();
   });
 
   it("passes a failed poll through without expiring the gate itself", async () => {
@@ -540,5 +698,32 @@ describe("POST /api/inhouse request boundary", () => {
     expect((await response.json()).error).toMatch(/unknown action/i);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+});
+
+describe("a stopping process", () => {
+  beforeEach(() => {
+    mocks.getSessionUser.mockResolvedValue(user);
+    mocks.clientIp.mockReturnValue("203.0.113.9");
+    mocks.rateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
+    mocks.inhouseRoomHoldMark.mockReturnValue(0);
+    mocks.readInhouseRoomVersion.mockResolvedValue(VERSION);
+    mocks.pollInhouseState.mockResolvedValue({ state, invalidateGate: false });
+    mocks.holdInhouseRoomPoll.mockReset();
+  });
+
+  // SIGTERM answers every hold at once, but Caddy keeps sending a slot it
+  // still routes to new requests on open connections: those must read as
+  // unheld, or every tab re-polls once a second until the slot exits.
+  it("answers a current `since` at once and says it was not held", async () => {
+    mocks.inhouseRoomShuttingDown.mockReturnValue(true);
+    try {
+      const response = await POST(request({ action: "state", since: VERSION, holdMs: 25_000 }));
+      expect(response.status).toBe(200);
+      expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
+      expect((await response.json()).held).toBe(false);
+    } finally {
+      mocks.inhouseRoomShuttingDown.mockReturnValue(false);
+    }
   });
 });

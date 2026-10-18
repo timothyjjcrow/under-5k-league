@@ -24,11 +24,20 @@ import {
   setInhouseRoles,
   startGame,
 } from "@/lib/inhouse-service";
-import { pollInhouseState } from "@/lib/inhouse-room-state";
 import {
+  holdInhouseRoomPoll,
+  pollInhouseState,
+} from "@/lib/inhouse-room-state";
+import {
+  inhouseRoomHoldMark,
+  inhouseRoomVersionToken,
   publishInhouseRoomChange,
   readInhouseRoomVersion,
 } from "@/lib/inhouse-room-version";
+import {
+  inhouseRoomShuttingDown,
+  parseInhouseHold,
+} from "@/lib/inhouse-room-wait";
 import {
   readBoundedJsonObject,
   requireJsonContentType,
@@ -58,9 +67,19 @@ const MUTATION_ACTIONS = new Set([
   "remove",
 ]);
 
-// One JSON endpoint for the whole inhouse room. `state` is polled; the rest are
-// mutations. Every response is the fresh, viewer-tailored state (or { error }),
-// so the client stays in sync without extra round-trips.
+// One JSON endpoint for the whole inhouse room. `state` is long-polled; the
+// rest are mutations. Every response is the fresh, viewer-tailored state (or
+// { error }), so the client stays in sync without extra round-trips.
+//
+// `state` replies also carry `roomVersion`, the room version read before the
+// reply's rows (so the rows are at least that new). A client that sends it
+// back as `since` (with the `holdMs` it can wait, and `sinceNow`, the `now`
+// of the reply it shows) is held until the room moves past it, its next
+// clock or the hold's end, and then polled as any other request
+// (holdInhouseRoomPoll). Without `since` it answers at once. `held` says
+// whether this request was held: false for a `since` the room had already
+// moved past, which the client counts to back off from a version that never
+// stops moving (inhouseLongPollGapMs).
 export async function POST(req: NextRequest) {
   const invalidMediaType = requireJsonContentType(req);
   if (invalidMediaType) return invalidMediaType;
@@ -96,16 +115,48 @@ export async function POST(req: NextRequest) {
     }
     // Authorization on every request; the poll decides what is due. The
     // room version is read beside the session: it is what decides whether
-    // this instance's room snapshot may serve.
-    const [user, version] = await Promise.all([
+    // this instance's room snapshot may serve, and whether this request is
+    // held. The hold mark is taken first, so a publish in this process that
+    // starts or finishes around the read re-checks the hold instead of
+    // waiting for the 2s watch.
+    const hold = parseInhouseHold(body);
+    const mark = inhouseRoomHoldMark();
+    let [user, version] = await Promise.all([
       getSessionUser(),
       readInhouseRoomVersion(),
     ]);
+    // A stopping process answers at once, and says so (unheld): a tab then
+    // backs off to its ladder rather than re-polling every second while
+    // Caddy still routes to this slot (a restart of the live one).
+    const held =
+      hold !== null &&
+      hold.since === inhouseRoomVersionToken(version) &&
+      !inhouseRoomShuttingDown();
+    if (hold && held) {
+      // The client shows this version: wait for news, then authorize and
+      // read again, as a fresh request would.
+      const wake = await holdInhouseRoomPoll({
+        viewer: user,
+        version,
+        hold,
+        mark,
+        signal: req.signal,
+      });
+      if (wake === "aborted") return new NextResponse(null, { status: 204 });
+      [user, version] = await Promise.all([
+        getSessionUser(),
+        readInhouseRoomVersion(),
+      ]);
+    }
     let invalidateGate = false;
     try {
       const polled = await pollInhouseState(user, version);
       invalidateGate = polled.invalidateGate;
-      return NextResponse.json(polled.state);
+      return NextResponse.json({
+        ...polled.state,
+        roomVersion: inhouseRoomVersionToken(version),
+        held,
+      });
     } finally {
       // Only a signed-in poll that won the 2s maintenance claim, flipped a
       // queued player back to present or edited the board changed what the

@@ -302,8 +302,13 @@ describe("live rooms delegate their poll policy", () => {
       "INHOUSE.POLL_KEEPALIVE_MS",
       "INHOUSE.POLL_QUEUE_KEEPALIVE_MS",
       "INHOUSE.POLL_QUEUE_MS",
+      "INHOUSE.POLL_SETUP_MS",
       "INHOUSE.POLL_GAME_MS",
+      "INHOUSE.POLL_GAME_KEEPALIVE_MS",
       "INHOUSE.POLL_RECOVERY_MS",
+      // The long-poll's holds and its gap live in inhouseLongPoll and
+      // inhousePollDelay, beside the ladder they fall back to.
+      "INHOUSE.LONG_POLL_",
     ]) {
       expect(
         uiFilesWith(rate),
@@ -318,11 +323,97 @@ describe("live rooms delegate their poll policy", () => {
     // inhousePollCadence reads a game nobody attributes as the viewer's own:
     // without `inLobby` every queued player watching a game in progress would
     // wait at the slow game rate for their own lobby to form.
-    const calls = callArgs(roomText(INHOUSE_ROOM), "inhousePollCadence");
-    expect(calls.length).toBeGreaterThanOrEqual(2);
+    const src = roomText(INHOUSE_ROOM);
+    const calls = [
+      ...callArgs(src, "inhousePollCadence"),
+      ...callArgs(src, "inhousePollDelay"),
+      ...callArgs(src, "inhouseLongPoll"),
+    ];
+    // Before each request (the skip, the hold) and after it (the delay, the
+    // next hold).
+    expect(calls.length).toBeGreaterThanOrEqual(4);
     for (const args of calls) {
       expect(args).toMatch(/\binLobby:\s*latestStateRef\.current\?\.me\.inLobby\b/);
     }
+  });
+
+  it("inhouse-room long-polls only through inhouseLongPoll and inhousePollDelay", () => {
+    // The hold, its deadline and the re-issue are the long-poll's whole
+    // contract with the server: a `since` sent outside inhouseLongPoll would
+    // hold a request the rules said must answer at once (a resync, an action
+    // awaiting reconciliation), and a re-issue outside inhousePollDelay is a
+    // hot loop against an old slot that answers at once.
+    const src = roomText(INHOUSE_ROOM);
+    expect(src).toMatch(
+      /since:\s*longPoll\.since,\s*sinceNow:\s*longPoll\.sinceNow,\s*holdMs:\s*longPoll\.holdMs/,
+    );
+    expect(src).toMatch(/longPoll \? longPoll\.timeoutMs : ROOM_POLL_TIMEOUT_MS/);
+    expect([...src.matchAll(/\bsince:/g)]).toHaveLength(1);
+    // Urgent requests answer at once: resync, actions in flight, reconciling,
+    // and a refocus after a long hide.
+    expect(src).toMatch(/const urgent = \(\) =>\s*resyncPending \|\|\s*actionsInFlightRef\.current > 0 \|\|\s*actionReconcileSeqRef\.current !== null \|\|\s*refocusPending;/);
+    for (const call of callArgs(src, "inhouseLongPoll")) {
+      expect(call).toMatch(/\bversion:\s*roomVersion\b/);
+      expect(call).toMatch(/\burgent:\s*urgent\(\)/);
+      expect(call).toMatch(/\bfailureCount:\s*consecutiveFailures\b/);
+    }
+    // The version comes only from a poll reply apply() took.
+    expect(src).toMatch(
+      /if \(applied\) \{\s*roomVersion =\s*typeof payload\.roomVersion === "string"/,
+    );
+    expect([...src.matchAll(/\broomVersion =\s/g)]).toHaveLength(1);
+    // The next request leaves from the reply's continuation, not a timer,
+    // and only when the delay is 0 for a request that can be held.
+    expect(src).toMatch(
+      /if \(delayMs === 0 && nextLongPoll !== null\) \{\s*reissue\(\);\s*return;\s*\}\s*schedule\(delayMs\);/,
+    );
+    expect(callArgs(src, "inhousePollDelay")[0]).toMatch(
+      /longPoll:\s*nextLongPoll !== null,\s*startedAgoMs:\s*Date\.now\(\) - startedAt/,
+    );
+    // An action and a connectivity change release a held request.
+    expect(src).toMatch(
+      /bumpPollRef\.current\s*=\s*\(\)\s*=>\s*\{\s*rerunRequested\s*=\s*true;\s*schedule\(250\);\s*releaseHold\(\);/,
+    );
+    // The gap between requests backs off while replies keep coming back
+    // unheld: the streak is counted only by inhouseUnheldStreak, from every
+    // reply the room reads, and handed to inhousePollDelay.
+    expect(src).toMatch(
+      /unheldStreak = inhouseUnheldStreak\(unheldStreak, \{\s*askedHold: longPoll !== null,\s*held: payload\.held,\s*\}\);/,
+    );
+    // (Its declaration aside.)
+    expect([...src.matchAll(/(?<!let )\bunheldStreak =\s/g)]).toHaveLength(1);
+    expect(callArgs(src, "inhousePollDelay")[0]).toMatch(
+      /startedAgoMs:\s*Date\.now\(\) - startedAt,\s*unheldStreak,/,
+    );
+    expect(src).toMatch(/const onOnline = \(\) => \{[\s\S]*?releaseHold\(\);\s*tick\(\);/);
+    // A released request is not a failure.
+    expect(src).toMatch(/\} else if \(hold\?\.released\) \{\s*\} else \{\s*markFailure\(\);/);
+    // Actions count themselves in and out around their fetch.
+    expect(src).toMatch(/actionsInFlightRef\.current \+= 1;\s*const \{ seq, next: seqNext \} = issueSequence/);
+    expect(src).toMatch(/\} finally \{\s*actionsInFlightRef\.current -= 1;/);
+  });
+
+  it("inhouse-room asks afresh, unheld, when a tab comes back from a long hide", () => {
+    // A held request may have died with its connection while the device
+    // slept, and its own deadline is its hold plus ROOM_POLL_TIMEOUT_MS away:
+    // refocus releases it and the next request is unheld, once.
+    const src = roomText(INHOUSE_ROOM);
+    const visibility = src.slice(
+      src.indexOf("const onVisibility = () => {"),
+      src.indexOf("const onOffline = () => {"),
+    );
+    expect(visibility.length).toBeGreaterThan(0);
+    // Hiding is recorded; the threshold is the tested pure rule.
+    expect(visibility).toMatch(/if \(document\.visibilityState !== "visible"\) \{\s*hiddenAt \?\?= Date\.now\(\);\s*return;\s*\}/);
+    expect(visibility).toMatch(
+      /if \(inhouseRefocusResync\(hiddenForMs\)\) \{\s*refocusPending = true;\s*rerunRequested = true;\s*releaseHold\(\);\s*\}\s*tick\(\);/,
+    );
+    expect(visibility).not.toContain("ROOM_POLL_TIMEOUT_MS");
+    // One-shot: cleared only by a reply apply() took.
+    expect([...src.matchAll(/(?<!let )\brefocusPending = false;/g)]).toHaveLength(1);
+    expect(src).toMatch(
+      /if \(applied\) \{\s*roomVersion =[^;]*;\s*refocusPending = false;\s*\}/,
+    );
   });
 
   it("inhouse-room tells the cadence and the tab title when a READY game is being played", () => {
@@ -334,9 +425,11 @@ describe("live rooms delegate their poll policy", () => {
     const src = roomText(INHOUSE_ROOM);
     const uses = [
       ...callArgs(src, "inhousePollCadence"),
+      ...callArgs(src, "inhousePollDelay"),
+      ...callArgs(src, "inhouseLongPoll"),
       ...callArgs(src, "inhouseTitleFlag"),
     ];
-    expect(uses.length).toBeGreaterThanOrEqual(3);
+    expect(uses.length).toBeGreaterThanOrEqual(5);
     for (const args of uses) {
       expect(args).toMatch(/\bscanOpensAt:/);
       expect(args).toMatch(/\bserverNow:/);

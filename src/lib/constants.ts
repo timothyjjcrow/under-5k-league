@@ -292,24 +292,72 @@ export const INHOUSE = {
   LOBBY_PASSWORD: "ggd2l",
   LOBBY_TICKET: LEAGUE_CONFIG.inhouseLeagueName,
   LOBBY_TICKET_CONFIGURED: LEAGUE_CONFIG.inhouseLeagueConfigured,
-  // Keep the fast room rate for ready checks, captain votes and picks; every
-  // other state waits longer. Each poll is a function call on a Vercel Hobby
-  // plan both leagues share (four hours of Active CPU a month), and on
-  // 2026-10-11 five /inhouse tabs polling every ten seconds made 79% of the US
-  // site's calls. Queued: a forming lobby gives ACCEPT_SECONDS (90s) to accept.
-  POLL_QUEUE_MS: 10000,
+  // How the room hears about changes (src/lib/room-poll.ts, the route's
+  // `state` action, src/lib/inhouse-room-wait.ts). It LONG-POLLS over plain
+  // HTTP: a state request carries the room version of the last reply it
+  // showed, and the server holds it until the room changes (a publish in this
+  // process, or the version moving in the database), the room's next clock
+  // or the hold's end, then answers through the ordinary poll. Every request
+  // is CPU on the one box both leagues share with Postgres and the lobby bot
+  // (about 15-25 ms of box CPU each across Node, Postgres, Caddy and the
+  // tunnel, measured 2026-10-18), so a viewer makes about one request per
+  // change, plus one per hold while nothing changes.
+  //
+  // The longest hold the server grants. It bounds how late a change that
+  // published nowhere shows (an admin's display edit), and stays far under
+  // Cloudflare's ~100s wait for a response; the box's Caddy and tunnel set
+  // no response timeout.
+  LONG_POLL_HOLD_MS: 25_000,
+  // The hold a member asks for in their own game's timed stages (ready check,
+  // vote, draft). The client gives a held request its hold plus
+  // ROOM_POLL_TIMEOUT_MS, so where a clock runs a held request that silently
+  // died is given up on, and the fast retries begin, 15s sooner than at the
+  // full hold. The room still says "Connection lost" only after three
+  // failures in a row: about 43s after a connection dies here, 58s
+  // elsewhere (inhouseLongPoll, room-poll.test.ts).
+  LONG_POLL_TIMED_HOLD_MS: 10_000,
+  // A held request wakes this long after a room clock runs out (an accept,
+  // vote or pick deadline, the result window opening, an abandon floor, a
+  // queue idle or away transition), so a signed-in request that wakes finds
+  // the work due and resolves it under the 2s claim, as a fast poll did.
+  LONG_POLL_CLOCK_GRACE_MS: 250,
+  // A signed-in request that finds work already due (another poll holds the
+  // 2s maintenance claim and will publish) is held at most this long: past
+  // that claim, so work nobody finished is retried at a fast poll's pace.
+  LONG_POLL_DUE_RETRY_MS: 2_250,
+  // After a publish in this process, held requests wait this long and then
+  // re-check the version once, so a mutation's two publishes (after its
+  // dispatch, and after its follow-up read) wake each viewer once.
+  LONG_POLL_COALESCE_MS: 100,
+  // Each woken request waits up to this much more, at random, so a room of
+  // viewers waking together doesn't queue on Prisma's four connections.
+  LONG_POLL_JITTER_MS: 150,
+  // While any request is held, one timer per process re-reads the version
+  // this often: it catches the other slot's publishes during a release's 90s
+  // overlap, and writes made outside this process.
+  LONG_POLL_WATCH_MS: 2_000,
+  // The client never starts two state requests closer together than this,
+  // so a version that keeps moving can't turn the long-poll into a hot loop.
+  LONG_POLL_MIN_GAP_MS: 1_000,
+  // The FALLBACK ladder. A reply with no room version (an old slot during a
+  // release ignores `since`), and the requests that must answer at once (the
+  // first, a resync after going offline, one while an action is in flight or
+  // awaiting reconciliation, a retry) poll on these rates instead. Fast (the
+  // room's `pollMs`, 1.5s) only in the clocked stages; the rest are the
+  // 2026-10-18 retune of the Vercel Hobby rates (docs/DECISIONS.md).
+  // Queued: a forming lobby gives ACCEPT_SECONDS (90s) to accept.
+  POLL_QUEUE_MS: 3000,
   // Game setup (READY until the result scan's window opens): ten people
-  // getting into one Dota lobby, which takes minutes and has no clock. The
-  // lobby name, the Start answer and a cancel can arrive a few seconds late;
-  // at the 1.5s rate a setup could last 15 minutes and cost ~6,000 calls.
-  POLL_SETUP_MS: 5000,
-  // A game being played, in a visible tab or a hidden one: nothing in it is
-  // timed, and the players are in the Dota client.
-  POLL_GAME_MS: 30000,
+  // getting into one Dota lobby, which takes minutes and has no clock.
+  POLL_SETUP_MS: 2500,
+  // A game being played, in a visible tab: nothing in it is timed.
+  POLL_GAME_MS: 5000,
+  // The same game in a hidden tab: the players are in the Dota client.
+  POLL_GAME_KEEPALIVE_MS: 30000,
   // Spectating: nothing at stake.
-  POLL_IDLE_MS: 30000,
-  // After a 429, and the floor of a disconnected room's backoff. Kept at the
-  // old idle rate so the slower spectator rate never slows a recovery.
+  POLL_IDLE_MS: 10000,
+  // After a 429, and the floor of a disconnected room's backoff: never faster
+  // than idling.
   POLL_RECOVERY_MS: 10000,
   // Hidden-tab keepalive (ms) in a lobby's timed stages (ready check, vote,
   // draft, setup). A hidden tab with NO stake (not queued, not in a lobby)
@@ -323,9 +371,9 @@ export const INHOUSE = {
   // The same for a hidden tab that is queued with no lobby yet. Only the
   // accept window binds it: a lobby can form just after this player's poll,
   // and the vote can't open until they have seen the ready check and
-  // accepted. 20s leaves 70s to notice and act when the browser allows
+  // accepted. 10s leaves 80s to notice and act when the browser allows
   // background execution (and the ready check pings Discord too).
-  POLL_QUEUE_KEEPALIVE_MS: 20000,
+  POLL_QUEUE_KEEPALIVE_MS: 10000,
   // Seconds to press ACCEPT once a lobby fills (the Dota-style ready check).
   // The queue holds a spot for hours with the tab closed, so the tenth join
   // can land while the others are in a pub game or away from the desk: they
@@ -533,8 +581,10 @@ export const AUTO_SYNC = {
   LEAGUE_SKIP_MEMORY: 1000,
   // Client ping cadence: fast while matches are in their detection window or
   // an inhouse game is live (so parked dashboards update themselves), slow
-  // otherwise (a near-free keepalive that notices a window opening).
-  WATCH_POLL_SECONDS: 60,
+  // otherwise (a near-free keepalive that notices a window opening). The
+  // watch rate was a minute on Vercel's Hobby plan; on the box a ping is a
+  // small read (2026-10-18, docs/DECISIONS.md).
+  WATCH_POLL_SECONDS: 30,
   IDLE_POLL_SECONDS: 300,
 } as const;
 

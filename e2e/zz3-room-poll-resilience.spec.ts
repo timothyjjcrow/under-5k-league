@@ -1,4 +1,11 @@
-import { test, expect, type Dialog, type Page } from "@playwright/test";
+import {
+  test,
+  expect,
+  type APIResponse,
+  type Dialog,
+  type Page,
+  type Route,
+} from "@playwright/test";
 import {
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
@@ -96,13 +103,48 @@ function deferred() {
   return { promise, resolve };
 }
 
+/**
+ * Answer a route with the origin's reply minus the inhouse room's
+ * `roomVersion`, as an old slot during a release answers: the room then
+ * never long-polls and keeps to its fallback ladder, the loop these tests
+ * were written for. (Long-poll specifics: e2e/zz4e-inhouse-long-poll.spec.ts.)
+ */
+async function fulfillOnTheLadder(
+  route: Route,
+  response?: APIResponse,
+): Promise<void> {
+  const res = response ?? (await route.fetch());
+  const text = await res.text();
+  let json: unknown = null;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    await route.fulfill({ response: res, body: text });
+    return;
+  }
+  if (json && typeof json === "object" && "roomVersion" in json) {
+    delete (json as Record<string, unknown>).roomVersion;
+  }
+  await route.fulfill({ response: res, json });
+}
+
 /** Hold one already-started response, then the first poll that follows it. */
-async function holdOldAndFreshPoll(page: Page, pattern: string) {
+async function holdOldAndFreshPoll(
+  page: Page,
+  pattern: string,
+  { ladder = false }: { ladder?: boolean } = {},
+) {
   let phase: "pass" | "old" | "fresh" = "pass";
   const oldStarted = deferred();
   const releaseOld = deferred();
   const freshStarted = deferred();
   const releaseFresh = deferred();
+  const pass = (route: Route, response?: APIResponse) =>
+    ladder
+      ? fulfillOnTheLadder(route, response)
+      : response
+        ? route.fulfill({ response })
+        : route.continue();
 
   await page.route(pattern, async (route) => {
     if (phase === "old") {
@@ -113,7 +155,7 @@ async function holdOldAndFreshPoll(page: Page, pattern: string) {
       oldStarted.resolve();
       await releaseOld.promise;
       phase = "fresh";
-      await route.fulfill({ response });
+      await pass(route, response);
       return;
     }
     if (phase === "fresh") {
@@ -121,7 +163,7 @@ async function holdOldAndFreshPoll(page: Page, pattern: string) {
       await releaseFresh.promise;
       phase = "pass";
     }
-    await route.continue();
+    await pass(route);
   });
 
   return {
@@ -330,7 +372,11 @@ test("inhouse rejects a pre-outage response and waits for a post-reconnect poll"
   page,
 }) => {
   await installSyntheticConnectivity(page);
-  const held = await holdOldAndFreshPoll(page, "**/api/inhouse");
+  // On the ladder: a held long-poll is released by the outage itself, so the
+  // pre-outage response this test delivers late only exists on the ladder.
+  const held = await holdOldAndFreshPoll(page, "**/api/inhouse", {
+    ladder: true,
+  });
   await page.goto(
     "/api/auth/dev?name=Held+Inhouse&steamId=76561190000009006&redirect=/inhouse",
   );
@@ -422,7 +468,9 @@ test("inhouse preserves action reconciliation behind an in-flight state poll", a
         heldStateStarted.resolve();
         await releaseHeldState.promise;
       }
-      await route.continue();
+      // On the ladder: the in-flight latch this guards is a short poll's (an
+      // action releases a held long-poll instead; zz4e covers that).
+      await fulfillOnTheLadder(route);
       return;
     }
     // The origin may have committed even though a proxy replaced the body.
@@ -491,6 +539,10 @@ test("inhouse holds a timed-out action lock until a newer state poll lands", asy
           return;
         }
         cachedState = (await response.json()) as Record<string, unknown>;
+        // On the ladder, as an old slot answers: this cached reply comes back
+        // at once, so with its version the room would long-poll it at the
+        // 1s gap, and the poll it holds would time out before the action.
+        delete cachedState.roomVersion;
       }
       if (actionStarted && holdNextState) {
         holdNextState = false;

@@ -481,7 +481,10 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
   in `inhouse-room-due.ts`: a new key of room version plus present ids and
   away count, `BOARD_RECHECK_MS` (60s) since the last check, or a `throttled`
   or `failed` outcome, which stay due so the board's retry-on-difference
-  holds). `syncInhouseBoard` returns its outcome for that memo (`off`,
+  holds). The room long-polls, so "the next poll" is a woken one: a
+  `throttled` memo wakes the signed-in held requests when the throttle ends
+  (`boardRetryAtMs`, `inhouseRoomWakeAt`), and a `failed` one waits for a
+  hold's end inside its own 20s-and-up back-off. `syncInhouseBoard` returns its outcome for that memo (`off`,
   `no-webhook`, `cleared`, `unchanged`, `throttled`, `edited`, `failed`,
   `gone`), and `edited` expires the automation gate. Signed-out polls never
   check. Never use `/api/sync` as a heartbeat.

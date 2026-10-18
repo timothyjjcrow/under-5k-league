@@ -112,6 +112,30 @@ const gameIn = (s: StateView, id: string) =>
 const pollsAfter = (tab: Tab, t: number) =>
   tab.replies.filter((r) => r.action === "state" && r.start > t);
 
+/**
+ * Publish a new room version with nothing changed (the fixture fence
+ * publishes). The tabs long-poll: each held request answers on a publish,
+ * so this makes every tab poll once, and lets the checks below count polls.
+ * Spaced past the room's 1s gap between requests.
+ */
+async function nudge(ctx: APIRequestContext) {
+  expect((await ctx.post("/api/test/cache")).ok()).toBe(true);
+}
+/** Until every tab has `n` polls started after `t`, nudging between looks. */
+async function pollsEach(ctx: APIRequestContext, tabs: Tab[], t: number, n: number) {
+  for (const tab of tabs) {
+    await expect
+      .poll(
+        async () => {
+          if (pollsAfter(tab, t).length < n) await nudge(ctx);
+          return pollsAfter(tab, t).length;
+        },
+        { timeout: 30_000, intervals: [1_250] },
+      )
+      .toBeGreaterThanOrEqual(n);
+  }
+}
+
 async function titlesAfter(page: Page, t: number): Promise<string[]> {
   const all = await page.evaluate(
     () => (window as unknown as { __titles: [number, string][] }).__titles,
@@ -229,17 +253,15 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
     const stillOnClock = pickReply.state.me.isOnClock;
 
     // The other captain's first poll that starts after the pick shows it.
-    await expect.poll(() => pollsAfter(other, pickedAt).length, { timeout: 15_000 }).toBeGreaterThan(0);
+    await pollsEach(admin, [other], pickedAt, 1);
     const first = gameIn(pollsAfter(other, pickedAt)[0].state, lobbyId);
     if (first?.status === "DRAFTING") {
       expect(first.pool.map((p) => p.userId)).not.toContain(draftedId);
     }
 
     // Five polls in every tab: the drafted player never comes back.
+    await pollsEach(admin, tabs, pickedAt, 5);
     for (const tab of tabs) {
-      await expect
-        .poll(() => pollsAfter(tab, pickedAt).length, { timeout: 30_000 })
-        .toBeGreaterThanOrEqual(5);
       for (const reply of pollsAfter(tab, pickedAt)) {
         const seen = gameIn(reply.state, lobbyId);
         expect(seen?.pool.map((p) => p.userId) ?? []).not.toContain(draftedId);
@@ -259,7 +281,7 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   const cancelled = await act(admin, { action: "cancel", lobbyId });
   expect(cancelled.ok).toBe(true);
   const cancelledAt = Date.now();
-  await expect.poll(() => pollsAfter(capA, cancelledAt).length, { timeout: 30_000 }).toBeGreaterThan(0);
+  await pollsEach(admin, [capA], cancelledAt, 1);
   const back = pollsAfter(capA, cancelledAt)[0].state;
   expect(back.me.inQueue).toBe(true);
   expect(back.queue.find((q) => q.userId === back.me.userId)?.away).toBe(false);

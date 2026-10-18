@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import {
+  bumpInhouseRoomGeneration,
+  inhouseRoomGeneration,
+  inhouseRoomPublishMark,
+  wakeInhouseRoomWaiters,
+} from "./inhouse-room-wait";
 import { prisma } from "./prisma";
 import { SETTING_KEYS } from "./settings";
 
@@ -16,17 +22,45 @@ import { SETTING_KEYS } from "./settings";
 //
 // A missing row means "uncached": every poll builds fresh and stores nothing.
 // Polls only read it, so an anonymous poll never writes.
+//
+// The version is also the long-poll's change signal: a state request that
+// sends back the version of the reply its client shows is held until it
+// moves (inhouse-room-wait.ts), and a publish wakes the requests held in this
+// process once its statement has run.
 
 /**
- * Bumped by every publish on THIS instance, before its statement runs. A
- * snapshot load that started before a local publish is never stored, and a
- * stored one stops serving at once, without waiting for the database.
+ * This process's publish count (the cache's local fence), bumped by every
+ * publish before its statement runs. A snapshot load that started before a
+ * local publish is never stored, and a stored one stops serving at once,
+ * without waiting for the database. Process-wide, on globalThis
+ * (inhouse-room-wait.ts): a server action's publish fences the route
+ * handlers' snapshot too.
  */
-let localGeneration = 0;
-
-/** This instance's publish count (the cache's local fence). */
 export function inhouseRoomLocalGeneration(): number {
-  return localGeneration;
+  return inhouseRoomGeneration();
+}
+
+/**
+ * The long-poll's fence (inhouse-room-wait.ts): it moves when a publish in
+ * this process starts its statement or finishes it. The route reads it
+ * before the version it compares with a request's `since`, so a publish
+ * racing that read re-checks the hold instead of waiting for the watch.
+ */
+export function inhouseRoomHoldMark(): number {
+  return inhouseRoomPublishMark();
+}
+
+/** No version row yet: what a reply carries and a client sends back. */
+const NO_ROOM_VERSION = "none";
+
+/**
+ * The version as the client sees it: the opaque token a state reply carries
+ * as `roomVersion` and a held request sends back as `since`. A missing row
+ * (nothing ever published) has a token too, so a fresh database long-polls
+ * and its first publish moves it.
+ */
+export function inhouseRoomVersionToken(version: string | null): string {
+  return version ?? NO_ROOM_VERSION;
 }
 
 /** The room's current version, or null when nothing ever published. */
@@ -43,27 +77,33 @@ export async function readInhouseRoomVersion(): Promise<string | null> {
  * statement (claimThrottle's INSERT … ON CONFLICT shape), so a missing row is
  * created and a present one replaced on SQLite and Postgres alike. Retries
  * once, logs, and never throws: the change it announces has already
- * committed, and a lost publish is bounded by the snapshot's max age.
+ * committed, and a lost publish is bounded by the snapshot's max age. After
+ * the statement, landed or not, the requests held in this process re-check
+ * the version (the commit happened either way).
  */
 export async function publishInhouseRoomChange(): Promise<void> {
-  localGeneration += 1;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      await prisma.$executeRaw`
-        INSERT INTO "Setting" ("key", "value")
-        VALUES (${SETTING_KEYS.INHOUSE_ROOM_VERSION}, ${randomUUID()})
-        ON CONFLICT ("key") DO UPDATE SET "value" = excluded."value"
-      `;
-      return;
-    } catch (error) {
-      if (attempt === 1) {
-        const code = (error as { code?: unknown } | null)?.code;
-        console.error(
-          `[inhouse-room-version] publish failed (${
-            typeof code === "string" ? code : "unknown"
-          })`,
-        );
+  bumpInhouseRoomGeneration();
+  try {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        await prisma.$executeRaw`
+          INSERT INTO "Setting" ("key", "value")
+          VALUES (${SETTING_KEYS.INHOUSE_ROOM_VERSION}, ${randomUUID()})
+          ON CONFLICT ("key") DO UPDATE SET "value" = excluded."value"
+        `;
+        return;
+      } catch (error) {
+        if (attempt === 1) {
+          const code = (error as { code?: unknown } | null)?.code;
+          console.error(
+            `[inhouse-room-version] publish failed (${
+              typeof code === "string" ? code : "unknown"
+            })`,
+          );
+        }
       }
     }
+  } finally {
+    wakeInhouseRoomWaiters();
   }
 }
