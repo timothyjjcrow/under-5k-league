@@ -108,8 +108,8 @@ usage figures are the US site's as of 2026-09-26.
 ## Hosting
 
 How the self-hosted box runs, decided on 2026-10-15 with the move in
-[Product decisions](#product-decisions). Until the cutover these describe the
-target. The procedures are [RELEASING](RELEASING.md) and
+[Product decisions](#product-decisions). These describe the box as it has run
+since the cutover on 2026-10-17. The procedures are [RELEASING](RELEASING.md) and
 [PRODUCTION-OPERATIONS](PRODUCTION-OPERATIONS.md); the box runbook is
 `ops/selfhost/README.md`.
 

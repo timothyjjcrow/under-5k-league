@@ -8,17 +8,13 @@ both leagues on the box. The appendices cover database and scheduler changes,
 incidents and the reference material, and link to the guarded procedures that
 govern them.
 
-> **Status: planned.** Both leagues move from Vercel and Neon to the box on the
-> cutover day ([DECISIONS](DECISIONS.md#hosting)). Until then they run on
-> Vercel and Neon as before and **nothing is released**: the kit commit never
-> goes to Vercel. This page doesn't cover the cutover: that one-time
-> procedure has its own runbook, kept outside the repository, and
-> `ops/selfhost/README.md` (Cutover helpers) covers the kit's parts of it,
-> the Neon dump and the redirect deployments. An emergency on Vercel before
-> the cutover uses the procedure this page replaced:
-> `git show 33a1f348:docs/RELEASING.md`. Until a league has moved, its
-> scheduler pause, resume and rollback deploys also run from a checkout of
-> 33a1f348: the `wrangler*.jsonc` on `main` already target the box's origins.
+> **Status: live.** Both leagues moved from Vercel and Neon to the box on
+> 2026-10-17 ([DECISIONS](DECISIONS.md#hosting)), and every release since then
+> follows this page. The one-time cutover had its own runbook, kept outside
+> the repository; `ops/selfhost/README.md` (Cutover helpers) covers the kit's
+> parts of it. The Vercel-era procedure this page replaced is at
+> `git show 33a1f348:docs/RELEASING.md` and no longer applies: never "Instant
+> Rollback" a GGD2L Vercel project.
 
 ## How the box serves a league
 

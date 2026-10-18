@@ -6,18 +6,13 @@ evidence from the actual box, DNS, identity, Discord, monitoring and backup
 providers. Never put a secret, connection URL, session cookie, backup receipt,
 or bearer header in this record.
 
-> **Status: planned.** Production is one self-hosted box (`ggd2l-1`): both
+> **Status: live.** Production is one self-hosted box (`ggd2l-1`): both
 > leagues' Next slots, their PostgreSQL 18 databases and the lobby bot, behind
-> a Cloudflare Tunnel and Caddy. Both leagues move there from Vercel and Neon
-> on the cutover day ([DECISIONS](DECISIONS.md#hosting)); until then they run
-> on Vercel and Neon as before and nothing is released. The procedure this
-> page replaced is at `git show 33a1f348:docs/PRODUCTION-OPERATIONS.md`.
-> **Until a league has moved, run its scheduler pause, resume and rollback
-> deploys from a checkout of 33a1f348.** The `wrangler*.jsonc` on `main`
-> already point the Workers at `https://us.ggd2l.com` and
-> `https://eu.ggd2l.com`; deployed for a league still on Vercel, they would aim
-> its only clock at an origin that answers only the maintenance page (or
-> doesn't resolve yet), and its automation would stop.
+> a Cloudflare Tunnel and Caddy. Both leagues moved there from Vercel and Neon
+> on 2026-10-17, and the lobby bot followed on 2026-10-18
+> ([DECISIONS](DECISIONS.md#hosting)). The Vercel-era procedure this page
+> replaced is at `git show 33a1f348:docs/PRODUCTION-OPERATIONS.md`; it no
+> longer applies.
 
 The agent calls below use the helper from [RELEASING](RELEASING.md#how-the-box-serves-a-league):
 `box_agent <verb> <args>` runs `/usr/local/sbin/ggd2l-agent` on the box over
