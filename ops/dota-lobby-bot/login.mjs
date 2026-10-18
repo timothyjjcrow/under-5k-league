@@ -9,7 +9,7 @@ import { runWithProcessLock } from "./process-lock.mjs";
 
 const passwordLogin = process.argv.includes("--password");
 if (process.argv.includes("--help")) {
-  console.log("npm run login             Sign in by scanning with Steam Guard\nnpm run login -- --password  Enter credentials privately in this terminal\nAdd --code to use a Steam Guard code instead of mobile approval.");
+  console.log("npm run login             Sign in by scanning with Steam Guard (the QR code shows in this terminal and as an image)\nnpm run login -- --password  Enter credentials privately in this terminal\nAdd --code to use a Steam Guard code instead of mobile approval.");
   process.exit(0);
 }
 if (passwordLogin && !process.stdin.isTTY) {
@@ -116,7 +116,12 @@ try {
     if (!finished) {
       await QRCode.toFile(qrPath, result.qrChallengeUrl, { width: 480, margin: 4, errorCorrectionLevel: "M" });
       chmodSync(qrPath, 0o600);
-      console.log(`Scan this QR image with Steam Guard while signed into the dedicated bot account:\n${qrPath}\nApprove “GGD2L in-house lobby bot”. Waiting up to five minutes.\nWithout mobile Steam Guard, cancel and run: npm run login -- --password`);
+      // The same code drawn in the terminal, so a sign-in over ssh (the box)
+      // needs no image viewer. Only to a terminal: never into a log file.
+      const terminalQr = process.stdout.isTTY
+        ? await QRCode.toString(result.qrChallengeUrl, { type: "terminal", small: true, errorCorrectionLevel: "M" })
+        : "";
+      console.log(`${terminalQr ? `${terminalQr}\nScan the QR code above, or this image, ` : "Scan this QR image "}with Steam Guard while signed into the dedicated bot account:\n${qrPath}\nApprove “GGD2L in-house lobby bot”. Waiting up to five minutes.\nWithout mobile Steam Guard, cancel and run: npm run login -- --password`);
     }
   }
 } catch {

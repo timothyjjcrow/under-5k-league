@@ -48,7 +48,7 @@ import {
   standinRemovedMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
-import { reachabilityNote } from "@/lib/discord-roles";
+import { reachabilityNote, withReachabilityNote } from "@/lib/discord-roles";
 import { mentionsOf } from "@/lib/discord-mentions";
 import { logAdminAction } from "@/lib/admin-log";
 import {
@@ -1064,12 +1064,13 @@ export async function signFreeAgent(
     ...coverCleanup.overbooked,
   ].filter(Boolean);
   return {
-    message:
+    // A permanent signing that structurally can't be reached on Discord is
+    // discovered on match night — the assign-standin garnish, same reason.
+    message: withReachabilityNote(
       `${registration.user.name} signed to ${team.name}` +
-      (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : "") +
-      // A permanent signing that structurally can't be reached on Discord is
-      // discovered on match night — the assign-standin garnish, same reason.
-      (await reachabilityNote(userId)),
+        (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : ""),
+      await reachabilityNote(userId),
+    ),
   };
 }
 
@@ -1774,14 +1775,20 @@ export async function assignStandin(
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({ action: "assignStandin", summary: res.summary });
+  await logAdminAction({
+    action: "assignStandin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
   refresh();
   // If the announcement structurally can't reach them (unlinked, not in the
   // server, stuck behind the rules screen), the person arranging the cover
   // finds out NOW, not on match night. "" when reachable or unknowable.
   return {
-    message:
-      res.message + (await reachabilityNote(str(formData, "standinUserId"))),
+    message: withReachabilityNote(
+      res.message,
+      await reachabilityNote(str(formData, "standinUserId")),
+    ),
   };
 }
 
@@ -1799,7 +1806,11 @@ export async function removeStandin(
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
-  await logAdminAction({ action: "removeStandin", summary: res.summary });
+  await logAdminAction({
+    action: "removeStandin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
   refresh();
   return { message: res.message };
 }

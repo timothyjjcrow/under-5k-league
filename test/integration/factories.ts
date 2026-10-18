@@ -7,6 +7,8 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
+// Pure (constants only), so safe to import statically; see the note below.
+import { undoSaleTarget } from "@/lib/draft-admin";
 import type { SessionUser } from "@/lib/auth";
 
 // draft-service / playoff-service are imported LAZILY inside the helpers that
@@ -246,6 +248,19 @@ export async function startDraftState(seasonId: string) {
       ),
     },
   });
+}
+
+/**
+ * The roster row an "Undo last sale" button names right now, by the rule
+ * /admin and the draft room render it with (`undoSaleTarget`): what their
+ * forms post as `expectedSaleMembershipId`. "" when nothing has sold.
+ */
+export async function undoTargetId(seasonId: string): Promise<string> {
+  const rows = await prisma.teamMember.findMany({
+    where: { seasonId },
+    select: { id: true, isCaptain: true, price: true, createdAt: true },
+  });
+  return undoSaleTarget(rows)?.id ?? "";
 }
 
 /** Force the auction (bid) clock into the past so resolveExpiredNomination fires. */

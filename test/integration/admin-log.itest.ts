@@ -296,6 +296,8 @@ describe("log lines name the fixture, never an internal id", () => {
     expect(assignRow.summary).toBe(
       `Assigned Standin Sam to cover Covered Carl for ${home.name} in ${label}`,
     );
+    // Filed under the match's season, not as season-independent work.
+    expect(assignRow.seasonId).toBe(season.id);
 
     const assignment = await prisma.standinAssignment.findFirstOrThrow({
       where: { matchId: match.id },
@@ -311,6 +313,7 @@ describe("log lines name the fixture, never an internal id", () => {
       `Removed Standin Sam's cover for ${home.name} in ${label}`,
     );
     expect(removeRow.summary).not.toContain(assignment.id);
+    expect(removeRow.seasonId).toBe(season.id);
   });
 
   it("removeGame", async () => {

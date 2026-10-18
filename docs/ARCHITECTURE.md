@@ -177,7 +177,8 @@ initial failure, delayed sync, paused, waiting, completed, and short-roster
 completion each have distinct UI states.
 
 The room directly offers `pauseDraft`/`resumeDraft`, `voidCurrentLot` (paused
-active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase),
+active lot only), and `undoLastSale` (reverts the newest `price > 0` purchase,
+only while it is the sale the confirm named: `expectedSaleMembershipId`),
 plus a link to `/admin` for typed-confirmation Abort. Abort is one Serializable
 pre-season reset: it preserves registrations, teams, authoritative
 `Team.captainId` captains, draft settings/night/readiness; removes every other
@@ -480,8 +481,9 @@ stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
-1. **Queue** — `joinQueue` (MMR trust chain: league registration > clamped
-   typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
+1. **Queue** — `joinQueue` (MMR trust chain: an admin's inhouse MMR
+   (`User.inhouseMmr`, set on `/admin/inhouse-players`) > league registration >
+   clamped typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
    refuses a Divine 3+ medal or an MMR over `HARD_MMR_CEILING`) into the
    userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
    by the player's own polls); stale entries dim to "away" and are pruned.
@@ -621,8 +623,8 @@ Rules that follow from the layering:
   work is different: the private Cloudflare Worker in
   `ops/cloudflare-automation-worker` owns the repository's only one-minute Cron
   Trigger and calls `GET /api/cron/automation` with `Authorization: Bearer
-  <CRON_SECRET>`. Vercel deliberately has no cron registration, so the same
-  deployment works on Hobby without creating a second clock.
+  <CRON_SECRET>`. Nothing on the box (no systemd timer or in-process cron)
+  calls that route, so there is never a second clock.
   `runAutomation` elects one runner across all instances with a tokened,
   database-global 90-second lease, fences finalization with the same token,
   and gives `runResultSync` a 45-second deadline/abort budget. The persisted
@@ -732,22 +734,27 @@ reads remain origin-independent and allow 1,200/min/IP; every mutation requires
 canonical same-origin proof and allows 300/min/signed-in user (signed-out
 attempts fall back to IP);
 `/api/dota-lobby` — the lobby bot panel's POST (`{kind, id, action:
-status|create|start|release|invite}`; signed in, 30 reads and 10 writes per
-minute per user), relayed to the bot by `callLobbyBot`; the browser gets
-names, sides, seats and invite results, never a Steam ID;
+status|create|start|release|invite}`; signed in, 60 reads and 10 writes per
+minute per user), sent to the bot by `callLobbyBot` (through the relay, or
+over loopback once the bot is on the box), with every panel of a game sharing
+one status read per 2 seconds; the browser gets names, sides, seats, invite
+results and the bot's releasing and game-over flags, never a Steam ID, and a
+read showing Dota's postgame marks the game over (`endInhouseGameFromBot`);
 `/api/dota-lobby/recovery` — the admin-only bot recovery check;
 `/api/sync` — public, read-only GET snapshot for `<ResultSyncPing>` (`watch` +
 result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,
 read-only GET of one fixture's overlay data, its version (the result cursor and
-a 10-minute bucket until the series is decided) in the path so Vercel's CDN
-keeps each answer; `/api/cron/automation` — the
+a 10-minute bucket until the series is decided) in the path so an edge cache
+could keep each answer (Vercel's did; on the box none does);
+`/api/cron/automation` — the
 `CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
 60-second route ceiling); `/api/health/live` — dependency-free process
 liveness; `/api/health/ready` — database readiness (`SELECT 1`, 503 on
 failure); `/api/health/automation` — public, read-only dead-man probe with only
 a bounded status enum (200 for fresh clean success, 503 otherwise);
-`/api/health/release` — public code identity (league region and release
-commit) that a release reads to confirm what is live;
+`/api/health/release` — public code identity (`ok`, `region`, `commit`, and
+`site` and `deployEnv`, the origin the build was baked with and the box's
+deploy marker) that a release reads to confirm what is live;
 `/api/calendar` — the .ics feed; `/api/calendar/inhouse-night` — the planned
 inhouse night as a one-event .ics download (404 when none);
 `/api/calendar/inhouse-time?at=` — a Play later time as a one-event .ics
@@ -761,11 +768,15 @@ returns an admin-only 413 with backup/out-of-band-export guidance above the
 4,000,000-byte hosted-response ceiling instead of letting the platform fail an
 oversized response; `/api/test/cache` — fixture-only cache expiry, gated behind non-production + dev login + an
 e2e/fixture database URL and otherwise 404. Rate limiting
-(`src/lib/rate-limit.ts`) is an in-memory per-instance speed bump, not a
-distributed limit; production therefore requires reviewed pre-function edge
-rules and direct Vercel ingress (or an explicitly trusted upstream proxy).
-`x-vercel-forwarded-for` wins over spoofable fallback headers and an invalid
-provider-owned value collapses into the shared `unknown` bucket.
+(`src/lib/rate-limit.ts`) is an in-memory per-process speed bump, not a
+distributed limit. On the box one process serves each league (two during a
+release's 90-second overlap), so it acts league-wide, behind Cloudflare's own
+DDoS protection. Its key is the client IP: with
+`CLIENT_IP_HEADER=cf-connecting-ip` (the box) only Cloudflare's
+`cf-connecting-ip` counts and every other header is ignored, which is safe
+because only Cloudflare reaches Caddy, through the tunnel; without it (Vercel,
+development) `x-vercel-forwarded-for` wins over spoofable fallback headers.
+A missing or invalid value collapses into the shared `unknown` bucket.
 Attacker-controlled key growth is bounded to 5,000 live
 buckets with expiry pruning and oldest-window eviction. App-level files:
 `layout.tsx` (session + season + nav
@@ -774,12 +785,24 @@ gating fetched per request), `error/global-error/loading/not-found.tsx`, `sitema
 
 All five JSON mutation routes stream at most 8,192 UTF-8 bytes, reject a lying
 or absent `Content-Length` by the measured body, require one JSON object, and
-fail before authentication/database work on malformed input. Scalar-only
+fail before authentication/database work on malformed input. Their canonical
+same-origin proof compares the `Origin` with `publicOrigin(req)`
+(`src/lib/public-origin.ts`): `APP_URL` when `LEAGUE_DEPLOY_ENV` is declared
+(the box, where Next builds `req.url` from the local bind address,
+`https://localhost:<port>`, never the public hostname), else the request's
+own origin. Every route-handler redirect builds on it too, never on `req.url`
+(`src/app/route-redirect-origin.test.ts`). The Steam `return_to` and `realm`
+and the Discord `redirect_uri` build on `providerReturnBase(req)` instead:
+the canonical origin when declared, else `APP_URL` or the request's origin
+(the pre-box rule, so a request on another host still hands the provider its
+registered callback); don't replace it with `publicOrigin`. Scalar-only
 Server Actions have a 64 KB raw multipart ceiling; the app has no file upload.
 `/api/sync` and
-calendar are viewer-independent and use short Vercel-only microcaches while
-browsers must revalidate; the overlay page and each version of its data are
-kept by the CDN for a day; room state remains personalized and `no-store`.
+calendar are viewer-independent and carry short `vercel-cdn-cache-control`
+microcache headers that only Vercel's edge honored, while browsers must
+revalidate; the overlay page and each version of its data carry a day-long
+edge lifetime. On the box no edge caches any of them (the Cloudflare zone has no Cache Rules), so
+the box answers each request; room state remains personalized and `no-store`.
 
 ## 6. Database models
 
@@ -995,14 +1018,18 @@ enums, so every status column is a string whose allowed values live in
 
 ## 7. Background/automatic processes
 
-The production clock is explicit and single-owner. `vercel.json` has no `crons`
-entry; `ops/cloudflare-automation-worker/wrangler.jsonc` declares the only
-`* * * * *` trigger. Its private scheduled handler validates an exact canonical
-HTTPS `AUTOMATION_URL` pinned as a reviewed, non-secret Wrangler `var`, refuses
-redirects, sends encrypted `AUTOMATION_SECRET` as the bearer, limits the
-response to 2 KiB, and accepts only HTTP 200 with `{ ok: true, status:
-"SUCCEEDED" }`. `AUTOMATION_SECRET` is the same byte-for-byte value stored as
-Vercel's `CRON_SECRET` and is the Worker's only required secret binding.
+The production clock is explicit and single-owner, one per league. No systemd
+timer, in-process cron or `vercel.json` `crons` entry calls the route;
+`ops/cloudflare-automation-worker/wrangler.jsonc` (Europe's
+`wrangler.europe.jsonc`) declares the league's only `* * * * *` trigger. Its
+private scheduled handler validates an exact canonical HTTPS `AUTOMATION_URL`
+pinned as a reviewed, non-secret Wrangler `var`
+(`https://us.ggd2l.com/api/cron/automation`, or Europe's), refuses redirects,
+sends encrypted `AUTOMATION_SECRET` as the bearer with
+`user-agent: ggd2l-automation-scheduler`, limits the response to 2 KiB, and
+accepts only HTTP 200 with `{ ok: true, status: "SUCCEEDED" }`.
+`AUTOMATION_SECRET` is the same byte-for-byte value as the league's
+`CRON_SECRET` on the box and is the Worker's only required secret binding.
 `src/lib/cron-auth.ts` accepts only the header bearer token matching the
 non-placeholder `CRON_SECRET` and compares fixed-length digests in constant
 time. Query strings and browser cookies are not credential sources. The route
@@ -1085,6 +1112,9 @@ box-score issues) and `/admin/health` (one season's signups and seats, check-in
 rate, standin bookings and their lead time, Discord links and posts, and new
 accounts per week, as counts; `?season=` picks any season;
 `league-health-service.ts` over the pure `league-health.ts`).
+Off-page with edits of its own: `/admin/inhouse-players`, any player's inhouse
+MMR and medal, signed up for the league or not (`setInhouseRating` over
+`inhouse-rating-service.ts`; [inhouse](features/inhouse.md#queue)).
 
 ## 9. External integrations
 
@@ -1245,8 +1275,9 @@ Five layers (depth and the doctrine behind each in CLAUDE.md and
    repo directory.
 
 CI (`.github/workflows/ci.yml`) runs: types + unit + SQLite integration; the
-integration suite on a Postgres service container; the 4-shard mutation
-matrix; and all three Playwright suites sequentially. CI invokes the release
+integration suite on PostgreSQL 18, started by a step (`scripts/ci-postgres.mjs`:
+mirror.gcr.io, then ECR Public, then Docker Hub, no secret); the 4-shard
+mutation matrix; and all three Playwright suites sequentially. CI invokes the release
 classifier against the PR/push event base as a conservative job-selection
 optimization; only a narrow presentation-path allowlist may skip the Postgres
 job, and the mutation job also skips when `needs_mutation` is false (only
@@ -1274,13 +1305,62 @@ remote connection, and the browser fixture never touches `dev.db`.
 
 ## 11. Production deployment and recovery
 
+**Status: planned.** Production is one self-hosted box, `ggd2l-1`; both
+leagues move there from Vercel and Neon on the cutover day
+([DECISIONS](DECISIONS.md#hosting)). Until then they run on Vercel and Neon
+as before and nothing is released; until a league has moved, its scheduler
+pause, resume and rollback deploys run from a checkout of 33a1f348, because
+the `wrangler*.jsonc` on `main` already target the box's origins. This
+section describes the box.
+
+**Ingress and runtime.** Each league's hostname is a proxied Cloudflare CNAME
+to a Cloudflare Tunnel; `cloudflared` on the box hands requests to Caddy on
+127.0.0.1:8080, which routes by host to the league's live slot and serves
+`/_next/static/*` from a per-league union of every build's static files.
+Nothing listens publicly but SSH. Each league has two slots (`a` and `b`: US
+3001/3002, Europe 3011/3012), each `next start -H 127.0.0.1 --keepAliveTimeout
+75000` from a release directory built on the box at an exact commit;
+`ggd2l-us@.service` and `ggd2l-eu@.service` run them, and only the live slot
+is enabled. Caddy removes `X-Vercel-Forwarded-For`, `X-Real-IP` and
+`X-Middleware-Subrequest`, sets `X-Forwarded-Proto` and `X-Forwarded-For`, and
+passes `Host` through. A promote restarts the target slot clean, swaps the
+league's Caddy mode file and reloads Caddy; a rollback is a promote of the
+previous release. Every slot start deletes `.next/cache/fetch-cache`, because
+Next keeps cache tag state only in a process's memory. A slot's user can write
+only `.next/cache` and `.next/server/route-cache` (Next's response cache for
+prerendered routes) of its release (`RELEASE_WRITABLE_DIRS`), and each process
+holds one Prisma pool (`src/lib/prisma.ts`). One fixed
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` per league keeps action ids stable
+across releases. PostgreSQL 18 holds both leagues' databases on
+127.0.0.1:5432. `ops/selfhost/` is the kit, and `ops/selfhost/README.md` its
+runbook.
+
+**Deploy marker.** `LEAGUE_DEPLOY_ENV` (`leagueDeployEnv`,
+`src/lib/deploy-env.ts`) is `production` or `staging` on the box and absent
+everywhere else. Declared, it makes `publicOrigin(req)` (the same-origin
+guard and every redirect) and `providerReturnBase(req)` (the Steam and
+Discord callbacks) answer `APP_URL`, and opens Discord writes only for
+`production` (`discordMutationsAllowed`); absent, all three behave as they
+always did, and Vercel previews stay closed. Every box unit runs the env
+contract (`ops/selfhost/agent/env-contract.mjs`) before it starts and refuses
+an environment without a valid marker, with any `VERCEL*` or Neon key, with a
+`NEXT_PUBLIC_LEAGUE_REGION` other than its league, with an `APP_URL` that
+isn't a bare origin (in production, exactly the league's canonical origin),
+or with database URLs that aren't the league's app role on 127.0.0.1.
+`/api/health/release` reports `site` and `deployEnv`, so a release can see a
+build baked with the wrong origin or a staging environment serving
+production.
+
 **Environment gate.** `scripts/validate-prod-env.mjs` runs first for a
-production Vercel build. It requires PostgreSQL `DATABASE_URL` and `DIRECT_URL`
+production build (on the box, `scripts/vercel-build.mjs` with
+`NODE_ENV=production`; the name is kept). It requires PostgreSQL
+`DATABASE_URL` and `DIRECT_URL`
 that name the same logical database, schema, username (and, for recognized
-managed providers, the same project). The initial release intentionally does
-not claim to provision or attest grants for a separate runtime role; pooled and
-direct URLs must therefore retain the same username, though their passwords may
-differ. It rejects a custom-provider pair unless hostname and effective port
+managed providers, the same project). On the box both are the same URL for
+the league's non-owner app role (`ggd2l_<lg>_app`); the migration process
+alone gets the owner role (`ggd2l_<lg>_owner`) in both variables, and the
+agent's grants check (`ops/selfhost/sql/runtime-grants.sql`) attests that the
+app role can read and write every table and owns nothing. It rejects a custom-provider pair unless hostname and effective port
 also match; only the reviewed Neon and Supabase forms normalize distinct
 pool/direct endpoints. It rejects a pooler as `DIRECT_URL`, a known direct
 endpoint as `DATABASE_URL`,
@@ -1296,30 +1376,37 @@ production `DISCORD_API_BASE`; at least one valid, unique individual SteamID64 i
 `PRISMA_SCHEMA_DISABLE_ADVISORY_LOCK` is rejected so concurrent migration
 commands retain Prisma's database lock.
 Errors identify fields without echoing their values. Production has no
-first-user bootstrap path. Secrets belong in Vercel
-or another secret manager and a private process environment, never literal
-command arguments, source, logs, or chat. Cloudflare stores the same cron value
-only as encrypted `AUTOMATION_SECRET`; the reviewed, non-secret
-`AUTOMATION_URL` remains pinned in `wrangler.jsonc`.
+first-user bootstrap path. Secrets belong in root-only files under
+`/etc/ggd2l/` that systemd hands to the process, never literal command
+arguments, source, logs, or chat. Cloudflare stores the same cron value only
+as encrypted `AUTOMATION_SECRET`; the reviewed, non-secret `AUTOMATION_URL`
+remains pinned in the Worker's `wrangler*.jsonc`.
 
-**Build and schema order.** The database gate in the ordinary Vercel migration
-path deliberately contains no writer. In production, `build:vercel` validates
+**Build and schema order.** The database gate in the build deliberately
+contains no writer. In production, `build:vercel` (`scripts/vercel-build.mjs`,
+which the agent runs on the box as the unprivileged `ggd2l-build` user from a
+clean clone at the exact commit) validates
 the environment → switches the Prisma provider to PostgreSQL → validates the
 checksum-pinned committed migration set → generates the client → attests the
 exact migration ledger, Prisma schema, and required PostgreSQL-native objects
 read-only through `scripts/production-schema-check.mjs` → runs the Next
-production build. Pending, missing, failed, extra, or changed migrations and
-schema/native-object drift stop compilation instead of being applied implicitly.
-A Preview build that has its own database runs the same attestation against
-it and stops while it is behind; development and local builds attest nothing,
-and no build deploys migrations. The subsequent Next build
+production build, with Next's own type check skipped on the box
+(`GGD2L_SKIP_BUILD_TYPECHECK=1`; CI type-checked the exact commit). Without
+`NODE_ENV=production` both gates skip silently, so the agent requires their
+pass lines in the output. Pending, missing, failed, extra, or changed
+migrations and schema/native-object drift stop compilation instead of being
+applied implicitly. Development and local builds attest nothing, and no build
+deploys migrations. The subsequent Next build
 still receives its runtime environment, so application build code must remain
 side-effect-free; the read-only guarantee belongs to the database gate, not to
 arbitrary application code.
 
 Database expansion is a separate controlled operation. From a clean ephemeral
 checkout whose `HEAD` is the reviewed full 40-character commit, the operator
-runs `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`.
+runs `npm run db:migrate:release -- --apply <reviewed 40-character HEAD SHA>`;
+on the box `agent migrate` runs that script from a tools clone at the commit,
+as the league's owner role, with `VERCEL_ENV=production` set only in that
+process.
 The guarded wrapper binds approval to that exact checkout, validates production
 configuration and immutable migration SQL, requires `VERCEL_ENV=production`,
 refuses root or `prisma/` `.env` files that Prisma could auto-load afterward,
@@ -1329,7 +1416,7 @@ abbreviated-SHA or build-environment mode-flag shortcut. Migrations land before
 the candidate application is promoted and must remain backward-compatible with
 the currently serving release. Production has no data-loss override and never
 uses `prisma db push`. The wrapper enforces these technical gates, but cannot
-prove human approval, exact-SHA CI success, provider backup/restore evidence,
+prove human approval, exact-SHA CI success, backup and drill evidence,
 scheduler propagation, or lease drain; operators must verify and record every
 applicable prerequisite before invoking it.
 
@@ -1358,13 +1445,14 @@ promoting the previous application build, not attempting a destructive SQL
 down migration. The automation/outbox tables are additive and safe for that
 older binary to ignore.
 
-**Scheduler and health launch gate.** `vercel.json` deliberately omits `crons`,
-so Vercel Hobby can deploy the application without accepting its unsafe daily
-cadence. `ops/cloudflare-automation-worker/wrangler.jsonc` is the sole clock: it
-pins the reviewed production `AUTOMATION_URL`, declares one `* * * * *` Cron
-Trigger, disables `workers.dev`, and requires only encrypted
-`AUTOMATION_SECRET`. That secret must equal Vercel's `CRON_SECRET`; it is a
-machine boundary, never a browser credential or URL/query value. The Worker
+**Scheduler and health launch gate.** No systemd timer, in-process cron or
+Vercel cron calls the automation route. Each league's Worker
+(`ops/cloudflare-automation-worker/wrangler.jsonc`, Europe's
+`wrangler.europe.jsonc`) is its sole clock: it pins the reviewed production
+`AUTOMATION_URL`, declares one `* * * * *` Cron Trigger, disables
+`workers.dev`, and requires only encrypted `AUTOMATION_SECRET`. That secret
+must equal the league's `CRON_SECRET` on the box; it is a machine boundary,
+never a browser credential or URL/query value. The Worker
 throws for every redirect, non-200, oversized/invalid response, or body other
 than `SUCCEEDED`, making the Cron Event fail visibly. The next minute's
 invocation and persisted recovery primitives own retry, while observability
@@ -1372,41 +1460,48 @@ owns alerting.
 
 Cloudflare Workers Free currently permits 100,000 requests/day, five Cron
 Triggers/account, 50 external subrequests/invocation, 10 ms CPU per Cron
-Trigger, and 15 minutes wall time. This Worker consumes about 1,440 scheduled
-invocations/day, one trigger, one external fetch per invocation, a 65-second
+Trigger, and 15 minutes wall time. Each league's Worker consumes about 1,440
+scheduled invocations/day, one trigger, one external fetch per invocation, a 65-second
 timeout, and a bounded 2 KiB parse. Those limits are shared provider state, not
 an application guarantee, so initial-launch or scheduler-change evidence must
 re-check capacity and current
 [Cloudflare Workers limits](https://developers.cloudflare.com/workers/platform/limits/).
 
-Before promotion, a Preview or staging deployment on a non-production database
-must prove runtime behavior: `/api/health/live` returns 200 without dependency
-work; `/api/health/ready` returns 200 with the target database and 503 when that
+The runtime contract: `/api/health/live` returns 200 without dependency work;
+`/api/health/ready` returns 200 with the target database and 503 when that
 probe fails; unauthenticated/incorrect-auth cron is 401; POST `/api/sync` is
 405; GET `/api/sync` is a read-only `updated`/`watch`/`cursor` response; and a
-manual Admin run or separate reviewed staging invocation can complete. That
-rehearsal is not promotable. The exact reviewed SHA is then built as a staged
-production candidate, with production configuration but no canonical domain;
-its read-only database gate attests the actual production database. Only
-read-only probes, a public database-backed page, focused UI checks, and an
-error-log scan run against that generated candidate URL before the exact
-deployment is promoted without rebuilding. The production Cloudflare Worker
-must never target a Vercel Preview or generated candidate URL. Immediately
+manual Admin run can complete (on a fixture server or the rehearsal, never a
+candidate). The
+exact reviewed SHA is built on the box as a production candidate with the
+league's production configuration; its read-only database gate attests the
+actual production database. The candidate starts in the league's idle slot,
+reachable only on 127.0.0.1, and passes the shared smoke
+(`ops/selfhost/smoke/smoke.mjs`, the same script CI's postgres job runs on its
+own build): the probes, release identity, database-backed pages, the
+same-origin guard, the sign-in redirects, image resizing and the overlay. The
+smoke never calls `/api/sync` or `/api/health/automation`, which would cache
+automation state in the candidate's own process. That exact release is then
+promoted without rebuilding. The production Cloudflare Worker always targets
+the canonical origin, never a candidate or a staging slot. Immediately
 after a controlled production promotion, the sole Cloudflare trigger must
 produce two consecutive authenticated one-minute 200/SUCCEEDED invocations,
 and `/api/health/automation` must return 200. The evergreen Admin →
 Automation card must show those attempts and successes, Source = Scheduled
 cron, cleared leases, and zero consecutive failures. The manual control must
 complete under Source = Admin manual run while idle and refuse to overlap an
-active scheduled lease. Alert on live/ready failure, cron non-2xx, or four
-minutes without a completed pass. The pinned-commit promotion, release evidence,
-traffic freeze, rollback, PITR recovery, and secret-rotation contract lives in
+active scheduled lease. healthchecks.io dead-man checks are to alert on
+readiness through Cloudflare, the automation probe, each backup and the weekly
+drill; they are not configured yet (PRODUCTION-OPERATIONS, Box operations).
+The pinned-commit promotion, release evidence, traffic freeze, rollback,
+recovery, and secret-rotation contract lives in
 `docs/PRODUCTION-OPERATIONS.md`.
 
 **Application rollback sequencing.** The Cloudflare clock is independent of a
-Vercel rollback. A schema-neutral rollback that preserves the authenticated
-automation contract leaves the scheduler active, promotes the exact known-good
-artifact, verifies normal health, and observes two scheduled successes. A
+slot rollback. A schema-neutral rollback that preserves the authenticated
+automation contract leaves the scheduler active, promotes the previous
+release (`agent rollback`, which restarts it clean), verifies normal health,
+and observes two scheduled successes. A
 rollback that crosses a schema/scheduler boundary, predates that contract, or
 has uncertain compatibility deploys the committed `wrangler.paused.jsonc` through
 `npm run scheduler:pause`; its empty `crons` array removes every Cron Trigger
@@ -1448,6 +1543,11 @@ identity includes hostname and effective port so a receipt cannot cross between
 clusters listening on different ports; reviewed Neon/Supabase pool/direct forms
 normalize to their managed project identity. The season JSON is an
 audit archive with no restore path and cannot satisfy that gate.
+On the box each league's `ggd2l-backup@<lg>.timer` runs those two scripts
+every hour as the app role (so receipts keep matching the database), without
+the receipt secret, then gzips the dump, encrypts it with `age` to Tim's
+offline key and copies it to the `ggd2l-backups` R2 bucket; there is no
+point-in-time restore, so the recovery point is the newest hourly dump.
 
 **Recovery proof.** A checksum proves byte integrity, not that SQL is parsable,
 complete, or compatible. `npm run db:backup:rehearse -- <backup.sql>` accepts
@@ -1460,6 +1560,7 @@ preflight, deploys the reviewed migrations from an isolated Prisma workspace,
 and only then runs the same full schema/migration/native-object postflight. The
 legacy mode preserves its additional baseline-adoption step before preflight.
 CI also asserts that known legacy User and Season fixture rows survived the
-round trip. Initial launch and every production migration release still require the
-same restore drill against a disposable database on the actual hosting
-provider, with the result recorded before the backup is trusted for recovery.
+round trip. On the box the same rehearsal runs weekly per league
+(`ggd2l-drill@<lg>.timer`, as the scratch-only `ggd2l_rehearsal` role) and
+before every production migration (`agent drill`), with the result recorded
+before the backup is trusted for recovery.

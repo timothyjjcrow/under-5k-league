@@ -10,6 +10,7 @@
 
 import { LIVE_WINDOW_MS } from "./countdown";
 import { icsDate, type CalendarEvent } from "./ics";
+import { LEAGUE_CONFIG } from "./league-config";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -414,14 +415,18 @@ export function inhouseNightGoogleCalendarUrl(
   return `https://calendar.google.com/calendar/render?${params}`;
 }
 
-/** The night as one calendar entry, for the .ics download. */
+/**
+ * The night as one calendar entry, for the .ics download. The UID's host is
+ * pinned (calendarUidHost), never the site's: a calendar app matches a
+ * re-imported night by its UID.
+ */
 export function inhouseNightCalendarEvent(
   night: InhouseNight,
   site: string,
   leagueName: string,
 ): CalendarEvent {
   return {
-    uid: `inhouse-night-${night.id}@${new URL(site).host}`,
+    uid: `inhouse-night-${night.id}@${LEAGUE_CONFIG.calendarUidHost}`,
     stamp: new Date(night.createdAtMs),
     sequence: night.revision,
     start: new Date(night.startsAtMs),

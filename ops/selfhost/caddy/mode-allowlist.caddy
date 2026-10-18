@@ -1,0 +1,33 @@
+# Reference for /etc/caddy/ggd2l/<lg>-mode.caddy in "allowlist" mode (the
+# rehearsal and the W10a/E7a first look). Only the addresses in
+# /etc/caddy/ggd2l/allow.caddy reach the slot; everyone else gets the
+# maintenance page. allow.caddy holds one matcher line written by
+# `ggd2l-agent allow <ip...>`, for example:
+#   @allowed client_ip 203.0.113.7 2001:db8::7
+import /etc/caddy/ggd2l/allow.caddy
+handle @allowed {
+	header X-Robots-Tag "noindex, nofollow"
+	reverse_proxy 127.0.0.1:__PORT__ {
+		header_up -X-Vercel-Forwarded-For
+		header_up -X-Real-IP
+		header_up -X-Middleware-Subrequest
+		header_up X-Forwarded-Proto https
+		header_up X-Forwarded-For {client_ip}
+		flush_interval -1
+		transport http {
+			keepalive 60s
+		}
+	}
+}
+handle {
+	header Retry-After 600
+	header Cache-Control no-store
+	header X-Robots-Tag "noindex, nofollow"
+	@write not method GET HEAD
+	respond @write "GGD2L is under maintenance. Check the league Discord for updates." 503
+	root * /srv/ggd2l/www
+	rewrite * /maintenance.html
+	file_server {
+		status 503
+	}
+}

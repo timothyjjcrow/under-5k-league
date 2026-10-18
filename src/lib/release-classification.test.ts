@@ -225,6 +225,13 @@ describe("release classifier policy", () => {
       expect(prefix).toMatch(/^ops\/[^/]+\/$/);
       expect(ignored).toContain(prefix);
     }
+    // The self-hosting kit reaches the box only through install-kit.sh, and
+    // the legacy-origin redirects deploy from their own folders: neither goes
+    // out with the website, so neither selects a scheduler pause.
+    for (const prefix of ["ops/selfhost/", "ops/vercel-redirect/"]) {
+      expect(INDEPENDENT_OPS_PREFIXES).toContain(prefix);
+      expect(ignored).toContain(prefix);
+    }
   });
 
   it.each([
@@ -251,6 +258,16 @@ describe("release classifier policy", () => {
     ["ops/dota-lobby-bot/server.mjs", true],
     ["ops/dota-lobby-relay/src/index.mjs", true],
     ["ops/dota-lobby-relay/wrangler.jsonc", true],
+    // The self-hosting kit and the legacy-origin redirect deployments, for
+    // the same reason. The kit's tests and the shared smoke stay strict and
+    // run the ratchet like any other ops/ file.
+    ["ops/selfhost/agent/ggd2l-agent.mjs", true],
+    ["ops/selfhost/agent/env-contract.test.mjs", true],
+    ["ops/selfhost/smoke/smoke.mjs", true],
+    ["ops/selfhost/systemd/ggd2l-league@.service", true],
+    ["ops/selfhost/install-kit.sh", true],
+    ["ops/vercel-redirect/us/vercel.json", true],
+    ["ops/vercel-redirect/eu/public/index.html", true],
     // The Next proxy and the root tooling were unknown paths, which select
     // both controls: src/proxy.ts forced the 2026-10-06 maintenance release
     // with no migration. Like any config or server file they still run the
@@ -534,6 +551,8 @@ describe("release classifier deletions", () => {
     [".github/workflows/old.yml", true],
     ["ops/dota-lobby-bot/server.mjs", true],
     ["ops/dota-lobby-relay/src/index.mjs", true],
+    ["ops/selfhost/provision-base.sh", true],
+    ["ops/vercel-redirect/eu/vercel.json", true],
   ])(
     "keeps strict review without maintenance for deleted %s",
     (file, needsMutation) => {
@@ -574,6 +593,8 @@ describe("release classifier deletions", () => {
   it.each([
     "ops/cloudflare-automation-worker-europe/wrangler.jsonc",
     "ops/scheduler-backup/cron.mjs",
+    // A prefix exempts only its own folder.
+    "ops/selfhost-scheduler/cron.mjs",
   ])(
     "fails closed for a deleted file in an unlisted ops/ folder %s",
     (file) => {

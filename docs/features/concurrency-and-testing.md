@@ -91,7 +91,10 @@ Each server instance serves the inhouse room from one copy of its rows,
 labelled with the `inhouseRoomVersion` Setting and checked on every poll
 (`src/lib/inhouse-room-cache.ts`, `inhouse-room-version.ts`; the rules are in
 [inhouse](inhouse.md#scope-and-where-it-runs)). SQLite and a single test
-process hide every way it can go stale, as they hide races.
+process hide every way it can go stale, as they hide races. **These rules
+stay on the self-hosted box:** it runs one process per league, but two for
+the 90 seconds of every release's overlap, and any later scale-out would add
+more, so a writer that skips Rule P still shows stale rows.
 
 - **Rule P: after any commit the room shows, call `publishInhouseRoomChange()`
   before any Discord or OpenDota call and before the response.** An
@@ -227,6 +230,13 @@ process hide every way it can go stale, as they hide races.
   production classification or an earlier main commit's passing shards for a
   mutation-neutral delta (README has the recovery). `mutation-nightly.yml` verifies
   everything daily at 07:00 UTC. Keep the job names; `release:both` reads them.
+- **CI's PostgreSQL starts from a step, never a `services:` container.** Each
+  Postgres job's "Start PostgreSQL 18" step (`scripts/ci-postgres.mjs`) runs
+  the official image for the job's `PG_TEST_URL`, pulled from mirror.gcr.io,
+  ECR Public or Docker Hub, whichever answers first, with no secret. Shared
+  runner IPs exhaust one registry's anonymous limit at a time, and a service
+  pulls from only one ([DECISIONS](../DECISIONS.md#code-and-schema)). Keep its
+  step identical in every job; `scripts/shared-release.test.mjs` checks them.
 - **The runner owns guarded files while it runs.** It mutates them in place; do
   not edit or interrupt it, and inspect the diff after any abnormal end.
 - **`--only` is a probe.** It never writes the baseline and is refused in verify
@@ -237,6 +247,14 @@ process hide every way it can go stale, as they hide races.
 
 The provider switch is a footgun if you forget to switch back. (Database names
 keep the old `ld2l_` prefix.)
+
+**Never on the production box.** Its localhost Postgres is production, and
+the suite wipes every table. Run `pg:up`, `test:pg`, `test:mutation`, the
+integration suites and `db:push` only on a development machine or CI.
+Production databases are `ggd2l_us` and `ggd2l_eu`, never a name the guards
+accept (`ld2l_test`, `ld2l_pgtest`, `ld2l_restore_test`); the box's weekly
+restore drill is the one thing that uses `ld2l_restore_test` there, as a
+scratch-only role.
 
     npm run pg:up            # create the DB, switch provider, migrate, generate
     export PG_TEST_URL="postgresql://$USER@localhost:5432/ld2l_pgtest"
@@ -254,7 +272,7 @@ keep the old `ld2l_` prefix.)
   and `pg:up`/`pg:down` require localhost. Never use a production or shared URL,
   and never paste a credential-bearing URL into a command line or shell history.
 - **Test on production's major where it matters.** Both leagues and CI run
-  PostgreSQL 18. `pg:up` uses whatever server listens on localhost:5432, so a
+  PostgreSQL 18 (the box's PGDG 18 from the cutover; Neon's before it). `pg:up` uses whatever server listens on localhost:5432, so a
   check that depends on the major (postflight's deparsed predicates and checks,
   or a backup rehearsal, whose `pg_dump` refuses a newer server) needs a
   PostgreSQL 18 server and client, such as Homebrew's `postgresql@18`.

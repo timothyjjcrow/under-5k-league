@@ -8,6 +8,13 @@ and a Europe league, each with its own database, Discord server and settings.
 > [docs/PRODUCTION-OPERATIONS.md](docs/PRODUCTION-OPERATIONS.md). Those are the
 > source of truth for builds, migrations, backups, the scheduler, rollback and
 > approval. Nothing in this file or the feature notes overrides them.
+>
+> **Hosting:** production is one self-hosted box (SSH alias `ggd2l-1`) behind
+> a Cloudflare Tunnel. **Status: planned.** Both leagues move there from Vercel
+> and Neon on the cutover day ([decisions](docs/DECISIONS.md#hosting)); until
+> then they run as before and nothing is released. Until a league has moved,
+> run its scheduler pause, resume and rollback deploys from a checkout of
+> 33a1f348: the `wrangler*.jsonc` on `main` already target the box's origins.
 
 [docs/DECISIONS.md](docs/DECISIONS.md) lists settled decisions and deferrals,
 one line each: check it before proposing a change. Where it disagrees with this
@@ -25,7 +32,7 @@ note before changing that area: it is required reading, not background.
 | [draft](docs/features/draft.md) | the auction engine, the draft admin controls, `/draft` or the draft room |
 | [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover, check-ins, the week reminder |
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
-| [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later |
+| [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal (`/admin/inhouse-players`) |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
 | [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
@@ -67,8 +74,8 @@ note before changing that area: it is required reading, not background.
   the same uid, epoch and sign-in time (180-day cap) by one call a week: the
   layout mounts `<SessionRefresh>` only when `getSessionRefreshDue` says so,
   and `POST /api/auth/refresh` runs `refreshSessionCookie`. **Add no Next
-  proxy or middleware:** each is its own often-cold Vercel function on every
-  page load (`session-refresh.test.ts`). Bumping `session-epoch.ts` signs
+  proxy or middleware:** each adds a hop and one more layer to every page
+  load (`session-refresh.test.ts`). Bumping `session-epoch.ts` signs
   everyone out, `npm run set-admins` reconciles stored roles, `/api/auth/dev`
   needs `ALLOW_DEV_LOGIN`, and `bootstrapAdminSteamId` is a local-development
   fallback only.
@@ -98,14 +105,22 @@ note before changing that area: it is required reading, not background.
   `league-status-service.ts`, bot-token calls only in `discord-roles.ts`.
 - **Lobby bot:** `ops/dota-lobby-bot` behind `ops/dota-lobby-relay`, driven by
   `dota-lobby-service.ts` ([docs/DOTA-LOBBY-BOT.md](docs/DOTA-LOBBY-BOT.md)).
+- **Hosting:** `ops/selfhost/` is the box kit: the release agent and its env
+  contract, systemd units, Caddy, the Cloudflare Tunnel config, Postgres
+  provisioning, backups and the shared smoke (`smoke/smoke.mjs`), with its
+  runbook in `ops/selfhost/README.md`. `ops/vercel-redirect/` holds the
+  function-free deployments that redirect the old Vercel origins.
+  `scripts/release-box.mjs` (`npm run release:both`) drives the agent over SSH.
 - **Tests:** unit tests beside the file (`vitest.config.mts`, which is `.mts`
   because the project is CommonJS; no jsdom), integration tests in
   `test/integration/`, Playwright in `e2e/`, `e2e-mid/` and `e2e-postseason/`.
 
 ## Concurrency: the two rules
 
-Production is **Postgres** (`npm run build:vercel` switches the provider with
-`scripts/switch-db-provider.mjs`); local dev, integration tests and e2e are
+Production is **Postgres** on the box: the release agent runs
+`scripts/vercel-build.mjs` (name kept; `npm run build:vercel`) per league with
+`NODE_ENV=production`, and it switches the provider with
+`scripts/switch-db-provider.mjs`. Local dev, integration tests and e2e are
 **SQLite**, which serializes writers and therefore HIDES every race below. Two
 rules, both non-negotiable:
 
@@ -226,6 +241,11 @@ seams: [concurrency-and-testing](docs/features/concurrency-and-testing.md).
   `node scripts/mutation-guard.mjs --static` after touching a file in `FILES`.
 - **Scripts:** `npm run test:scripts` after touching `scripts/`
   (`test:release` and `test:provisioning` for the release and Europe scripts).
+  `test:release` also runs every `ops/selfhost/**/*.test.mjs` (the agent,
+  smoke, units, Caddy, Postgres, SQL, backup scripts and the cutover dump),
+  so run it after touching `ops/selfhost/` or `scripts/release-box.mjs`.
+  CI's Postgres job boots the built site the way the box runs it and runs the
+  smoke against it (the step "Boot the built site the way the box runs it").
 - **Browser:** `npm run test:e2e` (signup, draft, inhouse), `test:e2e:mid` (a
   regular season), `test:e2e:postseason` (playoffs, finished seasons). Each
   seeds its own database but builds into `.next` like `npm run dev`, and Next
@@ -281,8 +301,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Add a page to navigation only through `src/lib/site-nav.ts`,** once it has
   something to show. Hidden pages stay reachable by URL.
 - **Import `Link` from `@/components/app-link`, never `next/link`:** it turns
-  off viewport prefetching, which cost a server render per visible link on
-  every page view (`app-link.test.ts`).
+  off viewport prefetching, which cost a server render and its database work
+  per visible link on every page view (`app-link.test.ts`).
 - **Render a control only where its action would accept, and keep cleanup
   visible.** Drive both from one pure predicate (`seasonPhasePolicy`,
   `standinAssignmentOpen`), but never hide remove or undo for existing rows.
@@ -323,12 +343,11 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 
 ### Automation and caching
 
-- **Both leagues share one Vercel Hobby plan: four hours of Active CPU a
-  month,** and every poll, prefetch and page view is a function call (past
-  the limit Vercel can pause the projects; its Hobby docs say "wait until 30
-  days have passed"). Poll only as fast as a
-  deadline needs (the rooms' rates live in `src/lib/room-poll.ts`), and count
-  what a new background request costs before adding one.
+- **Both leagues share one 1-vCPU box with Postgres and the lobby bot:** poll
+  only as fast as a deadline needs (the rooms' rates live in
+  `src/lib/room-poll.ts`), and count a new background request's database work
+  before adding one. Every poll, prefetch and page view of both leagues lands
+  on the same CPU and the same database.
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
   signed-in room poll runs maintenance only when it wins a `claimThrottle`,
@@ -359,6 +378,42 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Select only display fields for client payloads,** never
   `include: { user: true }`.
 
+### The box
+
+How it runs is in [docs/PRODUCTION-OPERATIONS.md](docs/PRODUCTION-OPERATIONS.md#box-operations)
+and `ops/selfhost/README.md`.
+
+- **Build redirects and origin checks in route handlers on
+  `publicOrigin(req)`** (`src/lib/public-origin.ts`), never on `req.url` or
+  `request.url`: behind the tunnel Next sees the local bind address
+  (`https://localhost:<port>`), never the public hostname.
+  `src/app/route-redirect-origin.test.ts` fails on `new URL(…, req.url)`.
+  The Steam `return_to` and `realm` and the Discord `redirect_uri` use
+  `providerReturnBase(req)` instead, and must keep it: undeclared (Vercel,
+  dev) it falls back to `APP_URL` before the request's origin, so a request
+  on another host still hands the provider its registered callback.
+- **Never run `test:pg`, `pg:up`, the test suites or `db:push` on the box;**
+  its localhost Postgres is production. Production databases (`ggd2l_us`,
+  `ggd2l_eu`) never take a test name (`ld2l_test`, `ld2l_pgtest`,
+  `ld2l_restore_test`), which the destructive scripts accept.
+- **Exactly one clock.** No systemd timer, in-process cron or monitor may call
+  `/api/cron/automation`; only the Cloudflare Worker does.
+- **Never probe `/api/sync` or `/api/health/automation` on a candidate.** They
+  cache automation state in the candidate's own process, where no expiry from
+  the live slot reaches it, and the agent's `check` refuses a candidate whose
+  fetch cache holds those tags. Check a candidate only with
+  `ops/selfhost/smoke/smoke.mjs`.
+- **Keep the per-instance cache rules (Rule P).** The box runs one process per
+  league, except for the 90 s overlap of every release, when two serve it.
+- **One Prisma client per process.** `src/lib/prisma.ts` keeps it on
+  `globalThis` in every environment: Next loads the module once per server
+  bundle, and a module-level client opens a pool per bundle
+  (`prisma.test.ts`). `connection_limit` is per process.
+- **A slot can write only `RELEASE_WRITABLE_DIRS`**
+  (`ops/selfhost/agent/layout.mjs`: `.next/cache`, `.next/server/route-cache`).
+  The build creates them, the units name them, and CI's boot step fails a
+  build that writes anywhere else; a new folder goes in that list.
+
 ### Third-party calls
 
 - **Never overwrite stored data with a failed fetch.** Keep "unreachable"
@@ -380,7 +435,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   token and the OAuth secret show only as a boolean plus a masked fingerprint
   (`maskWebhookUrl`); credential inputs start empty.
 - **Gate every Discord write behind `discordMutationsAllowed()`,** so Vercel
-  previews never post, edit or grant roles.
+  previews and any `LEAGUE_DEPLOY_ENV` other than `production` never post,
+  edit or grant roles.
 - **Escape every player-chosen name with `escapeDiscordText`:** webhook messages
   render markdown and live masked links.
 - **Ping only ids the server chose.** Every send keeps

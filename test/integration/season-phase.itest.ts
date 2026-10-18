@@ -36,6 +36,7 @@ import {
   makeUser,
   sessionFor,
   startDraftState,
+  undoTargetId,
 } from "./factories";
 
 function phaseForm(phase: string, seasonId: string): FormData {
@@ -905,10 +906,11 @@ describe("setSeasonPhase — the write re-asserts the phase it judged", () => {
     });
     await scheduleFixtures(season.id);
     const admin = sessionFor(await makeUser("Undo Admin", "ADMIN"));
+    const target = await undoTargetId(season.id);
     let undone = false;
     setRaceHook(
       onceAt("admin.setSeasonPhase.beforeWrite", async () => {
-        const result = await undoLastSale(season.id, admin);
+        const result = await undoLastSale(season.id, admin, target);
         undone = result.ok;
       }),
     );

@@ -39,9 +39,12 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   best-effort (a failed log never fails the mutation), actor from the session
   (`actor` only for a break-glass action that revokes its own cookie), and a
   summary that carries the destructive numbers, since the row is the whole
-  record. **Consequential corrections write their audit INSIDE the
-  transaction** (`removeGame`, `import-progress.ts`, `recordHistoryAction`,
-  game identity corrections) so a failed audit rolls the correction back.
+  record. Pass the `seasonId` of season work (a service returns it when the
+  action doesn't know it, as the standin services do), or /admin/activity
+  files it as season-independent. **Consequential corrections write their
+  audit INSIDE the transaction** (`removeGame`, `import-progress.ts`,
+  `recordHistoryAction`, game identity corrections) so a failed audit rolls
+  the correction back.
 - **`AdminAction` has no foreign key to `Season` and denormalizes
   `actorName`:** a deletion's record must outlive what it deleted, and a Steam
   rename must not rewrite history.
@@ -262,7 +265,8 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
 - **Draw medals from the 72px copies** (`public/ranks/72`, behind a
   year-long immutable cache header in `next.config.ts`): `RankMedal` at its
   24px default used the 256px masters, 374KB on `/players`. The share
-  pictures (`og-assets.ts`) keep the masters.
+  pictures (`og-assets.ts`) keep the masters, which browsers keep a day
+  ([pages-and-ui](pages-and-ui.md#static-files-and-icons)).
 
 ## Live rooms: connection health and fetch deadlines
 
@@ -302,8 +306,10 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 `docs/PRODUCTION-OPERATIONS.md`; they win over this list.
 
 - **Keep build code side-effect-free.** `npm run build:vercel`
-  (`scripts/vercel-build.mjs`) runs env validation, the read-only
-  `production-schema-check.mjs`, then `next build` with runtime config.
+  (`scripts/vercel-build.mjs`, which the box's agent runs per league with
+  `NODE_ENV=production`) runs env validation, the read-only
+  `production-schema-check.mjs`, then `next build` with runtime config and the
+  real database's URL.
 - **Ship schema changes as committed migrations, additive and compatible with
   the binary still serving** (it keeps serving while they run). Breaking
   changes go expand, deploy, backfill, contract. `scripts/migration-safety.mjs`
@@ -314,14 +320,17 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
   the Postgres job runs). Add a new migration to all three.
 - **Never `db push` production.** Only `npm run db:migrate:release` applies
   migrations there; `npm run db:push` refuses non-local databases.
-- **A release with a migration migrates both Preview databases first**
-  (`docs/RELEASING.md` Appendix B step 1). Nothing else migrates them, and a
-  Preview build attests its own database read-only through
-  `scripts/production-schema-check.mjs`, so a Preview that is behind fails to
-  build instead of serving runtime errors.
+- **Migrations run on the box through the agent, as the owner role**
+  (`docs/RELEASING.md` Appendix B): a fresh dump and a drill first, then the
+  guarded wrapper, then the app role's grants check. A new table the app role
+  can't write fails that check, so a migration never needs a hand-written
+  `GRANT`. The Preview step is retired: the box has no Previews.
 - **Add each new required production env var to
-  `scripts/validate-prod-env.mjs`** (it reports names, never values). Never
-  point a Preview or development build at the production database.
+  `scripts/validate-prod-env.mjs`** (it reports names, never values), to
+  `/etc/ggd2l/<lg>.env` on the box before the release that needs it, and to the
+  env contract (`ops/selfhost/agent/env-contract.mjs`) when the box must refuse
+  a bad value before a slot starts. Never point a staging slot or a
+  development build at a production database.
 - **Release strictness comes from `scripts/classify-release.mjs` taken from
   the live commit**, never the candidate. A path it does not name is unknown
   and selects the database release and the scheduler pause, so name a new
@@ -329,7 +338,72 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
   (`release-classification.test.ts` fails until you do). The new rule spares
   only the releases after the classifier change is live.
 - **A verified checksum is not a restorable backup.** `db:backup:verify`
-  proves bytes; only a restore (`db:backup:rehearse`, or a disposable provider
-  restore) proves the league comes back.
+  proves bytes; only a restore (`db:backup:rehearse`, which the box's weekly
+  drill runs) proves the league comes back.
 - **Never put a credential in argv, a commit, a log, an issue, a screenshot or
   chat** (`backup-db.mjs` passes libpq env fields for this reason).
+
+## The box
+
+Production is one self-hosted box for both leagues
+([PRODUCTION-OPERATIONS](../PRODUCTION-OPERATIONS.md#box-operations); status:
+planned, the move happens on the cutover day). What a code change must
+respect there:
+
+- **One process per league, two during a release.** Caddy sends a league's
+  traffic to one slot at a time; a promote keeps the old slot running at
+  least 90 seconds for its in-flight requests. Per-process state (the inhouse
+  room snapshot, the rate limiter's buckets, Next's cache tags) is therefore
+  league-wide most of the time but not always: keep the per-instance rules
+  ([concurrency-and-testing](concurrency-and-testing.md#per-instance-caches-the-inhouse-room-snapshot)).
+- **Every slot starts clean.** A start deletes `.next/cache/fetch-cache`,
+  since Next keeps tag state only in memory and a leftover entry could serve
+  an old automation-gate snapshot. Never rely on the fetch cache surviving a
+  release or a restart.
+- **A slot writes only `RELEASE_WRITABLE_DIRS`** (`ops/selfhost/agent/layout.mjs`):
+  `.next/cache` (the fetch and image caches) and `.next/server/route-cache`,
+  where Next 16 keeps its response cache for prerendered routes (a copy of
+  each build seed, and every re-render after a `revalidatePath`). The rest of
+  the release is read-only, so a write elsewhere fails, usually with only a
+  warning (`Failed to update prerender cache`, cutover day). The build creates
+  the folders, the units name them, and CI's boot step fails a build that
+  writes anywhere else. The route cache is kept across restarts: it holds
+  only `/manifest.webmanifest`, `/robots.txt` and the global error page, all
+  fixed per build. A prerendered route that reads data would need it wiped at
+  start like the fetch cache.
+- **One Prisma client per process.** `src/lib/prisma.ts` keeps it on
+  `globalThis` in every environment: Next loads the module once per server
+  bundle, and a client held in the module opened a pool per bundle (two per
+  process on the box, `prisma.test.ts`). `connection_limit=8` is therefore per
+  process; four processes in a release overlap use 32 of the 47 usable
+  connections.
+- **Never call `/api/sync` or `/api/health/automation` against a
+  candidate.** They cache automation state in the candidate's own process;
+  the agent's `check` refuses a candidate whose fetch cache holds those tags.
+  A candidate is checked only by `ops/selfhost/smoke/smoke.mjs`; add a check
+  there, not a probe elsewhere.
+- **Build redirects and origin checks on `publicOrigin(req)`.** Behind the
+  tunnel Next builds `req.url` from the local bind address
+  (`https://localhost:<port>`), never the public hostname;
+  `src/app/route-redirect-origin.test.ts` fails on a redirect built from
+  `req.url` or `request.url`. The Steam `return_to` and `realm` and the
+  Discord `redirect_uri` stay on `providerReturnBase(req)`: the canonical
+  origin when declared, else `APP_URL` or the request's origin, so a Vercel
+  or local request on another host still hands the provider its registered
+  callback. Never swap it for `publicOrigin`.
+- **Keep `after()` work short.** A stopping slot gets 60 seconds
+  (`TimeoutStopSec`), which covers the cron's 45-second budget and the
+  `after()` drain; route `maxDuration` exports do nothing on the box.
+- **Exactly one clock.** No systemd timer, in-process cron or monitor calls
+  `/api/cron/automation`; a new deadline gets a wake-up in
+  `src/lib/automation-gate.ts`, never a timer of its own.
+- **Builds share the box with both live sites.** A build runs as
+  `ggd2l-build` at low priority with a 3 GB Node heap and peaks around 1.6
+  GB; never cap its memory below that. Count a new dependency's install and
+  build cost on one vCPU, and a new background request's database work.
+- **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
+  Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
+  scripts accept only the test names, which production never takes.
+- **Treat the box's logs as personal data.** Caddy's access logs hold player
+  IP addresses (size-bounded, kept on the box); never copy them into an issue
+  or a report.

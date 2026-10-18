@@ -1,0 +1,14 @@
+# GGD2L roles (design §1.6). install-kit.sh puts these lines, between the
+# BEGIN/END markers it adds, at the top of /etc/postgresql/18/main/pg_hba.conf;
+# the packaged rules (local all postgres peer, ...) stay below them.
+#
+# Each league's roles reach only their own database, over TCP 127.0.0.1 with
+# a password. The restore-drill role reaches only its scratch database and the
+# maintenance database it drops and creates that one from.
+host    ggd2l_us                     ggd2l_us_app,ggd2l_us_owner    127.0.0.1/32    scram-sha-256
+host    ggd2l_eu                     ggd2l_eu_app,ggd2l_eu_owner    127.0.0.1/32    scram-sha-256
+host    postgres,ld2l_restore_test   ggd2l_rehearsal                127.0.0.1/32    scram-sha-256
+# Any other connection by these roles (another league, another database, the
+# Unix socket or IPv6) is refused here, before a packaged rule can match it.
+host    all    ggd2l_us_app,ggd2l_us_owner,ggd2l_eu_app,ggd2l_eu_owner,ggd2l_rehearsal    all    reject
+local   all    ggd2l_us_app,ggd2l_us_owner,ggd2l_eu_app,ggd2l_eu_owner,ggd2l_rehearsal           reject

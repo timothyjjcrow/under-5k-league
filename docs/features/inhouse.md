@@ -22,9 +22,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   one per game slot** (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`;
   see "Two games at once" below). A lobby is played from team lock:
   `INHOUSE_PLAYING_STATUSES` is READY and IN_PROGRESS, and Start is optional.
-  Both IN_PROGRESS writers (`startGame`, the bot launch in
-  `src/app/api/dota-lobby/route.ts`) are guarded on READY and stamp
-  `startedAt`. AWAITING_RESULT is a game marked over whose result is on the
+  Both IN_PROGRESS writers (`startGame`, and the bot launch
+  `markInhouseGameStartedFromBot`, run by a lobby panel's read and by the
+  worker's bot read) are guarded on READY and stamp `startedAt`. AWAITING_RESULT is a game marked over whose result is on the
   way: not live, not playing, but a result still lands on it
   (`INHOUSE_RESULT_STATUSES`; see "Game over" below).
 - **Two chains run the resolvers; keep them the same SET.** `getInhouseState`
@@ -61,7 +61,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     resolver, Discord or OpenDota, so spectators never advance a lobby. Room
     polls never scan OpenDota: the worker owns the automatic scan.
 - **Each server instance serves the room from one snapshot, checked against
-  the room version on every poll** (`src/lib/inhouse-room-cache.ts`). The
+  the room version on every poll** (`src/lib/inhouse-room-cache.ts`). On the
+  box one process serves each league, but two do for the 90 seconds of every
+  release's overlap (and Vercel ran many), so every rule here holds. The
   snapshot is `loadInhouseRoomRows`: the queue, live games, games marked over,
   the last `LAST_RESULT_WINDOW_MS` of results with their `eloDeltas`, and the
   signup-roles batch. Its label is the `inhouseRoomVersion` Setting
@@ -107,15 +109,17 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     board edit (`formOneLobby`'s queue reset returns false and
     `resolveStalledPick` drops `restoreLostPickTurn`'s result, so
     per-resolver bumps would miss writes). `syncInhouse` after `resolveStalledPick`, plus a try/finally
-    around its call. `formOneLobby` before its ping when it formed or
-    `expireStaticQueue` deleted rows. `joinQueue` before forming. The
+    around its call. `formOneLobby` before its ping (which goes after the
+    response, below) when it formed or `expireStaticQueue` deleted rows.
+    `joinQueue` before forming. The
     auto-detect claims and their deadline rollback. `applyResult` and
     `voidLastResult` before delivery (the admin `voidInhouseResult` too;
     `voidLastResult` after its result-cursor stamp, so a board check that
     sees the new version reads the post-void stats). The
     bot's IN_PROGRESS write when it lands. The outbox reconcile when it
     committed (its `eloDeltas` show in `lastResult`). `/api/test/cache`. The
-    login upsert, the Steam refresh and the signup save.
+    login upsert, the Steam refresh and the signup save. An admin's inhouse
+    MMR and medal (`saveInhouseRating`, after its commit).
   - **`src/lib/inhouse-room-publish.test.ts` guards them.** Every src file
     outside the engine that writes the room's tables publishes. Every importer
     of an engine writer publishes or imports only self-publishing ones. No
@@ -124,7 +128,7 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   - **Writers that never publish show within the 15s max age:** admin
     display edits, the worker's rank refresh and profile writes outside the
     room's flows, such as a relinked Dota account's medal (`docs/DECISIONS.md`).
-    So does a lost publish, and during a rolling deploy an old instance's
+    So does a lost publish, and during a release's overlap the old slot's
     writes. A new writer the room waits on publishes.
 - **Give every new lobby or queue clock a wake-up in
   `src/lib/automation-gate.ts`,** which schedules the worker for accept, vote
@@ -137,6 +141,18 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   claim winner or the worker repaints the board. That is the maintenance
   winner, or, with nothing due, a signed-in poll whose board check is due
   (`boardCheckDue`) and that wins the same 2s claim.
+  - **The pings go out after the response** (`runAfterResponse`, Next's
+    `after`): the match-found ping (`maybeFormLobby`) and the queue's
+    milestone ping (`joinQueue`, whose throttle claim still decides in the
+    request). A Discord post can take 5s, and the tenth joiner's POST, a
+    "Game over" press or a room poll that won maintenance would otherwise
+    hold it, with the joiner's controls locked. They stay after the publish
+    (rule P). The worker alone sends the match-found ping at once
+    (`maybeFormLobby({ pingAfterResponse: false })`): its response comes
+    after a pass of up to 45s, which would eat the 90s accept window, and
+    nobody waits on it. Outside a request (scripts, tests) the ping is sent
+    inline. Tests: `test/integration/inhouse-pings.itest.ts`, and the call
+    sites in `inhouse-room-publish.test.ts`.
   - **The check is due on a new key, 60s (`BOARD_RECHECK_MS`) after the last
     check, or after a `throttled` or `failed` outcome.** The key is this
     instance's: the room version (a digest of the board input while none
@@ -199,11 +215,15 @@ be marked over.
 - **Elo stays correct with overlap.** `summarizeInhouse` rates in formation
   order (id breaks a tie), and since the two games' players are disjoint, a
   later-formed game finishing first never changes the other's deltas.
-- **One bot hosts both, one after the other** (docs/DOTA-LOBBY-BOT.md). The
-  Steam account holds one Dota lobby, but only until launch: it leaves each
-  game once Dota reports it running with a match id, keeping the id for the
-  result lookup. The other game's captain gets BUSY meanwhile, or hosts by
-  hand under its own lobby name.
+- **One bot hosts one game at a time, until that game's postgame**
+  (docs/DOTA-LOBBY-BOT.md; DECISIONS 2026-10-18, superseding the 2026-10-09
+  "leaves each game once it runs"). Dota's Game Coordinator ignores a leave
+  while a game runs, so the Steam account stays in a game's lobby until Dota
+  shows it over, keeping the match id for the result lookup. The other
+  game's Create answers BUSY for that whole game ("hosts one game at a time
+  and is free again when that game ends"), so its captains host it by hand
+  under its own lobby name. Never word the bot as free "once that game
+  starts".
 
 ## Game over (result pending)
 
@@ -212,8 +232,9 @@ OpenDota publishes it, and the queue used to refuse its ten (and hold its
 slot) until then. That night's game (2026-10-10 UTC) ended about 00:50 and
 recorded at 01:11, and the night stalled. OpenDota can't be hurried: its
 match page needs Valve's sequence-number feed (`GET /matches` is empty until
-then, and `POST /request` only queues a replay parse), and the bot leaves at
-launch, so it never sees the end.
+then, and `POST /request` only queues a replay parse). A player's press was
+the only signal until 2026-10-18; since then a bot-hosted game also ends by
+itself when the bot sees Dota's postgame (below).
 
 - **"Game over — queue again" (`finishGame`, action `finish`)** moves a game
   being played (READY or IN_PROGRESS) to AWAITING_RESULT and stamps the
@@ -230,12 +251,18 @@ launch, so it never sees the end.
   during set-up. Unlike `inhouseScanStatus` an unknown window is closed.
 - **Refused while the bot holds an unlaunched lobby** for that game and is
   online (creating, ready or starting: `botHoldsUnlaunchedLobby` over the
-  bounded `inhouseBotGameStatus` read; unknown never blocks). Once the game
+  bounded `inhouseBotGameStatus` read; unknown never blocks). A pending
+  release (`releasing`) doesn't hold it: the bot is already leaving, and its
+  Start and invites refuse while Release is hidden. The refusal
+  (`botGameOverRefusal`) names "Start game with bot" and "Release bot…" only
+  for a ready lobby, where both show; while the bot creates or starts the
+  lobby it says to try again in a minute. Once the game
   left the room nobody but an admin could release it, and it answers BUSY to
   every other game. "Blocked" doesn't hold it back: an offline bot reports
   it too, when its Release can't work either. Bot recovery
-  (`recoverableInhouseBotLobby`) treats AWAITING_RESULT as closed, so an admin
-  releases it later. A launch that fails (someone can't load, the server never
+  (`recoverableInhouseBotLobby`) and Create's BUSY self-heal treat
+  AWAITING_RESULT as closed (one lookup, `closedInhouseLobbyForBotKey`), so
+  the bot is released later. A launch that fails (someone can't load, the server never
   starts, Dota calls it not scored) releases the bot itself, so the bot never
   holds the press back, and the captains can instead press "Create Dota
   lobby" to try again
@@ -244,6 +271,38 @@ launch, so it never sees the end.
   `inhouse.finishGame.beforeClaim`; it loses to a result, a cancel or the
   abandon sweep. Lost to a result or another press, the presser still
   queues; lost to a cancel, they were already requeued.
+- **The bot's postgame ends a bot-hosted game (Tim's call, 2026-10-18).**
+  When the bot reports `over` for a game being played (it saw Dota's
+  postgame, played and not "not scored"), `endInhouseGameFromBot` makes
+  finishGame's claim with no requeue: AWAITING_RESULT and `finishedAt`, its
+  ten and its slot free at once. Then the follow-ups finishGame's press
+  gets: publish the room (its next signed-in poll repaints the board), wake
+  the automation gate, release the bot, and `maybeFormLobby` for the freed
+  slot. Two callers: `/api/dota-lobby`, when a panel's read shows `over` for
+  a playable game (seconds after the end; the reply then says the game is
+  no longer playable), and the result scan's own bot read in
+  `lookUpLobbyGame` (the backstop when no tab is open; it also marks a READY
+  game IN_PROGRESS when the bot saw it running, `markInhouseGameStartedFromBot`).
+  Both callers catch and log a failure there (the claim, or the formation
+  and ping after it), so it never costs the panel its answer, or the scan
+  that game's OpenDota lookup and the rest of its pass.
+  The claim loses cleanly to a result, a cancel, the abandon sweep or a
+  press that landed first (seam `inhouse.endInhouseGameFromBot.beforeClaim`,
+  plus raced tests, in `test/integration/inhouse-bot-lifecycle.itest.ts`),
+  and then changes nothing. The press stays as the fallback and still
+  requeues its presser. Its data is a flat literal for the mutation ratchet.
+- **Every close releases the bot, after its commit and without waiting on
+  it** (`releaseInhouseBotAfterClose` in `dota-lobby-service.ts`): Game
+  over, the bot's game over, `cancelLobby`, `giveUpOnResult`,
+  `voidLastResult` (the room's banner and the history page's form alike) and
+  a recorded result (`applyResult`, so the scan, "Check now" and a pasted
+  id). It reads the game's spec and sends `release` in the background, a
+  no-op before any read when no bot is configured, never inside a
+  transaction; a Game over or a cancel answers at once. A cancelled READY
+  game's ready lobby, which players still sit in, would otherwise hold the
+  bot until its idle clock ran out. `src/lib/dota-lobby-service.test.ts`
+  pins the call sites; integration tests settle the releases with
+  `settleInhouseBotReleases()` before they unstub fetch.
 - **A result must have started before its players' next game formed**
   (`nextGameCeilingSeconds` over `inhouseResultCeilingSeconds`, in
   `findInhouseGame` and `checkMatchForLobby`, so the scan, the bot's id and a
@@ -368,7 +427,9 @@ Every transition is a guarded claim; keep it that way (general rules:
 
 - **The claims:** `applyResult` on `status in INHOUSE_RESULT_STATUSES` (a
   cancel racing the OpenDota fetch wins); `finishGame` on PLAYING and
-  `giveUpOnResult` on AWAITING_RESULT (see "Game over"); `cancelLobby` inside its transaction
+  `giveUpOnResult` on AWAITING_RESULT (see "Game over"); `endInhouseGameFromBot`
+  on PLAYING (the bot saw Dota's postgame; the same claim as `finishGame`,
+  requeuing nobody); `markInhouseGameStartedFromBot` on READY; `cancelLobby` inside its transaction
   (loses to a landed result and requeues nobody); `applyPick` on the turn and on
   the target row `{team: null}` (a double-click is one turn), auto-assigning
   the last pool player; `resolveCaptainVote` on `CAPTAIN_VOTE → DRAFTING`
@@ -474,11 +535,15 @@ Every transition is a guarded claim; keep it that way (general rules:
   simultaneous joins all land. A repeat join keeps position and idle deadline.
   Outsiders may queue during a live lobby (for the next game). The tenth join
   tries formation at once.
-- **MMR trust chain:** latest `Registration.mmr` (used as-is, so an admin
-  override survives) > the typed value clamped to the medal > the last lobby
-  snapshot (clamped), so a blank "Run it back" join keeps a known MMR. Client
-  MMR alone never decides captaincy for a registered player. The signup MMR
-  and the medal are read by `loadInhouseJoinFacts`, for the join and the page.
+- **MMR trust chain:** an admin's inhouse MMR (`User.inhouseMmr`, used
+  as-is; see "An admin's inhouse MMR and medal" below) > latest
+  `Registration.mmr` (used as-is, so an admin override survives) > the typed
+  value clamped to the medal > the last lobby snapshot (clamped), so a blank
+  "Run it back" join keeps a known MMR. The first two are the fixed MMR
+  (`inhouseFixedMmr`, `src/lib/inhouse-mmr-cap.ts`), which nothing typed
+  changes. Client MMR alone never decides captaincy for a registered or
+  admin-rated player. The admin MMR, the signup MMR and the medal are read by
+  `loadInhouseJoinFacts`, for the join and the page.
 - **The MMR cap (Tim, 2026-10-11).** `joinQueue` refuses a Divine 3 or higher
   medal whatever is typed, and an MMR over `HARD_MMR_CEILING` (5,000, the
   line league signups enforce): `inhouseJoinRefusal` in
@@ -487,14 +552,15 @@ Every transition is a guarded claim; keep it that way (general rules:
   anything is written, the positions too. No medal is no opinion: the typed
   number stands (Tim's call), so an account OpenDota shows unranked can still
   get in by typing low. Unlike `registrationGate`, an ACTIVE league signup is
-  no medal exemption (Tim's call too): every join is judged. A medal is corrected through
-  `setPlayerRank`, which needs a signup. It is judged at the join only: a
+  no medal exemption (Tim's call too): every join is judged. A medal is
+  corrected through `setPlayerRank` (on a signup) or `/admin/inhouse-players`
+  (anyone's, below). It is judged at the join only: a
   medal that changes while a player is queued or in a game removes nobody,
   and the requeues (`cancelLobby`, a failed ready check) only put back
   players who were in a game. "Game over — queue again" ends the game and
   then gets the join's refusal.
 - **Offer no join the cap refuses.** `/inhouse` reads the same facts and rule
-  (`inhouseJoinRefusalBeforeTyping`: the medal, or a signup MMR over the
+  (`inhouseJoinRefusalBeforeTyping`: the medal, or a fixed MMR over the
   line) and the room shows the reason, in the accent colour, where Join, the
   MMR box and the positions would be, and drops "Run it back"; a queued
   player keeps Leave. A typed number is judged when sent, and the MMR box
@@ -504,12 +570,47 @@ Every transition is a guarded claim; keep it that way (general rules:
   built in `src/app/inhouse/page.tsx`, shown by
   `src/components/inhouse/queue-view.tsx`; on a phone right under the filled
   card, to keep the card on the first screen). It renders only for a medal-holder
-  with no signup MMR who is under the cap, and explains why a typed value
+  with no fixed MMR who is under the cap, and explains why a typed value
   outside the medal's window is clamped and that nothing over the cap joins
-  (the window shown stops at it). A registered player gets no MMR input at all, only "Joining at N
-  MMR, from your league signup", which is what explains that override (on a
-  phone's filled queue card it reads "N MMR" over "from your signup" beside
+  (the window shown stops at it). A player with a fixed MMR gets no MMR input
+  at all, only "Joining at N MMR, from your league signup" (or "set by an
+  admin"), which is what explains that override (on a phone's filled queue
+  card it reads "N MMR" over "from your signup" or "set by an admin" beside
   the positions, with "Joining at" kept for screen readers).
+- **An admin's inhouse MMR and medal (Tim, 2026-10-17): any player, signed
+  up for the league or not,** on `/admin/inhouse-players`, linked from the
+  room's admin controls ("Admin: players' medal & MMR") and /admin's
+  "Inhouse players". It lists the queue, the latest players and anyone else
+  already rated, and finds a player by name (any case), Steam ID, or a
+  Steam, OpenDota or Dotabuff link. `setInhouseRating` (`inhouse-admin.ts`)
+  over `saveInhouseRating` (`src/lib/inhouse-rating-service.ts`); the form's
+  rules and words are `src/lib/inhouse-rating.ts`.
+  - **The MMR is for inhouse only and beats everything else there:** a
+    league signup's and anything typed. It never touches a signup; blank
+    clears it, and the join falls back to the chain. Over the cap is allowed
+    on purpose (an admin marking a player too strong): the join refuses it
+    in the cap's words ("an admin set your inhouse MMR to 6,000").
+  - **The medal is the site-wide one,** `rankTier` and `rankTierManual` as
+    `setPlayerRank` writes them, so a manual medal shows on every page and
+    outlives OpenDota refreshes. Going back to OpenDota fetches the medal
+    before the transaction, or changes nothing.
+  - **The claim is the stored rating the editor showed,** plus the Dota
+    account link (`saveInhouseRating::inhouseMmr+rankTier+rankTierManual`):
+    a second admin's save, the worker's medal refresh or a relink landing
+    first refuses the save (seam `inhouseRating.saveInhouseRating.beforeClaim`).
+  - **A set MMR rewrites the player's queue spot in the same transaction;
+    a cleared one leaves it** until their next join (what they typed is
+    gone). `joinQueue` re-reads `inhouseMmr` inside its Serializable
+    transaction (seam `inhouse.joinQueue.beforeWrite`) and the save runs
+    Serializable too, so a first join still on its way in, whose row the
+    rewrite can't find, still lands at the admin's number. The requeues
+    (`cancelLobby`, a failed ready check) put a player back at an admin's
+    number saved during the game, else at the game's snapshot. A live game
+    keeps its snapshot.
+  - **Judged at the join, like the cap:** a save that puts a queued player
+    over it removes nobody, and its toast says to remove them from the room.
+    Tests: `test/integration/inhouse-rating.itest.ts`, `inhouse-rating.test.ts`,
+    `e2e/admin-inhouse-rating.spec.ts`.
 - **Order by exact keys, never row order.** Queue reads and formation sort
   `[joinedAt, userId]`; formation copies `joinedAt` to
   `InhouseLobbyPlayer.queuedAt`, and later sorts use `[queuedAt, userId]`.
@@ -573,7 +674,27 @@ Every transition is a guarded claim; keep it that way (general rules:
   (`DotaLobbyControls` `onAvailability` is "on"), its panel is the path and
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
-  its status line. See `docs/DOTA-LOBBY-BOT.md`.
+  its status line. See `docs/DOTA-LOBBY-BOT.md`. While the one bot is
+  hosting ANOTHER game still being played (one bot, one game at a time: the
+  route's `busyElsewhere`, from one shared health read), availability is
+  "busy": the panel says which game (`#1234`), hides the bot's lobby name and
+  Create, and the card unfolds the by-hand steps, and keeps them unfolded for
+  that game even once the bot frees up, so its ten never get a second lobby
+  name midway. A closed game's hold keeps Create, which frees the bot first.
+- **No in-house ticket id, no bot panel for players.** The bot hosts no
+  in-house game without `DOTA_INHOUSE_LEAGUE_ID` (`inhouseLobbyTicketId`;
+  Europe's is unset until Valve grants its ticket), so `/api/dota-lobby`
+  answers a player's read (and any action) for an in-house game like a bot
+  that isn't set up (`{ enabled: false }`: the card shows the by-hand steps
+  and no panel), and an admin's with `INHOUSE_TICKET_MISSING_ADMIN_NOTE`,
+  which names the setting (`dota-lobby.itest.ts`). /inhouse's "Make your
+  games auto-detect" guide follows the same facts (`inhouseTicketGuideStep`
+  in `src/lib/inhouse.ts`, source-guarded in `inhouse.test.ts`): with no
+  ticket (`INHOUSE.LOBBY_TICKET_CONFIGURED`, as the card's ticket step
+  decides it) its step 3 says the admins will provide the European ticket
+  before tracked games begin, never a placeholder as a ticket to pick, and
+  it promises the bot only when `inhouseLobbyBotConfigured` (a connection
+  AND the ticket's id).
 - **The bot invites the ten once its lobby is ready** (Tim's call,
   2026-10-10; `docs/DOTA-LOBBY-BOT.md#lobby-invites`), once per game.
   Accepting joins without the password but lands the player on neither side,
@@ -588,15 +709,83 @@ Every transition is a guarded claim; keep it that way (general rules:
   copy tells a player with no popup to untick "Block party invites from
   non-friends": a blocked invite looks sent to the bot. A bot without invites
   reports no seats, so the panel shows no list and keeps the Custom Lobbies
-  line.
-- **The bot panel re-reads the bot every 5s only while it sets a lobby up**
-  (`lobbyPanelPollMs` in `src/lib/dota-lobby.ts`, source-guarded in the
-  panel): once a minute once Dota reports the game "started", never with no
-  bot lobby. Each read is a function call that also asks the bot through the
-  relay, and the panel stays mounted for the whole game for its players and
-  admins: on 2026-10-13 ten players' panels at 5s made a fifth of the US
-  site's Active CPU. The first "started" answer, read at 5s, is the one that
-  stamps the lobby IN_PROGRESS; the minute read is its safety net.
+  line. The list also shows while Dota is starting the game
+  (`lobbyListVisible`: ready and starting, the two states the bot reports
+  seats in), with its own line instead of the invite copy.
+- **The panel's rates (DECISIONS 2026-10-18, superseding the 2026-10-12
+  row for the panel):** `lobbyPanelPollMs` in `src/lib/dota-lobby.ts`,
+  source-guarded in the panel. Every 3s (`LOBBY_PANEL_POLL_MS`) while the bot
+  sets a lobby up, and while a playable game has no bot lobby (idle or
+  released: any captain or admin can press Create, and every other panel must
+  see it); every 15s (`LOBBY_PANEL_STARTED_POLL_MS`) once Dota reports the
+  game "started"; not at all once the bot says `over`. A tab coming back
+  reads at once, and a panel whose first read failed (a bot restarting
+  refuses connections for half a minute) retries every 15s by itself
+  (`lobbyPanelPollMs`'s `unanswered`). The idle rate lasts a whole
+  hand-hosted game (DECISIONS counts it). `/api/dota-lobby` allows 60 reads a
+  minute per player (three visible panels), and the admin's bot line
+  (`DotaLobbyRecovery`) checks every 15s (`LOBBY_RECOVERY_POLL_MS`) without
+  holding its "Check bot connection" button (a press wins over a background
+  check); `/api/dota-lobby/recovery` allows 30 checks a minute per admin.
+  - **One bot read per game, not per panel.** A browser status read goes
+    through a per-process single-flight cache
+    (`src/lib/lobby-bot-status-cache.ts`, 2s TTL, keyed by bot, job key and
+    seat report, held on `globalThis` because one `next start` process loads
+    lib modules more than once). Writes always ask the bot and store their
+    reply, so the next read shows what the action did, and an older read in
+    flight never overwrites it. Per-viewer fields (`self`, the invite scope)
+    are computed after the cache. The worker's bounded read
+    (`inhouseBotGameStatus`) never uses it.
+  - **Polls never hold the action lock.** The panel's `read` (background
+    polls, the first read, "Refresh bot status") skips while an action or
+    another read is in flight; `act` (Create, Start, an invite, Release)
+    holds the lock that disables the buttons and cancels a read in flight,
+    and a read sent before an action never lands after it. A poll used to
+    share the lock, so a read in flight disabled the buttons and dropped a
+    click. An action's failure is toasted (`pushToast`), never set inline:
+    the next 3s read would clear the line, and with it what the failure
+    asked the presser to do. Only a read's failure shows inline.
+  - **Requests are bounded by `requestSignal`** (`src/lib/request-signal.ts`:
+    a timer and the cancels on one AbortController, unhooked by `done()`
+    once the body is read). Never `AbortSignal.any`: Safari before 17.4 has
+    none, and calling it there failed every read of the panel.
+  - The first "started" answer stamps the lobby IN_PROGRESS
+    (`markInhouseGameStartedFromBot`, guarded on READY); the result scan's
+    own bot read does the same, so it needs no open tab.
+- **The bot's lifecycle flags.** Every request carries `withLifecycle: true`,
+  and the reply's `releasing` and `over` are read strictly (only `true`
+  counts; anything else is unknown, so absent) and passed to the panel.
+  `releasing` reads "Leaving the Dota lobby…" with no second "Release bot…"
+  (`releaseOpen`), and no "Start game with bot" or invite button
+  (`startOpen`, `reinviteMissingOpen`, `selfInviteOpen`: the bot refuses
+  both on a lobby it is leaving); `over` reads "Game over in Dota — the result records
+  itself from OpenDota", and the site marks the game over (see "Game over").
+  The status line comes from `lobbyStatusLabel`.
+- **BUSY says why, and frees a bot left on a closed game.** BUSY's copy says
+  the bot hosts one game at a time and is free again when that game ends.
+  When Create answers BUSY, the route reads the bot's health once; if its
+  active job is this league's in-house game and the database shows it closed
+  (COMPLETED, CANCELLED or AWAITING_RESULT, the lookup admin recovery uses),
+  it sends that job's release and says what the release did
+  (`freeBotFromClosedInhouseGame`, `freeingBotMessage`): "Freeing the bot
+  from finished game #1234. Press “Create Dota lobby” again in a few
+  seconds." when the bot is leaving now; "Asked the bot to leave finished
+  game #1234. It leaves as soon as Dota lets it…" when that game still runs
+  in Dota (`started`: an early "Game over" press, an admin cancel) or the
+  release's answer was lost. A release the bot refuses (it can't leave yet,
+  isn't running, or a player's Dota account is gone) changed nothing, so the
+  BUSY answer stands.
+- **How the site reaches the bot** (`lobbyBotConnection`, DECISIONS
+  2026-10-18): https to any host (the relay), or in production plain http
+  only to exactly `http://127.0.0.1:<port>` or `http://[::1]:<port>`, the bot
+  on the box (5s timeout instead of 15s). A refused connection is "the bot
+  isn't running" (nothing was sent, so an invite is a failure, not unknown);
+  a timeout or reset after sending stays unknown. Every reply goes through
+  `readBotReply` (`src/lib/lobby-bot-transport.ts`: 8 KiB cap, only 200, 400
+  and 409), and lobby and match ids that aren't digits are dropped. Through
+  the relay an invite's OFFLINE stays unknown (the relay says it for a lost
+  answer); on loopback it is the bot's own word. `resolveDotaLobby` and the
+  release select only the spec's fields, never whole user rows.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
   share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`
@@ -719,11 +908,13 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **Cadence comes only from pure `inhousePollCadence`** (`src/lib/room-poll.ts`,
   sharing `roomPollCadence` with the draft room). A source guard fails if an
   `INHOUSE.POLL_*` rate reappears in the room.
-  - **Every poll is a function call on the Vercel Hobby plan both leagues
-    share** (four hours of Active CPU a month). On 2026-10-11 five /inhouse
-    tabs polling every 10s made 79% of the US site's calls, and the plan ran
-    out. Poll fast only where seconds decide something; every long wait is
-    slow.
+  - **Every poll is a request to the one box both leagues share,** with the
+    session and room-version reads behind it, on one vCPU beside Postgres
+    and the lobby bot. The rates were set on Vercel's Hobby plan (on
+    2026-10-11 five /inhouse tabs polling every 10s made 79% of the US site's
+    calls, and its four hours of Active CPU ran out) and stay until Tim asks
+    (`docs/DECISIONS.md`). Poll fast only where seconds decide something;
+    every long wait is slow.
   - Fast (`pollMs`, 1500) only for the clocked stages: ready check, vote and
     draft. Game setup (READY until the scan window opens,
     `inhouseReadyInPlay`, after which a hand-hosted game polls like
@@ -1038,6 +1229,14 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
   admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+  The bot-driven transitions are covered in
+  `test/integration/inhouse-bot-lifecycle.itest.ts`: the auto-end at the
+  bot's postgame by its seam tests (`inhouse.endInhouseGameFromBot.beforeClaim`)
+  plus raced tests against a cancel, a Game over press and the abandon sweep;
+  releases on close and BUSY's self-heal by ordinary integration tests. The
+  IN_PROGRESS stamp is covered in `dota-lobby.itest.ts`, including a game
+  closed while the bot's reply is in flight (an in-fetch interleave, its
+  mutation-ratchet killer), and the "busy elsewhere" read there too.
   `e2e/zz4-inhouse.spec.ts` also checks the room's one header row in every
   stage at 375 and 1280 (one stage strip on the right step, Sound on its
   line, no sideways scroll).

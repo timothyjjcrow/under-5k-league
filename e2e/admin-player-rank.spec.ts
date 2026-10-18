@@ -8,6 +8,17 @@ const db = new PrismaClient({
   datasources: { db: { url: `file:${path.resolve("prisma/e2e.db")}` } },
 });
 
+/** Prisma's "Operations timed out" (P1008) on SQLite: another connection held
+ * the write lock for longer than the busy timeout. */
+function isSqliteLockTimeout(error: unknown): boolean {
+  const e = error as { code?: unknown; message?: unknown };
+  return (
+    e?.code === "P1008" ||
+    (typeof e?.message === "string" &&
+      e.message.includes("failed to respond to a query within the configured timeout"))
+  );
+}
+
 async function openEditor(page: Page, name: string) {
   const editor = page
     .getByLabel(`MMR for ${name}`, { exact: true })
@@ -33,10 +44,20 @@ async function saveRank(
     .selectOption(String(rankTier));
   await editor.getByRole("button", { name: "Save medal & MMR", exact: true }).click();
   await expect.poll(async () => {
-    const registration = await db.registration.findUniqueOrThrow({
-      where: { id: player.registrationId },
-      include: { user: true },
-    });
+    // This reads the dev server's SQLite file directly while the save may
+    // still hold its write lock. A read that times out on that lock means
+    // "not yet": expect.poll stops at the first throw, which flaked CI once
+    // (PR #80's first run). Any other error still fails the test.
+    const registration = await db.registration
+      .findUniqueOrThrow({
+        where: { id: player.registrationId },
+        include: { user: true },
+      })
+      .catch((error: unknown) => {
+        if (isSqliteLockTimeout(error)) return null;
+        throw error;
+      });
+    if (!registration) return "database busy";
     return {
       mmr: registration.mmr,
       rankTier: registration.user.rankTier,

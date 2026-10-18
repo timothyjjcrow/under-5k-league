@@ -18,6 +18,8 @@ Pages never load a master. The right-sized copies below were exported from the m
 
 The masters stay in `public/brand/` for re-exports and for the Discord queue board's author icon, which Discord resizes itself.
 
+Browsers keep every file above for a day (`next.config.ts`, [pages-and-ui](features/pages-and-ui.md#static-files-and-icons)), so a re-export that must show at once takes a new file name. `/favicon.ico` and `/apple-touch-icon.png` redirect to the region's tab and Apple touch icons.
+
 The same Europe image is used for the Discord server icon, bot avatar, and announcement/queue/alert webhook avatars.
 
 The September 5 branding release is on `codex/europe-logo-release` at `becc9c4`, based on the previously live Europe commit `7bed06e`. It includes the logo and background blending, without the separately prepared database efficiency changes. The development branch also contains both branding commits. Validation: TypeScript, scoped ESLint, 69 existing configuration/metadata/queue-board tests, production build, readiness check, live website logo and metadata inspection, and Discord icon/avatar verification.

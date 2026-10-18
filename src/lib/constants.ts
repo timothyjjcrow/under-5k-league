@@ -275,7 +275,8 @@ export const INHOUSE = {
   // How many games can be live at once. Each live lobby holds a numbered slot
   // (InhouseLobby.slot), so twenty queued players play two games side by side
   // and anyone past that waits for a slot to free up. The lobby bot hosts
-  // them one after the other: it leaves each game once it is running.
+  // one game at a time, until that game's postgame (Dota won't let it leave
+  // a running game); the other game is hosted by hand meanwhile.
   MAX_LIVE_GAMES: 2,
   // The Discord voice channels each game's teams talk in, one pair per game
   // slot (team 1, team 2). Match the channel names in the Discord server

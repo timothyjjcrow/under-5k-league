@@ -19,6 +19,7 @@ import {
   type DraftTeam,
 } from "./draft";
 import { draftBudgetsForDisplay } from "./draft-budgets";
+import { undoSaleTarget, type UndoTarget } from "./draft-admin";
 import { draftPresenceTracked } from "./draft-presence";
 import { readCaptainPresence } from "./draft-presence-service";
 import type { SessionUser } from "./auth";
@@ -741,7 +742,8 @@ export type UndoSaleSummary = {
 
 /**
  * Admin: revert the most recent sale — the recovery path for a mis-click or a
- * disputed lot (previously nothing short of SQL could fix one). The player
+ * disputed lot (previously nothing short of SQL could fix one) — and only
+ * when it is the sale the admin's confirm named (`expectedMembershipId`). The player
  * returns to the pool, the buyer gets their money back and the next
  * nomination (they have the open seat); works from COMPLETE too, re-opening
  * the draft. Refused while a lot is live — undoing under an active clock
@@ -758,6 +760,14 @@ class UndoRaceError extends Error {}
 export async function undoLastSale(
   seasonId: string,
   viewer: SessionUser,
+  /**
+   * The roster row of the sale the admin's confirm named (`UndoTarget`,
+   * draft-admin.ts). Undo reverts only that sale, and only while it is still
+   * the newest auction purchase: a newer sale, or one this page never saw,
+   * is refused, never reverted in its place. Empty refuses too (a form
+   * rendered before this field existed).
+   */
+  expectedMembershipId: string,
 ): Promise<UndoSaleSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   try {
@@ -816,6 +826,34 @@ export async function undoLastSale(
         error: signings
           ? "No auction sale to undo — the players on these rosters were free-agent signings. Use Release to remove one."
           : "No sale to undo",
+      };
+    }
+    // The sale the confirm NAMED, not whatever is newest at click time. /admin
+    // doesn't poll during the auction and the room's confirm is a poll old, so
+    // "Undo the most recent sale (A → Team 1, $5)" used to revert a sale the
+    // admin never saw. Compared here, inside the Serializable transaction and
+    // before the first write, so a refusal writes nothing. A sale needs a live
+    // lot, which the check above refused, and any sale that commits after this
+    // snapshot also rewrites the Draft row the claim below updates, so Postgres
+    // aborts this transaction (P2034) instead of reverting the older sale.
+    if (last.id !== expectedMembershipId) {
+      const named = expectedMembershipId
+        ? await tx.teamMember.findUnique({
+            where: { id: expectedMembershipId },
+            select: { seasonId: true, isCaptain: true, price: true },
+          })
+        : null;
+      const newest = `${last.user.name} to ${last.team.name} ($${last.price})`;
+      return {
+        ok: false as const,
+        error: !expectedMembershipId
+          ? "This Undo last sale button is from an older page — reload, then undo again."
+          : named &&
+              named.seasonId === seasonId &&
+              !named.isCaptain &&
+              named.price > 0
+            ? `A newer sale landed since this page loaded: ${newest}. Reload, then undo again if that's the one.`
+            : `The sale this page named can no longer be undone (it was undone or released, or its player is now a captain). The last sale is now ${newest}. Reload, then undo again if that's the one.`,
       };
     }
 
@@ -1241,6 +1279,9 @@ export async function getDraftState(
               members: {
                 orderBy: { price: "desc" },
                 select: {
+                  // Only for the admin's Undo target (undoSale below); the
+                  // client's roster rows never carry it.
+                  id: true,
                   userId: true,
                   price: true,
                   isCaptain: true,
@@ -1393,6 +1434,27 @@ export async function getDraftState(
           )
         : null;
       const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
+      // What the admin bar's Undo last sale would revert, from the rosters
+      // already read (no extra query): the newest auction purchase still on a
+      // roster, by undoLastSale's own rule. Not `recentSales[0]`: a released
+      // player's lot stays SOLD there, and the confirm named their sale while
+      // Undo reverted the one before it. Admins only; the form posts its id.
+      const undoRow =
+        viewer?.role === "ADMIN"
+          ? undoSaleTarget(
+              teams.flatMap((team) =>
+                team.members.map((member) => ({ ...member, teamName: team.name })),
+              ),
+            )
+          : null;
+      const undoSale: UndoTarget | null = undoRow
+        ? {
+            membershipId: undoRow.id,
+            name: undoRow.user.name,
+            teamName: undoRow.teamName,
+            price: undoRow.price,
+          }
+        : null;
       // The finished room's recap: the same draftRecap math over the same
       // auction records as the /teams "Draft night" card and the Discord
       // recap. Only once the auction is over, and only from a recorded run
@@ -1483,6 +1545,7 @@ export async function getDraftState(
         })),
         lotBidsTruncated: lotBidRows.length > 8,
         recentSales,
+        undoSale,
         recap,
         nominatedPlayer: nominatedPlayer && nomineeProfile
           ? {

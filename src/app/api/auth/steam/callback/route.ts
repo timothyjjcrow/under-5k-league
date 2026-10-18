@@ -11,13 +11,14 @@ import {
 } from "@/lib/return-path";
 import { expireHttpOnlyCookie } from "@/lib/cookie-policy";
 import { invalidateAutomationGateBestEffort } from "@/lib/automation-gate-invalidation";
+import { providerReturnBase, publicOrigin } from "@/lib/public-origin";
 
 function failedLogin(
   req: NextRequest,
   error: "rate" | "steam",
   { consumeFlow = true }: { consumeFlow?: boolean } = {},
 ) {
-  const target = new URL("/login", req.url);
+  const target = new URL("/login", publicOrigin(req));
   target.searchParams.set("error", error);
   const next = safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value);
   if (next && next !== "/") target.searchParams.set("next", next);
@@ -69,7 +70,7 @@ export async function GET(req: NextRequest) {
 
   // Pin the assertion to our own callback URL (must match how /api/auth/steam
   // built openid.return_to).
-  const base = process.env.APP_URL || req.nextUrl.origin;
+  const base = providerReturnBase(req);
   const expectedReturnTo = new URL("/api/auth/steam/callback", base);
   expectedReturnTo.searchParams.set("state", callbackState);
 
@@ -98,7 +99,7 @@ export async function GET(req: NextRequest) {
   // Land back where they clicked Sign in (validated again — the cookie is
   // ours, but defense in depth is free), clearing the one-shot cookie.
   const next = safeReturnPath(req.cookies.get(RETURN_COOKIE)?.value) ?? "/";
-  const res = NextResponse.redirect(new URL(next, req.url));
+  const res = NextResponse.redirect(new URL(next, publicOrigin(req)));
   expireHttpOnlyCookie(res.cookies, RETURN_COOKIE);
   expireHttpOnlyCookie(res.cookies, STEAM_STATE_COOKIE);
   return res;

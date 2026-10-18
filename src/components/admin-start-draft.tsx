@@ -60,7 +60,9 @@ export async function StartDraftControl({
   disabled: boolean;
   size?: ButtonSize;
 }) {
-  const reach = await getDiscordReachFunnel(seasonId);
+  // Players only: the line says "of N signed-up players" beside readiness
+  // counts over the same PLAYER signups (standins aren't drafted).
+  const reach = await getDiscordReachFunnel(seasonId, { playersOnly: true });
   return (
     <StartDraftForm
       seasonId={seasonId}

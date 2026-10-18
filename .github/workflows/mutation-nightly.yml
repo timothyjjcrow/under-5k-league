@@ -33,18 +33,6 @@ jobs:
       fail-fast: false # one bad shard shouldn't hide the others' results
       matrix:
         shard: [1, 2, 3, 4]
-    services:
-      postgres:
-        # Not Docker Hub, and production's major: see the postgres job's
-        # service in ci.yml.
-        image: public.ecr.aws/docker/library/postgres:18
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: ld2l_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready --health-interval 5s
-          --health-timeout 5s --health-retries 10
     env:
       PG_TEST_URL: "postgresql://postgres:postgres@localhost:5432/ld2l_test"
     steps:
@@ -55,6 +43,13 @@ jobs:
         with:
           node-version: "22.x"
           cache: npm
+      # A step, not a service container, which pulls from one registry: this
+      # falls back across three that serve the official image, with no secret,
+      # so a fork's pull request pulls the same way. 18 is the major both
+      # leagues' databases run. See scripts/ci-postgres.mjs.
+      - name: Start PostgreSQL 18
+        timeout-minutes: 10
+        run: node scripts/ci-postgres.mjs
       - run: npm ci
       - name: Point Prisma at postgres
         run: node scripts/switch-db-provider.mjs postgresql

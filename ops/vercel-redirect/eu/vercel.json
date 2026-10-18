@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "",
+  "installCommand": "",
+  "outputDirectory": "public",
+  "redirects": [
+    {
+      "source": "/",
+      "destination": "https://eu.ggd2l.com/",
+      "permanent": false
+    },
+    {
+      "source": "/:path*",
+      "destination": "https://eu.ggd2l.com/:path*",
+      "permanent": false
+    }
+  ]
+}

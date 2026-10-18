@@ -78,6 +78,7 @@ import {
   invalidatePendingAnnouncementMarkers,
   invalidateMatchNudges,
 } from "@/lib/announcement-marker";
+import { releaseRetimedReminderMarker } from "@/lib/reminder-service";
 import type { ActionResult } from "@/lib/action-result";
 import {
   describeScrimConflict,
@@ -1966,16 +1967,23 @@ export async function setWeekNight(
           await invalidateMatchNudges(tx, match.id);
         }
 
-        // Keep the arithmetic anchor used for future playoff rounds aligned with
-        // the moved league rhythm. If generation had no first night, derive the
-        // missing week-1 anchor from the newly scheduled week.
+        // Keep the arithmetic anchor used for future playoff rounds (and the
+        // reschedule deadline) aligned with the league rhythm. Only week 1 or a
+        // cascade moves the rhythm: a one-off move of a later week (cascade
+        // unticked, the default) is an exception, and re-anchoring on it put
+        // every playoff round on the one-off weekday. If generation had no
+        // first night, derive the missing week-1 anchor from the rhythm: the
+        // new night when it moves, else the week's night before this move.
         let firstMatchNight = currentSeason.firstMatchNight;
         if (week === 1) {
           firstMatchNight = night;
-        } else if (firstMatchNight && delta !== 0) {
-          firstMatchNight = shiftMatchNight(firstMatchNight, new Date(current!), night);
-        } else if (!firstMatchNight) {
-          firstMatchNight = matchNightForWeek(night, 2 - week);
+        } else if (firstMatchNight) {
+          if (cascade && delta !== 0) {
+            firstMatchNight = shiftMatchNight(firstMatchNight, new Date(current!), night);
+          }
+        } else {
+          const rhythm = cascade || current == null ? night : new Date(current);
+          firstMatchNight = matchNightForWeek(rhythm, 2 - week);
         }
         if (
           firstMatchNight?.getTime() !==
@@ -2246,17 +2254,14 @@ export async function setMatchTime(
             where: { matchId, status: "PENDING" },
             data: { status: "CANCELLED" },
           }),
-          tx.setting.deleteMany({
-            where: {
-              OR: [
-                { key: weekReminderKey(before.seasonId, before.week) },
-                {
-                  key: {
-                    startsWith: `${weekReminderKey(before.seasonId, before.week)}:`,
-                  },
-                },
-              ],
-            },
+          // Only the old kickoff's marker, and only once no other fixture of
+          // the week still kicks off there: the week's other clusters did not
+          // move, and releasing them re-posted their reminder with pings.
+          releaseRetimedReminderMarker(tx, {
+            id: before.id,
+            seasonId: before.seasonId,
+            week: before.week,
+            oldKickoff: before.scheduledAt,
           }),
         ]);
         return {
@@ -2328,8 +2333,11 @@ export async function setMatchTime(
         ? `Kickoff time set to ${formatLeagueTime(scheduledAt)}`
         : "Kickoff time cleared · this match is now unscheduled; auto-sync, reminders and pick'em locks stay off until a new time is set"
     } · ${outcome.rsvps} check-in(s) cleared · ${outcome.proposals} open reschedule proposal(s) cancelled${
+      // One reminder per kickoff (releaseRetimedReminderMarker): the new
+      // kickoff gets its own unless another fixture's reminder already
+      // posted for it, and the week's other kickoffs never re-send.
       scheduledAt
-        ? " · the week's Discord reminder is eligible to re-send with the new time"
+        ? " · its Discord match-night reminder posts for the new kickoff unless that kickoff's reminder already went out"
         : ""
     }${announced ? " · captains notified on Discord" : ""}${
       clashes.length

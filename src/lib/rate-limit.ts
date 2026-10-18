@@ -3,9 +3,11 @@ import { isIP } from "node:net";
 // Best-effort in-memory fixed-window rate limiter. NOTE: the state is
 // per-server-instance, so on serverless (Vercel) this throttles a single warm
 // instance, not the whole fleet — the deployment runbook therefore makes
-// pre-function Vercel WAF limits a hard launch gate. This remains a useful
-// second layer and immediate feedback path. Pure over an injected `nowMs` so
-// it can be unit-tested deterministically.
+// pre-function Vercel WAF limits a hard launch gate. On the self-hosted league
+// box one `next start` process serves each league's traffic, so there the
+// limiter covers every request (a release swap starts the new slot empty).
+// This remains a useful second layer and immediate feedback path. Pure over an
+// injected `nowMs` so it can be unit-tested deterministically.
 
 type Bucket = { count: number; resetAt: number };
 const buckets = new Map<string, Bucket>();
@@ -73,14 +75,27 @@ function firstValidIp(value: string | null): string | null {
 }
 
 /**
- * Best-effort rate-limit identity. Vercel's platform-owned header wins; an
+ * Best-effort rate-limit identity.
+ *
+ * Self-hosted behind Cloudflare, the box opts in with
+ * `CLIENT_IP_HEADER=cf-connecting-ip` (its env contract accepts no other
+ * value). Cloudflare sets that header on every request through the tunnel and
+ * nothing else can reach the origin, so it is the only header read: a forged
+ * `x-vercel-forwarded-for`, `x-forwarded-for` or `x-real-ip` is ignored, and a
+ * missing or invalid value is the one shared `unknown` bucket.
+ *
+ * Otherwise (Vercel, dev, tests) Vercel's platform-owned header wins; an
  * invalid value fails closed instead of falling through to a spoofable one.
  * The standard proxy fallbacks support local/reviewed self-hosting and direct
  * Vercel ingress, where the platform also overwrites X-Forwarded-For.
  */
-export function clientIp(req: {
-  headers: { get(name: string): string | null };
-}): string {
+export function clientIp(
+  req: { headers: { get(name: string): string | null } },
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (env.CLIENT_IP_HEADER === "cf-connecting-ip") {
+    return firstValidIp(req.headers.get("cf-connecting-ip")) ?? "unknown";
+  }
   const vercelForwarded = req.headers.get("x-vercel-forwarded-for");
   if (vercelForwarded !== null) {
     return firstValidIp(vercelForwarded) ?? "unknown";

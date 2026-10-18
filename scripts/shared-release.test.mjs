@@ -9,6 +9,7 @@ import { requireSuccessfulCi, requiredCiGates, requireReleaseCi, findMutationCov
 import { hostedReleaseInputs } from "./hosted-migration-release.mjs";
 import { projectProvider } from "./release-provider.mjs";
 import { classifyEntries } from "./classify-release.mjs";
+import { POSTGRES_MAJOR, SOURCES } from "./ci-postgres.mjs";
 
 const sha = "a".repeat(40);
 const baseSha = "b".repeat(40);
@@ -310,36 +311,66 @@ test("the CI mutation job matches the release gate and the nightly verify runs t
   const steps = (text) => text.slice(text.indexOf("\n    steps:\n")).trimEnd();
   assert.equal(steps(nightly), steps(job));
   // release:both may accept these runs' shards for a later commit, so the
-  // listed workflows and their shard names must be the real ones, and the
-  // release workflow must be allowed to read them.
+  // listed workflows and their shard names must be the real ones. The release
+  // runs from the operator's machine (scripts/release-box.mjs over SSH), so no
+  // workflow prepares or starts one.
   assert.deepEqual(MUTATION_COVERAGE_WORKFLOWS.map((w) => w.workflow), ["ci.yml", "mutation-nightly.yml"]);
   assert.match(nightly, /\n    name: nightly mutation guard \$\{\{ matrix\.shard \}\}\/4\n/);
   assert.equal(MUTATION_COVERAGE_WORKFLOWS[1].shardPrefix, "nightly ");
-  assert.match(read("release.yml"), /\npermissions:\n  contents: read\n  actions: read\n/);
+  const workflows = readdirSync(new URL("../.github/workflows/", import.meta.url)).filter((file) => /\.ya?ml$/.test(file));
+  assert.ok(!workflows.includes("release.yml"));
+  for (const file of workflows) assert.doesNotMatch(read(file), /npm run release:both|node scripts\/release-(?:both|box)\.mjs/, file);
 });
-// Docker Hub limits anonymous pulls per IP, and hosted runners share IPs: on
-// 2026-10-09 all five Postgres jobs on main failed to pull postgres:16 and the
-// release waited for a rerun. ECR Public serves the same official image under
-// a per-second limit that the runner's own pull retry absorbs. 18 is the
-// major both leagues' Neon databases run.
-test("every CI service pulls the official Postgres 18 image from ECR Public, not Docker Hub", () => {
+/** A workflow's jobs as [id, body] pairs, each body the lines indented under `  <id>:`. */
+function workflowJobs(text) {
+  const jobs = text.slice(text.indexOf("\njobs:\n"));
+  return [...jobs.matchAll(/^ {2}([\w-]+):\n((?:(?: {4}.*)?\n)*)/gm)].map((match) => [match[1], match[2]]);
+}
+// Anonymous pulls fail on GitHub's shared runner IPs one registry at a time:
+// Docker Hub's per-IP limit failed all five Postgres jobs on main on
+// 2026-10-09, and ECR Public's anonymous data cap six on PR #78 on 2026-10-17.
+// A service container pulls from one registry, three times a few seconds
+// apart. Every Postgres job therefore starts PostgreSQL 18, both leagues'
+// major, from one step: scripts/ci-postgres.mjs falls back across three
+// registries that serve the official image to anyone, so no step needs a
+// secret and a fork's pull request pulls the same way.
+test("every Postgres job starts PostgreSQL 18 from the step that falls back across three registries", () => {
+  assert.equal(POSTGRES_MAJOR, "18");
+  assert.deepEqual(SOURCES.map((source) => source.image), [
+    "mirror.gcr.io/library/postgres:18",
+    "public.ecr.aws/docker/library/postgres:18",
+    "docker.io/library/postgres:18",
+  ]);
+  const start = [
+    `      - name: Start PostgreSQL ${POSTGRES_MAJOR}`,
+    "        timeout-minutes: 10",
+    "        run: node scripts/ci-postgres.mjs",
+  ].join("\n");
   const dir = new URL("../.github/workflows/", import.meta.url);
-  const images = readdirSync(dir).filter((file) => /\.ya?ml$/.test(file))
-    .flatMap((file) => [...readFileSync(new URL(file, dir), "utf8").matchAll(/^ +image: *(\S+)/gm)].map((m) => m[1]));
-  // ci.yml's integration job and mutation shards, and the nightly's shards.
-  assert.ok(images.length >= 3, "the workflows' service images were found");
-  assert.deepEqual([...new Set(images)], ["public.ecr.aws/docker/library/postgres:18"]);
+  const started = [];
+  for (const file of readdirSync(dir).filter((name) => /\.ya?ml$/.test(name))) {
+    const text = readFileSync(new URL(file, dir), "utf8");
+    // A service or job container is pulled before the first step, from one registry.
+    assert.doesNotMatch(text, /^ +(?:services|image|credentials):/m, `${file} pulls no image before its steps`);
+    for (const [job, body] of workflowJobs(text)) {
+      if (!body.includes("PG_TEST_URL")) continue;
+      const steps = body.indexOf("\n    steps:\n");
+      const at = body.indexOf(`\n${start}\n`);
+      assert.ok(steps > 0 && at > steps, `${file} ${job} starts PostgreSQL in a step`);
+      assert.ok(at < body.indexOf("${{ env.PG_TEST_URL }}"), `${file} ${job} starts PostgreSQL before it uses it`);
+      started.push(`${file} ${job}`);
+    }
+  }
+  assert.deepEqual(started, ["ci.yml postgres", "ci.yml mutation", "mutation-nightly.yml mutation"]);
 });
 // pg_dump refuses a server newer than itself, and the runner image's own
-// client is 16, so the integration job installs its service's major before
+// client is 16, so the integration job installs the major it starts before
 // the backup rehearsal runs pg_dump.
-test("the integration job installs the PostgreSQL client of its service's major", () => {
+test("the integration job installs the PostgreSQL client of the major it starts", () => {
   const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  const major = ci.match(/^ +image: public\.ecr\.aws\/docker\/library\/postgres:(\d+)$/m)?.[1];
-  assert.ok(major, "the integration job's service image was found");
-  const install = ci.match(new RegExp(`\\n +sudo apt-get install [^\\n]*\\bpostgresql-client-${major}\\b`))?.index;
-  assert.ok(install > 0, `the integration job installs postgresql-client-${major}`);
-  assert.match(ci, new RegExp(`\\n {10}echo /usr/lib/postgresql/${major}/bin >> "\\$GITHUB_PATH"\\n`));
+  const install = ci.match(new RegExp(`\\n +sudo apt-get install [^\\n]*\\bpostgresql-client-${POSTGRES_MAJOR}\\b`))?.index;
+  assert.ok(install > 0, `the integration job installs postgresql-client-${POSTGRES_MAJOR}`);
+  assert.match(ci, new RegExp(`\\n {10}echo /usr/lib/postgresql/${POSTGRES_MAJOR}/bin >> "\\$GITHUB_PATH"\\n`));
   assert.ok(install < ci.indexOf("name: Rehearse a verified backup restore"), "the client is installed before the backup rehearsal");
 });
 test("maintenance evidence cannot waive an affected database or scheduler", () => {

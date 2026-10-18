@@ -20,10 +20,12 @@ vi.mock("@/lib/rate-limit", () => ({
 
 import { verifySteamCallback } from "@/lib/steam";
 import { rateLimit } from "@/lib/rate-limit";
+import { upsertLeagueUser } from "@/lib/users";
 import { GET } from "./route";
 
 const verify = vi.mocked(verifySteamCallback);
 const limit = vi.mocked(rateLimit);
+const upsert = vi.mocked(upsertLeagueUser);
 
 afterEach(() => vi.unstubAllEnvs());
 
@@ -38,8 +40,9 @@ function request(
   returnCookie: string | null,
   stateCookie: string | null = "browser-state",
   callbackState: string | null = stateCookie,
+  origin = "https://league.example",
 ) {
-  const url = new URL("https://league.example/api/auth/steam/callback");
+  const url = new URL("/api/auth/steam/callback", origin);
   if (callbackState) url.searchParams.set("state", callbackState);
   const cookies = [
     returnCookie ? `${RETURN_COOKIE}=${returnCookie}` : null,
@@ -154,6 +157,69 @@ describe("Steam callback failures", () => {
     expect(verify).toHaveBeenCalledWith(
       expect.any(URLSearchParams),
       "https://league.example/api/auth/steam/callback?state=browser-state",
+    );
+  });
+});
+
+describe("Steam callback redirects on a self-hosted league", () => {
+  // Next hands the handler the 127.0.0.1 bind address behind Caddy.
+  const AT_BIND_ADDRESS = "https://127.0.0.1:3001";
+
+  beforeEach(() => {
+    vi.stubEnv("LEAGUE_DEPLOY_ENV", "production");
+    vi.stubEnv("APP_URL", "https://us.ggd2l.com");
+  });
+
+  it("sends a failed sign-in back to the canonical login page", async () => {
+    const res = await GET(
+      request(
+        encodeURIComponent("/me"),
+        "browser-state",
+        "browser-state",
+        AT_BIND_ADDRESS,
+      ),
+    );
+    const location = new URL(res.headers.get("location")!);
+
+    expect(location.origin).toBe("https://us.ggd2l.com");
+    expect(location.pathname).toBe("/login");
+    expect(location.searchParams.get("next")).toBe("/me");
+  });
+
+  it("pins return_to to, and lands a signed-in player on, the canonical origin", async () => {
+    verify.mockResolvedValueOnce("76561198000000001");
+    upsert.mockResolvedValueOnce({ id: "site-user" } as Awaited<
+      ReturnType<typeof upsertLeagueUser>
+    >);
+
+    const res = await GET(
+      request(
+        encodeURIComponent("/me"),
+        "browser-state",
+        "browser-state",
+        AT_BIND_ADDRESS,
+      ),
+    );
+
+    expect(verify).toHaveBeenCalledWith(
+      expect.any(URLSearchParams),
+      "https://us.ggd2l.com/api/auth/steam/callback?state=browser-state",
+    );
+    expect(res.headers.get("location")).toBe("https://us.ggd2l.com/me");
+  });
+});
+
+describe("Steam callback when the deployment is undeclared", () => {
+  it("pins return_to to APP_URL and redirects on the request's own origin", async () => {
+    vi.stubEnv("APP_URL", "https://ggd2l.example");
+    const res = await GET(request(null));
+
+    expect(verify).toHaveBeenCalledWith(
+      expect.any(URLSearchParams),
+      "https://ggd2l.example/api/auth/steam/callback?state=browser-state",
+    );
+    expect(new URL(res.headers.get("location")!).origin).toBe(
+      "https://league.example",
     );
   });
 });

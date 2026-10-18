@@ -1,0 +1,20 @@
+# Reference for /etc/caddy/ggd2l/<lg>-mode.caddy in "proxy" mode (live).
+# The release agent writes the real file with the live slot's port in place
+# of __PORT__ (us 3001/3002, eu 3011/3012).
+#
+# Strip headers only a Vercel edge or Next middleware may set; Next sees
+# https and the real client address (Caddy's {client_ip} is CF-Connecting-IP).
+# Host passes through, and Caddy sets X-Forwarded-Host to it, which Next's
+# server-action origin check needs. No encode: Next compresses. Streaming
+# (Suspense) needs flush_interval -1; keepalive stays under Node's 75 s.
+reverse_proxy 127.0.0.1:__PORT__ {
+	header_up -X-Vercel-Forwarded-For
+	header_up -X-Real-IP
+	header_up -X-Middleware-Subrequest
+	header_up X-Forwarded-Proto https
+	header_up X-Forwarded-For {client_ip}
+	flush_interval -1
+	transport http {
+		keepalive 60s
+	}
+}

@@ -13,7 +13,9 @@ in `result-sync.ts`), `automation-service.ts`, `automation-gate.ts`,
 - **What lives there.** SteamID64 to `account_id` conversion, match, league and
   account id/URL parsing (`parseMatchId`, `parseLeagueId`, `parseAccountId`)
   and every OpenDota fetch. `OPENDOTA_API_KEY` is optional; it only raises the
-  rate limit.
+  rate limit. On the self-hosted box both leagues call OpenDota from one IP
+  address and share its anonymous limit. Neither has a key yet: watch the
+  journal for 429s on busy evenings before getting one.
 - **Never fetch hero names.** `heroById` (`src/lib/heroes.ts`) is a static
   table, so no hero label depends on OpenDota being up.
 - **Keep "unreachable" distinct from "nothing there".** `fetchRankTier` and
@@ -179,10 +181,11 @@ Captain report, admin import, league feed and roster scan all end in
   (`syncPingWakesOnNavigation`). The loop outlives navigations and reads the
   path from a ref: restarting it per page would reset its cursor baseline and
   refresh pages that just rendered. /inhouse tabs sent 128 of the US site's
-  175 pings in an hour on 2026-10-11. Vercel's CDN answers `/api/sync` for 30
-  seconds (`vercel-cdn-cache-control`, pinned in `route.test.ts`): a hit is no
-  function call, and a result still reaches a parked tab within about a
-  minute and a half.
+  175 pings in an hour on 2026-10-11. The route still sends a 30-second
+  `vercel-cdn-cache-control` (pinned in `route.test.ts`), which Vercel's CDN
+  honored and the box ignores: there no edge caches it (the Cloudflare zone
+  has no Cache Rules), so each ping is one cheap read, and a result reaches a
+  parked tab within about a minute.
 - **Bump the result cursor inside the write.** `stampResultChange(tx)`
   (`settings.ts`) sets `resultChangedAt` and a fresh `publicGameRevision`. Call
   it in the transaction of every write that changes results, games, box-score

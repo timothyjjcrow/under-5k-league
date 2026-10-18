@@ -24,7 +24,16 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Put every Discord write behind `discordMutationsAllowed()`**
   (`discord-mutation-policy.ts`). Vercel previews may carry production
   credentials, so posts, edits, deletes, role changes, joins and outbox
-  enqueues refuse there; reads still work.
+  enqueues refuse there; reads still work. A declared `LEAGUE_DEPLOY_ENV`
+  (`leagueDeployEnv`, the box's marker) opens them only when it is exactly
+  `production`: the cutover rehearsal and the staging slot run `staging`
+  against a copy of a league's database, whose webhook rows and message ids
+  would otherwise post into the real server. Undeclared (Vercel production,
+  development, tests) behaves as before.
+  `test/integration/discord-deploy-env.itest.ts` pins that a staging send
+  makes no request. The staging env also carries no bot token, OAuth secret
+  or webhook (the env contract refuses them) and its database's webhook rows
+  are scrubbed: three locks, so a stray post needs all three to fail.
 - **Branch on `res.ok`, and on the body's `code` where a status is
   ambiguous.** Discord errors are valid JSON, so a parsed body proves nothing.
   `GET /guilds/{g}/members/@me` is not a route (400 "not snowflake"): a bot
@@ -72,7 +81,7 @@ actions: `src/app/actions/admin-discord.ts`.
   must report this attempt); news (`postNewsToDiscord` needs the message id to
   edit or delete; it pings @everyone only when the admin ticks the box, and
   edits never re-ping); inhouse alerts (`sendInhouseDiscordMessage`, direct and
-  best-effort). Inhouse results and voids have their own outbox
+  best-effort; the queue and match-found pings are sent after the response). Inhouse results and voids have their own outbox
   (`inhouse-announcement-outbox.ts`, see `docs/features/inhouse.md`).
 - **Pin API v10** (`webhookApiUrl`); unversioned routes ride deprecated v6.
   **Validate URLs with `normalizeDiscordWebhookUrl`**; `runtimeWebhookUrl`'s
@@ -186,7 +195,12 @@ actions: `src/app/actions/admin-discord.ts`.
   it if it cries wolf. It links `joinLink()` (`/inhouse?join=1`).
 - **Lobby formed mentions all ten** (`maybeFormLobby`, after commit):
   `<@discordId>` if linked, escaped name otherwise, plus the accept deadline,
-  and "(Game 2)" when another game is already live.
+  and "(Game 2)" when another game is already live. It goes out after the
+  response (`runAfterResponse`), so the tenth joiner's POST and a room poll
+  never wait on Discord; the worker alone sends it during its pass, which
+  answers too late for the accept clock
+  ([inhouse](inhouse.md#scope-and-where-it-runs)). The queue ping above is
+  posted after the response too.
   Queueing is the consent; don't add an opt-out. One tabbed-away player burns
   the league's scarcest event on a short `INHOUSE.ACCEPT_SECONDS` clock.
 - **Only the interrupting posts carry the ping role:** queue filling, match
@@ -356,10 +370,16 @@ actions: `src/app/actions/admin-discord.ts`.
   "reload fixes it" for unknowns (the memo window, or a kicked bot forever).
 - **Start draft warns without slowing /admin:** `discordReachWarning` (names
   only) via the Suspense-wrapped `StartDraftControl`
-  (`admin-start-draft.tsx`), whose fallback is the same working button.
-  `adminNextStep`'s two Start-draft steps take `unlinkedDiscordCount`, counted
-  over all ACTIVE registrations in `loadSeasonAdminData` so banner and card
-  agree.
+  (`admin-start-draft.tsx`), whose fallback is the same working button. Its
+  funnel counts PLAYER signups only (`getDiscordReachFunnel(id, {
+  playersOnly: true })`): the line says "of N signed-up players" beside
+  readiness counts over the same players, and counting standins too made it
+  read "0 of 62 ready" then "of 65 signed-up players"
+  (`admin-start-draft.test.ts` guards the call). `adminNextStep`'s two
+  Start-draft steps and Needs attention take `unlinkedDiscordCount` /
+  `unlinkedSignups`, counted over all ACTIVE registrations in
+  `loadSeasonAdminData` so banner and card agree, and say "players and
+  standins" because that is who they count.
 - **The chase post** (`discordChaseMessage` + `<ChaseCopy>`) names everyone
   (invite for missing, rules nudge for pending, profile link for unlinked, who
   are told being in the server isn't enough), with the origin read at click
@@ -378,7 +398,10 @@ actions: `src/app/actions/admin-discord.ts`.
   isn't listed. Names go through `pasteSafeName`.
 - **`reachabilityNote(userId)`** rides the assign-standin (captain and admin)
   and free-agent toasts when the post can't reach the player: silent on
-  unknown, raced against 2.5 s, never throws.
+  unknown, raced against 2.5 s, never throws. Join it with
+  `withReachabilityNote` (`discord-reach.ts`), which ends the toast's sentence
+  first; plain `+` printed "Standin assigned Heads up: …" (source-guarded in
+  `discord-reach.test.ts`).
 - **Quote copy that follows a JSX expression onto a new line** (`{" text"}`);
   JSX trims the plain space ("(@gone4)isn't").
 - **Coverage limit:** the dashboard join card has no render test. Check it with

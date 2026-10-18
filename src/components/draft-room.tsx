@@ -8,6 +8,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from "react";
+import { useRouter } from "next/navigation";
 import Link from "@/components/app-link";
 import {
   Avatar,
@@ -83,7 +84,11 @@ import {
   seedDraftFeed,
   type FeedLine,
 } from "@/lib/draft-feed";
-import { draftPollCadence } from "@/lib/room-poll";
+import { draftPollCadence, draftPollsAtClockZero } from "@/lib/room-poll";
+import {
+  draftRoomNeedsRefresh,
+  type DraftRoomPhase,
+} from "@/lib/draft-room-refresh";
 import { DRAFT_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
 import { RoomStatusLine } from "@/components/room-status-line";
 import { nextClockOffset } from "@/lib/countdown";
@@ -297,6 +302,7 @@ export function DraftRoom({
   voidLotAction,
   adminStart,
   adminFinish,
+  renderedPhase,
 }: {
   pollMs?: number;
   seasonId: string;
@@ -317,6 +323,12 @@ export function DraftRoom({
    * when there are no fixtures yet).
    */
   adminFinish?: { title: string; detail: string; control: ReactNode };
+  /**
+   * The season and auction status this page's server render (the root
+   * layout's header chip and navigation) was built from. The room refreshes
+   * that render once when its poll shows either moved (draftRoomNeedsRefresh).
+   */
+  renderedPhase?: DraftRoomPhase;
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -463,6 +475,30 @@ export function DraftRoom({
     hasStakeRef.current = !!state && draftViewerStake(state);
     if (state) canActRef.current = state.me.isAdmin || !!state.me.myTeamId;
   }, [state]);
+
+  // The header's status chip and the phase nav are the root layout's render,
+  // which this poll never repeats: a tab parked here before Start said
+  // "Signups open" through the whole auction. Refresh that render ONCE when
+  // the polled season phase or auction status differs from what it shows,
+  // never on every poll (each refresh re-renders the layout and this page).
+  // Seeded from the page's own render, so a Start between that render and
+  // the first poll still refreshes; after that, each poll's phase. An admin's
+  // own action already re-rendered the page, so their tab may refresh twice.
+  const router = useRouter();
+  const renderedPhaseRef = useRef<DraftRoomPhase | null>(
+    renderedPhase ?? null,
+  );
+  useEffect(() => {
+    if (!state) return;
+    const polled: DraftRoomPhase = {
+      seasonStatus: state.seasonStatus,
+      draftStatus: state.status,
+    };
+    if (draftRoomNeedsRefresh(renderedPhaseRef.current, polled)) {
+      router.refresh();
+    }
+    renderedPhaseRef.current = polled;
+  }, [state, router]);
 
   // Self-scheduling poll (not setInterval): the cadence has to react to the
   // draft's phase and the tab's visibility, and a fixed interval also stacks
@@ -726,11 +762,19 @@ export function DraftRoom({
   const reconcileExpiredClock = useCallback(() => {
     if (settlingClockKey === currentClockKey) return;
     setSettlingClockKey(currentClockKey);
-    // Only a signed-in poll can settle the lot (the tick route runs the
-    // resolvers for those alone), so a signed-out tab waits for its next
-    // poll instead of joining every open tab's request at zero.
-    if (state?.me.userId) setPollKick((value) => value + 1);
-  }, [currentClockKey, settlingClockKey, state?.me.userId]);
+    // Only a captain's or an admin's tab polls at once (draftPollsAtClockZero):
+    // every other tab waits for its next poll instead of joining every open
+    // tab's request at zero.
+    if (
+      state &&
+      draftPollsAtClockZero({
+        signedIn: !!state.me.userId,
+        canAct: state.me.isAdmin || !!state.me.myTeamId,
+      })
+    ) {
+      setPollKick((value) => value + 1);
+    }
+  }, [currentClockKey, settlingClockKey, state]);
 
   useEffect(() => {
     if (!soldFlash) return;
@@ -2106,7 +2150,10 @@ function DraftAdminToolbar({
     seasonStatus: state.seasonStatus,
     status: state.status,
     lotLive: !!state.nominatedPlayer,
-    hasSale: state.recentSales.length > 0,
+    // The sale Undo would revert, by undoLastSale's own rule (undoSaleTarget,
+    // server side). Not `recentSales[0]`: a released player's lot stays in
+    // that history, and naming it reverted the sale before it.
+    hasSale: !!state.undoSale,
   });
   // Nothing to press here (e.g. the season has left the Draft phase): no
   // bar, just the way to the admin panel.
@@ -2120,7 +2167,7 @@ function DraftAdminToolbar({
     );
   }
   const hidden = { expectedActiveSeasonId: seasonId };
-  const lastSale = state.recentSales[0];
+  const undoSale = state.undoSale;
   const nominatorName =
     state.teams.find((t) => t.id === state.nominatorTeamId)?.name ?? null;
 
@@ -2159,21 +2206,27 @@ function DraftAdminToolbar({
           </SubmitButton>
         </ActionForm>
       ) : null}
-      {controls.undo ? (
-        <ActionForm action={undoAction} hidden={hidden}>
+      {controls.undo && undoSale ? (
+        <ActionForm
+          action={undoAction}
+          /* The confirm and this id come from the same poll, and the server
+             reverts only this sale while it is still the newest one. */
+          hidden={{
+            ...hidden,
+            expectedSaleMembershipId: undoSale.membershipId,
+          }}
+        >
           <SubmitButton
             variant="secondary"
             size="sm"
             disabled={disabled}
             confirm={undoSaleConfirm({
               draftComplete: state.status === "COMPLETE",
-              sale: lastSale
-                ? {
-                    name: lastSale.name,
-                    teamName: lastSale.teamName,
-                    price: lastSale.price,
-                  }
-                : null,
+              sale: {
+                name: undoSale.name,
+                teamName: undoSale.teamName,
+                price: undoSale.price,
+              },
             })}
           >
             Undo last sale

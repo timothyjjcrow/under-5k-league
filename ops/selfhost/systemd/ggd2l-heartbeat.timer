@@ -1,0 +1,10 @@
+# Every 5 minutes (design §5.2). Not persistent: a missed beat is exactly what
+# healthchecks should notice.
+[Unit]
+Description=GGD2L heartbeat every 5 minutes
+
+[Timer]
+OnCalendar=*-*-* *:00/5:00 UTC
+
+[Install]
+WantedBy=timers.target

@@ -67,7 +67,9 @@ function nameRun(players: ReachPlayer[], total: number): string {
  * since their names are already on the Discord card and a confirm has to stay
  * readable. `unknown` players appear as a caveat, not as missing. Empty string
  * when there is nothing to warn about, so the confirm is byte-identical to
- * what shipped before this existed.
+ * what shipped before this existed. Pass a PLAYER-only funnel
+ * (`getDiscordReachFunnel(id, { playersOnly: true })`): "signed-up players"
+ * sits beside the confirm's readiness counts, which count only players.
  */
 export function discordReachWarning(reach: DiscordReachFunnel): string {
   const parts: string[] = [];
@@ -173,4 +175,17 @@ export function discordChaseMessage(
   }
   if (blocks.length === 0) return null;
   return `League Discord check:\n\n${blocks.join("\n\n")}`;
+}
+
+/**
+ * A success toast plus the reachabilityNote that may follow it ("" when the
+ * player is reachable or it can't tell). The note is its own sentence ("Heads
+ * up: …"), so the toast before it gets the full stop it lacks; without one the
+ * two ran together ("Standin assigned Heads up: …").
+ */
+export function withReachabilityNote(message: string, note: string): string {
+  const extra = note.trim();
+  if (!extra) return message;
+  const lead = message.trimEnd();
+  return `${/[.!?]$/.test(lead) ? lead : `${lead}.`} ${extra}`;
 }

@@ -66,13 +66,36 @@ describe("fixturesMatchNightLabel", () => {
     );
   });
 
-  it("follows a move of the rest of the season, counting only games still to play", () => {
-    // Weeks 1-4 played on Wednesdays; weeks 5-6 moved to Thursdays.
+  it("follows a move of the rest of the season once it holds as many fixtures", () => {
+    // Weeks 1-3 played on Wednesdays; weeks 4-6 moved to Thursdays. A tie
+    // goes to the slot with games still to play.
     const fixtures = season(EU_WEEK_ONE, 6).map((f, i) =>
-      i < 8 ? played(f.scheduledAt!) : open(dayLater(f)),
+      i < 6 ? played(f.scheduledAt!) : open(dayLater(f)),
     );
     expect(fixturesMatchNightLabel(fixtures, BERLIN, "en-GB")).toBe(
       "Thursdays at 20:00 Berlin time",
+    );
+    // Weeks 1-4 played on Wednesdays, weeks 5-6 on Thursdays: most of the
+    // season was Wednesdays, and the label says so.
+    const lateMove = season(EU_WEEK_ONE, 6).map((f, i) =>
+      i < 8 ? played(f.scheduledAt!) : open(dayLater(f)),
+    );
+    expect(fixturesMatchNightLabel(lateMove, BERLIN, "en-GB")).toBe(
+      "Wednesdays at 20:00 Berlin time",
+    );
+  });
+
+  it("never lets the last open fixture, rescheduled, name the night", () => {
+    // Every fixture is played on Wednesdays but one in the last week, which
+    // two captains moved to Saturday and is still to play. Counting only the
+    // open fixtures made it the season's "Saturdays" on every page.
+    const fixtures = season(EU_WEEK_ONE, 6).map((f, i) =>
+      i === 11
+        ? open(new Date(f.scheduledAt!.getTime() + 3 * DAY_MS))
+        : played(f.scheduledAt!),
+    );
+    expect(fixturesMatchNightLabel(fixtures, BERLIN, "en-GB")).toBe(
+      "Wednesdays at 20:00 Berlin time",
     );
   });
 

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 import {
   guardJsonMutation,
@@ -58,6 +58,17 @@ describe("JSON mutation request boundary", () => {
     const response = requireSameOrigin(request(headers));
     expect(response?.status).toBe(403);
     expect((await response?.json()).error).toMatch(/same-origin/i);
+  });
+
+  it("keeps comparing with the request's own origin when undeclared, APP_URL or not", () => {
+    const undeclared = { APP_URL: "https://us.ggd2l.com" };
+    expect(
+      requireSameOrigin(request({ origin: "https://league.example" }), undeclared),
+    ).toBeNull();
+    expect(
+      requireSameOrigin(request({ origin: "https://us.ggd2l.com" }), undeclared)
+        ?.status,
+    ).toBe(403);
   });
 
   it("reads one small JSON object", async () => {
@@ -135,5 +146,91 @@ describe("JSON mutation request boundary", () => {
     expect(parsed.ok).toBe(false);
     if (parsed.ok) return;
     expect(parsed.response.status).toBe(413);
+  });
+});
+
+describe("JSON mutation origin on a self-hosted league", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  const US = { LEAGUE_DEPLOY_ENV: "production", APP_URL: "https://us.ggd2l.com" };
+
+  // What Next hands a route handler behind Caddy: the 127.0.0.1 bind address.
+  function atBindAddress(headers: Record<string, string>) {
+    return new NextRequest("https://127.0.0.1:3001/api/inhouse", {
+      method: "POST",
+      headers: { "content-type": "application/json", ...headers },
+      body: "{}",
+    });
+  }
+
+  it("accepts the canonical APP_URL origin at the bind address", () => {
+    const req = atBindAddress({
+      origin: "https://us.ggd2l.com",
+      "sec-fetch-site": "same-origin",
+    });
+    expect(requireSameOrigin(req, US)).toBeNull();
+    expect(guardJsonMutation(req, US)).toBeNull();
+    expect(
+      requireSameOrigin(atBindAddress({ origin: "https://us.ggd2l.com" }), US),
+    ).toBeNull();
+  });
+
+  it.each([
+    "https://eu.ggd2l.com",
+    "https://admin.us.ggd2l.com",
+    "https://127.0.0.1:3001",
+    "https://localhost:3001",
+    "http://us.ggd2l.com",
+    "https://us.ggd2l.com:8443",
+  ])("rejects %s once the deployment is declared", async (origin) => {
+    const response = requireSameOrigin(atBindAddress({ origin }), US);
+    expect(response?.status).toBe(403);
+    expect((await response?.json()).error).toMatch(/same-origin/i);
+  });
+
+  it("accepts ONLY the canonical origin, never the request's own, when declared", () => {
+    // Undeclared, this request is plainly same-origin (the first test above).
+    const own = request({ origin: "https://league.example" });
+    for (const marker of ["production", "staging", "prod"]) {
+      expect(
+        requireSameOrigin(own, { LEAGUE_DEPLOY_ENV: marker, APP_URL: US.APP_URL })
+          ?.status,
+      ).toBe(403);
+    }
+  });
+
+  it("keeps the sec-fetch-site rule for the canonical origin", () => {
+    for (const fetchSite of ["same-site", "cross-site", "none"]) {
+      const req = atBindAddress({
+        origin: "https://us.ggd2l.com",
+        "sec-fetch-site": fetchSite,
+      });
+      expect(requireSameOrigin(req, US)?.status).toBe(403);
+    }
+  });
+
+  it("fails closed with an error when declared without a canonical APP_URL", () => {
+    const req = atBindAddress({ origin: "https://us.ggd2l.com" });
+    expect(() =>
+      requireSameOrigin(req, { LEAGUE_DEPLOY_ENV: "production" }),
+    ).toThrow(/APP_URL/);
+    expect(() =>
+      requireSameOrigin(req, {
+        LEAGUE_DEPLOY_ENV: "production",
+        APP_URL: "https://us.ggd2l.com/",
+      }),
+    ).toThrow(/APP_URL/);
+  });
+
+  it("reads the deployment from process.env by default", () => {
+    vi.stubEnv("LEAGUE_DEPLOY_ENV", "production");
+    vi.stubEnv("APP_URL", "https://us.ggd2l.com");
+    expect(
+      guardJsonMutation(atBindAddress({ origin: "https://us.ggd2l.com" })),
+    ).toBeNull();
+    expect(
+      guardJsonMutation(atBindAddress({ origin: "https://127.0.0.1:3001" }))
+        ?.status,
+    ).toBe(403);
   });
 });

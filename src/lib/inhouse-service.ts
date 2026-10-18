@@ -50,8 +50,12 @@ import {
   type OpenDotaMatch,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
-import { botReportedMatchId, inhouseBotGameStatus } from "./dota-lobby-service";
-import { botHoldsUnlaunchedLobby } from "./dota-lobby";
+import {
+  botReportedMatchId,
+  inhouseBotGameStatus,
+  releaseInhouseBotAfterClose,
+} from "./dota-lobby-service";
+import { botGameOverRefusal } from "./dota-lobby";
 import { effectiveInhouseRoles, parseRoleKeys } from "./roles";
 import { classifyGame } from "./match-import";
 import {
@@ -80,9 +84,15 @@ import {
 } from "./inhouse-board-service";
 import { resolveSiteUrl } from "./site-url";
 import { clampMmrToRank } from "./rank";
-import { inhouseJoinRefusal, type InhouseMmrSource } from "./inhouse-mmr-cap";
+import {
+  adminInhouseMmr,
+  inhouseFixedMmr,
+  inhouseJoinRefusal,
+  type InhouseMmrSource,
+} from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
+import { runAfterResponse } from "./after-response";
 import { raceHook } from "./race-hook";
 import {
   inhouseAllAccepted,
@@ -190,11 +200,21 @@ async function loadRecords(
  * the READY_CHECK phase — the Dota-style accept gate: all ten must press
  * ACCEPT before the captain vote starts (acceptMatch / resolveReadyCheck), so
  * an AFK player is dropped instead of drafted.
+ *
+ * Each game's "match found" ping goes out after the response
+ * (`runAfterResponse`): the tenth joiner's POST, a "Game over" press and a
+ * room poll that won maintenance never wait on Discord (its post can take
+ * 5s, and the room holds the joiner's controls meanwhile). Outside a request
+ * (scripts, tests) it is sent before this returns. The worker passes
+ * `pingAfterResponse: false`: its own response comes only after a pass of up
+ * to 45s, which would eat into the 90s accept window, and nobody waits on it.
  */
-export async function maybeFormLobby(): Promise<boolean> {
+export async function maybeFormLobby({
+  pingAfterResponse = true,
+}: { pingAfterResponse?: boolean } = {}): Promise<boolean> {
   let formed = false;
   for (let game = 0; game < INHOUSE.MAX_LIVE_GAMES; game += 1) {
-    if (!(await formOneLobby())) break;
+    if (!(await formOneLobby(pingAfterResponse))) break;
     formed = true;
   }
   return formed;
@@ -208,7 +228,7 @@ export async function maybeFormLobby(): Promise<boolean> {
  * barrier, so the loser stands down and the winner's next call fills the
  * next slot.
  */
-async function formOneLobby(): Promise<boolean> {
+async function formOneLobby(pingAfterResponse: boolean): Promise<boolean> {
   // Captured in-tx, sent post-commit (draft-sale pattern) — one formation,
   // one announcement.
   let lobbyPlayers: { name: string; discordId: string | null }[] = [];
@@ -326,18 +346,27 @@ async function formOneLobby(): Promise<boolean> {
   // before the ping, which can take seconds on Discord.
   if (formed || expired > 0) await publishInhouseRoomChange();
   if (formed && lobbyPlayers.length > 0) {
-    const roleId = await getInhousePingRoleId();
-    await sendInhouseDiscordMessage(
-      inhouseLobbyMessage(lobbyPlayers, roleId, acceptEndsAt, gameLabel),
-      {
-        // Only these exact ids may ring anyone — a Steam persona in the same
-        // message still can't ping (see MentionAllowlist).
-        roles: roleId ? [roleId] : [],
-        users: lobbyPlayers
-          .map((p) => p.discordId)
-          .filter((id): id is string => !!id),
-      },
-    );
+    const players = lobbyPlayers;
+    const deadline = acceptEndsAt;
+    const label = gameLabel;
+    const ping = async () => {
+      const roleId = await getInhousePingRoleId();
+      await sendInhouseDiscordMessage(
+        inhouseLobbyMessage(players, roleId, deadline, label),
+        {
+          // Only these exact ids may ring anyone — a Steam persona in the
+          // same message still can't ping (see MentionAllowlist).
+          roles: roleId ? [roleId] : [],
+          users: players
+            .map((p) => p.discordId)
+            .filter((id): id is string => !!id),
+        },
+      );
+    };
+    // Best-effort either way (maybeFormLobby says when each runs): the lobby
+    // is committed and published, and a lost ping loses no state.
+    if (pingAfterResponse) await runAfterResponse(ping);
+    else await ping().catch(() => {});
   }
   return formed;
 }
@@ -414,6 +443,7 @@ async function failReadyCheck(
           mmr: true,
           acceptedAt: true,
           queuedAt: true,
+          user: { select: { inhouseMmr: true } },
         },
       },
     },
@@ -449,7 +479,9 @@ async function failReadyCheck(
       where: { userId: p.userId },
       create: {
         userId: p.userId,
-        mmr: p.mmr,
+        // An admin's inhouse MMR saved since the game formed beats the game's
+        // snapshot, as it would at a join.
+        mmr: adminInhouseMmr(p.user.inhouseMmr) ?? p.mmr,
         joinedAt,
         lastSeenAt,
         idleExpiresAt,
@@ -1231,20 +1263,23 @@ export async function makePick(
 
 /**
  * What a queue join knows about a player's MMR before anything is typed: the
- * newest league signup's MMR (0 = none) and the medal. joinQueue resolves its
- * number from these, and /inhouse reads the same two to decide whether to
- * offer Join at all (inhouseJoinRefusalBeforeTyping), so the page never
- * offers a join the server refuses.
+ * inhouse MMR an admin set (null = none), the newest league signup's MMR
+ * (0 = none) and the medal. joinQueue resolves its number from these, and
+ * /inhouse reads the same three to decide whether to offer Join at all
+ * (inhouseJoinRefusalBeforeTyping) and whether to ask for an MMR, so the page
+ * never offers a join the server refuses.
  */
-export async function loadInhouseJoinFacts(
-  userId: string,
-): Promise<{ signupMmr: number; rankTier: number | null }> {
+export async function loadInhouseJoinFacts(userId: string): Promise<{
+  adminMmr: number | null;
+  signupMmr: number;
+  rankTier: number | null;
+}> {
   // MMR drives captain selection, auto-pick order, and the balance meter — so
-  // prefer the league-trusted number (their registration, which admins see and
-  // the season cap gates) over the free-typed client value. The typed value
-  // only seeds players who never registered for a season; a blank re-join
-  // ("Run it back") falls back to their last lobby's snapshot instead of
-  // silently resetting them to unknown.
+  // prefer the trusted numbers over the free-typed client value: an admin's
+  // inhouse MMR for the player, then their registration (which admins see and
+  // the season cap gates). The typed value only seeds players with neither; a
+  // blank re-join ("Run it back") falls back to their last lobby's snapshot
+  // instead of silently resetting them to unknown.
   const [reg, user] = await Promise.all([
     prisma.registration.findFirst({
       where: { userId, mmr: { gt: 0 } },
@@ -1253,10 +1288,14 @@ export async function loadInhouseJoinFacts(
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rankTier: true },
+      select: { rankTier: true, inhouseMmr: true },
     }),
   ]);
-  return { signupMmr: reg?.mmr ?? 0, rankTier: user?.rankTier ?? null };
+  return {
+    adminMmr: adminInhouseMmr(user?.inhouseMmr),
+    signupMmr: reg?.mmr ?? 0,
+    rankTier: user?.rankTier ?? null,
+  };
 }
 
 /** Add the current user to the inhouse queue (or refresh their seed MMR). */
@@ -1270,18 +1309,21 @@ export async function joinQueue(
    */
   roles?: unknown,
 ): Promise<InhouseActionResult> {
-  const { signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
-  // A registration MMR is league-approved as-is — clamped against the medal
-  // at its own save, or deliberately set by an admin override (the escape
-  // hatch for stale medals, which this path must not silently undo). Only
+  const { adminMmr, signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
+  // A fixed MMR is used as it stands (inhouseFixedMmr): an admin's inhouse
+  // MMR for the player (their call, the escape hatch for a smurf or a stale
+  // medal), else the registration MMR, which is league-approved as-is —
+  // clamped against the medal at its own save, or deliberately set by an
+  // admin override, which this path must not silently undo. Only
   // SELF-reported numbers get the medal check: the free-typed value and the
   // old lobby snapshot (which may predate medal validation). A blank-but-
   // medaled player seeds at the medal floor instead of unknown.
+  const fixed = inhouseFixedMmr({ adminMmr, signupMmr });
   let claimed: number;
   let source: InhouseMmrSource;
-  if (signupMmr > 0) {
-    claimed = signupMmr;
-    source = "signup";
+  if (fixed) {
+    claimed = fixed.mmr;
+    source = fixed.source;
   } else {
     claimed = Number.isFinite(mmr) ? Math.max(0, Math.floor(mmr)) : 0;
     source = "typed";
@@ -1302,8 +1344,7 @@ export async function joinQueue(
   // below can only lower it. Refused before anything is written.
   const refusal = inhouseJoinRefusal({ mmr: claimed, source, rankTier });
   if (refusal) return { ok: false, error: refusal };
-  const safeMmr =
-    source === "signup" ? claimed : clampMmrToRank(claimed, rankTier).mmr;
+  const safeMmr = fixed ? claimed : clampMmrToRank(claimed, rankTier).mmr;
   if (roles !== undefined) {
     const saved = await setInhouseRoles(viewer, roles);
     if (!saved.ok) return saved;
@@ -1321,11 +1362,24 @@ export async function joinQueue(
   // player's InhouseLobbyPlayer row between the check and the upsert, leaving
   // them rostered in the live lobby AND queued for the next one. Serializable
   // makes the two conflict, and the loser aborts with P2034.
+  await raceHook("inhouse.joinQueue.beforeWrite");
   let joined: boolean | null = null;
   for (let attempt = 0; attempt < QUEUE_WRITE_RETRY_ATTEMPTS; attempt += 1) {
     try {
       joined = await prisma.$transaction(
         async (tx) => {
+          // An admin's inhouse MMR as it stands now, so one saved since the
+          // read above still lands (saveInhouseRating). That save also
+          // rewrites a queued row's MMR, but finds no row for a first join
+          // that is still on its way in. Both run Serializable and each
+          // reads what the other writes, so a crossing pair aborts one and
+          // the retry sees the other's commit. Cleared since the read: the
+          // number judged above stands, as for a join just before the clear.
+          const current = await tx.user.findUnique({
+            where: { id: viewer.id },
+            select: { inhouseMmr: true },
+          });
+          const queueMmr = adminInhouseMmr(current?.inhouseMmr) ?? safeMmr;
           const inActiveLobby = await tx.inhouseLobbyPlayer.findFirst({
             where: {
               userId: viewer.id,
@@ -1348,10 +1402,10 @@ export async function joinQueue(
           }
           await tx.inhouseQueueEntry.upsert({
             where: { userId: viewer.id },
-            create: { userId: viewer.id, mmr: safeMmr, idleExpiresAt },
+            create: { userId: viewer.id, mmr: queueMmr, idleExpiresAt },
             // A duplicate request is presence, not a composition change. Keep
             // both the original queue position and shared idle deadline.
-            update: { mmr: safeMmr, lastSeenAt: new Date(now) },
+            update: { mmr: queueMmr, lastSeenAt: new Date(now) },
           });
           return true;
         },
@@ -1410,7 +1464,9 @@ export async function joinQueue(
   // "Almost there" Discord ping: only when THIS join crosses the milestone
   // upward (so hovering at the threshold stays quiet), never on the join that
   // formed a lobby (that gets its own announcement), and at most once per
-  // throttle window so leave/rejoin churn can't spam the channel.
+  // throttle window so leave/rejoin churn can't spam the channel. The claim
+  // decides here; the post goes after the response, like the match-found
+  // ping (maybeFormLobby), so the joiner's controls never wait on Discord.
   if (!formed) {
     const milestone = INHOUSE.QUEUE_PING_AT;
     const presentAfter = await prisma.inhouseQueueEntry.count({
@@ -1421,11 +1477,13 @@ export async function joinQueue(
       presentAfter >= milestone &&
       (await claimQueuePingThrottle(Date.now()))
     ) {
-      const roleId = await getInhousePingRoleId();
-      await sendInhouseDiscordMessage(
-        inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE, roleId),
-        { roles: roleId ? [roleId] : [] },
-      );
+      await runAfterResponse(async () => {
+        const roleId = await getInhousePingRoleId();
+        await sendInhouseDiscordMessage(
+          inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE, roleId),
+          { roles: roleId ? [roleId] : [] },
+        );
+      });
     }
   }
   return { ok: true };
@@ -1684,13 +1742,8 @@ export async function finishGame(
         : NO_GAME_TO_FINISH,
     };
   }
-  if (botHoldsUnlaunchedLobby(await inhouseBotGameStatus(lobby))) {
-    return {
-      ok: false,
-      error:
-        "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
-    };
-  }
+  const botRefusal = botGameOverRefusal(await inhouseBotGameStatus(lobby));
+  if (botRefusal) return { ok: false, error: botRefusal };
   // Seam: a result, an admin cancel or the abandon sweep landing between the
   // read above and the claim — the claim must lose to each of them.
   await raceHook("inhouse.finishGame.beforeClaim");
@@ -1712,10 +1765,80 @@ export async function finishGame(
     if (current?.status === INHOUSE_STATUS.CANCELLED && !(requeue && isMember)) {
       return { ok: false, error: "That game was cancelled" };
     }
+  } else {
+    // The bot may still be attached to this game's Dota lobby (a started
+    // job waits for Dota's postgame): let it go, without waiting on it.
+    releaseInhouseBotAfterClose(lobby.id);
   }
   if (requeue && isMember) return joinQueue(viewer, 0);
   await maybeFormLobby();
   return { ok: true };
+}
+
+/**
+ * The lobby bot saw this game running ("started"): a READY game becomes
+ * IN_PROGRESS, stamping `startedAt`, as if someone pressed Start. Called by
+ * the bot panel's read (/api/dota-lobby) and by the result scan's own bot
+ * read, so a bot game is marked started without a visible tab. Guarded on
+ * READY: a game cancelled, finished or already started meanwhile is left
+ * alone, so a late reply never resurrects it. Publishes the room and wakes
+ * the automation gate (the abandon floor now runs from `startedAt`) only when
+ * it moved the game. Returns whether it did.
+ */
+export async function markInhouseGameStartedFromBot(
+  lobbyId: string,
+): Promise<boolean> {
+  const started = await prisma.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: INHOUSE_STATUS.READY },
+    data: { status: INHOUSE_STATUS.IN_PROGRESS, startedAt: new Date() },
+  });
+  if (started.count === 0) return false;
+  // Rule P: the room shows the game started.
+  await publishInhouseRoomChange();
+  invalidateAutomationGateBestEffort();
+  return true;
+}
+
+/**
+ * The lobby bot saw Dota's postgame for this game, played and scored (its
+ * `over` flag; Tim's call 2026-10-18): the site marks it over as if "Game
+ * over" were pressed, requeuing nobody. Its ten and its game slot are free at
+ * once, the bot is released, and the result still records itself from
+ * OpenDota (AWAITING_RESULT). "Game over — queue again" stays as the
+ * fallback, and still requeues its presser.
+ *
+ * The claim is finishGame's: a game being played (READY or IN_PROGRESS)
+ * moves to AWAITING_RESULT with `finishedAt`, so it loses cleanly to a
+ * result, an admin cancel, the abandon sweep or a "Game over" press that
+ * landed first, and then changes nothing. Called by the bot panel's read
+ * (/api/dota-lobby, the fast path) and the result scan's bot read (the
+ * backstop). Then the follow-ups finishGame's press gets: publish the room
+ * (its next signed-in poll repaints the Discord board), wake the automation
+ * gate (the game's clocks moved) and offer the freed slot to the queue.
+ * Returns whether this call marked it over.
+ */
+export async function endInhouseGameFromBot(lobbyId: string): Promise<boolean> {
+  // Seam: a result, a cancel, the abandon sweep or a "Game over" press
+  // landing after the caller read the game as playing — the claim must lose
+  // to each of them.
+  await raceHook("inhouse.endInhouseGameFromBot.beforeClaim");
+  // Hoisted so the claim's data stays a flat literal (scripts/mutation-guard).
+  const finishedAt = new Date();
+  const ended = await prisma.inhouseLobby.updateMany({
+    where: { id: lobbyId, status: { in: INHOUSE_PLAYING_STATUSES } },
+    data: { status: INHOUSE_STATUS.AWAITING_RESULT, finishedAt },
+  });
+  if (ended.count === 0) return false;
+  // Rule P: the room drops the game before anything slower runs.
+  await publishInhouseRoomChange();
+  invalidateAutomationGateBestEffort();
+  releaseInhouseBotAfterClose(lobbyId);
+  // The freed slot may form the next game, whose accept clock is new
+  // automated work; formOneLobby publishes it but doesn't wake the gate, and
+  // this path's callers (the panel's read, the result scan) have no trailing
+  // expiry of their own.
+  if (await maybeFormLobby()) invalidateAutomationGateBestEffort();
+  return true;
 }
 
 /**
@@ -2065,6 +2188,8 @@ async function applyResult(
   // Rule P: COMPLETED (and, when finalized, its Elo swing, which the room's
   // post-game banner shows) is committed; the delivery below is Discord.
   await publishInhouseRoomChange();
+  // The game is closed: a bot still attached to its Dota lobby lets go.
+  releaseInhouseBotAfterClose(lobbyId);
   if (!finalized) return "closed";
 
   // Preserve the immediate announcement when Discord is healthy, but only
@@ -2232,12 +2357,30 @@ async function lookUpLobbyGame(
   );
   // The bot read never throws: no bot, an unreachable one, or a game it didn't
   // host all come back without a match id, and the history scan runs as ever.
-  const botMatchId = botReportedMatchId(
-    await inhouseBotGameStatus(
-      { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
-      options,
-    ),
+  const botStatus = await inhouseBotGameStatus(
+    { id: lobby.id, radiantTeam: lobby.radiantTeam, players },
+    options,
   );
+  // What the bot saw needs no open tab: a game Dota showed over is marked
+  // over (the bot panel's read does the same, sooner), and a READY game it
+  // saw running is marked started. Both are guarded claims that publish
+  // their own commit before the OpenDota lookup below. A failure in either
+  // (the claim, or the formation and ping after it) only delays what the
+  // next pass or panel read does again: it never costs this game's lookup or
+  // the rest of the pass.
+  if ((INHOUSE_PLAYING_STATUSES as readonly string[]).includes(lobby.status)) {
+    try {
+      if (botStatus?.over) await endInhouseGameFromBot(lobby.id);
+      else if (
+        botStatus?.state === "started" &&
+        lobby.status === INHOUSE_STATUS.READY
+      )
+        await markInhouseGameStartedFromBot(lobby.id);
+    } catch {
+      console.error("[inhouse] bot-driven game update failed");
+    }
+  }
+  const botMatchId = botReportedMatchId(botStatus);
   if (botMatchId) {
     const od = await fetchOpenDotaMatch(botMatchId, options);
     if (!canStartOpenDotaFetch(options) || openDotaBudgetExpired(options)) {
@@ -2784,6 +2927,8 @@ export async function voidLastResult(
   // After the cursor stamp: a board check that sees the new version must
   // also see the moved cursor, or it settles on the pre-void stats.
   await publishInhouseRoomChange();
+  // A voided game is closed: a bot still attached to its lobby lets go.
+  releaseInhouseBotAfterClose(last.id);
 
   // Post-claim, so only the winner of a concurrent void writes the record —
   // the cancelLobby ordering. The lobby reads CANCELLED like any abandoned
@@ -2856,7 +3001,12 @@ export async function cancelLobby(
   }
   const players = await prisma.inhouseLobbyPlayer.findMany({
     where: { lobbyId: lobby.id },
-    select: { userId: true, mmr: true, queuedAt: true },
+    select: {
+      userId: true,
+      mmr: true,
+      queuedAt: true,
+      user: { select: { inhouseMmr: true } },
+    },
   });
   const requeuePlayers = [...players].sort(
     (a, b) =>
@@ -2896,7 +3046,9 @@ export async function cancelLobby(
         where: { userId: p.userId },
         create: {
           userId: p.userId,
-          mmr: p.mmr,
+          // An admin's inhouse MMR saved since the game formed beats the
+          // game's snapshot, as it would at a join.
+          mmr: adminInhouseMmr(p.user.inhouseMmr) ?? p.mmr,
           // Stagger joins so queue order stays deterministic.
           joinedAt: new Date(now + i),
           lastSeenAt: requeueLastSeenAt(now),
@@ -2925,6 +3077,10 @@ export async function cancelLobby(
           : "The lobby just finished — its result is in, nothing to cancel.",
     };
   }
+  // A cancelled game's bot lets go of its Dota lobby: a ready lobby that
+  // players still sit in would otherwise hold the bot until its idle clock
+  // ran out, answering BUSY to the next game.
+  releaseInhouseBotAfterClose(lobby.id);
   // Every successful admin cancellation is destructive and therefore gets an
   // audit row. Written after the claim so a losing cancel logs nothing.
   await logAdminAction({
@@ -2974,6 +3130,7 @@ export async function giveUpOnResult(
       error: "That game's result just came in, so there is nothing to give up on.",
     };
   }
+  releaseInhouseBotAfterClose(lobbyId);
   await logAdminAction({
     action: "cancelLobby",
     summary: `Gave up on the result of inhouse #${inhouseLobbyCode(lobbyId)} (marked over; nobody requeued)`,
