@@ -189,7 +189,8 @@ actions: `src/app/actions/admin-discord.ts`.
   CREATE on `draftTeamsPingKey(season, runId)`, released if nothing was queued.
 - **The queue ping fires only on an upward crossing** of
   `INHOUSE.QUEUE_PING_AT` present players, never on the lobby-forming join, at
-  most once per `QUEUE_PING_MIN_MINUTES` (Setting `inhouseQueuePingAt`). It is
+  most once an hour (`QUEUE_PING_MIN_MINUTES`, Setting `inhouseQueuePingAt`;
+  15 minutes re-pinged a queue hovering at 3 and 4 all evening). It is
   low on purpose (the first queuers are invisible to anyone off the site); raise
   it if it cries wolf. It links `joinLink()` (`/inhouse?join=1`).
 - **Lobby formed mentions all ten** (`maybeFormLobby`, after commit):

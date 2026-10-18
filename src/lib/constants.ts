@@ -473,7 +473,10 @@ export const INHOUSE = {
   // lobby is genuinely worth interrupting someone for. Raise it if the ping
   // starts crying wolf; the throttle below is the other tuning knob.
   QUEUE_PING_AT: 4,
-  QUEUE_PING_MIN_MINUTES: 15,
+  // An hour between queue pings, counted from the last one sent. It was 15
+  // minutes, and a queue hovering at the line (3, 4, 3, 4) re-pinged the role
+  // every quarter hour all evening; Tim asked for about one an hour.
+  QUEUE_PING_MIN_MINUTES: 60,
   // Floor between EDITS of the pinned Discord queue board (inhouse-board.ts).
   // Six edits/minute worst case, and only when the rendered state actually
   // changed — a motionless queue costs zero requests. Short enough that a
