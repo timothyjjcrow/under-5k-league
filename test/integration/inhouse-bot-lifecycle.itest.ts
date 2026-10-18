@@ -28,7 +28,10 @@ import {
   voidLastResult,
 } from "@/lib/inhouse-service";
 import { readInhouseRoomVersion } from "@/lib/inhouse-room-version";
-import { settleInhouseBotReleases } from "@/lib/lobby-bot-releases";
+import {
+  inhouseBotReleasesStarted,
+  settleInhouseBotReleases,
+} from "@/lib/lobby-bot-releases";
 import { POST } from "@/app/api/dota-lobby/route";
 import { voidInhouseResult } from "@/app/actions/inhouse-admin";
 import { ON_POSTGRES, makeUser, raceAll, sessionFor } from "./factories";
@@ -559,6 +562,40 @@ describe("who ends a game from the bot's postgame", () => {
     expect(mockMatch).toHaveBeenCalledWith("9050201642", expect.anything());
     expect((await sent()).map(([action]) => action)).toEqual(["status", "release"]);
   });
+
+  // 2026-10-18 review: the backstop's claim and the formation after it ran
+  // without the route's try/catch, so one failure there aborted the pass:
+  // this game's OpenDota lookup and every other game's scan.
+  it("a failure in the bot-driven update never costs the scan its lookups", async () => {
+    stubBot(() => ({ state: "started", matchId: "9050201643", over: true }));
+    const first = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-scan-fail-a-");
+    const second = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-scan-fail-b-");
+    const a = await playedLobby(first, { slot: 1 });
+    const b = await playedLobby(second, { slot: 2, formed: 61 });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.endInhouseGameFromBot.beforeClaim", async () => {
+        fired = true;
+        throw new Error("simulated failure after the bot's read");
+      }),
+    );
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(await maybeAutoDetectResult({ deadlineMs: Date.now() + 60_000 })).toEqual({
+        recorded: false,
+        deadlineReached: false,
+      });
+      expect(fired).toBe(true);
+      expect(error).toHaveBeenCalledWith("[inhouse] bot-driven game update failed");
+    } finally {
+      error.mockRestore();
+    }
+    // The failed game still got its OpenDota lookup, and the other game was
+    // scanned (and marked over) in the same pass.
+    expect(mockMatch.mock.calls.filter(([id]) => String(id) === "9050201643")).toHaveLength(2);
+    const statuses = [(await lobbyRow(a.id)).status, (await lobbyRow(b.id)).status].sort();
+    expect(statuses).toEqual([INHOUSE_STATUS.AWAITING_RESULT, INHOUSE_STATUS.IN_PROGRESS].sort());
+  });
 });
 
 describe("every close releases the bot, without waiting on it", () => {
@@ -643,9 +680,21 @@ describe("every close releases the bot, without waiting on it", () => {
     const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-rel-none-");
     const lobby = await playedLobby(players, { status: INHOUSE_STATUS.READY });
     const admin = await makeAdmin();
+    const before = inhouseBotReleasesStarted();
     expect(await cancelLobby(admin, lobby.id)).toEqual({ ok: true });
     await settleInhouseBotReleases();
     expect(fetch).not.toHaveBeenCalled();
+    // No release started at all: one would read the game before finding no
+    // bot to send it to.
+    expect(inhouseBotReleasesStarted()).toBe(before);
+    // Configured, the same close starts exactly one (this test can fail).
+    stubBot(() => ({ state: "released" }));
+    const second = await playedLobby(await makePlayers(INHOUSE.LOBBY_SIZE, "BO-rel-some-"), {
+      status: INHOUSE_STATUS.READY,
+      slot: 2,
+    });
+    expect(await cancelLobby(admin, second.id)).toEqual({ ok: true });
+    expect(inhouseBotReleasesStarted()).toBe(before + 1);
   });
 });
 
@@ -665,8 +714,14 @@ describe("Create's BUSY", () => {
   });
   const busy = new Response(JSON.stringify({ code: "BUSY" }), { status: 409 });
 
-  it("frees the bot from a closed game of this league and says so", async () => {
-    const old = await playedLobby(await makePlayers(INHOUSE.LOBBY_SIZE, "BO-busy-old-"), {
+  const busyCopy =
+    "The bot is hosting another game's lobby. It hosts one game at a time and is free again when that game ends: try again then, or host this game by hand.";
+  const leavingCopy = (id: string) =>
+    `Asked the bot to leave finished game #${inhouseLobbyCode(id)}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
+
+  /** A closed game the bot still holds, and Create on a new game. */
+  async function heal(prefix: string, release: (request: BotRequest) => BotAnswer) {
+    const old = await playedLobby(await makePlayers(INHOUSE.LOBBY_SIZE, `${prefix}old-`), {
       status: INHOUSE_STATUS.AWAITING_RESULT,
     });
     stubBot((request) =>
@@ -674,21 +729,59 @@ describe("Create's BUSY", () => {
         ? busy.clone()
         : request.action === "health"
           ? health(keyOf(old.id))
-          : { state: "started" },
+          : release(request),
     );
-    const lobby = await readyGame("BO-busy-new-");
-
+    const lobby = await readyGame(`${prefix}new-`);
     const res = await create(lobby.id);
     expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({
-      error: `Freeing the bot from finished game #${inhouseLobbyCode(old.id)}. Press “Create Dota lobby” again in a few seconds.`,
-    });
     expect(await sent()).toEqual([
       ["create", keyOf(lobby.id)],
       ["health", null],
       ["release", keyOf(old.id)],
     ]);
+    return { old, error: (await res.json()).error as string };
+  }
+
+  it.each([
+    ["it left the lobby", { state: "released" }],
+    ["it is leaving the lobby screen", { state: "ready", releasing: true }],
+  ])("frees the bot from a closed game of this league and says so (%s)", async (_label, reply) => {
+    const { old, error } = await heal("BO-busy-", () => reply);
+    expect(error).toBe(
+      `Freeing the bot from finished game #${inhouseLobbyCode(old.id)}. Press “Create Dota lobby” again in a few seconds.`,
+    );
   });
+
+  // 2026-10-18 review: the copy promised "a few seconds" whatever the
+  // release did. A closed game still running in Dota (an early "Game over"
+  // press, an admin cancel) keeps the bot until its postgame.
+  it("says the bot leaves when that game ends when Dota is still running it", async () => {
+    const { old, error } = await heal("BO-busy-run-", () => ({
+      state: "started",
+      releasing: true,
+    }));
+    expect(error).toBe(leavingCopy(old.id));
+  });
+
+  it("says the release was asked for when its answer was lost", async () => {
+    const { old, error } = await heal(
+      "BO-busy-lost-",
+      () => new Response("upstream timeout", { status: 524 }),
+    );
+    expect(error).toBe(leavingCopy(old.id));
+  });
+
+  // A release the bot refused changed nothing: never "Freeing…".
+  it.each(["STATE", "OFFLINE", "INVALID"])(
+    "keeps the BUSY answer when the bot refuses the release (%s)",
+    async (code) => {
+      const { error } = await heal(
+        `BO-busy-ref-${code}-`,
+        () => new Response(JSON.stringify({ code }), { status: 409 }),
+      );
+      expect(error).toBe(busyCopy);
+    },
+  );
 
   it.each([
     ["a game still being played", "live"],
@@ -707,9 +800,7 @@ describe("Create's BUSY", () => {
 
     const res = await create(lobby.id);
     expect(res.status).toBe(400);
-    expect((await res.json()).error).toBe(
-      "The bot is hosting another game's lobby. It hosts one game at a time and is free again when that game ends: try again then, or host this game by hand.",
-    );
+    expect((await res.json()).error).toBe(busyCopy);
     expect((await sent()).map(([action]) => action)).toEqual(["create", "health"]);
   });
 });

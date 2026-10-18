@@ -57,6 +57,19 @@ export class InviteOutcomeUnknownError extends UserFacingError {
 }
 
 /**
+ * A lobby action whose answer was lost (a timeout, a dropped socket, an
+ * unreadable reply): it may have reached Dota, so it is unknown, never a
+ * refusal. The BUSY self-heal tells this apart from a refusal.
+ */
+class LobbyBotOutcomeUnknownError extends UserFacingError {
+  constructor() {
+    super(
+      "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
+    );
+  }
+}
+
+/**
  * The bot answered BUSY: its one Steam account holds another game's Dota
  * lobby. The route's Create tries `freeBotFromClosedInhouseGame` on it.
  */
@@ -270,12 +283,23 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
 }
 
 /**
+ * What Create's BUSY self-heal got the bot to do about a closed game: leave
+ * its lobby now (`leavingNow`), or leave once Dota lets it (a game still
+ * running in Dota, or a release whose answer was lost).
+ */
+export type FreedBot = { id: string; leavingNow: boolean };
+
+/**
  * Create's BUSY self-heal. When the bot's active job is this league's
  * in-house game and the database shows that game closed, ask the bot to
- * release it and return the game's id; otherwise null (the BUSY answer
- * stands). One health read and at most one release; never throws.
+ * release it. Null when there is nothing to free, or when the bot refused the
+ * release (it can't leave yet, isn't running, or the game's spec can't be
+ * built): that changed nothing, so the BUSY answer stands. A release the bot
+ * accepted for a game still running in Dota (`started`) only leaves at that
+ * game's end, and a lost answer may or may not have landed: neither is
+ * `leavingNow`. One health read and at most one release; never throws.
  */
-export async function freeBotFromClosedInhouseGame(): Promise<string | null> {
+export async function freeBotFromClosedInhouseGame(): Promise<FreedBot | null> {
   try {
     const connection = lobbyBotConnection();
     if (!connection) return null;
@@ -283,18 +307,27 @@ export async function freeBotFromClosedInhouseGame(): Promise<string | null> {
     if (health === "offline") return null;
     const id = await closedInhouseLobbyForBotKey(health.activeKey);
     if (!id) return null;
-    // Best-effort: a release the bot can't confirm still may have landed,
-    // and the next Create shows either way.
-    await releaseInhouseBotLobby(id).catch(() => {});
-    return id;
+    let reply: DotaLobbyBotReply | null;
+    try {
+      reply = await releaseInhouseBotLobby(id);
+    } catch (error) {
+      return error instanceof LobbyBotOutcomeUnknownError
+        ? { id, leavingNow: false }
+        : null;
+    }
+    if (!reply) return null;
+    return { id, leavingNow: reply.state !== "started" };
   } catch {
     return null;
   }
 }
 
 /** Create's answer when the self-heal sent the closed game's release. */
-export function freeingBotMessage(lobbyId: string) {
-  return `Freeing the bot from finished game #${inhouseLobbyCode(lobbyId)}. Press “Create Dota lobby” again in a few seconds.`;
+export function freeingBotMessage(freed: FreedBot) {
+  const game = `#${inhouseLobbyCode(freed.id)}`;
+  return freed.leavingNow
+    ? `Freeing the bot from finished game ${game}. Press “Create Dota lobby” again in a few seconds.`
+    : `Asked the bot to leave finished game ${game}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
 }
 
 /** What an in-house bot spec is built from: the lobby's id, sides and roster. */
@@ -666,9 +699,7 @@ async function askLobbyBot(
   const unknown = () =>
     action === "invite"
       ? new InviteOutcomeUnknownError()
-      : new UserFacingError(
-          "The lobby bot could not be reached. Refresh its status before retrying; the request may have reached Dota.",
-        );
+      : new LobbyBotOutcomeUnknownError();
   let response: Response;
   try {
     response = await postToBot(
@@ -770,16 +801,19 @@ async function askLobbyBot(
 
 /**
  * Ask the bot to release this in-house game's job, built from the game's
- * own stored roster (the bot checks the job's name and password). Throws
- * what callLobbyBot throws; a missing game is a no-op.
+ * own stored roster (the bot checks the job's name and password), and return
+ * its answer. Throws what callLobbyBot throws; a missing game is a no-op
+ * (null).
  */
-async function releaseInhouseBotLobby(lobbyId: string): Promise<void> {
+async function releaseInhouseBotLobby(
+  lobbyId: string,
+): Promise<DotaLobbyBotReply | null> {
   const lobby = await prisma.inhouseLobby.findUnique({
     where: { id: lobbyId },
     select: INHOUSE_SPEC_SELECT,
   });
-  if (!lobby) return;
-  await callLobbyBot(inhouseLobbySpec(lobby), "release");
+  if (!lobby) return null;
+  return callLobbyBot(inhouseLobbySpec(lobby), "release");
 }
 
 /**
@@ -799,7 +833,12 @@ export function releaseInhouseBotAfterClose(lobbyId: string): void {
   } catch {
     return;
   }
-  trackBotRelease(releaseInhouseBotLobby(lobbyId).catch(() => {}));
+  trackBotRelease(
+    releaseInhouseBotLobby(lobbyId).then(
+      () => {},
+      () => {},
+    ),
+  );
 }
 
 // The worker's bot read is a garnish on a result scan that has its own

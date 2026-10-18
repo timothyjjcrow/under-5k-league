@@ -27,11 +27,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 /**
- * Status reads per viewer per minute. One viewer can have two devices, each
- * with a room panel and the admin recovery panel's own panel, at the 3s
- * setup rate (LOBBY_PANEL_POLL_MS): about 80 a minute at worst, but the route
- * serves every read of a game from one short-lived bot read (the status cache
- * in dota-lobby-service.ts), so this bounds the site's work, not the bot's.
+ * Status reads per viewer per minute. One visible panel at the 3s rate
+ * (LOBBY_PANEL_POLL_MS) reads 20 times a minute, so this covers three at once:
+ * a player's game on two devices, or an admin watching two games' setup on
+ * one page. A fourth (an admin with both games open on two visible devices)
+ * gets an occasional 429, which its panel shows until the next read clears
+ * it. A hidden tab never polls. The route serves every read of a game from
+ * one short-lived bot read (the status cache in dota-lobby-service.ts), so
+ * this bounds the site's work, not the bot's.
  */
 const READS_PER_MINUTE = 60;
 /** Creates, starts, releases and invites per viewer per minute. */
@@ -141,7 +144,8 @@ export async function POST(req: NextRequest) {
     } catch (error) {
       // BUSY: the bot holds another game's lobby. When that game is one of
       // this league's in-house games and already closed, free the bot from
-      // it (one health read, one release) and say so.
+      // it (one health read, one release) and say what the release did; a
+      // refused release leaves the BUSY answer as it is.
       if (action === "create" && error instanceof LobbyBotBusyError) {
         const freed = await freeBotFromClosedInhouseGame();
         if (freed) throw new UserFacingError(freeingBotMessage(freed));

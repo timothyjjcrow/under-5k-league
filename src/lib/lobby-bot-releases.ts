@@ -7,22 +7,31 @@
  */
 const STORE = Symbol.for("ggd2l.lobbyBotReleases");
 
-function pending(): Set<Promise<void>> {
-  const holder = globalThis as typeof globalThis & {
-    [STORE]?: Set<Promise<void>>;
-  };
-  return (holder[STORE] ??= new Set());
+type Releases = { pending: Set<Promise<void>>; started: number };
+
+function releases(): Releases {
+  const holder = globalThis as typeof globalThis & { [STORE]?: Releases };
+  return (holder[STORE] ??= { pending: new Set(), started: 0 });
 }
 
 /** Track one release until it settles. It must never reject. */
 export function trackBotRelease(task: Promise<void>): void {
-  const set = pending();
-  set.add(task);
-  void task.finally(() => set.delete(task));
+  const store = releases();
+  store.started += 1;
+  store.pending.add(task);
+  void task.finally(() => store.pending.delete(task));
 }
 
 /** Tests only: wait for every release started so far, and any they start. */
 export async function settleInhouseBotReleases(): Promise<void> {
-  const set = pending();
-  while (set.size > 0) await Promise.all([...set]);
+  const { pending } = releases();
+  while (pending.size > 0) await Promise.all([...pending]);
+}
+
+/**
+ * Tests only: how many releases this process has started. A close with no
+ * bot configured must start none (it never reads the game either).
+ */
+export function inhouseBotReleasesStarted(): number {
+  return releases().started;
 }

@@ -55,7 +55,7 @@ import {
   inhouseBotGameStatus,
   releaseInhouseBotAfterClose,
 } from "./dota-lobby-service";
-import { botHoldsUnlaunchedLobby } from "./dota-lobby";
+import { botGameOverRefusal } from "./dota-lobby";
 import { effectiveInhouseRoles, parseRoleKeys } from "./roles";
 import { classifyGame } from "./match-import";
 import {
@@ -1688,13 +1688,8 @@ export async function finishGame(
         : NO_GAME_TO_FINISH,
     };
   }
-  if (botHoldsUnlaunchedLobby(await inhouseBotGameStatus(lobby))) {
-    return {
-      ok: false,
-      error:
-        "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
-    };
-  }
+  const botRefusal = botGameOverRefusal(await inhouseBotGameStatus(lobby));
+  if (botRefusal) return { ok: false, error: botRefusal };
   // Seam: a result, an admin cancel or the abandon sweep landing between the
   // read above and the claim — the claim must lose to each of them.
   await raceHook("inhouse.finishGame.beforeClaim");
@@ -2311,14 +2306,21 @@ async function lookUpLobbyGame(
   // What the bot saw needs no open tab: a game Dota showed over is marked
   // over (the bot panel's read does the same, sooner), and a READY game it
   // saw running is marked started. Both are guarded claims that publish
-  // their own commit before the OpenDota lookup below.
+  // their own commit before the OpenDota lookup below. A failure in either
+  // (the claim, or the formation and ping after it) only delays what the
+  // next pass or panel read does again: it never costs this game's lookup or
+  // the rest of the pass.
   if ((INHOUSE_PLAYING_STATUSES as readonly string[]).includes(lobby.status)) {
-    if (botStatus?.over) await endInhouseGameFromBot(lobby.id);
-    else if (
-      botStatus?.state === "started" &&
-      lobby.status === INHOUSE_STATUS.READY
-    )
-      await markInhouseGameStartedFromBot(lobby.id);
+    try {
+      if (botStatus?.over) await endInhouseGameFromBot(lobby.id);
+      else if (
+        botStatus?.state === "started" &&
+        lobby.status === INHOUSE_STATUS.READY
+      )
+        await markInhouseGameStartedFromBot(lobby.id);
+    } catch {
+      console.error("[inhouse] bot-driven game update failed");
+    }
   }
   const botMatchId = botReportedMatchId(botStatus);
   if (botMatchId) {

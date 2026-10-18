@@ -297,7 +297,7 @@ const keyPrefix = LEAGUE_CONFIG.region === "eu" ? "eu:" : "";
 const botCalls: { action: string; spec: { key: string } }[] = [];
 
 /** The relay answers every status read with `reply`, or fails with it. */
-function stubBot(reply: { state: string; matchId?: string } | Error) {
+function stubBot(reply: { state: string; matchId?: string; releasing?: boolean } | Error) {
   vi.stubEnv("DOTA_LOBBY_BOT_URL", BOT_ORIGIN);
   vi.stubEnv("DOTA_LOBBY_BOT_SECRET", "test-game-over-secret-".repeat(3));
   vi.stubEnv("DOTA_INHOUSE_LEAGUE_ID", "54321");
@@ -466,17 +466,24 @@ describe("inhouse Game over — marking a game over", () => {
     });
   });
 
-  it.each(["creating", "ready", "starting"])(
+  it.each([
+    [
+      "ready",
+      "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
+    ],
+    // Neither button shows while the bot creates or starts the lobby.
+    ["creating", "The lobby bot is still setting up or starting this game's Dota lobby. Try again in a minute."],
+    ["starting", "The lobby bot is still setting up or starting this game's Dota lobby. Try again in a minute."],
+  ])(
     "waits while the lobby bot holds the game's Dota lobby unlaunched (%s)",
-    async (state) => {
+    async (state, error) => {
       const players = await makePlayers(INHOUSE.LOBBY_SIZE, `GO-bot-${state}-`);
       const lobby = await playedLobby(players);
       stubBot({ state });
 
       expect(await finishGame(players[0].session, lobby.id)).toEqual({
         ok: false,
-        error:
-          "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over.",
+        error,
       });
       expect(await lobbyRow(lobby.id)).toMatchObject({
         status: INHOUSE_STATUS.IN_PROGRESS,
@@ -493,6 +500,9 @@ describe("inhouse Game over — marking a game over", () => {
     ["it launched the game", { state: "started", matchId: "7400000001" }],
     ["it holds nothing", { state: "idle" }],
     ["it released the lobby", { state: "released" }],
+    // Already leaving: its Start and invites refuse and Release is hidden,
+    // so a refusal naming them would point at nothing.
+    ["it is leaving the lobby", { state: "ready", releasing: true }],
     // Also what an offline-from-Steam bot reports, when Release can't work
     // either; admin recovery can let it go once the game is marked over.
     ["it reports blocked", { state: "blocked" }],
