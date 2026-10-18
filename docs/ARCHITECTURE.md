@@ -1311,13 +1311,9 @@ remote connection, and the browser fixture never touches `dev.db`.
 
 ## 11. Production deployment and recovery
 
-**Status: planned.** Production is one self-hosted box, `ggd2l-1`; both
-leagues move there from Vercel and Neon on the cutover day
-([DECISIONS](DECISIONS.md#hosting)). Until then they run on Vercel and Neon
-as before and nothing is released; until a league has moved, its scheduler
-pause, resume and rollback deploys run from a checkout of 33a1f348, because
-the `wrangler*.jsonc` on `main` already target the box's origins. This
-section describes the box.
+**Status: live.** Production is one self-hosted box, `ggd2l-1`; both
+leagues moved there from Vercel and Neon on 2026-10-17
+([DECISIONS](DECISIONS.md#hosting)). This section describes the box.
 
 **Ingress and runtime.** Each league's hostname is a proxied Cloudflare CNAME
 to a Cloudflare Tunnel; `cloudflared` on the box hands requests to Caddy on

@@ -6,13 +6,9 @@ Players use Steam to sign in separately on each site; profiles, admins,
 registrations, seasons, drafts, matches, records and inhouses are separate.
 
 The site is [GGD2L Europe](https://eu.ggd2l.com) at `https://eu.ggd2l.com`.
-**Status: planned.** Europe moves there from Vercel and Neon on the cutover
-day, about two hours after the US ([DECISIONS](DECISIONS.md#hosting)); until
-then it runs at `https://ggd2l-europe.vercel.app`, which afterwards redirects
-to the new origin (307 for 14 days, then 308). Until Europe has moved, run
-its scheduler pause, resume and rollback deploys from a checkout of 33a1f348:
-the `wrangler.europe*.jsonc` on `main` already target `https://eu.ggd2l.com`,
-which doesn't serve the league until the move. Season 1 is open
+**Status: live** since 2026-10-17 (16:24Z; [DECISIONS](DECISIONS.md#hosting)).
+The old `https://ggd2l-europe.vercel.app` redirects to the new origin (307 for
+14 days, then 308). Season 1 is open
 for signups with **match night to be announced**, no draft date and no first
 match date. Europe now connects to the existing US Dota worker, Steam account
 and relay with explicit US/EU region support. Ticket IDs remain unset pending
