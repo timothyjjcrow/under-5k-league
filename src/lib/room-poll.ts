@@ -275,8 +275,14 @@ export type InhouseLongPoll = {
  * - the last request failed: a retry must be quick to diagnose.
  *
  * A member in their own game's clocked stages asks for the shorter
- * LONG_POLL_TIMED_HOLD_MS, so a dead connection there shows as reconnecting
- * while the clock still matters; everyone else for LONG_POLL_HOLD_MS.
+ * LONG_POLL_TIMED_HOLD_MS, so a held request that silently died there is
+ * given up on, and the fast retries begin, 15s sooner; everyone else asks
+ * for LONG_POLL_HOLD_MS. The cost of holding: usePollHealth says
+ * "Connection lost" only at ROOM_POLL_FAIL_THRESHOLD failures in a row, and
+ * the first held one takes its hold plus ROOM_POLL_TIMEOUT_MS, so a dead
+ * connection shows after about 43s in a clocked stage and 58s elsewhere,
+ * against about 34-43s on the ladder (room-poll.test.ts states it, and
+ * docs/DECISIONS.md's 2026-10-18 row accepts it).
  */
 export function inhouseLongPoll(
   o: InhouseRoomPhaseInput & {

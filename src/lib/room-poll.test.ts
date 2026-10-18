@@ -367,11 +367,59 @@ describe("inhouseLongPoll", () => {
       // The server never holds longer than it grants.
       expect(lp.holdMs).toBeLessThanOrEqual(INHOUSE.LONG_POLL_HOLD_MS);
     }
-    // The clocked stages notice a dead connection inside the vote window.
-    expect(INHOUSE.LONG_POLL_TIMED_HOLD_MS + ROOM_POLL_TIMEOUT_MS).toBeLessThan(
-      INHOUSE.VOTE_SECONDS * 1000,
-    );
     expect(INHOUSE.LONG_POLL_TIMED_HOLD_MS).toBeLessThan(INHOUSE.LONG_POLL_HOLD_MS);
+  });
+
+  it("a dead connection shows later while held: the cost the 2026-10-18 row accepts", () => {
+    // usePollHealth (poll-health.ts) locks the room and says "Connection
+    // lost" only at ROOM_POLL_FAIL_THRESHOLD failures in a row, and a request
+    // that just hangs fails only at its own deadline. Worst case, the
+    // connection dies as a request leaves. A held request fails after its
+    // hold plus ROOM_POLL_TIMEOUT_MS; the retries after it are never held
+    // and leave at the fast retry rate. On the ladder the first request
+    // waits its cadence and then the same three deadlines.
+    const FAST = 1500;
+    const retryMs = inhousePollDelay({
+      activeMs: FAST,
+      hidden: false,
+      hasStake: true,
+      reached: false,
+      failureCount: 1,
+      longPoll: false,
+      startedAgoMs: ROOM_POLL_TIMEOUT_MS,
+    });
+    expect(retryMs).toBe(FAST);
+    expect(inhouseLongPoll({ ...calm, failureCount: 1 })).toBeNull();
+    const retries = (ROOM_POLL_FAIL_THRESHOLD - 1) * (retryMs + ROOM_POLL_TIMEOUT_MS);
+    const held = (lobbyStatus: string | null, inLobby?: boolean) =>
+      inhouseLongPoll({ ...calm, lobbyStatus, inLobby })!.timeoutMs + retries;
+    const ladder = (lobbyStatus: string | null, hasStake: boolean, inLobby?: boolean) =>
+      inhousePollCadence({ activeMs: FAST, hidden: false, hasStake, lobbyStatus, inLobby })
+        .delayMs +
+      ROOM_POLL_TIMEOUT_MS +
+      retries;
+    const clocked = held(INHOUSE_STATUS.CAPTAIN_VOTE, true);
+    const elsewhere = [
+      held(null), // queued
+      held(null), // spectating (no stake)
+      held(INHOUSE_STATUS.IN_PROGRESS, true), // their own game
+    ];
+    // A member's clocked stage: about 43s held, against about 34.5s on the
+    // ladder. Neither is inside the 25s vote: what a dead connection meets
+    // there first is the failed action's own toast.
+    expect(clocked).toBeLessThanOrEqual(45_000);
+    expect(ladder(INHOUSE_STATUS.CAPTAIN_VOTE, true, true)).toBeLessThan(clocked);
+    expect(clocked).toBeGreaterThan(INHOUSE.VOTE_SECONDS * 1000);
+    // Queued, spectating or in a game: about 58s held, against 36-43s.
+    for (const ms of elsewhere) expect(ms).toBeLessThanOrEqual(60_000);
+    expect(ladder(null, true)).toBeLessThan(elsewhere[0]);
+    expect(ladder(null, false)).toBeLessThan(elsewhere[1]);
+    expect(ladder(INHOUSE_STATUS.IN_PROGRESS, true, true)).toBeLessThan(elsewhere[2]);
+    // What the shorter clocked hold buys: the first failure, and the fast
+    // retries after it, come that much sooner where a clock runs.
+    expect(elsewhere[0] - clocked).toBe(
+      INHOUSE.LONG_POLL_HOLD_MS - INHOUSE.LONG_POLL_TIMED_HOLD_MS,
+    );
   });
 });
 

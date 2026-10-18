@@ -310,8 +310,11 @@ export const INHOUSE = {
   LONG_POLL_HOLD_MS: 25_000,
   // The hold a member asks for in their own game's timed stages (ready check,
   // vote, draft). The client gives a held request its hold plus
-  // ROOM_POLL_TIMEOUT_MS, and a connection that died there must show as
-  // reconnecting while the clock still matters.
+  // ROOM_POLL_TIMEOUT_MS, so where a clock runs a held request that silently
+  // died is given up on, and the fast retries begin, 15s sooner than at the
+  // full hold. The room still says "Connection lost" only after three
+  // failures in a row: about 43s after a connection dies here, 58s
+  // elsewhere (inhouseLongPoll, room-poll.test.ts).
   LONG_POLL_TIMED_HOLD_MS: 10_000,
   // A held request wakes this long after a room clock runs out (an accept,
   // vote or pick deadline, the result window opening, an abandon floor, a
