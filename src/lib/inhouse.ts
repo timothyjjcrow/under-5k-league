@@ -5,6 +5,7 @@ import {
   INHOUSE_STATUS,
 } from "./constants";
 import { uncoveredRoles } from "./draft";
+import { DOTA_SIDE, type LobbySeat, type LobbySide } from "./dota-lobby";
 import { rankMedalName, rankMedalTier } from "./rank";
 import { parseRoles } from "./roles";
 
@@ -293,7 +294,7 @@ export function inhouseTicketGuideStep(o: {
   return {
     kind: "ticket",
     lead: o.lobbyBot
-      ? "When teams lock, a captain asks the lobby bot to host the game, with the ticket already set. If the bot is down, the host must be one of the league's ticket admins, since only they can select the "
+      ? "When teams lock, a captain asks the lobby bot to host the game, with the ticket already set. It invites the ten; take a slot on your side, since the bot moves anyone on the wrong side back to unassigned and may post in lobby chat who goes where. If the bot is down, the host must be one of the league's ticket admins, since only they can select the "
       : "When teams lock, the host must be one of the league's ticket admins, since only they can select the ",
   };
 }
@@ -303,6 +304,56 @@ export function inhouseVoiceChannel(slot: number, team: number): string {
   const channels =
     INHOUSE.VOICE_CHANNELS[slot - 1] ?? INHOUSE.VOICE_CHANNELS[0];
   return channels[team === 2 ? 1 : 0];
+}
+
+/**
+ * The viewer's own line at the top of the setup card (Tim, 2026-10-18): which
+ * side they play, in Dota's words, since Dota lets nobody seat another player
+ * and inhouse assigns no positions, so any slot on that side is right.
+ *
+ * - Only for a player on this game's roster (`myTeam`, which is null for a
+ *   spectator and for an admin watching another game), while the game is set
+ *   up: READY, or IN_PROGRESS while the bot still reports seats (its lobby is
+ *   ready or starting, and "Start the game clock" was pressed early).
+ * - `seat` is the viewer's own row in the bot's seat report, or null without
+ *   one (no bot, a bot that reports no seats, a hand-hosted game). It turns
+ *   the line into "you're seated", or, for a player in the lobby on no side or
+ *   the wrong one, says so plainly with what the bot does about it. Absent
+ *   from the lobby reads like no report: take a slot once you're in.
+ */
+export function inhouseViewerSideLine(input: {
+  status: string;
+  myTeam: number | null;
+  teams: readonly { team: number; isRadiant: boolean }[];
+  seat: LobbySeat | null;
+}): { side: LobbySide; tone: "join" | "seated" | "move"; text: string } | null {
+  const { status, myTeam, teams, seat } = input;
+  const team = myTeam === null ? undefined : teams.find((t) => t.team === myTeam);
+  if (!team) return null;
+  if (
+    status !== INHOUSE_STATUS.READY &&
+    !(status === INHOUSE_STATUS.IN_PROGRESS && seat !== null)
+  )
+    return null;
+  const side: LobbySide = team.isRadiant ? "radiant" : "dire";
+  const own = DOTA_SIDE[side];
+  const moved =
+    "The bot moves anyone on the wrong side back to unassigned.";
+  if (seat === side)
+    return { side, tone: "seated", text: `You're ${own} — you're in a ${own} slot.` };
+  if (seat === "radiant" || seat === "dire")
+    return {
+      side,
+      tone: "move",
+      text: `You're in the lobby but on ${DOTA_SIDE[seat]}, not your side — take a ${own} slot. ${moved}`,
+    };
+  if (seat === "unassigned")
+    return {
+      side,
+      tone: "move",
+      text: `You're in the lobby but not on your side yet — take a ${own} slot. ${moved}`,
+    };
+  return { side, tone: "join", text: `You're ${own} — take any ${own} slot.` };
 }
 
 /**

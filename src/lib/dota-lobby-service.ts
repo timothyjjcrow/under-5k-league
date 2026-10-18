@@ -19,6 +19,7 @@ import { UserFacingError } from "./user-facing-error";
 import { LEAGUE_CONFIG } from "./league-config";
 import { inhouseLobbyCode } from "./inhouse";
 import {
+  lobbyChatName,
   parseBotPlayers,
   parseInvitedCount,
   parseLobbyDigits,
@@ -437,6 +438,15 @@ function sideSteamIds(roster: readonly LobbyRosterEntry[], side: LobbySide) {
 }
 
 /**
+ * A side's display names for the bot's lobby chat, from the same roster pass
+ * and filter as `sideSteamIds`, so name i belongs to id i. Names only, never
+ * contact info.
+ */
+function sideChatNames(roster: readonly LobbyRosterEntry[], side: LobbySide) {
+  return roster.filter((p) => p.side === side).map((p) => lobbyChatName(p.name));
+}
+
+/**
  * The bot spec for an in-house lobby, and the roster it was built from (each
  * player's name, side and playing Steam id, and whether they are the viewer).
  * One builder for the browser controls and the scheduled result scan, so both
@@ -479,6 +489,9 @@ function inhouseLobbyPlan(
       dire: sideSteamIds(roster, "dire"),
       radiantName: inhouseSideName(lobby, lobby.radiantTeam),
       direName: inhouseSideName(lobby, direTeam),
+      // The bot's lobby chat tells players where to sit (in-house only).
+      radiantNames: sideChatNames(roster, "radiant"),
+      direNames: sideChatNames(roster, "dire"),
     },
     roster,
   };

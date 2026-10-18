@@ -315,6 +315,40 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await expect(
     page.getByRole("heading", { name: "Get into the Dota lobby" }),
   ).toBeVisible();
+  // The player's own side, straight under the card's heading. No bot here,
+  // so no seat report: just the side to sit on (the observer captains
+  // Radiant). An admin watching the game plays on neither side and gets none.
+  await expect(page.getByRole("status", { name: "Your side" })).toContainText(
+    "You're Radiant — take any Radiant slot.",
+  );
+  // ...and on a phone's first screen: on a fresh load at 390x664 (an iPhone
+  // with Safari's toolbars showing) the whole line sits above the fixed tab
+  // bar, so nothing added above the card can push it off unnoticed (boxes
+  // are measured where the load leaves them, in the viewport). Its own tab,
+  // signed in as the same player, so the room page above keeps its size.
+  const phone = await page.context().newPage();
+  const phoneErrors = trackPageErrors(phone);
+  await phone.setViewportSize({ width: 390, height: 664 });
+  await phone.goto("/inhouse");
+  const phoneSide = phone.getByRole("status", { name: "Your side" });
+  await expect(phoneSide).toContainText("You're Radiant");
+  const dock = phone.getByRole("navigation", { name: "Quick navigation" });
+  await expect(dock).toBeVisible();
+  await expect
+    .poll(async () => {
+      const line = await phoneSide.boundingBox();
+      const bar = await dock.boundingBox();
+      return line && bar ? line.y + line.height - bar.y : Infinity;
+    })
+    .toBeLessThanOrEqual(0);
+  expect(phoneErrors).toEqual([]);
+  await phone.close();
+  await expect(
+    adminPage.getByRole("heading", { name: "Get into the Dota lobby" }),
+  ).toBeVisible();
+  await expect(
+    adminPage.getByRole("status", { name: "Your side" }),
+  ).toHaveCount(0);
   // No lobby bot in this environment: players get the by-hand steps only,
   // never a bot panel that can't help them, and are told who can host.
   await expect(
@@ -364,6 +398,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // hidden until the automatic scan's window opens; the match-ID path is
   // there from the start.
   await expect(page.getByText("Game in progress")).toBeVisible();
+  // Under way with no bot reporting seats: nothing left to sit in.
+  await expect(page.getByRole("status", { name: "Your side" })).toHaveCount(0);
   await expect(
     page.getByText("The result records automatically after the game."),
   ).toBeVisible();

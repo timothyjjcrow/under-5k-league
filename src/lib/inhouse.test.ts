@@ -15,6 +15,7 @@ import {
   inhouseHandLobbyName,
   inhouseLobbyCode,
   inhouseTicketGuideStep,
+  inhouseViewerSideLine,
   inhouseVoiceChannel,
   liveGameEnded,
   otherGameFlags,
@@ -48,6 +49,7 @@ import {
   INHOUSE_RESULT_STATUSES,
   INHOUSE_STATUS,
 } from "./constants";
+import type { LobbySeat } from "./dota-lobby";
 import {
   sourceFile,
   stripLineComments,
@@ -468,6 +470,96 @@ describe("game slots", () => {
   });
 });
 
+describe("inhouseViewerSideLine", () => {
+  // Formation's default: team 1 Radiant. A played game may swap them.
+  const TEAMS = [
+    { team: 1, isRadiant: true },
+    { team: 2, isRadiant: false },
+  ];
+  const SWAPPED = [
+    { team: 1, isRadiant: false },
+    { team: 2, isRadiant: true },
+  ];
+  const line = (
+    myTeam: number | null,
+    seat: LobbySeat | null = null,
+    status: string = INHOUSE_STATUS.READY,
+    teams = TEAMS,
+  ) => inhouseViewerSideLine({ status, myTeam, teams, seat });
+
+  it("tells each side's player their side in Dota's words, before any seat report", () => {
+    expect(line(1)).toEqual({
+      side: "radiant",
+      tone: "join",
+      text: "You're Radiant — take any Radiant slot.",
+    });
+    expect(line(2)).toEqual({
+      side: "dire",
+      tone: "join",
+      text: "You're Dire — take any Dire slot.",
+    });
+    // The side follows the stored mapping, not the team's number.
+    expect(line(1, null, INHOUSE_STATUS.READY, SWAPPED)?.text).toBe(
+      "You're Dire — take any Dire slot.",
+    );
+  });
+
+  it("confirms a player sitting on their own side", () => {
+    expect(line(1, "radiant")).toEqual({
+      side: "radiant",
+      tone: "seated",
+      text: "You're Radiant — you're in a Radiant slot.",
+    });
+    expect(line(2, "dire")?.tone).toBe("seated");
+  });
+
+  it("says plainly that a player in the lobby on no side isn't on theirs yet", () => {
+    expect(line(1, "unassigned")).toEqual({
+      side: "radiant",
+      tone: "move",
+      text: "You're in the lobby but not on your side yet — take a Radiant slot. The bot moves anyone on the wrong side back to unassigned.",
+    });
+  });
+
+  it("names the wrong side a player sits on, and what the bot does about it", () => {
+    expect(line(1, "dire")).toEqual({
+      side: "radiant",
+      tone: "move",
+      text: "You're in the lobby but on Dire, not your side — take a Radiant slot. The bot moves anyone on the wrong side back to unassigned.",
+    });
+    expect(line(2, "radiant")?.text).toBe(
+      "You're in the lobby but on Radiant, not your side — take a Dire slot. The bot moves anyone on the wrong side back to unassigned.",
+    );
+  });
+
+  it("reads a player not in the lobby yet like no report: take a slot once in", () => {
+    expect(line(2, "absent")).toEqual(line(2, null));
+  });
+
+  it("says nothing to a viewer off this game's roster", () => {
+    // A spectator, or an admin watching (otherGameFlags: myTeam null).
+    for (const seat of [null, "radiant", "absent"] as const)
+      expect(line(null, seat)).toBeNull();
+    // A team the game doesn't have.
+    expect(line(3)).toBeNull();
+  });
+
+  it("shows while the game is set up, and once it runs only while the bot still reports seats", () => {
+    // "Start the game clock" pressed early: the bot's lobby is still filling.
+    expect(line(1, "unassigned", INHOUSE_STATUS.IN_PROGRESS)?.tone).toBe("move");
+    expect(line(1, null, INHOUSE_STATUS.IN_PROGRESS)).toBeNull();
+    for (const status of [
+      INHOUSE_STATUS.READY_CHECK,
+      INHOUSE_STATUS.CAPTAIN_VOTE,
+      INHOUSE_STATUS.DRAFTING,
+      INHOUSE_STATUS.AWAITING_RESULT,
+      INHOUSE_STATUS.COMPLETED,
+      INHOUSE_STATUS.CANCELLED,
+    ])
+      expect(line(1, "radiant", status), status).toBeNull();
+  });
+});
+
 describe("the auto-detect guide's ticket step", () => {
   it("says the admins will provide a ticket the league doesn't have yet, whatever the bot", () => {
     for (const lobbyBot of [false, true]) {
@@ -489,9 +581,17 @@ describe("the auto-detect guide's ticket step", () => {
       kind: "ticket",
       lead: expect.stringContaining("asks the lobby bot to host the game, with the ticket already set"),
     });
+    // What the bot does once players come in (Tim's call, 2026-10-18).
+    if (bot.kind === "ticket") {
+      expect(bot.lead).toContain(
+        "the bot moves anyone on the wrong side back to unassigned",
+      );
+      expect(bot.lead).toContain("may post in lobby chat");
+    }
     expect(hand.kind).toBe("ticket");
     if (hand.kind !== "ticket") return;
     expect(hand.lead).not.toContain("lobby bot");
+    expect(hand.lead).not.toMatch(/unassigned|lobby chat/);
     // Both end where the page names the ticket.
     for (const step of [bot, hand])
       if (step.kind === "ticket")

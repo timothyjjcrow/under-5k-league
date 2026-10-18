@@ -3,8 +3,10 @@ import {
   botGameOverRefusal,
   botHoldsUnlaunchedLobby,
   createOpen,
+  INHOUSE_SEAT_RULE_NOTE,
   inviteResultToast,
   inviteUnknownToast,
+  LOBBY_CHAT_NAME_MAX,
   LOBBY_INVITES,
   LOBBY_OVER_NOTE,
   LOBBY_PANEL_POLL_MS,
@@ -14,10 +16,12 @@ import {
   lobbyBusyElsewhere,
   lobbyBusyLabel,
   lobbyBusyNote,
+  lobbyChatName,
   lobbyInviteScope,
   lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
+  lobbySeatSummary,
   lobbyStatusLabel,
   noPopupHelp,
   lobbyPlayerViews,
@@ -29,6 +33,7 @@ import {
   releaseOpen,
   selfInviteOpen,
   startOpen,
+  viewerLobbySeat,
   type DotaLobbyPlayerView,
   type DotaLobbyStatus,
   type LobbyInvite,
@@ -668,5 +673,171 @@ describe("invite toasts", () => {
       expect(
         inviteResultToast({ scope, invited: undefined, players: undefined }),
       ).toEqual({ type: "info", message: inviteUnknownToast(scope) });
+  });
+});
+
+describe("lobbyChatName", () => {
+  it("keeps the display name the site shows", () => {
+    expect(lobbyChatName("Radiant Captain")).toBe("Radiant Captain");
+    expect(lobbyChatName("  gone4  ")).toBe("gone4");
+  });
+
+  it("drops control and bidi characters and folds whitespace", () => {
+    expect(lobbyChatName("a\u0000b\u0007c")).toBe("abc");
+    expect(lobbyChatName("evil\u202eeman")).toBe("evileman");
+    expect(lobbyChatName("\u2066iso\u2069 \u200fmark")).toBe("iso mark");
+    expect(lobbyChatName("two\n\tlines   here")).toBe("two lines here");
+    // A stripped mark between two spaces leaves one space, not two.
+    expect(lobbyChatName("a \u200f b\u0000 \u202e c")).toBe("a b c");
+  });
+
+  it("caps at LOBBY_CHAT_NAME_MAX characters, never half of one", () => {
+    expect(LOBBY_CHAT_NAME_MAX).toBe(32);
+    expect(lobbyChatName("x".repeat(40))).toBe("x".repeat(32));
+    // 31 letters, then emoji (two UTF-16 units each): the 32nd character is
+    // the first emoji, whole.
+    const capped = lobbyChatName(`${"y".repeat(31)}😀😀`);
+    expect(Array.from(capped)).toHaveLength(32);
+    expect(capped.endsWith("😀")).toBe(true);
+    // A cut that lands on a space doesn't leave it dangling.
+    expect(lobbyChatName(`${"z".repeat(31)} tail`)).toBe("z".repeat(31));
+  });
+
+  it("falls back to Player when nothing printable is left", () => {
+    for (const name of [null, undefined, "", "   ", "\u0000\u202e"])
+      expect(lobbyChatName(name)).toBe("Player");
+  });
+});
+
+describe("viewerLobbySeat", () => {
+  const row = (seat: LobbySeat, self: boolean) => ({ seat, self });
+
+  it("is the viewer's own row's seat", () => {
+    expect(
+      viewerLobbySeat([row("radiant", false), row("unassigned", true)]),
+    ).toBe("unassigned");
+    expect(viewerLobbySeat([row("dire", true)])).toBe("dire");
+    expect(viewerLobbySeat([row("absent", true)])).toBe("absent");
+  });
+
+  it("is null with no seat list, or for a viewer off the roster", () => {
+    expect(viewerLobbySeat(undefined)).toBeNull();
+    expect(viewerLobbySeat(null)).toBeNull();
+    expect(viewerLobbySeat([])).toBeNull();
+    expect(
+      viewerLobbySeat([row("radiant", false), row("dire", false)]),
+    ).toBeNull();
+  });
+});
+
+describe("lobbySeatSummary", () => {
+  type Row = Pick<DotaLobbyPlayerView, "side" | "seat">;
+  /** Five a side, each on their own side unless `seats` says otherwise. */
+  const ten = (seats: Partial<Record<number, LobbySeat>> = {}): Row[] =>
+    Array.from({ length: 10 }, (_, i) => {
+      const side = i < 5 ? ("radiant" as const) : ("dire" as const);
+      return { side, seat: seats[i] ?? side };
+    });
+  const ready = { state: "ready" as const };
+  const summary = (
+    players: readonly Row[] | null | undefined,
+    canStart: boolean,
+    status: Pick<DotaLobbyStatus, "state" | "releasing"> | undefined = ready,
+  ) =>
+    lobbySeatSummary({ kind: "inhouse", playable: true, status, players, canStart });
+
+  it("tells a viewer with Start that all ten are seated, and highlights it", () => {
+    expect(summary(ten(), true)).toEqual({
+      allSeated: true,
+      start: true,
+      text: "All ten seated — press “Start game with bot”.",
+    });
+  });
+
+  it("tells everyone else a captain starts it: no Start prompt", () => {
+    expect(summary(ten(), false)).toEqual({
+      allSeated: true,
+      start: false,
+      text: "All ten seated — waiting for a captain to start the game.",
+    });
+  });
+
+  it("counts only players on their own side: the wrong side, unassigned and absent are not seated", () => {
+    const partial = ten({ 0: "dire", 1: "unassigned", 6: "absent", 7: "radiant" });
+    expect(summary(partial, true)).toEqual({
+      allSeated: false,
+      start: false,
+      text: "6 of 10 on their side. Start works once all ten are.",
+    });
+    expect(summary(partial, false)).toEqual({
+      allSeated: false,
+      start: false,
+      text: "6 of 10 on their side.",
+    });
+    // One player on the wrong side is enough to hold the state back.
+    expect(summary(ten({ 9: "radiant" }), true)?.allSeated).toBe(false);
+    expect(summary(ten({ 4: "unassigned" }), true)?.start).toBe(false);
+  });
+
+  it("counts a roster that isn't ten by its own size", () => {
+    expect(summary(ten().slice(3, 7), true)?.text).toBe(
+      "All 4 seated — press “Start game with bot”.",
+    );
+  });
+
+  it("says nothing outside a ready in-house lobby with a seat list", () => {
+    for (const state of [
+      "idle",
+      "creating",
+      "starting",
+      "started",
+      "blocked",
+      "released",
+    ] as const)
+      expect(summary(ten(), true, { state }), state).toBeNull();
+    // The bot refuses Start on a lobby it is leaving.
+    expect(summary(ten(), true, { state: "ready", releasing: true })).toBeNull();
+    // No bot answer yet.
+    expect(
+      lobbySeatSummary({
+        kind: "inhouse",
+        playable: true,
+        status: undefined,
+        players: ten(),
+        canStart: true,
+      }),
+    ).toBeNull();
+    // A closed game (admin recovery's panel): nobody will start it.
+    expect(
+      lobbySeatSummary({
+        kind: "inhouse",
+        playable: false,
+        status: ready,
+        players: ten(),
+        canStart: false,
+      }),
+    ).toBeNull();
+    // No list: unknown, never "0 of 10".
+    for (const players of [undefined, null, []])
+      expect(summary(players, true)).toBeNull();
+    // Season lobbies stay as they were.
+    expect(
+      lobbySeatSummary({
+        kind: "season",
+        playable: true,
+        status: ready,
+        players: ten(),
+        canStart: true,
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("INHOUSE_SEAT_RULE_NOTE", () => {
+  it("says what the bot does about the wrong side and strangers, and about lobby chat", () => {
+    expect(INHOUSE_SEAT_RULE_NOTE).toContain(
+      "moves anyone on the wrong side, and anyone not in this game, back to unassigned",
+    );
+    expect(INHOUSE_SEAT_RULE_NOTE).toContain("may post in lobby chat");
   });
 });

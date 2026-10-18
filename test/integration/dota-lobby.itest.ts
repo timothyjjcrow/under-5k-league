@@ -800,6 +800,9 @@ describe("lobby invites and the seat report", () => {
         "dire",
         "radiantName",
         "direName",
+        // The lobby chat's names (in-house), which an older bot ignores.
+        "radiantNames",
+        "direNames",
       ].sort(),
     );
     expect(bot.calls[0].spec.radiant).toEqual([
@@ -807,12 +810,74 @@ describe("lobby invites and the seat report", () => {
       radiantPlayer.steamId,
     ]);
     expect(bot.calls[0].spec.dire).toEqual([direCaptain.steamId, OVERRIDE_STEAM_ID]);
+    // The worker's read carries the same spec as the browser's: one builder.
+    expect(bot.calls[0].spec.radiantNames).toEqual(["Radiant Captain", "Radiant Player"]);
+    expect(bot.calls[0].spec.direNames).toEqual(["Dire Captain", "Override Player"]);
     // A list it never asked for is ignored.
     expect(status).toEqual({
       state: "ready",
       lobbyId: "30007027938516500",
       matchId: undefined,
     });
+  });
+
+  // The bot says in Dota's lobby chat who goes where (Tim's call,
+  // 2026-10-18), so the in-house spec carries each side's display names,
+  // name i for Steam id i, through lobbyChatName. Never contact info, never
+  // to the browser, and a season spec has none.
+  it("sends each side's display names in the spec's own order, on every request", async () => {
+    const { lobby, radiantCaptain, radiantPlayer, direCaptain, override, steamIds } =
+      await inhouseGame();
+    // A name with a control character and a bidi override, and one past
+    // Steam's 32 characters: the bot gets them cleaned and capped.
+    await prisma.user.update({
+      where: { id: radiantPlayer.id },
+      data: { name: "Radiant\u0007 \u202ePlayer" },
+    });
+    await prisma.user.update({
+      where: { id: override.id },
+      data: { name: `Override ${"o".repeat(40)}` },
+    });
+    as(direCaptain);
+    const bot = inviteBot();
+    for (const action of ["status", "create", "invite"]) {
+      const response = await inhouse(lobby.id, action);
+      expect(response.status, action).toBe(200);
+      const json = await response.json();
+      // The browser gets the view, never the spec's lists.
+      expect(json).not.toHaveProperty("radiantNames");
+      expect(json).not.toHaveProperty("direNames");
+      expectNoSteamIds(json, steamIds);
+    }
+    expect(bot.calls).toHaveLength(3);
+    for (const call of bot.calls) {
+      const spec = call.spec as typeof call.spec & {
+        radiantNames: string[];
+        direNames: string[];
+      };
+      // Index for index with the sides' ids.
+      expect(spec.radiantNames).toHaveLength(spec.radiant.length);
+      expect(spec.direNames).toHaveLength(spec.dire.length);
+      const named = new Map(
+        [...spec.radiant, ...spec.dire].map((id, i) => [
+          id,
+          [...spec.radiantNames, ...spec.direNames][i],
+        ]),
+      );
+      expect(named.get(radiantCaptain.steamId)).toBe("Radiant Captain");
+      expect(named.get(radiantPlayer.steamId)).toBe("Radiant Player");
+      expect(named.get(direCaptain.steamId)).toBe("Dire Captain");
+      // A linked Dota account's playing id carries that player's name.
+      expect(named.get(OVERRIDE_STEAM_ID)).toBe(`Override ${"o".repeat(23)}`);
+      expect([...named.values()].every((n) => Array.from(n).length <= 32)).toBe(true);
+    }
+  });
+
+  it("sends no lobby chat names for a season match", async () => {
+    const { home, match } = await fixture();
+    const { spec } = await resolveDotaLobby(asSession(home.user), "season", match.id);
+    expect(spec).not.toHaveProperty("radiantNames");
+    expect(spec).not.toHaveProperty("direNames");
   });
 
   it("sends a captain's invite with no targets: the bot invites everyone missing", async () => {

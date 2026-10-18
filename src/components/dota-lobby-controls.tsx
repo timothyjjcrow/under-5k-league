@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   createOpen,
+  INHOUSE_SEAT_RULE_NOTE,
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_OVER_NOTE,
@@ -13,16 +14,19 @@ import {
   lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
+  lobbySeatSummary,
   lobbyStatusLabel,
   noPopupHelp,
   reinviteMissingOpen,
   releaseOpen,
   selfInviteOpen,
   startOpen,
+  viewerLobbySeat,
   type DotaLobbyView,
   type LobbyAction,
   type LobbyInviteScope,
   type LobbyKind,
+  type LobbySeat,
 } from "@/lib/dota-lobby";
 import { LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -88,6 +92,7 @@ export function DotaLobbyControls({
   id,
   recoveryOnly = false,
   onAvailability,
+  onViewerSeat,
   audience = "host",
 }: {
   kind: LobbyKind;
@@ -97,6 +102,12 @@ export function DotaLobbyControls({
   audience?: LobbyPanelAudience;
   /** Called whenever the bot's availability changes (see LobbyBotAvailability). */
   onAvailability?: (availability: LobbyBotAvailability) => void;
+  /**
+   * Called whenever the viewer's own seat in the bot's lobby changes, from
+   * the seat list this panel shows (`viewerLobbySeat`), or null while it
+   * shows none: the setup card's "your side" line.
+   */
+  onViewerSeat?: (seat: LobbySeat | null) => void;
 }) {
   const [view, setView] = useState<DotaLobbyView | null>(null);
   const [error, setError] = useState("");
@@ -285,10 +296,6 @@ export function DotaLobbyControls({
     };
   }, [state, playable, over, unanswered, read]);
 
-  if (!lobbyPanelVisible(audience, availability)) return null;
-  // Joiners can't create, start or release the lobby, so their copy says who
-  // does. An admin on the players' panel can, and gets the hosts' copy.
-  const joiner = audience === "player" && !view?.canRelease;
   // Only a bot that invites reports seats, and only while its lobby is ready
   // or Dota is starting the game: the list shows then, so it is never false
   // under an older bot.
@@ -296,7 +303,31 @@ export function DotaLobbyControls({
     view?.enabled && lobbyListVisible(state) && view.players?.length
       ? view.players
       : null;
+  // The setup card's "your side" line follows the same list.
+  const mySeat = viewerLobbySeat(players);
+  useEffect(() => {
+    onViewerSeat?.(mySeat);
+  }, [mySeat, onViewerSeat]);
+
+  if (!lobbyPanelVisible(audience, availability)) return null;
+  // Joiners can't create, start or release the lobby, so their copy says who
+  // does. An admin on the players' panel can, and gets the hosts' copy.
+  const joiner = audience === "player" && !view?.canRelease;
   const releasing = view?.status?.releasing === true;
+  // In-house only: how many sit on their own side, then "All ten seated",
+  // which highlights Start for the viewers who have it and tells everyone
+  // else a captain starts the game.
+  const seatSummary =
+    view?.enabled && view.status
+      ? lobbySeatSummary({
+          kind,
+          playable,
+          status: view.status,
+          players,
+          canStart: !recoveryOnly && startOpen(view),
+        })
+      : null;
+  const startHighlighted = seatSummary?.start === true;
 
   return (
     <section
@@ -384,6 +415,11 @@ export function DotaLobbyControls({
                   still missing can join with this name and password.
                 </p>
               )}
+              {/* In-house only: the bot keeps its sides right while the
+                  lobby fills (it moves nobody in a season lobby). */}
+              {kind === "inhouse" && state === "ready" && !releasing ? (
+                <p className="text-xs text-muted">{INHOUSE_SEAT_RULE_NOTE}</p>
+              ) : null}
               <p className="text-xs text-muted">
                 Ticket {view.leagueId}. The bot checks the ticket, mode,
                 region, and rosters before starting.
@@ -461,6 +497,27 @@ export function DotaLobbyControls({
               to play the next one straight away.
             </p>
           ) : null}
+          {/* Right above Start: how many sit on their side, then the "All
+              ten seated" state (lobbySeatSummary). A status, so a screen
+              reader hears the count change and "All ten seated". */}
+          {seatSummary ? (
+            <p
+              role="status"
+              className={cn(
+                "min-w-0 break-words",
+                seatSummary.allSeated
+                  ? "rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-sm font-semibold text-fg"
+                  : "text-xs text-muted",
+              )}
+            >
+              {seatSummary.allSeated ? (
+                <span aria-hidden className="mr-1.5 text-success">
+                  ✓
+                </span>
+              ) : null}
+              {seatSummary.text}
+            </p>
+          ) : null}
           <div className="flex flex-wrap gap-2">
             {!recoveryOnly && createOpen(view) ? (
               <button
@@ -476,7 +533,13 @@ export function DotaLobbyControls({
               <button
                 type="button"
                 disabled={pending}
-                className={buttonClasses("primary", "sm")}
+                className={buttonClasses(
+                  "primary",
+                  "sm",
+                  startHighlighted
+                    ? "ring-2 ring-success ring-offset-2 ring-offset-surface"
+                    : undefined,
+                )}
                 onClick={() => void act("start")}
               >
                 Start game with bot

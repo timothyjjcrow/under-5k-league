@@ -12,7 +12,53 @@ export type DotaLobbySpec = {
   dire: string[];
   radiantName: string;
   direName: string;
+  /**
+   * In-house games only: each side's players' display names for the bot's
+   * lobby chat ("where to sit"), in the same order as `radiant` and `dire`,
+   * one per id, each through `lobbyChatName`. Display only: the bot never
+   * checks, logs or matches by them, and a season spec has none. An older bot
+   * ignores the keys.
+   */
+  radiantNames?: string[];
+  direNames?: string[];
 };
+
+/**
+ * A Steam persona name is at most 32 characters, so a lobby chat line never
+ * needs more of one; it also keeps ten names well inside the bot's 8 KiB
+ * request cap.
+ */
+export const LOBBY_CHAT_NAME_MAX = 32;
+
+/**
+ * Characters that would garble a chat line or reorder the text around a name:
+ * control characters and the Unicode bidi embeddings, overrides and isolates.
+ */
+const CHAT_NAME_STRIP = /[\p{Cc}\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/gu;
+
+/**
+ * A player's name as the bot may say it in Dota lobby chat: the display name
+ * the site shows, with control and bidi characters removed, runs of
+ * whitespace as one space, at most `LOBBY_CHAT_NAME_MAX` code points (never
+ * half of one, though a cut may split a joined emoji such as a flag; the bot
+ * cuts shorter anyway), and "Player" when nothing is left.
+ */
+export function lobbyChatName(name: string | null | undefined): string {
+  // Whitespace first: a newline or tab is a control character too, and
+  // stripping it would join the words it separated.
+  // A stripped character between two spaces would leave both: fold again.
+  const clean = (name ?? "")
+    .replace(/\s+/gu, " ")
+    .replace(CHAT_NAME_STRIP, "")
+    .replace(/ {2,}/g, " ")
+    .trim();
+  const chars = Array.from(clean);
+  const capped =
+    chars.length > LOBBY_CHAT_NAME_MAX
+      ? chars.slice(0, LOBBY_CHAT_NAME_MAX).join("").trimEnd()
+      : clean;
+  return capped || "Player";
+}
 
 export type DotaLobbyStatus = {
   state:
@@ -481,8 +527,11 @@ const ABSENT_ROW = {
   failed: () => "Invite didn't send",
 } satisfies Record<LobbyInvite, (self: boolean) => string>;
 
-/** Dota's own names for its lobby's two sides, which is what players see there. */
-const DOTA_SIDE = { radiant: "Radiant", dire: "Dire" } as const satisfies Record<
+/**
+ * Dota's own names for its lobby's two sides, which is what players see there
+ * (the panel's rows and the setup card's "your side" line both use them).
+ */
+export const DOTA_SIDE = { radiant: "Radiant", dire: "Dire" } as const satisfies Record<
   LobbySide,
   string
 >;
@@ -511,6 +560,80 @@ export function lobbyPlayerRow(
     case "absent":
       return { text: ABSENT_ROW[player.invite](player.self), settled: false };
   }
+}
+
+/**
+ * The viewer's own seat in the bot's seat report: what the setup card's "your
+ * side" line is told. Null without a report (an older bot, a reply that
+ * didn't parse, a lobby that isn't set up) or for a viewer off the roster.
+ */
+export function viewerLobbySeat(
+  players: readonly Pick<DotaLobbyPlayerView, "seat" | "self">[] | null | undefined,
+): LobbySeat | null {
+  return players?.find((p) => p.self)?.seat ?? null;
+}
+
+/**
+ * The in-house panel's line on how the bot keeps the sides right (Tim's call,
+ * 2026-10-18): it sends a rostered player on the wrong side, and anyone not in
+ * the game who takes a slot, back to unassigned, and may say in Dota's lobby
+ * chat who goes where. In-house only: a season lobby's bot moves nobody.
+ */
+export const INHOUSE_SEAT_RULE_NOTE =
+  "The bot moves anyone on the wrong side, and anyone not in this game, back to unassigned, and may post in lobby chat who goes where.";
+
+/** "ten" for a full in-house lobby, else the count itself. */
+function seatCount(n: number): string {
+  return n === 10 ? "ten" : String(n);
+}
+
+/**
+ * The seat summary above an in-house panel's buttons while its lobby is ready:
+ * how many of the roster sit on their own side, or, once all of them do, the
+ * "All ten seated" state. `start` is true only for a viewer who sees "Start
+ * game with bot" (`canStart`: `startOpen`, on a panel that may start), whose
+ * button it highlights; everyone else is told a captain starts it, so nobody
+ * else gets a Start prompt.
+ *
+ * Null for a season lobby (scope: in-house only), for a game that is no
+ * longer playable (nobody will start it: admin recovery's panel of a closed
+ * game), while the lobby isn't ready or a release is pending (the bot refuses
+ * Start then), and without a seat list (no bot that invites, or a reply that
+ * didn't parse): an unknown seat is never counted as seated or as missing.
+ */
+export function lobbySeatSummary(input: {
+  kind: LobbyKind;
+  playable: boolean;
+  status: Pick<DotaLobbyStatus, "state" | "releasing"> | undefined;
+  players: readonly Pick<DotaLobbyPlayerView, "side" | "seat">[] | null | undefined;
+  canStart: boolean;
+}): { allSeated: boolean; start: boolean; text: string } | null {
+  const { kind, playable, status, players, canStart } = input;
+  if (
+    kind !== "inhouse" ||
+    !playable ||
+    status?.state !== "ready" ||
+    status.releasing ||
+    !players?.length
+  )
+    return null;
+  const total = players.length;
+  const seated = players.filter((p) => p.seat === p.side).length;
+  if (seated === total)
+    return {
+      allSeated: true,
+      start: canStart,
+      text: canStart
+        ? `All ${seatCount(total)} seated — press “Start game with bot”.`
+        : `All ${seatCount(total)} seated — waiting for a captain to start the game.`,
+    };
+  return {
+    allSeated: false,
+    start: false,
+    text: canStart
+      ? `${seated} of ${total} on their side. Start works once all ${seatCount(total)} are.`
+      : `${seated} of ${total} on their side.`,
+  };
 }
 
 /**
