@@ -14,6 +14,7 @@ import {
   reinviteMissingOpen,
   releaseOpen,
   selfInviteOpen,
+  startOpen,
   type DotaLobbyView,
   type LobbyAction,
   type LobbyInviteScope,
@@ -21,6 +22,7 @@ import {
 } from "@/lib/dota-lobby";
 import { LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { requestSignal } from "@/lib/request-signal";
 import { cn } from "@/lib/utils";
 import { pushToast } from "./toaster";
 import { buttonClasses } from "./ui";
@@ -28,6 +30,17 @@ import { buttonClasses } from "./ui";
 const UNREACHABLE = "Could not reach the lobby bot.";
 /** A request the panel sends gives up after this long. */
 const REQUEST_TIMEOUT_MS = 20_000;
+
+/** What /api/dota-lobby answers: a view, or an error and its unknown flag. */
+type RouteBody =
+  | (Partial<DotaLobbyView> & { error?: unknown; unknown?: unknown })
+  | null;
+
+/** The route's own fixed message, never a caught error's text. */
+function routeError(body: unknown): string {
+  const error = (body as RouteBody)?.error;
+  return typeof error === "string" ? error : UNREACHABLE;
+}
 
 /**
  * Whether the bot can host this game, for a page that lays itself out around
@@ -85,15 +98,27 @@ export function DotaLobbyControls({
   const actions = useRef(0);
   const listHeading = useId();
 
+  /**
+   * One request and its body, bounded by REQUEST_TIMEOUT_MS from the send
+   * to the last byte, and cancelled by any of `cancels`.
+   */
   const send = useCallback(
-    (action: LobbyAction | "status", cancel?: AbortSignal) => {
-      const timeout = AbortSignal.timeout(REQUEST_TIMEOUT_MS);
-      return fetch("/api/dota-lobby", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind, id, action }),
-        signal: cancel ? AbortSignal.any([cancel, timeout]) : timeout,
-      });
+    async (
+      action: LobbyAction | "status",
+      ...cancels: (AbortSignal | undefined)[]
+    ): Promise<{ ok: boolean; body: unknown }> => {
+      const request = requestSignal(REQUEST_TIMEOUT_MS, ...cancels);
+      try {
+        const response = await fetch("/api/dota-lobby", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ kind, id, action }),
+          signal: request.signal,
+        });
+        return { ok: response.ok, body: await response.json() };
+      } finally {
+        request.done();
+      }
     },
     [kind, id],
   );
@@ -116,21 +141,15 @@ export function DotaLobbyControls({
         actions.current !== since;
       setReading(true);
       try {
-        const response = await send(
-          "status",
-          signal
-            ? AbortSignal.any([controller.signal, signal])
-            : controller.signal,
-        );
-        const body = await response.json();
+        const { ok, body } = await send("status", controller.signal, signal);
         if (stale()) return;
         // Only the route's own fixed messages reach the viewer, never a
         // caught error's text.
-        if (!response.ok) {
-          setError(typeof body?.error === "string" ? body.error : UNREACHABLE);
+        if (!ok) {
+          setError(routeError(body));
           return;
         }
-        setView(body);
+        setView(body as DotaLobbyView);
         setError("");
       } catch {
         if (!stale()) setError(UNREACHABLE);
@@ -161,26 +180,26 @@ export function DotaLobbyControls({
       setPending(true);
       let answered = false;
       try {
-        const response = await send(action);
-        const body = await response.json();
+        const reply = await send(action);
+        const body = reply.body as RouteBody;
         answered = true;
-        if (!response.ok) {
-          const message =
-            typeof body?.error === "string" ? body.error : UNREACHABLE;
+        // An action's failure is toasted, never set inline: the next
+        // background read (3s on a playable game) clears the inline line,
+        // and with it what the failure asked the presser to do.
+        if (!reply.ok) {
           // The bot's leg lost the answer: the invites may have gone out.
           if (inviteScope && body?.unknown === true)
             pushToast("info", inviteUnknownToast(inviteScope));
-          else if (inviteScope) pushToast("error", message);
-          else setError(message);
+          else pushToast("error", routeError(body));
           return;
         }
-        setView(body);
+        setView(body as DotaLobbyView);
         setError("");
         if (inviteScope) {
           const toast = inviteResultToast({
             scope: inviteScope,
-            invited: body.invited,
-            players: body.players,
+            invited: body?.invited,
+            players: body?.players,
           });
           pushToast(toast.type, toast.message);
         }
@@ -189,7 +208,7 @@ export function DotaLobbyControls({
         // have gone out, so it is unknown, never failed.
         if (inviteScope && !answered)
           pushToast("info", inviteUnknownToast(inviteScope));
-        else setError(UNREACHABLE);
+        else pushToast("error", UNREACHABLE);
       } finally {
         acting.current = false;
         setPending(false);
@@ -220,11 +239,14 @@ export function DotaLobbyControls({
     onAvailability?.(availability);
   }, [availability, onAvailability]);
   const playable = view?.playable === true;
+  // No answer yet, and the last read failed: try again by itself.
+  const unanswered = !view && error !== "";
   useEffect(() => {
     // Fast while the bot sets the lobby up, or while a playable game waits
-    // for anyone to create it; every 15s once the game runs, and not at all
-    // once Dota showed it over (lobbyPanelPollMs says why).
-    const every = lobbyPanelPollMs(state, playable, over);
+    // for anyone to create it; every 15s once the game runs, or while a
+    // failed first read retries; not at all once Dota showed it over
+    // (lobbyPanelPollMs says why).
+    const every = lobbyPanelPollMs(state, playable, over, unanswered);
     if (every === null) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void read();
@@ -238,7 +260,7 @@ export function DotaLobbyControls({
       clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [state, playable, over, read]);
+  }, [state, playable, over, unanswered, read]);
 
   if (!lobbyPanelVisible(audience, availability)) return null;
   // Joiners can't create, start or release the lobby, so their copy says who
@@ -413,7 +435,7 @@ export function DotaLobbyControls({
                 Create Dota lobby
               </button>
             ) : null}
-            {!recoveryOnly && view.canControl && state === "ready" ? (
+            {!recoveryOnly && startOpen(view) ? (
               <button
                 type="button"
                 disabled={pending}

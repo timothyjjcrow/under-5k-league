@@ -135,12 +135,14 @@ describe("DotaLobbyControls refresh (source)", () => {
     return code.slice(start, next === -1 ? undefined : next);
   };
 
-  it("sets its interval from lobbyPanelPollMs(state, playable, over)", () => {
+  it("sets its interval from lobbyPanelPollMs(state, playable, over, unanswered)", () => {
     expect(code).toMatch(/const playable = view\?\.playable === true;/);
+    // A failed first read (no view, an error) retries by itself.
+    expect(code).toMatch(/const unanswered = !view && error !== "";/);
     expect(code).toMatch(
-      /const every = lobbyPanelPollMs\(state, playable, over\);/,
+      /const every = lobbyPanelPollMs\(state, playable, over, unanswered\);/,
     );
-    expect(code).toMatch(/\[state, playable, over, read\]\);/);
+    expect(code).toMatch(/\[state, playable, over, unanswered, read\]\);/);
     expect(code).toMatch(/if \(every === null\) return;/);
     expect(code).toMatch(/setInterval\([^]*?\}, every\);/);
     expect(code).not.toMatch(/\b5000\b|5_000|60_000|3_000|15_000/);
@@ -171,5 +173,43 @@ describe("DotaLobbyControls refresh (source)", () => {
     // Polls and "Refresh bot status" read; the buttons act.
     expect(code).toMatch(/void read\(\)/);
     expect(code).not.toMatch(/request\(/);
+  });
+
+  // 2026-10-18 review: an action's failure (BUSY, "Freeing the bot…", "the
+  // bot isn't running") was set inline, and the next 3s read cleared it
+  // before the presser could read what to do.
+  it("toasts an action's failures instead of setting them inline", () => {
+    const act = callback("act");
+    expect(act).not.toMatch(/setError\((?!"")/);
+    expect(act).toMatch(/else pushToast\("error", routeError\(body\)\);/);
+    expect(act).toMatch(/else pushToast\("error", UNREACHABLE\);/);
+  });
+
+  // Safari before 17.4 has no AbortSignal.any, and calling it throws: every
+  // read of the panel failed there. Both panels bound their requests with
+  // the portable requestSignal, which done() unhooks.
+  it.each(["src/components/dota-lobby-controls.tsx", "src/components/dota-lobby-recovery.tsx"])(
+    "%s never calls AbortSignal.any or AbortSignal.timeout",
+    (file) => {
+      const source = stripLineComments(sourceFile(file).text);
+      expect(source).not.toMatch(/AbortSignal\.(any|timeout)/);
+      expect(source).toMatch(/requestSignal\(/);
+      expect(source).toMatch(/signal: request\.signal/);
+      expect(source).toMatch(/request\.done\(\)/);
+    },
+  );
+});
+
+// SOURCE GUARD: Start renders only through startOpen, which hides it while a
+// release is pending (the bot refuses to start a lobby it is leaving).
+describe("DotaLobbyControls Start (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+  it("renders Start game with bot only through startOpen", () => {
+    expect(code).toMatch(
+      /\{!recoveryOnly && startOpen\(view\) \? \(\s*<button(?:(?!<\/button>)[^])*>\s*Start game with bot\s*<\/button>/,
+    );
+    expect(code.match(/Start game with bot/g)).toHaveLength(1);
   });
 });
