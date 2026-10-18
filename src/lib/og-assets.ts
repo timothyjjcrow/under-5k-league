@@ -2,7 +2,7 @@
 // fail without failing the picture: a missing font falls back to next/og's
 // own, a missing emblem or crest is left out or drawn as initials, and a
 // picture that still can't render sends the league's own image instead
-// (renderOgImage).
+// (drawOgImage, fallbackOgImage).
 
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -154,27 +154,43 @@ export async function fetchOgImage(
 }
 
 /**
- * Draw a preview. The picture is rendered here, not while it streams, so a
- * failure can still answer with the league's own image (a redirect Discord
- * and X follow) rather than a broken one.
+ * Draw a preview's PNG, or null when it can't be drawn. The picture is
+ * rendered here, not while it streams, so a failure can still answer with
+ * the league's own image (fallbackOgImage, a redirect Discord and X follow)
+ * rather than a broken one, and a drawn one can be kept
+ * (og-share-images.tsx).
  */
-export async function renderOgImage(element: ReactElement): Promise<Response> {
+export async function drawOgImage(
+  element: ReactElement,
+): Promise<ArrayBuffer | null> {
   try {
     const loaded = await loadOgFonts();
     const image = new ImageResponse(element, {
       ...OG_SIZE,
       ...(loaded ? { fonts: loaded } : {}),
     });
-    const png = await image.arrayBuffer();
-    return new Response(png, {
-      headers: {
-        "content-type": "image/png",
-        "cache-control": OG_CACHE_CONTROL,
-      },
-    });
+    return await image.arrayBuffer();
   } catch {
-    return fallbackOgImage();
+    return null;
   }
+}
+
+/**
+ * A drawn preview's response, cached five minutes (OG_CACHE_CONTROL).
+ * `ageMs` is how long ago a kept picture's data was read: the Age header
+ * lets a browser or unfurler count the time the box kept it against the
+ * same five minutes.
+ */
+export function ogImageResponse(png: ArrayBuffer, ageMs = 0): Response {
+  // A Response copies the bytes it is given, so one kept picture can answer
+  // any number of requests.
+  return new Response(png, {
+    headers: {
+      "content-type": "image/png",
+      "cache-control": OG_CACHE_CONTROL,
+      age: String(Math.max(0, Math.floor(ageMs / 1000))),
+    },
+  });
 }
 
 /**

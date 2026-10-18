@@ -216,6 +216,20 @@ export function readBackupRecord(ctx, lg) {
 }
 
 /**
+ * The record drill-league.sh writes after a passing drill, whether the weekly
+ * unit or `drill <lg> <sha>` (systemd-run, outside the unit) ran it:
+ * /var/backups/ggd2l/<lg>/state/last-drill.json, {ok, league, dump,
+ * dumpSha256, tools, finishedAt}. A failed drill writes none, so this is the
+ * last pass. Only a record for this league that says ok and carries a
+ * readable finishedAt counts.
+ */
+export function readDrillRecord(ctx, lg) {
+  const record = readJson(path.join(ctx.layout.backupDir(lg), "state", "last-drill.json"));
+  if (record?.ok !== true || record.league !== lg || !Number.isFinite(Date.parse(record.finishedAt ?? ""))) return null;
+  return record;
+}
+
+/**
  * `backup <lg>`: run the backup unit and wait, then report the record it
  * wrote (with the R2 key). Without a fresh record, the newest dump and its
  * sidecar answer, with no offsite key.

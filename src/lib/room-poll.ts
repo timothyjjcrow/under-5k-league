@@ -225,6 +225,24 @@ export function inhousePollCadence(
 }
 
 /**
+ * Whether a draft-room tab polls the moment a clock it shows reaches zero.
+ * Only a signed-in poll can settle the lot (the tick route runs the resolvers
+ * for those alone), and only a captain or an admin has controls waiting on
+ * the result: the next nomination, a re-bid, the admin tools. Every other tab
+ * (signed out, a spectator, a player in the pool, a drafted player) catches
+ * the sale on its next scheduled poll, at most POLL_WATCH_MS later. When every
+ * signed-in tab polled at zero, a full US room sent about 63 polls at once per
+ * sale, about 2.2 s of the box's one vCPU each time (audit 2026-10-17).
+ */
+export function draftPollsAtClockZero(viewer: {
+  signedIn: boolean;
+  /** A captain or an admin: the same test as draftPollCadence's `canAct`. */
+  canAct: boolean;
+}): boolean {
+  return viewer.signedIn && viewer.canAct;
+}
+
+/**
  * The draft room's binding. Its "active" is the AUCTION's phase (PAUSED counts
  * as live, so a resume is caught at once), and its RATE is the viewer's role:
  * captains and admins, who act on a live lot, poll at the room's 2s; every

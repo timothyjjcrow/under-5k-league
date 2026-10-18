@@ -1134,6 +1134,46 @@ describe("getDiscordReachFunnel — the admin's pre-draft denominator", () => {
     });
   });
 
+  it("counts PLAYER signups only for the Start-draft confirm, everyone for the card", async () => {
+    // The confirm reads "of N signed-up players" beside readiness counts
+    // over PLAYER signups; counting standins too made it say 65 beside 62.
+    delete process.env.DISCORD_BOT_TOKEN;
+    const season = await makeSeason({});
+    const player = await makeUser("Linked Player");
+    await link(player.id, "800000000000000031");
+    await reg(player.id, season.id);
+    const unlinkedPlayer = await makeUser("Unlinked Player");
+    await reg(unlinkedPlayer.id, season.id);
+    const standin = await makeUser("Unlinked Standin");
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: standin.id,
+        status: "ACTIVE",
+        type: "STANDIN",
+        mmr: 3000,
+      },
+    });
+
+    const players = await getDiscordReachFunnel(season.id, {
+      playersOnly: true,
+    });
+    expect(players.registered).toBe(2);
+    expect(players.linked).toBe(1);
+    expect(players.unlinkedNames).toEqual(["Unlinked Player"]);
+    expect(discordReachWarning(players)).toBe(
+      "\nDiscord: of 2 signed-up players, 1 never linked Discord at all. Captains may not be able to reach them.",
+    );
+
+    // The Discord reach card and the admin banners keep every signup.
+    const everyone = await getDiscordReachFunnel(season.id);
+    expect(everyone.registered).toBe(3);
+    expect(everyone.unlinkedNames.sort()).toEqual([
+      "Unlinked Player",
+      "Unlinked Standin",
+    ]);
+  });
+
   it("never counts an unanswered player as missing", async () => {
     // Discord down must read as "couldn't check", not "everyone left".
     process.env.DISCORD_API_BASE = base;

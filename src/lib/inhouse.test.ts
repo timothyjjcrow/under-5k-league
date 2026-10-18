@@ -14,6 +14,7 @@ import {
   inhouseWatchedLobbyWhere,
   inhouseHandLobbyName,
   inhouseLobbyCode,
+  inhouseTicketGuideStep,
   inhouseVoiceChannel,
   liveGameEnded,
   otherGameFlags,
@@ -47,6 +48,10 @@ import {
   INHOUSE_RESULT_STATUSES,
   INHOUSE_STATUS,
 } from "./constants";
+import {
+  sourceFile,
+  stripLineComments,
+} from "../../test/support/source-files";
 
 const p = (userId: string, mmr: number, joinedAt: number) => ({
   userId,
@@ -460,6 +465,48 @@ describe("game slots", () => {
     expect(inhouseVoiceChannel(1, 2)).toBe("inhouse team 2");
     expect(inhouseHandLobbyName(1)).toBe(INHOUSE.LOBBY_NAME);
     expect(inhouseHandLobbyName(2)).toBe(`${INHOUSE.LOBBY_NAME} 2`);
+  });
+});
+
+describe("the auto-detect guide's ticket step", () => {
+  it("says the admins will provide a ticket the league doesn't have yet, whatever the bot", () => {
+    for (const lobbyBot of [false, true]) {
+      const step = inhouseTicketGuideStep({ ticketConfigured: false, lobbyBot });
+      expect(step.kind).toBe("pending");
+      if (step.kind !== "pending") continue;
+      expect(step.text).toContain(
+        "The league's admins will provide the European ticket before tracked games begin",
+      );
+      // No bot that would set it, and no ticket to pick by hand.
+      expect(step.text).not.toMatch(/lobby bot|ticket admins|already set/);
+    }
+  });
+
+  it("promises the bot only when it can host with the ticket set", () => {
+    const bot = inhouseTicketGuideStep({ ticketConfigured: true, lobbyBot: true });
+    const hand = inhouseTicketGuideStep({ ticketConfigured: true, lobbyBot: false });
+    expect(bot).toEqual({
+      kind: "ticket",
+      lead: expect.stringContaining("asks the lobby bot to host the game, with the ticket already set"),
+    });
+    expect(hand.kind).toBe("ticket");
+    if (hand.kind !== "ticket") return;
+    expect(hand.lead).not.toContain("lobby bot");
+    // Both end where the page names the ticket.
+    for (const step of [bot, hand])
+      if (step.kind === "ticket")
+        expect(step.lead.endsWith("only they can select the ")).toBe(true);
+  });
+
+  it("/inhouse picks the step by the ticket and a bot that can host with it", () => {
+    const page = stripLineComments(sourceFile("src/app/inhouse/page.tsx").text);
+    expect(page).toMatch(
+      /inhouseTicketGuideStep\(\{\s*ticketConfigured: INHOUSE\.LOBBY_TICKET_CONFIGURED,\s*lobbyBot,\s*\}\)/,
+    );
+    expect(page).toContain("lobbyBot={inhouseLobbyBotConfigured()}");
+    // The step's words live in the rule, not in a second copy on the page.
+    expect(page).not.toContain("with the ticket already set");
+    expect(page).not.toContain("lobbyBotConnection(");
   });
 });
 

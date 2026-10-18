@@ -92,6 +92,7 @@ import {
 } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
+import { runAfterResponse } from "./after-response";
 import { raceHook } from "./race-hook";
 import {
   inhouseAllAccepted,
@@ -199,11 +200,21 @@ async function loadRecords(
  * the READY_CHECK phase — the Dota-style accept gate: all ten must press
  * ACCEPT before the captain vote starts (acceptMatch / resolveReadyCheck), so
  * an AFK player is dropped instead of drafted.
+ *
+ * Each game's "match found" ping goes out after the response
+ * (`runAfterResponse`): the tenth joiner's POST, a "Game over" press and a
+ * room poll that won maintenance never wait on Discord (its post can take
+ * 5s, and the room holds the joiner's controls meanwhile). Outside a request
+ * (scripts, tests) it is sent before this returns. The worker passes
+ * `pingAfterResponse: false`: its own response comes only after a pass of up
+ * to 45s, which would eat into the 90s accept window, and nobody waits on it.
  */
-export async function maybeFormLobby(): Promise<boolean> {
+export async function maybeFormLobby({
+  pingAfterResponse = true,
+}: { pingAfterResponse?: boolean } = {}): Promise<boolean> {
   let formed = false;
   for (let game = 0; game < INHOUSE.MAX_LIVE_GAMES; game += 1) {
-    if (!(await formOneLobby())) break;
+    if (!(await formOneLobby(pingAfterResponse))) break;
     formed = true;
   }
   return formed;
@@ -217,7 +228,7 @@ export async function maybeFormLobby(): Promise<boolean> {
  * barrier, so the loser stands down and the winner's next call fills the
  * next slot.
  */
-async function formOneLobby(): Promise<boolean> {
+async function formOneLobby(pingAfterResponse: boolean): Promise<boolean> {
   // Captured in-tx, sent post-commit (draft-sale pattern) — one formation,
   // one announcement.
   let lobbyPlayers: { name: string; discordId: string | null }[] = [];
@@ -335,18 +346,27 @@ async function formOneLobby(): Promise<boolean> {
   // before the ping, which can take seconds on Discord.
   if (formed || expired > 0) await publishInhouseRoomChange();
   if (formed && lobbyPlayers.length > 0) {
-    const roleId = await getInhousePingRoleId();
-    await sendInhouseDiscordMessage(
-      inhouseLobbyMessage(lobbyPlayers, roleId, acceptEndsAt, gameLabel),
-      {
-        // Only these exact ids may ring anyone — a Steam persona in the same
-        // message still can't ping (see MentionAllowlist).
-        roles: roleId ? [roleId] : [],
-        users: lobbyPlayers
-          .map((p) => p.discordId)
-          .filter((id): id is string => !!id),
-      },
-    );
+    const players = lobbyPlayers;
+    const deadline = acceptEndsAt;
+    const label = gameLabel;
+    const ping = async () => {
+      const roleId = await getInhousePingRoleId();
+      await sendInhouseDiscordMessage(
+        inhouseLobbyMessage(players, roleId, deadline, label),
+        {
+          // Only these exact ids may ring anyone — a Steam persona in the
+          // same message still can't ping (see MentionAllowlist).
+          roles: roleId ? [roleId] : [],
+          users: players
+            .map((p) => p.discordId)
+            .filter((id): id is string => !!id),
+        },
+      );
+    };
+    // Best-effort either way (maybeFormLobby says when each runs): the lobby
+    // is committed and published, and a lost ping loses no state.
+    if (pingAfterResponse) await runAfterResponse(ping);
+    else await ping().catch(() => {});
   }
   return formed;
 }
@@ -1444,7 +1464,9 @@ export async function joinQueue(
   // "Almost there" Discord ping: only when THIS join crosses the milestone
   // upward (so hovering at the threshold stays quiet), never on the join that
   // formed a lobby (that gets its own announcement), and at most once per
-  // throttle window so leave/rejoin churn can't spam the channel.
+  // throttle window so leave/rejoin churn can't spam the channel. The claim
+  // decides here; the post goes after the response, like the match-found
+  // ping (maybeFormLobby), so the joiner's controls never wait on Discord.
   if (!formed) {
     const milestone = INHOUSE.QUEUE_PING_AT;
     const presentAfter = await prisma.inhouseQueueEntry.count({
@@ -1455,11 +1477,13 @@ export async function joinQueue(
       presentAfter >= milestone &&
       (await claimQueuePingThrottle(Date.now()))
     ) {
-      const roleId = await getInhousePingRoleId();
-      await sendInhouseDiscordMessage(
-        inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE, roleId),
-        { roles: roleId ? [roleId] : [] },
-      );
+      await runAfterResponse(async () => {
+        const roleId = await getInhousePingRoleId();
+        await sendInhouseDiscordMessage(
+          inhouseQueueMessage(presentAfter, INHOUSE.LOBBY_SIZE, roleId),
+          { roles: roleId ? [roleId] : [] },
+        );
+      });
     }
   }
   return { ok: true };

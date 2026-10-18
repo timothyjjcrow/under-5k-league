@@ -2,9 +2,9 @@
 import { existsSync, readFileSync, statfsSync } from "node:fs";
 import { caddyConfigSha256, readModeFile } from "./caddy-modes.mjs";
 import { BIN, LEAGUES, SLOTS, unitName } from "./layout.mjs";
-import { serverErrorCount } from "./logs.mjs";
+import { serverErrorCounts } from "./logs.mjs";
 import { readLive, slotTarget } from "./releases.mjs";
-import { newestDump, readBackupRecord } from "./tools.mjs";
+import { newestDump, readBackupRecord, readDrillRecord } from "./tools.mjs";
 
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -15,6 +15,8 @@ export const STATUS_UNITS = Object.freeze([
   "postgresql@18-main.service",
   "ggd2l-bot.service",
   "ggd2l-heartbeat.timer",
+  "ggd2l-config-archive.timer",
+  "ggd2l-config-archive.service",
   ...LEAGUES.flatMap((lg) => [
     `ggd2l-backup@${lg}.timer`,
     `ggd2l-backup@${lg}.service`,
@@ -53,6 +55,28 @@ export function parseMeminfo(text) {
   };
 }
 
+/**
+ * A league's newest drill, from two sources. The drill unit's last run
+ * (Result, ExecMainExitTimestamp) covers the weekly timer and `drill <lg>`,
+ * failures included. state/last-drill.json, which every passing drill writes,
+ * also covers `drill <lg> <sha>`, which runs outside the unit. The later one
+ * answers: a failed run writes no record, so a failure after the last pass
+ * shows, and a pass after a failure clears it. Times are ISO when readable.
+ */
+export function lastDrill(unit, record) {
+  const recordMs = Date.parse(record?.finishedAt ?? "");
+  const fromRecord = Number.isFinite(recordMs) ? { result: "success", at: new Date(recordMs).toISOString(), source: "record" } : null;
+  const raw = unit?.ExecMainExitTimestamp;
+  if (!raw || raw === "n/a") return fromRecord;
+  const unitMs = Date.parse(raw);
+  const fromUnit = { result: unit.Result || "unknown", at: Number.isFinite(unitMs) ? new Date(unitMs).toISOString() : raw, source: "unit" };
+  if (!fromRecord) return fromUnit;
+  // systemd prints the box's local zone, UTC on the box. A time this can't
+  // read can't be ordered, so a failed run is the one worth showing.
+  if (!Number.isFinite(unitMs)) return fromUnit.result === "success" ? fromRecord : fromUnit;
+  return unitMs > recordMs ? fromUnit : fromRecord;
+}
+
 export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
   const { layout, runner } = ctx;
   const shown = await runner.run(BIN.systemctl, [
@@ -70,16 +94,13 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     const live = readLive(ctx, lg);
     const backup = readBackupRecord(ctx, lg);
     const dump = newestDump(ctx, lg);
-    const drillUnit = units[`ggd2l-drill@${lg}.service`];
     leagues[lg] = {
       live: live ? { id: live.id, sha: live.sha, slot: live.slot, promotedAt: live.promotedAt } : null,
       previous: live?.previous ?? null,
       mode: readModeFile(layout.modeFile(lg)).mode,
       slots: Object.fromEntries(SLOTS.map((slot) => [slot, slotTarget(ctx, lg, slot)])),
       lastBackupAt: backup?.finishedAt ?? (dump ? new Date(dump.mtimeMs).toISOString() : null),
-      lastDrill: drillUnit?.ExecMainExitTimestamp
-        ? { result: drillUnit.Result || "unknown", at: drillUnit.ExecMainExitTimestamp }
-        : null,
+      lastDrill: lastDrill(units[`ggd2l-drill@${lg}.service`], readDrillRecord(ctx, lg)),
     };
   }
 
@@ -103,6 +124,7 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     .split("\n")
     .map((line) => line.trim().split(/\s+/)[0])
     .filter((name) => name && /^[\w@.:-]+$/.test(name));
+  const errors = serverErrorCounts({ layout, sinceMs: ctx.now() - DAY_MS });
 
   return {
     ok: true,
@@ -113,6 +135,8 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     caddyConfigSha256: caddyConfigSha256(layout),
     pendingReboot: existsSync(layout.rebootRequired),
     failedUnits,
-    serverErrors24h: serverErrorCount({ layout, sinceMs: ctx.now() - DAY_MS }),
+    // Real 5xx; the maintenance page's own 503s are counted apart.
+    serverErrors24h: errors.serverErrors,
+    maintenance503s24h: errors.maintenance503s,
   };
 }

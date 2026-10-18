@@ -266,7 +266,9 @@ import { mmrWeightedBudgets } from "@/lib/draft";
 import {
   profileSyncAllowed,
   undoSaleConfirm,
+  undoSaleTarget,
   voidLotConfirm,
+  type UndoTarget,
 } from "@/lib/draft-admin";
 import {
   captainMmrWarning,
@@ -2385,20 +2387,22 @@ function CaptainControls({
   );
   // The sale Undo last sale would revert — the newest AUCTION purchase
   // (price > 0; $0 rows are free-agent signings), the same row undoLastSale
-  // picks — so the confirm can name it like the draft room's does.
-  const lastAuctionSale =
-    data.teams
-      .flatMap((t) =>
-        t.members
-          .filter((m) => !m.isCaptain && m.price > 0)
-          .map((m) => ({
-            id: m.id,
-            at: m.createdAt.getTime(),
-            sale: { name: m.user.name, teamName: t.name, price: m.price },
-          })),
-      )
-      .sort((a, b) => b.at - a.at || (a.id < b.id ? 1 : -1))[0]?.sale ??
-    null;
+  // picks — so the confirm can name it like the draft room's does. The form
+  // posts its roster row, and undoLastSale refuses if a newer sale landed
+  // after this render: /admin doesn't poll during the auction.
+  const lastAuctionRow = undoSaleTarget(
+    data.teams.flatMap((t) =>
+      t.members.map((m) => ({ ...m, teamName: t.name })),
+    ),
+  );
+  const lastAuctionSale: UndoTarget | null = lastAuctionRow
+    ? {
+        membershipId: lastAuctionRow.id,
+        name: lastAuctionRow.user.name,
+        teamName: lastAuctionRow.teamName,
+        price: lastAuctionRow.price,
+      }
+    : null;
   const {
     seats,
     canStart,
@@ -2553,18 +2557,26 @@ function CaptainControls({
             {/* Draft phase only — after that the newest non-captain roster row
                 is a free-agent signing, not an auction sale, and re-opening the
                 auction mid-season lets the stalled-nomination resolver
-                auto-draft someone onto that team. The action refuses too. */}
-            {draftStarted && season.status === SEASON_STATUS.DRAFT ? (
+                auto-draft someone onto that team. The action refuses too.
+                And only once something has sold: before that there is
+                nothing to undo, and the click could only be refused. */}
+            {draftStarted &&
+            season.status === SEASON_STATUS.DRAFT &&
+            lastAuctionSale ? (
               <ActionForm
                 action={undoLastSaleAction}
-                hidden={{ expectedActiveSeasonId: season.id }}
+                hidden={{
+                  expectedActiveSeasonId: season.id,
+                  expectedSaleMembershipId: lastAuctionSale.membershipId,
+                }}
               >
                 <SubmitButton
                   variant="secondary"
                   size="sm"
                   /* The COMPLETE case is the one the old copy hid. This button
-                     renders whenever the draft has started and the season is
-                     still in DRAFT — which includes a FINISHED auction, i.e.
+                     renders whenever the draft has started, something has
+                     sold and the season is still in DRAFT — which includes a
+                     FINISHED auction, i.e.
                      exactly where the panel's own "Draft complete — rosters are
                      locked" banner parks the admin. undoLastSale accepts
                      COMPLETE and writes IN_PROGRESS with a 90s nomination

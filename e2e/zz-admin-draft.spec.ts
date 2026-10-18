@@ -108,6 +108,15 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     playerPage.getByRole("link", { name: /admin panel/i }),
   ).toHaveCount(0);
+  // The header chip is the root layout's render, which the room's poll never
+  // repeats. Parked here before Start, it names the phase as it is now…
+  const parkedChip = (label: string) =>
+    playerPage
+      .getByRole("banner")
+      .getByRole("link", {
+        name: new RegExp(`^League status: .+ — ${label}$`),
+      });
+  await expect(parkedChip("Draft setup")).toBeVisible();
 
   // Park both captains on /draft BEFORE the start — their pages must flip
   // live via their own polls, no reload.
@@ -151,6 +160,11 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(playerPage.getByText(/Available ·/)).toBeVisible({
     timeout: 15_000,
   });
+  // …and so does its header. REGRESSION: the chip kept the pre-Start phase
+  // through the whole auction; the room now refreshes the layout's render
+  // once when its poll sees the auction status move (draftRoomNeedsRefresh).
+  await expect(parkedChip("Draft live")).toBeVisible({ timeout: 15_000 });
+  await expect(parkedChip("Draft live")).toHaveAttribute("href", "/draft");
   // Every page loaded from now on says the auction is live in its header,
   // and the chip opens the draft room.
   await playerPage.goto("/news");
@@ -285,7 +299,9 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     page.getByRole("button", { name: "Pause auction" }),
   ).toBeVisible();
+  // Undo shows only once something has sold, and Topson's lot is still open:
+  // there is nothing to undo yet, so there is no button to be refused.
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
-  ).toBeVisible();
+  ).toHaveCount(0);
 });

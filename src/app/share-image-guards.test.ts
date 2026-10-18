@@ -66,7 +66,7 @@ describe("link preview picture reads", () => {
     expect(assets.match(/\bfetch\(/g)).toHaveLength(1);
     const fetchOgImage = assets.slice(
       assets.indexOf("export async function fetchOgImage("),
-      assets.indexOf("export async function renderOgImage("),
+      assets.indexOf("export async function drawOgImage("),
     );
     expect(fetchOgImage).toMatch(/if \(!ogImageUrlAllowed\(url\)\) return null;\s*try \{\s*const res = await fetch\(/);
     expect(fetchOgImage).toContain('redirect: "error"');
@@ -125,15 +125,49 @@ describe("link preview picture reads", () => {
     }
   });
 
-  it("draw every picture through renderOgImage, which falls back to the league's", () => {
+  it("draw every picture through drawOgImage, which falls back to the league's", () => {
     const bodies = stripLineComments(
       sourceFile("src/components/og-share-images.tsx").text,
     );
     // One draw per exported picture body, whatever their number.
     const pictures = bodies.match(/export function \w+ShareImage\(/g) ?? [];
     expect(pictures.length).toBeGreaterThanOrEqual(5);
-    expect(bodies.match(/return renderOgImage\(</g)).toHaveLength(pictures.length);
+    expect(bodies.match(/return drawOgImage\(</g)).toHaveLength(pictures.length);
     expect(bodies).not.toContain("new ImageResponse");
+  });
+
+  it("keep each drawn picture under its page's own address", () => {
+    // Drawing costs about a second of the box's one vCPU and no CDN keeps
+    // it, so a production process keeps each drawn picture five minutes
+    // (picture-cache.ts). The key is the page's address with no query:
+    // the opengraph-image and twitter-image of one page share an entry, and
+    // two pages never do.
+    const bodies = stripLineComments(
+      sourceFile("src/components/og-share-images.tsx").text,
+    );
+    const pictures = [...bodies.matchAll(/export function (\w+)ShareImage\(/g)];
+    const keys = [
+      ...bodies.matchAll(/return sharePicture\((`[^`]*`|"[^"]*"), async \(\) => \{/g),
+    ].map((call) => call[1].slice(1, -1));
+    expect(keys).toHaveLength(pictures.length);
+    const pages = [
+      ...new Set(
+        ROUTES.map((route) =>
+          path.posix.dirname(route.path).replace(/^src\/app/, "").replace("[id]", "${id}"),
+        ),
+      ),
+    ].sort();
+    expect([...keys].sort()).toEqual(pages);
+    // Only a drawn picture is kept, for the five minutes the header gives
+    // a browser, and only in production (a layout edit shows at once in
+    // development).
+    expect(bodies).toContain("ttlMs: OG_CACHE_TTL_MS,");
+    expect(bodies).toMatch(
+      /keepBytes: \(picture\) =>\s*picture && picture !== "missing" \? picture\.byteLength : null,/,
+    );
+    expect(bodies).toContain('if (process.env.NODE_ENV !== "production") return null;');
+    // One cache per process, whichever route's bundle asks.
+    expect(bodies).toMatch(/return \(host\.\w+ \?\?= createPictureCache</);
   });
 });
 

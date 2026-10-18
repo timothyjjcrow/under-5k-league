@@ -17,7 +17,7 @@ import { clashesAfterRetime } from "./standin-service";
 import { loadSidePlayerIds } from "./availability-service";
 import { AVAILABILITY } from "./availability";
 import { isPlayoffPhase, matchLogisticsOpen } from "./league-lifecycle";
-import { weekReminderKey } from "./settings";
+import { releaseRetimedReminderMarker } from "./reminder-service";
 import { invalidateMatchNudges } from "./announcement-marker";
 import { singleActiveSeason } from "./season";
 import { UserFacingError } from "./user-facing-error";
@@ -431,10 +431,11 @@ type RetimeCommit = {
  * transaction, after every refusal has been judged. It claims the request
  * (PENDING to ACCEPTED, recording the winning time and when) and the match (still
  * SCHEDULED), then follows the retime contract (season-schedule-playoffs.md):
- * new scheduleRevision, fresh auto-sync window, queued nudges dropped,
- * reminder markers released. Check-ins answered the OLD night, so they go;
- * each player's answer to the locked time becomes their check-in for the new
- * one, so nobody answers twice. Past the first write every failure throws.
+ * new scheduleRevision, fresh auto-sync window, queued nudges dropped, the
+ * old kickoff's reminder marker released. Check-ins answered the OLD night,
+ * so they go; each player's answer to the locked time becomes their check-in
+ * for the new one, so nobody answers twice. Past the first write every
+ * failure throws.
  */
 async function retimeToOption(
   tx: Tx,
@@ -444,6 +445,8 @@ async function retimeToOption(
     seasonId: string;
     week: number;
     scheduleRevision: number;
+    /** The kickoff before this move: its reminder cluster is the one left. */
+    scheduledAt: Date | null;
   },
   time: Date,
   sides: { home: ReadySide; away: ReadySide },
@@ -475,24 +478,19 @@ async function retimeToOption(
   await invalidateMatchNudges(tx, match.id);
 
   // Every RSVP answered the OLD night. Clear them and release the old
-  // reminder marker atomically with the retime.
+  // kickoff's reminder marker atomically with the retime, unless fixtures
+  // that did not move still sit there (releaseRetimedReminderMarker).
   const [cleared, standins] = await Promise.all([
     tx.matchAvailability.deleteMany({ where: { matchId: match.id } }),
     tx.standinAssignment.findMany({
       where: { matchId: match.id },
       select: { standinUserId: true },
     }),
-    tx.setting.deleteMany({
-      where: {
-        OR: [
-          { key: weekReminderKey(match.seasonId, match.week) },
-          {
-            key: {
-              startsWith: `${weekReminderKey(match.seasonId, match.week)}:`,
-            },
-          },
-        ],
-      },
+    releaseRetimedReminderMarker(tx, {
+      id: match.id,
+      seasonId: match.seasonId,
+      week: match.week,
+      oldKickoff: match.scheduledAt,
     }),
   ]);
 

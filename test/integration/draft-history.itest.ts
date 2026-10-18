@@ -11,12 +11,13 @@ import {
   removeCaptain,
   startDraft,
   transferCaptaincy,
+  undoLastSaleAction,
 } from "@/app/actions/admin-captains-draft";
 import { releasePlayer, signFreeAgent } from "@/app/actions/admin-roster";
 import { abortDraft, getDraftState, nominatePlayer, pauseDraft, placeBid, resolveExpiredNomination, resolveStalledNomination, resumeDraft, undoLastSale, voidCurrentLot } from "@/lib/draft-service";
 import { readAcceptedBids } from "@/lib/draft-history";
 import { backfillRosterTenures, captureRosterTenure } from "@/lib/roster-history";
-import { expireClock, expireNominationClock, makeCaptain, makePlayer, makeSeason, makeUser, ON_POSTGRES, sessionFor, startDraftState } from "./factories";
+import { expireClock, expireNominationClock, makeCaptain, makePlayer, makeSeason, makeUser, ON_POSTGRES, sessionFor, startDraftState, undoTargetId } from "./factories";
 
 const form = (values: Record<string, string>) => {
   const body = new FormData();
@@ -109,7 +110,7 @@ describe("durable draft and roster history", () => {
     await pauseDraft(f.season.id, f.actor); await voidCurrentLot(f.season.id, f.actor); await resumeDraft(f.season.id, f.actor);
     await sell(f, f.p.id, 7);
     const sold = await prisma.draftLot.findFirstOrThrow({ where: { status: "SOLD" } });
-    expect((await undoLastSale(f.season.id, f.actor)).ok).toBe(true);
+    expect((await undoLastSale(f.season.id, f.actor, await undoTargetId(f.season.id))).ok).toBe(true);
     await nominatePlayer(f.season.id, sessionFor(f.a.user), f.p.id, 1);
     const old = await prisma.draftLot.findMany({ orderBy: { sequence: "asc" } });
     expect(old.map((lot) => lot.status)).toEqual(["VOIDED", "UNDONE", "OPEN"]);
@@ -237,7 +238,7 @@ describe("durable draft and roster history", () => {
     const member = await prisma.teamMember.create({ data: { seasonId: f.season.id, teamId: f.a.team.id, userId: f.p.id, price: 9 } });
     await prisma.bid.create({ data: { seasonId: f.season.id, draftId: draft.id, teamId: f.a.team.id, userId: f.p.id, amount: 9 } });
     await prisma.$transaction((tx) => captureRosterTenure(tx, member));
-    expect((await undoLastSale(f.season.id, f.actor)).ok).toBe(true);
+    expect((await undoLastSale(f.season.id, f.actor, await undoTargetId(f.season.id))).ok).toBe(true);
     const run = await prisma.draftRun.findFirstOrThrow();
     expect(run).toMatchObject({ provenance: "LEGACY_OBSERVATION", startedAt: null, rulesSnapshot: null, openingTeamsSnapshot: null });
     expect(JSON.parse(run.legacySnapshot!).bids).toHaveLength(1);
@@ -252,7 +253,7 @@ describe("durable draft and roster history", () => {
     const bid = await prisma.bid.create({ data: { seasonId: f.season.id, draftId: draft.id, teamId: f.a.team.id, userId: f.p.id, amount: 9 } });
     const budget = (await prisma.team.findUniqueOrThrow({ where: { id: f.a.team.id } })).budget;
     failRunIntegrity = true;
-    await expect(undoLastSale(f.season.id, f.actor)).rejects.toThrow("unrelated history unique constraint");
+    await expect(undoLastSale(f.season.id, f.actor, await undoTargetId(f.season.id))).rejects.toThrow("unrelated history unique constraint");
     failRunIntegrity = false;
     expect(await prisma.teamMember.findUnique({ where: { id: member.id } })).toEqual(member);
     expect(await prisma.bid.findUnique({ where: { id: bid.id } })).toEqual(bid);
@@ -275,7 +276,7 @@ describe("durable draft and roster history", () => {
     expect(readAcceptedBids(lot.acceptedBidsSnapshot).bids.map((bid) => bid.amount)).toEqual([3, 8]);
     const stray = await prisma.bid.create({ data: { draftId: draft.id, seasonId: f.season.id,
       teamId: f.a.team.id, userId: f.p.id, amount: 4 } });
-    expect((await undoLastSale(f.season.id, f.actor)).ok).toBe(true);
+    expect((await undoLastSale(f.season.id, f.actor, await undoTargetId(f.season.id))).ok).toBe(true);
     expect((await prisma.draftLot.findUniqueOrThrow({ where: { id: lot.id } })).acceptedBidsSnapshot).toBe(lot.acceptedBidsSnapshot);
     const audit = await prisma.adminAction.findFirstOrThrow({ where: { action: "preserveUnpartitionedDraftBids" } });
     expect(JSON.parse(audit.detailsJson!).bids.map((bid: { id: string }) => bid.id)).toEqual([stray.id]);
@@ -298,5 +299,104 @@ describe("the finished draft room's recap", () => {
       bargainHunter: { teamId: f.b.team.id, spent: 2 },
       totalSpent: 9,
     });
+  });
+});
+
+// "Undo last sale" reverts the sale its confirm NAMED, never whatever is newest
+// at click time. /admin doesn't poll during the auction, so a confirm rendered
+// at sale #5 used to revert sale #12; the room named the newest SOLD lot, which
+// after a release is a player no longer on any roster, and Undo then reverted
+// the sale before it.
+describe("Undo last sale reverts only the sale its confirm named", () => {
+  /** Everything an undo writes, to prove a refusal wrote none of it. */
+  async function snapshot(seasonId: string) {
+    return {
+      members: await prisma.teamMember.findMany({ where: { seasonId }, orderBy: { id: "asc" } }),
+      budgets: await prisma.team.findMany({ where: { seasonId }, select: { id: true, budget: true }, orderBy: { id: "asc" } }),
+      draft: await prisma.draft.findUniqueOrThrow({ where: { seasonId } }),
+      lots: await prisma.draftLot.findMany({ orderBy: { id: "asc" } }),
+      tenures: await prisma.rosterTenure.findMany({ orderBy: { id: "asc" } }),
+      adminActions: await prisma.adminAction.count(),
+    };
+  }
+
+  it("refuses a sale that landed after the page rendered, and changes nothing", async () => {
+    // Staged, not raced, on purpose. The refusal is undoLastSale's comparison
+    // of the named id with the newest purchase, made inside its transaction
+    // before its first write, and it is the only check: no earlier read-time
+    // test exists for a staged row to trip instead. Delete it and this call
+    // reverts the newer sale (red). Racing can't add an interleaving: a sale
+    // needs a live lot, which Undo refuses, and one committing mid-undo
+    // rewrites the Draft row Undo updates last, so Postgres aborts the undo.
+    const f = await setup(3); await start(f);
+    await sell(f, f.p.id, 7);
+    // The page renders here and its confirm names sale #1…
+    const named = await undoTargetId(f.season.id);
+    const purchase = await prisma.teamMember.findUniqueOrThrow({ where: { seasonId_userId: { seasonId: f.season.id, userId: f.p.id } } });
+    expect(named).toBe(purchase.id);
+    // …then sale #2 lands before the click.
+    await sell(f, f.q.id, 2);
+    const before = await snapshot(f.season.id);
+
+    const res = await undoLastSale(f.season.id, f.actor, named);
+
+    expect(res).toEqual({
+      ok: false,
+      error: `A newer sale landed since this page loaded: Second to ${f.b.team.name} ($2). Reload, then undo again if that's the one.`,
+    });
+    expect(await snapshot(f.season.id)).toEqual(before);
+    // Reloaded, the page names sale #2, and that undo goes through.
+    const again = await undoLastSale(f.season.id, f.actor, await undoTargetId(f.season.id));
+    expect(again).toMatchObject({ ok: true, player: "Second", team: f.b.team.name, price: 2 });
+    expect(await prisma.teamMember.findUnique({ where: { id: purchase.id } })).toEqual(purchase);
+  });
+
+  it("never offers a released player's sale, though Recent sales keeps it", async () => {
+    const f = await setup(); await start(f);
+    await sell(f, f.p.id, 7); await sell(f, f.q.id, 2);
+    const first = await prisma.teamMember.findUniqueOrThrow({ where: { seasonId_userId: { seasonId: f.season.id, userId: f.p.id } } });
+    const second = await prisma.teamMember.findUniqueOrThrow({ where: { seasonId_userId: { seasonId: f.season.id, userId: f.q.id } } });
+    expect(await releasePlayer(null, form({ memberId: second.id }))).toHaveProperty("message");
+
+    const room = (await getDraftState(f.season.id, f.actor))!;
+    // The released player's lot is still the newest SOLD lot (history)…
+    expect(room.recentSales[0]).toMatchObject({ name: "Second", price: 2 });
+    // …but Undo names the sale it would actually revert.
+    expect(room.undoSale).toEqual({ membershipId: first.id, name: "Purchase", teamName: f.a.team.name, price: 7 });
+    // Only admins get an undo target.
+    expect((await getDraftState(f.season.id, null))!.undoSale).toBeNull();
+    expect((await getDraftState(f.season.id, sessionFor(f.a.user)))!.undoSale).toBeNull();
+
+    // A confirm that still names the released sale is refused: it never
+    // turns into reverting Purchase.
+    const before = await snapshot(f.season.id);
+    const stale = await undoLastSale(f.season.id, f.actor, second.id);
+    expect(stale.ok).toBe(false);
+    expect(!stale.ok && stale.error).toBe(
+      `The sale this page named can no longer be undone (it was undone or released, or its player is now a captain). The last sale is now Purchase to ${f.a.team.name} ($7). Reload, then undo again if that's the one.`,
+    );
+    expect(await snapshot(f.season.id)).toEqual(before);
+
+    expect(await undoLastSale(f.season.id, f.actor, room.undoSale!.membershipId)).toMatchObject({ ok: true, player: "Purchase", price: 7 });
+    expect((await getDraftState(f.season.id, f.actor))!.undoSale).toBeNull();
+  });
+
+  it("the action refuses a form that names no sale, and undoes the one it names", async () => {
+    const f = await setup(3); await start(f);
+    await sell(f, f.p.id, 7);
+    const before = await snapshot(f.season.id);
+    // A form rendered before Undo carried its target (the server-action id
+    // survives a release) can't say which sale the admin agreed to.
+    expect(await undoLastSaleAction(null, form({ expectedActiveSeasonId: f.season.id }))).toEqual({
+      error: "This Undo last sale button is from an older page — reload, then undo again.",
+    });
+    expect(await snapshot(f.season.id)).toEqual(before);
+
+    const done = await undoLastSaleAction(null, form({
+      expectedActiveSeasonId: f.season.id,
+      expectedSaleMembershipId: await undoTargetId(f.season.id),
+    }));
+    expect(done).toMatchObject({ message: expect.stringMatching(/^Undid Purchase → /) });
+    expect(await prisma.teamMember.count({ where: { seasonId: f.season.id, userId: f.p.id } })).toBe(0);
   });
 });

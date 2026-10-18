@@ -23,7 +23,12 @@ import {
   resolveStalledNomination,
   undoLastSale,
 } from "@/lib/draft-service";
-import { addCaptain, startDraft } from "@/app/actions/admin-captains-draft";
+import {
+  abortDraftAction,
+  addCaptain,
+  startDraft,
+} from "@/app/actions/admin-captains-draft";
+import { sendDiscordMessage } from "@/lib/discord";
 import {
   DRAFT_STATUS,
   MATCH_PHASE,
@@ -41,6 +46,7 @@ import {
   runDraftToCompletion,
   sessionFor,
   startDraftState,
+  undoTargetId,
   ON_POSTGRES,
 } from "./factories";
 
@@ -714,6 +720,50 @@ function formWith(fields: Record<string, string>): FormData {
   return fd;
 }
 
+// The toast used to say "Discord was notified that the auction stopped" even
+// when the post never went out (no webhook, a preview, a failed send), so the
+// admin trusted that captains knew. It reports what sendDiscordMessage said.
+describe("abortDraftAction — the toast says whether Discord heard", () => {
+  afterEach(() => {
+    vi.mocked(sendDiscordMessage).mockReset();
+    vi.mocked(sendDiscordMessage).mockResolvedValue(true);
+  });
+
+  it("says Discord was notified when the post went out", async () => {
+    const { season } = await prematureStart();
+
+    const res = await abortDraftAction(
+      {},
+      formWith({ expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.message).toContain(
+      "Discord was notified that the auction stopped",
+    );
+    expect(res?.message).not.toMatch(/announcement failed/);
+  });
+
+  it("says the announcement failed when it didn't, and still aborts", async () => {
+    const { season } = await prematureStart();
+    vi.mocked(sendDiscordMessage).mockResolvedValue(false);
+
+    const res = await abortDraftAction(
+      {},
+      formWith({ expectedActiveSeasonId: season.id }),
+    );
+
+    expect(res?.message).toContain(
+      "the Discord announcement failed; tell the league in Discord that the auction stopped",
+    );
+    expect(res?.message).not.toContain("Discord was notified");
+    // The abort itself committed; only the post is missing.
+    expect(
+      (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
+        .status,
+    ).toBe(SEASON_STATUS.SIGNUPS);
+  });
+});
+
 // "Undo last sale" used to target "the newest non-captain roster row", which is
 // not the same thing as the newest SALE. A pool-dry draft leaves the season in
 // DRAFT, where Sign free agent is legal — so undoing a disputed lot deleted the
@@ -761,7 +811,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       data: { seasonId: season.id, teamId: b.team.id, userId: late.id, price: 0 },
     });
 
-    const res = await undoLastSale(season.id, await admin());
+    const res = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
 
     expect(res.ok).toBe(true);
     if (res.ok) {
@@ -792,7 +842,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
 
-    const res = await undoLastSale(season.id, await admin());
+    const res = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
 
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.error).toMatch(/free-agent signings.*Use Release/i);
@@ -808,7 +858,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
 
-    const res = await undoLastSale(season.id, await admin());
+    const res = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
 
     expect(res).toMatchObject({ ok: false });
     if (!res.ok) expect(res.error).toMatch(/^No sale to undo$/);
@@ -823,7 +873,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       data: { isCaptain: true },
     });
 
-    const res = await undoLastSale(season.id, await admin());
+    const res = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
 
     expect(res).toMatchObject({ ok: false });
     expect(
@@ -840,14 +890,14 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
     });
     await prisma.team.update({ where: { id: b.team.id }, data: { budget: 80 } });
 
-    const first = await undoLastSale(season.id, await admin());
+    const first = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
     expect(first.ok && first.player).toBe("Second Buy");
     // Undo re-opens the auction; clear the clock so the next undo is allowed.
     await prisma.draft.update({
       where: { seasonId: season.id },
       data: { nominatedUserId: null },
     });
-    const next = await undoLastSale(season.id, await admin());
+    const next = await undoLastSale(season.id, await admin(), await undoTargetId(season.id));
     expect(next.ok && next.player).toBe("Sold Player");
 
     expect((await prisma.team.findUniqueOrThrow({ where: { id: a.team.id } })).budget).toBe(100);
@@ -899,8 +949,10 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       const { season, a, sold } = await saleWithExpiredNominationClock(`R${run}`);
 
       const adm = await admin();
+      // What the admin's confirm named before the click.
+      const target = await undoTargetId(season.id);
       const [undone] = await raceAll<unknown>([
-        () => undoLastSale(season.id, adm),
+        () => undoLastSale(season.id, adm, target),
         () => resolveStalledNomination(season.id),
       ]);
       const result = undone as Awaited<ReturnType<typeof undoLastSale>>;
@@ -957,7 +1009,7 @@ describe("undoLastSale — only ever reverts an actual auction purchase", () => 
       // other connection can claim Draft and bootstrap a genuine new lot.
       rivalOpened = await resolveStalledNomination(season.id);
     }));
-    const result = await undoLastSale(season.id, adm);
+    const result = await undoLastSale(season.id, adm, await undoTargetId(season.id));
     expect(rivalOpened).toBe(true);
     expect(result).toMatchObject({ ok: false, error: expect.stringMatching(/changed|try again/i) });
     expect(await prisma.teamMember.findUnique({ where: { id: memberBefore.id } })).toEqual(memberBefore);

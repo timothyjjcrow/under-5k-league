@@ -51,8 +51,8 @@ function readLines(file) {
   }
 }
 
-/** Parse one Caddy access-log line into a request row, or null. */
-export function parseCaddyLine(line, host) {
+/** One Caddy access-log line as { row, entry } (the row and the parsed JSON), or null. */
+function parseCaddyEntry(line, host) {
   let entry;
   try {
     entry = JSON.parse(line);
@@ -64,26 +64,57 @@ export function parseCaddyLine(line, host) {
   if (host && request.host && request.host.toLowerCase() !== host) return null;
   const status = Number(entry.status);
   const requestPath = request.uri.split("?")[0];
-  return {
+  const row = {
     id: sha256(line),
     timestamp: Math.round(entry.ts * 1000),
     responseStatusCode: Number.isFinite(status) ? status : 0,
     requestPath,
     level: status >= 500 ? "error" : "info",
   };
+  return { row, entry };
+}
+
+/** Parse one Caddy access-log line into a request row, or null. */
+export function parseCaddyLine(line, host) {
+  return parseCaddyEntry(line, host)?.row ?? null;
+}
+
+/** Every { row, entry } for the league's host since sinceMs, oldest first. */
+function caddyEntries({ layout, lg, sinceMs, name = lg }) {
+  const host = PUBLIC_HOST[lg] ?? null;
+  const found = new Map();
+  for (const file of logFilesFor(layout.caddyLogs, name, sinceMs)) {
+    for (const line of readLines(file)) {
+      const parsed = parseCaddyEntry(line, host);
+      if (parsed && parsed.row.timestamp >= sinceMs) found.set(parsed.row.id, parsed);
+    }
+  }
+  return [...found.values()].sort((a, b) => a.row.timestamp - b.row.timestamp || a.row.id.localeCompare(b.row.id));
 }
 
 /** Every request row for the league's host since sinceMs, oldest first. */
 export function caddyRows({ layout, lg, sinceMs, name = lg }) {
-  const host = PUBLIC_HOST[lg] ?? null;
-  const rows = new Map();
-  for (const file of logFilesFor(layout.caddyLogs, name, sinceMs)) {
-    for (const line of readLines(file)) {
-      const row = parseCaddyLine(line, host);
-      if (row && row.timestamp >= sinceMs) rows.set(row.id, row);
-    }
-  }
-  return [...rows.values()].sort((a, b) => a.timestamp - b.timestamp || a.id.localeCompare(b.id));
+  return caddyEntries({ layout, lg, sinceMs, name }).map(({ row }) => row);
+}
+
+/**
+ * Whether a Caddy access-log entry is the maintenance page's own 503 (the
+ * `maintenance` mode, and the `allowlist` mode for everyone not on the list).
+ * The mode's block (`maintenanceBlock` in caddy-modes.mjs) sends
+ * `Retry-After: 600` and `X-Robots-Tag: noindex, nofollow` with every answer,
+ * and Caddy logs response headers in `resp_headers`. The app never sends that
+ * pair on a 5xx, and a slot Caddy cannot reach is a 502 without it.
+ */
+export function isMaintenanceResponse(entry) {
+  if (Number(entry?.status) !== 503) return false;
+  const headers = entry.resp_headers;
+  if (!headers || typeof headers !== "object") return false;
+  const header = (name) => {
+    for (const [key, value] of Object.entries(headers))
+      if (key.toLowerCase() === name) return Array.isArray(value) ? value.join(", ") : String(value);
+    return null;
+  };
+  return header("retry-after") === "600" && header("x-robots-tag") === "noindex, nofollow";
 }
 
 /** Journal lines from the league's slots that look like a Next error. */
@@ -135,10 +166,19 @@ export function cronRequestCount({ layout, lg, sinceMs }) {
   return caddyRows({ layout, lg, sinceMs }).filter((row) => row.requestPath === CRON_PATH).length;
 }
 
-/** 5xx answers in a window across both leagues and the apex redirect host. */
-export function serverErrorCount({ layout, sinceMs }) {
-  let count = 0;
-  for (const lg of ["us", "eu"]) count += caddyRows({ layout, lg, sinceMs }).filter((row) => row.level === "error").length;
-  count += caddyRows({ layout, lg: "apex", name: "apex", sinceMs }).filter((row) => row.level === "error").length;
-  return count;
+/**
+ * 5xx answers in a window across both leagues and the apex redirect host, with
+ * the maintenance page's own 503s counted apart: a league held in maintenance
+ * answers every request with one, which is the mode working, not a fault.
+ */
+export function serverErrorCounts({ layout, sinceMs }) {
+  const counts = { serverErrors: 0, maintenance503s: 0 };
+  for (const [lg, name] of [["us", "us"], ["eu", "eu"], ["apex", "apex"]]) {
+    for (const { row, entry } of caddyEntries({ layout, lg, sinceMs, name })) {
+      if (row.level !== "error") continue;
+      if (isMaintenanceResponse(entry)) counts.maintenance503s += 1;
+      else counts.serverErrors += 1;
+    }
+  }
+  return counts;
 }

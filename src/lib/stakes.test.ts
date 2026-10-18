@@ -4,6 +4,7 @@ import {
   playoffOutlookShown,
   remainingRegular,
   seasonScenarioReport,
+  stakesCardTitle,
   type StakesMatchRow,
 } from "./stakes";
 import { computeStandings } from "./standings";
@@ -252,5 +253,41 @@ describe("playoffOutlookShown", () => {
         row({ id: "w2", week: 2 }),
       ]),
     ).toBe(true);
+  });
+});
+
+describe("stakesCardTitle", () => {
+  const LA = "America/Los_Angeles";
+  const BERLIN = "Europe/Berlin";
+  // Sun 4 Oct 2026, 6:00 PM in Los Angeles (PDT): Mon 01:00 UTC.
+  const usKickoff = new Date(Date.UTC(2026, 9, 5, 1, 0));
+  // Wed 7 Oct 2026, 20:00 in Berlin (CEST): 18:00 UTC.
+  const euKickoff = new Date(Date.UTC(2026, 9, 7, 18, 0));
+
+  it("says tonight only on match day, on the league's clock", () => {
+    // 9 AM Sunday in Los Angeles is still Sunday there, though UTC is a day
+    // behind the kickoff's UTC date.
+    expect(stakesCardTitle(usKickoff, Date.UTC(2026, 9, 4, 16, 0), LA)).toBe(
+      "Tonight's stakes",
+    );
+    expect(stakesCardTitle(euKickoff, Date.UTC(2026, 9, 7, 8, 0), BERLIN)).toBe(
+      "Tonight's stakes",
+    );
+  });
+
+  it("says what's at stake on the days before, and after midnight", () => {
+    expect(stakesCardTitle(usKickoff, Date.UTC(2026, 9, 2, 19, 0), LA)).toBe(
+      "What's at stake",
+    );
+    // 00:30 Thursday in Berlin, still Wednesday in UTC.
+    expect(
+      stakesCardTitle(euKickoff, Date.UTC(2026, 9, 7, 22, 30), BERLIN),
+    ).toBe("What's at stake");
+  });
+
+  it("has no tonight for an untimed fixture", () => {
+    expect(stakesCardTitle(null, Date.UTC(2026, 9, 7, 8, 0), BERLIN)).toBe(
+      "What's at stake",
+    );
   });
 });
