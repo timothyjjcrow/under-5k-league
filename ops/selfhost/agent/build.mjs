@@ -8,7 +8,7 @@
 import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { loadLeagueEnv, openRedactedLog, writeJsonAtomic } from "./context.mjs";
-import { AgentError, BIN, MIN_BUILD_FREE_BYTES, USERS, makeReleaseId } from "./layout.mjs";
+import { AgentError, BIN, MIN_BUILD_FREE_BYTES, RELEASE_WRITABLE_DIRS, USERS, makeReleaseId } from "./layout.mjs";
 import { asUser, must, systemdRunArgs } from "./runner.mjs";
 
 export const ENV_GATE_LINE = "Production environment validation passed.";
@@ -149,6 +149,25 @@ export async function lockDownTree(runner, dir, group, code) {
   await must(runner, code, BIN.chmod, ["-R", "g+rX,g-w,o-rwx", dir]);
 }
 
+/**
+ * Every part of `relative` under `dir` that exists must be a real directory.
+ * Root re-owns these folders for the league user, so a link the build left in
+ * their place (even one inside the release) would hand it something else.
+ */
+function requireRealDirs(dir, relative) {
+  let current = dir;
+  for (const part of relative.split("/")) {
+    current = path.join(current, part);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return; // Missing from here down: `install -d` creates it.
+    }
+    if (!stat.isDirectory()) throw new AgentError("lockdown_failed");
+  }
+}
+
 /** systemd-run's own summary: "Memory peak: 1.5G" (systemd 255), in MB. */
 export function parseMemoryPeak(line) {
   const match = /Memory peak:\s*([\d.]+)([BKMGT])/.exec(line);
@@ -260,12 +279,17 @@ export async function buildRelease(ctx, lg, commit) {
       if (!existsSync(path.join(dir, artifact))) throw new AgentError("artifact_missing");
     if (readdirSync(staticDir).length === 0) throw new AgentError("artifact_missing");
 
-    // 8. Root owns the release; the league user can read it and write only .next/cache.
+    // 8. Root owns the release; the league user can read it and write only
+    // the folders `next start` writes. The build makes no route-cache, and
+    // without it every response-cache write fails on the read-only tree.
     const leagueUser = USERS.league(lg);
-    const cache = path.join(dir, ".next/cache");
     await lockDownTree(runner, dir, leagueUser, "lockdown_failed");
-    await must(runner, "lockdown_failed", BIN.install, ["-d", "-o", leagueUser, "-g", leagueUser, "-m", "0700", cache]);
-    await must(runner, "lockdown_failed", BIN.chown, ["-R", "-P", "-h", `${leagueUser}:${leagueUser}`, cache]);
+    for (const relative of RELEASE_WRITABLE_DIRS) requireRealDirs(dir, relative);
+    for (const relative of RELEASE_WRITABLE_DIRS) {
+      const writable = path.join(dir, relative);
+      await must(runner, "lockdown_failed", BIN.install, ["-d", "-o", leagueUser, "-g", leagueUser, "-m", "0700", writable]);
+      await must(runner, "lockdown_failed", BIN.chown, ["-R", "-P", "-h", `${leagueUser}:${leagueUser}`, writable]);
+    }
 
     // 9. Add (never replace) this build's chunks to the union dir Caddy serves.
     // World-readable: Caddy runs as caddy, and these files are public anyway.
