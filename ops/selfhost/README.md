@@ -30,7 +30,7 @@ Browser ─> Cloudflare edge ─> tunnel (outbound from the box) ─> cloudflare
                            ├─ eu.ggd2l.com      ─> 3011 (eu@a) | 3012 (eu@b)
                            └─ ggd2l.com, www    ─> 302 https://us.ggd2l.com{uri}
 PostgreSQL 18 127.0.0.1:5432: ggd2l_us, ggd2l_eu (ld2l_restore_test only during drills)
-Lobby bot 127.0.0.1:8090 <─ the sites over loopback once it moves here (the relay Worker until then)
+Lobby bot 127.0.0.1:8090 <─ the sites over loopback (since 2026-10-18; the relay Worker is the rollback)
 Cloudflare Workers: the minute scheduler ─> https://{us,eu}.ggd2l.com/api/cron/automation
 R2 bucket ggd2l-backups: age-encrypted dumps and config archives
 ```
@@ -516,7 +516,7 @@ and delete the plaintext.
 reads the local secret files and installs the partial on the box through ssh's
 stdin (it prints only key names). A production partial points the site at the
 lobby bot on the box (`DOTA_LOBBY_BOT_URL=http://127.0.0.1:8090`);
-`--bot-via-relay` keeps the relay's URL while the bot still runs on the Mac.
+`--bot-via-relay` writes the relay's URL instead (the rollback, or a bot back on the Mac).
 The env contract accepts only those two in production. Then on the box,
 `sudo bash /root/ggd2l-kit/ops/selfhost/cutover/compose-env.sh <lg> [--keep-secrets]`
 adds the app-role database URL and fresh AUTH, CRON and BACKUP_RECEIPT secrets

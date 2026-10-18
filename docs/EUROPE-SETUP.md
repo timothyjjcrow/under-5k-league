@@ -251,10 +251,10 @@ secret; database/session/Discord/scheduler secrets remain separate. There is
 **one shared active lobby**: a request from either league receives `BUSY` while
 the other owns the worker. This does not merge any league data or seasons.
 
-The worker runs on the Mac until the bot moves to the box
-(`ggd2l-bot.service`, [DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md#on-the-box)); the
-move keeps the same Steam account, state, relay and regions, so nothing here
-changes for Europe.
+The worker runs on the box (`ggd2l-bot.service`, since 2026-10-18;
+[DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md#on-the-box)), which both leagues call over
+loopback; the move kept the same Steam account, state and regions, so nothing
+here changed for Europe.
 
 The shared relay is deployed as version
 `1445c2cb-19a4-4852-9d09-09e2c027c8b0`. The existing idle Mac service was safely
