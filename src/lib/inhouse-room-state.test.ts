@@ -106,10 +106,11 @@ describe("the room poll's source", () => {
     expect(hold).toBeGreaterThan(reads[0]);
     expect(reads[1]).toBeGreaterThan(hold);
     expect(poll).toBeGreaterThan(reads[1]);
-    // Only a client that shows the version just read is held, and the
-    // reply says whether it was (the client backs off a churning version).
+    // Only a client that shows the version just read is held, never while
+    // the process is stopping, and the reply says whether it was (the client
+    // backs off a churning version, or a stopping slot).
     expect(branch).toMatch(
-      /const held =\s*hold !== null && hold\.since === inhouseRoomVersionToken\(version\);\s*if \(hold && held\) \{/,
+      /const held =\s*hold !== null &&\s*hold\.since === inhouseRoomVersionToken\(version\) &&\s*!inhouseRoomShuttingDown\(\);\s*if \(hold && held\) \{/,
     );
     expect(branch).toMatch(/roomVersion: inhouseRoomVersionToken\(version\),\s*held,/);
     // A client that went away gets no poll.

@@ -579,6 +579,32 @@ describe("the long-poll's back-off from a version that never stops moving", () =
     expect(inhousePollDelay({ ...o, startedAgoMs: gap })).toBe(0);
   });
 
+  // The bound's limit, stated and pinned (DECISIONS 2026-10-18): a writer
+  // paced just slower than the 1s gap gets every request held, then woken by
+  // its next publish, so the streak never starts and tabs stay at about one
+  // request a second. Accepted: one client polling directly costs as much.
+  it("a no-op every 1.1s holds a spectator at about one request a second, every reply held", () => {
+    const PUBLISH_EVERY_MS = 1_100;
+    let streak = 0;
+    let t = 0;
+    let requests = 0;
+    while (t < 60_000) {
+      requests += 1;
+      // Held until the next publish lands (the version matched its since).
+      const answeredAt = Math.ceil((t + 1) / PUBLISH_EVERY_MS) * PUBLISH_EVERY_MS + 20;
+      streak = inhouseUnheldStreak(streak, { askedHold: true, held: true });
+      t = answeredAt + inhousePollDelay({
+        ...spectator,
+        longPoll: true,
+        startedAgoMs: answeredAt - t,
+        unheldStreak: streak,
+      });
+    }
+    expect(streak).toBe(0);
+    expect(requests).toBeGreaterThan(45);
+    expect(requests).toBeLessThanOrEqual(60_000 / MIN);
+  });
+
   it("a churning room settles at the ladder's request rate, and a held reply brings the 1s gap back", () => {
     // One writer moves the version faster than any request can be held, as
     // no-op mutations at the route's 300 a minute do. Each request is

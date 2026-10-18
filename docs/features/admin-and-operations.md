@@ -374,8 +374,10 @@ respect there:
   (`TimeoutStopSec`), which covers the cron's 45-second budget and the
   `after()` drain; route `maxDuration` exports do nothing on the box. Held
   `/inhouse` requests don't add to it: on SIGTERM every hold answers at
-  once (`inhouse-room-wait.ts`), so a stop waits for one ordinary poll, not
-  a 25s hold.
+  once (`inhouse-room-wait.ts`), so a slot Caddy no longer routes to stops
+  after one ordinary poll, not a 25s hold. A restart of the live slot still
+  serves new requests on Caddy's open connections until it exits, answered
+  unheld so tabs fall back to their ladder.
 - **Exactly one clock.** No systemd timer, in-process cron or monitor calls
   `/api/cron/automation`; a new deadline gets a wake-up in
   `src/lib/automation-gate.ts`, never a timer of its own.

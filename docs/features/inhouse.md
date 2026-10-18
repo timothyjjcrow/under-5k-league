@@ -176,7 +176,12 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     exit; where nothing else listens it hands the signal back, so a script
     or a test worker still exits). It settles every waiter as a deadline,
     so each answers through the ordinary poll, and a new hold answers at
-    once from then on.
+    once from then on, reported unheld (`held: false`) so the tab backs off
+    to its ladder. A slot Caddy no longer routes to (a rollback or retire
+    after a promote) then drains in one poll. One Caddy still routes to (a
+    restart of the live slot) keeps getting requests on its open
+    connections until it exits, at the ladder's rate, within
+    `TimeoutStopSec`.
   - **The waiter registry is one per process, on `globalThis`**
     (`src/lib/inhouse-room-wait.ts`, a leaf), with the snapshot's publish
     count: a `next start` process loads `src/lib` twice (route handlers in
@@ -975,8 +980,13 @@ Every transition is a guarded claim; keep it that way (general rules:
     From the second reply in a row that comes back unheld (`held: false`,
     counted by `inhouseUnheldStreak`) the gap doubles per reply up to the
     ladder rate of the phase (`inhouseLongPollGapMs`), and a held reply puts
-    it back to 1s; a member's own clocked stage keeps 1s. A churned request
-    is never held, so no server-side floor on wakes would bind it.
+    it back to 1s; a member's own clocked stage keeps 1s. That bounds churn
+    faster than the 1s gap. A writer paced just slower (a no-op every
+    1-2s) gets every request held and woken, so tabs stay at about one
+    request a second, bounded only by `LONG_POLL_MIN_GAP_MS`: no more than
+    one client could cost by polling directly within the per-IP state limit,
+    so it is accepted (DECISIONS 2026-10-18) rather than given a server-side
+    wake floor that would slow every real change.
   - **A dead connection shows later while held (accepted, 2026-10-18).**
     `usePollHealth` locks the room and says "Connection lost" at
     `ROOM_POLL_FAIL_THRESHOLD` (3) failures in a row, and a request that

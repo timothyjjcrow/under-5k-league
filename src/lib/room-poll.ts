@@ -339,12 +339,14 @@ export function inhouseUnheldStreak(
  * and no-op mutations included, so one writer that keeps the version moving
  * (any signed-in account pressing Leave while not queued, up to the route's
  * 300 mutations a minute) would hold every visible tab at one request a
- * second, where the ladder costs one per 3-10s. A churned request is never
- * held, so no server-side floor on wakes would bind it; the bound is here.
- * From the second unheld reply in a row (`unheldStreak`, inhouseUnheldStreak)
- * the gap doubles per reply, up to the ladder rate for the current phase
- * (inhousePollCadence), so churn costs no more than the ladder did; a held
- * reply puts it back to 1s. A member in their own game's clocked stage
+ * second, where the ladder costs one per 3-10s. Churn faster than the 1s gap
+ * comes back unheld: from the second unheld reply in a row (`unheldStreak`,
+ * inhouseUnheldStreak) the gap doubles per reply, up to the ladder rate for
+ * the current phase (inhousePollCadence); a held reply puts it back to 1s.
+ * A writer paced just slower than the gap (a no-op every 1-2s) gets every
+ * request held and woken, so it still holds tabs at about one request a
+ * second, bounded only by LONG_POLL_MIN_GAP_MS: accepted, since one client
+ * can cost as much by polling directly within the per-IP state limit. A member in their own game's clocked stage
  * (ready check, vote, draft) keeps 1s: their changes come seconds apart and
  * each one is a deadline.
  */

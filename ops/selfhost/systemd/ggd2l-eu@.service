@@ -34,8 +34,10 @@ ExecStartPre=/usr/bin/rm -rf .next/cache/fetch-cache
 ExecStart=/usr/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p ${PORT} --keepAliveTimeout 75000
 KillSignal=SIGTERM
 # Covers the automation pass's 45 s budget and the after() drain. Held
-# /inhouse requests answer at once on SIGTERM (inhouse-room-wait.ts), so
-# they add one ordinary poll, not a 25 s hold.
+# /inhouse requests answer at once on SIGTERM (inhouse-room-wait.ts), so a
+# slot Caddy no longer routes to drains in one ordinary poll, not a 25 s
+# hold; one it still routes to (a restart of the live slot) serves new
+# requests on open connections until it exits, within this timeout.
 TimeoutStopSec=60
 SuccessExitStatus=143
 Restart=on-failure

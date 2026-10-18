@@ -34,7 +34,10 @@ import {
   publishInhouseRoomChange,
   readInhouseRoomVersion,
 } from "@/lib/inhouse-room-version";
-import { parseInhouseHold } from "@/lib/inhouse-room-wait";
+import {
+  inhouseRoomShuttingDown,
+  parseInhouseHold,
+} from "@/lib/inhouse-room-wait";
 import {
   readBoundedJsonObject,
   requireJsonContentType,
@@ -122,7 +125,13 @@ export async function POST(req: NextRequest) {
       getSessionUser(),
       readInhouseRoomVersion(),
     ]);
-    const held = hold !== null && hold.since === inhouseRoomVersionToken(version);
+    // A stopping process answers at once, and says so (unheld): a tab then
+    // backs off to its ladder rather than re-polling every second while
+    // Caddy still routes to this slot (a restart of the live one).
+    const held =
+      hold !== null &&
+      hold.since === inhouseRoomVersionToken(version) &&
+      !inhouseRoomShuttingDown();
     if (hold && held) {
       // The client shows this version: wait for news, then authorize and
       // read again, as a fresh request would.

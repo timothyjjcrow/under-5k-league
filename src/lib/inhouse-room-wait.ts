@@ -161,6 +161,16 @@ export function inhouseRoomPublishMark(): number {
   return registry.generation + registry.landed;
 }
 
+/**
+ * The process is stopping (SIGTERM): holds answer at once. A slot Caddy still
+ * routes to keeps getting requests on its open connections until it exits,
+ * so the route reports them unheld and the room backs off to its ladder
+ * instead of re-polling every second.
+ */
+export function inhouseRoomShuttingDown(): boolean {
+  return registry.shuttingDown;
+}
+
 /** Held requests in this process, for tests and diagnostics. */
 export function heldInhouseRoomRequests(): number {
   return registry.waiters.size;

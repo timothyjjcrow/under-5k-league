@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
   readInhouseRoomVersion: vi.fn(),
   publishInhouseRoomChange: vi.fn(),
   inhouseRoomHoldMark: vi.fn(),
+  inhouseRoomShuttingDown: vi.fn(() => false),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -58,6 +59,10 @@ vi.mock("@/lib/inhouse-service", () => ({
 vi.mock("@/lib/inhouse-room-state", () => ({
   pollInhouseState: mocks.pollInhouseState,
   holdInhouseRoomPoll: mocks.holdInhouseRoomPoll,
+}));
+vi.mock("@/lib/inhouse-room-wait", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/inhouse-room-wait")>()),
+  inhouseRoomShuttingDown: mocks.inhouseRoomShuttingDown,
 }));
 vi.mock("@/lib/inhouse-room-version", () => ({
   readInhouseRoomVersion: mocks.readInhouseRoomVersion,
@@ -693,5 +698,32 @@ describe("POST /api/inhouse request boundary", () => {
     expect((await response.json()).error).toMatch(/unknown action/i);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+});
+
+describe("a stopping process", () => {
+  beforeEach(() => {
+    mocks.getSessionUser.mockResolvedValue(user);
+    mocks.clientIp.mockReturnValue("203.0.113.9");
+    mocks.rateLimit.mockReturnValue({ allowed: true, retryAfterMs: 0 });
+    mocks.inhouseRoomHoldMark.mockReturnValue(0);
+    mocks.readInhouseRoomVersion.mockResolvedValue(VERSION);
+    mocks.pollInhouseState.mockResolvedValue({ state, invalidateGate: false });
+    mocks.holdInhouseRoomPoll.mockReset();
+  });
+
+  // SIGTERM answers every hold at once, but Caddy keeps sending a slot it
+  // still routes to new requests on open connections: those must read as
+  // unheld, or every tab re-polls once a second until the slot exits.
+  it("answers a current `since` at once and says it was not held", async () => {
+    mocks.inhouseRoomShuttingDown.mockReturnValue(true);
+    try {
+      const response = await POST(request({ action: "state", since: VERSION, holdMs: 25_000 }));
+      expect(response.status).toBe(200);
+      expect(mocks.holdInhouseRoomPoll).not.toHaveBeenCalled();
+      expect((await response.json()).held).toBe(false);
+    } finally {
+      mocks.inhouseRoomShuttingDown.mockReturnValue(false);
+    }
   });
 });
