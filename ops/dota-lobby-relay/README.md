@@ -165,7 +165,7 @@ action, or `releasing`/`over` with any value but `true`, turns the reply into
 the spec asked with `withLifecycle: true`, and only as `true`: `releasing`
 while a release is pending on the bot's active claim (a running game's release
 waits for its postgame), and `over` once a played game's end showed in Dota
-(its postgame, not "not scored"). See
+with a winner (never "not scored", nor an outcome Dota hasn't named yet). See
 [DOTA-LOBBY-BOT: Protocol](../../docs/DOTA-LOBBY-BOT.md#protocol).
 
 `players` is the seat report. The bot includes it only when the spec asked
