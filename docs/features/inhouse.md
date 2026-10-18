@@ -22,9 +22,9 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
   one per game slot** (`INHOUSE_ACTIVE_STATUSES`, `INHOUSE.MAX_LIVE_GAMES`;
   see "Two games at once" below). A lobby is played from team lock:
   `INHOUSE_PLAYING_STATUSES` is READY and IN_PROGRESS, and Start is optional.
-  Both IN_PROGRESS writers (`startGame`, the bot launch in
-  `src/app/api/dota-lobby/route.ts`) are guarded on READY and stamp
-  `startedAt`. AWAITING_RESULT is a game marked over whose result is on the
+  Both IN_PROGRESS writers (`startGame`, and the bot launch
+  `markInhouseGameStartedFromBot`, run by a lobby panel's read and by the
+  worker's bot read) are guarded on READY and stamp `startedAt`. AWAITING_RESULT is a game marked over whose result is on the
   way: not live, not playing, but a result still lands on it
   (`INHOUSE_RESULT_STATUSES`; see "Game over" below).
 - **Two chains run the resolvers; keep them the same SET.** `getInhouseState`
@@ -413,7 +413,9 @@ Every transition is a guarded claim; keep it that way (general rules:
 
 - **The claims:** `applyResult` on `status in INHOUSE_RESULT_STATUSES` (a
   cancel racing the OpenDota fetch wins); `finishGame` on PLAYING and
-  `giveUpOnResult` on AWAITING_RESULT (see "Game over"); `cancelLobby` inside its transaction
+  `giveUpOnResult` on AWAITING_RESULT (see "Game over"); `endInhouseGameFromBot`
+  on PLAYING (the bot saw Dota's postgame; the same claim as `finishGame`,
+  requeuing nobody); `markInhouseGameStartedFromBot` on READY; `cancelLobby` inside its transaction
   (loses to a landed result and requeues nobody); `applyPick` on the turn and on
   the target row `{team: null}` (a double-click is one turn), auto-assigning
   the last pool player; `resolveCaptainVote` on `CAPTAIN_VOTE → DRAFTING`
@@ -1153,6 +1155,9 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
   admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+  The bot-driven transitions (the auto-end at the bot's postgame, the
+  IN_PROGRESS stamp, releases on close, BUSY's self-heal) are raced in
+  `test/integration/inhouse-bot-lifecycle.itest.ts` and `dota-lobby.itest.ts`.
   `e2e/zz4-inhouse.spec.ts` also checks the room's one header row in every
   stage at 375 and 1280 (one stage strip on the right step, Sound on its
   line, no sideways scroll).
