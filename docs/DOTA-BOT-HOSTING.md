@@ -1,6 +1,6 @@
 # Dota bot hosting options
 
-The bot runs on the league's own box (`ggd2l-1`, the DigitalOcean droplet that serves both sites) as `ggd2l-bot.service`, where the sites call it over loopback (`http://127.0.0.1:8090`). **Status: planned:** it moves there from this Mac at the next quiet window (Tim's call, 2026-10-18; [DOTA-LOBBY-BOT: On the box](DOTA-LOBBY-BOT.md#on-the-box)); until then it runs on the Mac and the sites reach it through the Cloudflare relay. The box costs nothing extra for the bot, so no separate VM is needed.
+The bot runs on the league's own box (`ggd2l-1`, the DigitalOcean droplet that serves both sites) as `ggd2l-bot.service`, where the sites call it over loopback (`http://127.0.0.1:8090`). It has run there since 2026-10-18 ([DOTA-LOBBY-BOT: On the box](DOTA-LOBBY-BOT.md#on-the-box)); the Mac setup below is the fallback, and the Cloudflare relay the rollback path. The box costs nothing extra for the bot, so no separate VM is needed.
 
 One bot hosts one in-house game at a time, until that game's postgame (the Game Coordinator ignores a Leave while a game runs), with Captains Mode, US East and league ticket 20004. A second game meanwhile is hosted by hand ([DECISIONS 2026-10-18](DECISIONS.md)); two bot-hosted games at once would need a second Steam bot account. Valve runs the actual game server. The bot needs Node, a Steam session and a small persistent state directory; it does not need Dota installed, a GPU, or ChatGPT running.
 
@@ -29,7 +29,7 @@ The relay is small enough to be expected to fit Cloudflare's free tier: SQLite D
 
 ## Running on this Mac
 
-This is how the bot runs until it moves to the box. The LaunchAgent starts at user login and continues after ChatGPT closes. The installed keep-awake option prevents idle system sleep while the bot runs. Keep the Mac connected to power, online and open; screen lock/display-off is fine. Closing the lid, logging out or shutting down interrupts availability. Apple's [Mac sleep settings](https://support.apple.com/en-gb/guide/mac-help/mchle41a6ccd/mac) describe the power controls.
+This is how the bot ran until 2026-10-18, and how it runs again if it is ever rolled back to the Mac. The LaunchAgent starts at user login and continues after ChatGPT closes. The installed keep-awake option prevents idle system sleep while the bot runs. Keep the Mac connected to power, online and open; screen lock/display-off is fine. Closing the lid, logging out or shutting down interrupts availability. Apple's [Mac sleep settings](https://support.apple.com/en-gb/guide/mac-help/mchle41a6ccd/mac) describe the power controls.
 
 From `ops/dota-lobby-bot`:
 

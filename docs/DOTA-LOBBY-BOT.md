@@ -4,18 +4,16 @@ The default rollout is **one bot for the league's in-house games**, using **Capt
 
 ## Architecture and research
 
-Lobby creation uses a Steam client session and the Dota Game Coordinator (GC). The existing Steam Web API key/OpenID login cannot supply that session, and signing into the desktop Steam app does not sign in the worker. The web app sends authenticated requests to the separate Node 22 service in `ops/dota-lobby-bot`. While the bot runs on the Mac, those go through `ops/dota-lobby-relay` on Cloudflare: the bot opens an outbound WebSocket to the relay, so the Mac needs no public IP, inbound port, domain or tunnel. Once the bot runs on the league's box, beside both sites, the sites call it directly on `http://127.0.0.1:8090` ([On the box](#on-the-box)). Either way the bot stays logged in to Steam.
+Lobby creation uses a Steam client session and the Dota Game Coordinator (GC). The existing Steam Web API key/OpenID login cannot supply that session, and signing into the desktop Steam app does not sign in the worker. The web app sends authenticated requests to the separate Node 22 service in `ops/dota-lobby-bot`. The bot runs on the league's box, beside both sites, and the sites call it directly on `http://127.0.0.1:8090` ([On the box](#on-the-box)). It still opens an outbound WebSocket to `ops/dota-lobby-relay` on Cloudflare, the path the sites used while it ran on Tim's Mac (no public IP, inbound port, domain or tunnel needed); that path stays as the rollback until the relay is retired. Either way the bot stays logged in to Steam.
 
-The worker runs on macOS or Linux with Node 22 and persistent private storage. **Status: planned:** it moves from the Mac to the box at the next quiet window (Tim's call, 2026-10-18), and runs on the Mac until then. It does not need the Steam desktop app, the Dota download, a GPU, or ChatGPT to remain open. A Mac running the bot can coexist with a PC playing Dota on a different Steam account. Windows would require a Linux environment such as WSL; that path has not been tested.
+The worker runs on macOS or Linux with Node 22 and persistent private storage. It has run on the box since 2026-10-18 13:42Z ([On the box](#on-the-box)); the Mac's LaunchAgent is stopped and kept only as a fallback. It does not need the Steam desktop app, the Dota download, a GPU, or ChatGPT to remain open. A Mac running the bot can coexist with a PC playing Dota on a different Steam account. Windows would require a Linux environment such as WSL; that path has not been tested.
 
 ```mermaid
 flowchart LR
   Captain[Captain or admin] --> Site["GGD2L site (the box)"]
-  Site -->|"until the move: authenticated HTTPS"| Relay[Cloudflare relay]
-  Mac["Lobby bot on the Mac (until the move)"] -->|Outbound authenticated WSS| Relay
-  Site -->|"after the move: http://127.0.0.1:8090"| Box["Lobby bot on the box"]
-  Mac --> Steam[Steam / Dota coordinator]
-  Box --> Steam
+  Site -->|"http://127.0.0.1:8090"| Box["Lobby bot on the box"]
+  Box -->|"Outbound authenticated WSS (rollback path)"| Relay[Cloudflare relay]
+  Box --> Steam[Steam / Dota coordinator]
 ```
 
 Primary sources inspected September 4, 2026:
@@ -67,7 +65,7 @@ Retain the entire private state directory, including `steam-auth.json`, `steam/`
 
 On the league's box the bot is `ggd2l-bot.service` ([On the box](#on-the-box)). For another Linux host, adapt `ld2l-dota-bot.service` to your checkout and Node 22 binary. Create the `ld2l-bot` OS user, `/var/lib/ld2l-dota-bot` owned by that user, and a private `/etc/ld2l-dota-bot.env` containing the worker variables with `DOTA_BOT_STATE_DIR=/var/lib/ld2l-dota-bot`. Perform the interactive first login as that OS user with those same variables. Install and enable the unit only after login works.
 
-The control server binds to `127.0.0.1:8090` and answers only `POST /lobby` with `Authorization: Bearer <DOTA_LOBBY_BOT_SECRET>`, bodies of at most 8 KiB. On the box the sites call it there. While the bot runs on the Mac, the deployed sites reach it through the [relay](../ops/dota-lobby-relay/README.md), deployed at `https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`. The relay's two separate secrets authorize site requests and bot connections. Steam session tokens stay on the bot host. Relay requests expire after ten seconds and are never replayed; the controller keeps its own durable idempotency checks either way. An idle relay connection uses Cloudflare WebSocket hibernation.
+The control server binds to `127.0.0.1:8090` and answers only `POST /lobby` with `Authorization: Bearer <DOTA_LOBBY_BOT_SECRET>`, bodies of at most 8 KiB. On the box the sites call it there. Before the move (2026-10-18) the deployed sites reached it through the [relay](../ops/dota-lobby-relay/README.md), deployed at `https://ggd2l-dota-lobby-relay.ggd2l.workers.dev`, which stays as the rollback path. The relay's two separate secrets authorize site requests and bot connections. Steam session tokens stay on the bot host. Relay requests expire after ten seconds and are never replayed; the controller keeps its own durable idempotency checks either way. An idle relay connection uses Cloudflare WebSocket hibernation.
 
 Worker-only configuration while the relay is in the path:
 
@@ -81,8 +79,8 @@ The relay connection turns itself off when both are unset. An independently mana
 In the **web app** environment, configure:
 
 ```dotenv
-# The relay's origin until the move; "http://127.0.0.1:8090" on the box after it.
-DOTA_LOBBY_BOT_URL="https://ggd2l-dota-lobby-relay.ggd2l.workers.dev"
+# The bot on the box (since 2026-10-18); the relay's origin is the rollback.
+DOTA_LOBBY_BOT_URL="http://127.0.0.1:8090"
 DOTA_LOBBY_BOT_SECRET="<same random secret as worker>"
 DOTA_INHOUSE_LEAGUE_ID="<numeric in-house ticket ID>"
 DOTA_SEASON_LOBBY_BOT_ENABLED="false"
@@ -161,7 +159,7 @@ Use `node macos-service.mjs stop` before signing in again or moving the bot to a
 
 ## On the box
 
-**Status: planned.** The bot moves to the league's box at the next quiet window (Tim's call, 2026-10-18): Tim present, no lobby active, never between 20:00 and 04:00 UTC. Until then it runs on the Mac under the LaunchAgent above. The box runbook is `ops/selfhost/README.md`.
+**Status: done.** The bot moved to the league's box on 2026-10-18 (Tim's call): `ggd2l-bot.service` from 13:42:56Z, Steam accepted the Mac's saved session with no new sign-in, and both leagues have called it over loopback since their live slots restarted at 13:44Z. The Mac's LaunchAgent is stopped (not uninstalled) and its `steam-auth.json` moved aside. The steps below are the runbook for a re-move or a rollback; the box runbook is `ops/selfhost/README.md`.
 
 `ggd2l-bot.service` runs the worker as the `ggd2l-bot` user from `/srv/ggd2l/bot/current/ops/dota-lobby-bot`, with its environment in `/etc/ggd2l/bot.env` (0600) and its private state in `/var/lib/ggd2l-bot` (0700), on `127.0.0.1:8090`. The unit itself sets `NODE_ENV`, `HOST`, `PORT` and the state directory. It restarts on failure after 30 seconds, under a 300 MB memory cap; once it is enabled, the box's heartbeat posts to the admin Discord channel when it has been inactive for four beats, about 20 minutes (alerts in `ops/selfhost/README.md`), and pings the healthchecks `bot` check while it runs, if that is configured. Its logs are `journalctl -u ggd2l-bot`.
 

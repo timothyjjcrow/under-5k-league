@@ -105,8 +105,10 @@ note before changing that area: it is required reading, not background.
   `league-announcement-outbox.ts`, the queue board in
   `inhouse-board-service.ts`, the #schedule status card in
   `league-status-service.ts`, bot-token calls only in `discord-roles.ts`.
-- **Lobby bot:** `ops/dota-lobby-bot` behind `ops/dota-lobby-relay`, driven by
-  `dota-lobby-service.ts` ([docs/DOTA-LOBBY-BOT.md](docs/DOTA-LOBBY-BOT.md)).
+- **Lobby bot:** `ops/dota-lobby-bot`, on the box as `ggd2l-bot.service`
+  since 2026-10-18; the sites call it over loopback (`http://127.0.0.1:8090`),
+  `ops/dota-lobby-relay` is the rollback path, and `dota-lobby-service.ts`
+  drives it ([docs/DOTA-LOBBY-BOT.md](docs/DOTA-LOBBY-BOT.md)).
 - **Hosting:** `ops/selfhost/` is the box kit: the release agent and its env
   contract, systemd units, Caddy, the Cloudflare Tunnel config, Postgres
   provisioning, backups and the shared smoke (`smoke/smoke.mjs`), with its
