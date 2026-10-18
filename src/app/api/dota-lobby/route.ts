@@ -142,6 +142,7 @@ export async function POST(req: NextRequest) {
         enabled: true,
         canControl: canControl && playable,
         canRelease: canControl,
+        playable,
         name: spec.name,
         password: spec.password,
         leagueId: spec.leagueId,

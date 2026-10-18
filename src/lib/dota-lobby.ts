@@ -44,12 +44,20 @@ export const LOBBY_PANEL_STARTED_POLL_MS = 60_000;
 
 /**
  * The panel's refresh interval for a bot lobby state, or null when it should
- * not refresh at all (no bot lobby yet, or the bot let it go).
+ * not refresh at all. With no bot lobby yet (or one the bot let go), a
+ * playable game keeps reading at the setup rate: any captain or admin can
+ * press Create, and every other panel of the game must see that lobby, its
+ * seats and Start without a reload (on 2026-10-17 only the presser's panel
+ * moved, so the admins and the other captain never saw a lobby). A game that
+ * is no longer playable has nothing left to wait for.
  */
 export function lobbyPanelPollMs(
   state: DotaLobbyStatus["state"] | undefined,
+  playable: boolean,
 ): number | null {
-  if (!state || state === "idle" || state === "released") return null;
+  if (!state) return null;
+  if (state === "idle" || state === "released")
+    return playable ? LOBBY_PANEL_POLL_MS : null;
   return state === "started" ? LOBBY_PANEL_STARTED_POLL_MS : LOBBY_PANEL_POLL_MS;
 }
 
@@ -118,6 +126,12 @@ export type DotaLobbyView = {
   direName: string;
   /** `lobbyInviteScope`, as the route decided it for this viewer. */
   inviteScope: LobbyInviteScope | null;
+  /**
+   * The game can still use the bot (an in-house game with its teams locked
+   * and not finished; a season match open for play), whoever views it. The
+   * panel keeps reading a playable game that has no bot lobby yet.
+   */
+  playable: boolean;
   status: DotaLobbyStatus;
   /**
    * Who of the roster is where. Only from a bot that invites, while its lobby

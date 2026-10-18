@@ -156,16 +156,18 @@ export function DotaLobbyControls({
   useEffect(() => {
     onAvailability?.(availability);
   }, [availability, onAvailability]);
+  const playable = view?.playable === true;
   useEffect(() => {
-    // Fast while the bot sets the lobby up, once a minute once the game runs
-    // (lobbyPanelPollMs says why), never without a bot lobby.
-    const every = lobbyPanelPollMs(state);
+    // Fast while the bot sets the lobby up, or while a playable game waits
+    // for anyone to create it; once a minute once the game runs
+    // (lobbyPanelPollMs says why).
+    const every = lobbyPanelPollMs(state, playable);
     if (every === null) return;
     const timer = setInterval(() => {
       if (document.visibilityState === "visible") void request("status");
     }, every);
     return () => clearInterval(timer);
-  }, [state, request]);
+  }, [state, playable, request]);
 
   if (!lobbyPanelVisible(audience, availability)) return null;
   // Joiners can't create, start or release the lobby, so their copy says who

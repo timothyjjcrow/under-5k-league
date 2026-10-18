@@ -97,8 +97,10 @@ describe("DotaLobbyControls refresh (source)", () => {
     sourceFile("src/components/dota-lobby-controls.tsx").text,
   );
 
-  it("sets its interval from lobbyPanelPollMs(state)", () => {
-    expect(code).toMatch(/const every = lobbyPanelPollMs\(state\);/);
+  it("sets its interval from lobbyPanelPollMs(state, playable)", () => {
+    expect(code).toMatch(/const playable = view\?\.playable === true;/);
+    expect(code).toMatch(/const every = lobbyPanelPollMs\(state, playable\);/);
+    expect(code).toMatch(/\[state, playable, request\]\);/);
     expect(code).toMatch(/if \(every === null\) return;/);
     expect(code).toMatch(/setInterval\([^]*?\}, every\);/);
     expect(code).not.toMatch(/\b5000\b|5_000|60_000/);

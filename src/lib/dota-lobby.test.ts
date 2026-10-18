@@ -36,12 +36,37 @@ describe("lobbyPanelPollMs", () => {
     released: null,
   } satisfies Record<DotaLobbyStatus["state"], number | null>;
 
-  it.each(Object.entries(cases))("%s refreshes every %s ms", (state, every) => {
-    expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"])).toBe(every);
-  });
+  it.each(Object.entries(cases))(
+    "%s refreshes every %s ms once the game is over",
+    (state, every) => {
+      expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"], false)).toBe(
+        every,
+      );
+    },
+  );
+
+  // 2026-10-17: a captain pressed Create, and every other panel (the other
+  // captain's, the admins', the players') stayed on "No bot lobby yet" until
+  // the game started, so nobody else saw the seats, the invites or Start.
+  it.each(["idle", "released"] as const)(
+    "keeps reading a playable game with no bot lobby (%s) at the setup rate",
+    (state) => {
+      expect(lobbyPanelPollMs(state, true)).toBe(LOBBY_PANEL_POLL_MS);
+    },
+  );
+
+  it.each(Object.entries(cases).filter(([, every]) => every !== null))(
+    "reads %s at the same rate whether or not the game is playable",
+    (state, every) => {
+      expect(lobbyPanelPollMs(state as DotaLobbyStatus["state"], true)).toBe(
+        every,
+      );
+    },
+  );
 
   it("does not refresh before the bot has answered", () => {
-    expect(lobbyPanelPollMs(undefined)).toBeNull();
+    expect(lobbyPanelPollMs(undefined, true)).toBeNull();
+    expect(lobbyPanelPollMs(undefined, false)).toBeNull();
   });
 
   // Setup keeps the 5s read (seats, invites, the Start answer); the running
