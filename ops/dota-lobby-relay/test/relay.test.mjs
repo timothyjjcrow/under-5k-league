@@ -318,11 +318,47 @@ test("invited is a count from 0 to 20 that only an invite reply may carry", () =
     assert.equal(validReply(reply(body, 409), "invite"), false);
 });
 
+test("releasing and over are optional true flags on every lobby reply, and nothing else", () => {
+  for (const action of LOBBY_ACTIONS) {
+    for (const flags of [{ releasing: true }, { over: true }, { releasing: true, over: true }]) {
+      assert.equal(validReply(reply({ state: "started", lobbyId: "12345", matchId: "67890", ...flags }), action), true, JSON.stringify(flags));
+      assert.equal(validReply(reply({ state: "ready", players: PLAYERS, ...flags }), action), true);
+    }
+    assert.equal(validReply(reply({ state: "blocked", releasing: true }), action), true);
+    // Only true: a false, a string, a number or a null fails closed.
+    for (const value of [false, "true", 1, 0, null, {}, []]) {
+      assert.equal(validReply(reply({ state: "started", releasing: value }), action), false, `releasing ${JSON.stringify(value)}`);
+      assert.equal(validReply(reply({ state: "started", over: value }), action), false, `over ${JSON.stringify(value)}`);
+    }
+    // Still no unknown lifecycle keys.
+    for (const extra of [{ postgame: true }, { outcome: 2 }, { resyncing: true }])
+      assert.equal(validReply(reply({ state: "started", ...extra }), action), false, JSON.stringify(extra));
+  }
+  // An error reply never carries them.
+  assert.equal(validReply(reply({ code: "BUSY", releasing: true }, 409), "create"), false);
+});
+
+test("releasing and over dispatch through the relay unchanged", { timeout: 5_000 }, async (t) => {
+  const { post, connect } = await fixture(t);
+  const bot = await connect();
+  const spec = { key: "inhouse:fixture:1", withLifecycle: true };
+  const pending = post({ action: "release", spec });
+  const command = await bot.nextRequest();
+  assert.deepEqual(command.request, { action: "release", spec });
+  const body = { state: "started", lobbyId: "12345", matchId: "67890", releasing: true, over: true };
+  bot.ws.send(JSON.stringify({ id: command.id, status: 200, body }));
+  await assertResponse(await pending, 200, body);
+  const badPending = post({ action: "status", spec });
+  const bad = await bot.nextRequest();
+  bot.ws.send(JSON.stringify({ id: bad.id, status: 200, body: { state: "started", over: "yes" } }));
+  await assertResponse(await badPending, 409, { code: "STATE" });
+});
+
 test("health, active and unknown actions refuse the lobby-only reply fields", () => {
   const health = { online: true, steamId: "76561198000000001", activeKey: null, lobbyId: null, gameMode: null, serverRegion: null, leagueId: null };
   assert.equal(validReply(reply(health), "health"), true);
   assert.equal(validReply(reply({ key: null }), "active"), true);
-  for (const extra of [{ players: [] }, { players: PLAYERS }, { invited: 0 }]) {
+  for (const extra of [{ players: [] }, { players: PLAYERS }, { invited: 0 }, { releasing: true }, { over: true }]) {
     assert.equal(validReply(reply({ ...health, ...extra }), "health"), false);
     assert.equal(validReply(reply({ key: null, ...extra }), "active"), false);
   }
