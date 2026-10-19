@@ -70,67 +70,148 @@ export function signupDiscordRefusal(blocker: SignupDiscordBlocker): string {
   }
 }
 
-/**
- * One control on the step: an in-page link to the Discord card, which holds
- * the buttons that do the work, or a reload of /me.
- */
-export type SignupDiscordCta = {
-  kind: "card" | "recheck";
+/** One control on the checklist's Discord step. */
+export type SignupChecklistCta = {
+  kind: "oauth" | "invite" | "recheck";
   label: string;
 };
 
-export type SignupDiscordStep = {
-  title: string;
-  body: string;
-  ctas: SignupDiscordCta[];
+/** Where one step of the checklist stands. */
+export type SignupChecklistState = "done" | "current" | "locked" | "checking";
+
+export type SignupChecklistStep = {
+  key: "steam" | "discord" | "signup";
+  state: SignupChecklistState;
+  label: string;
+  detail: string;
+  /** Controls, on the Discord step only. */
+  ctas: SignupChecklistCta[];
 };
 
+/** The Discord step as the page can tell it. */
+export type SignupChecklistDiscord =
+  | { status: "blocked"; blocker: SignupDiscordBlocker }
+  /** A linked player's membership lookup is still on its way. */
+  | { status: "checking" }
+  /** Linked, and in the server when `inServer`; false = Discord didn't
+   *  say (or no bot), which never blocks but is never claimed either. */
+  | { status: "done"; inServer: boolean };
+
 /**
- * What /me shows in place of the signup form until the rule is met. The form
- * itself stays hidden: linking is a full-page round trip to Discord, so a
- * half-filled form would be lost on the way. The step says why and points at
- * the Discord card, as /me's next-steps list does: the card holds the link,
- * join and invite buttons and the consent text beside them, and no two
- * controls on /me share a name. "Check again" reloads /me, for a player who
- * joined with the invite or accepted the rules in Discord.
+ * What a player joining the season sees on /me while the Discord rule applies
+ * to them: Steam (done, they're signed in), Discord, then their signup. The
+ * Discord step carries the real buttons, so the next thing to do is right
+ * where they're looking, and the Discord card leaves its own out
+ * (`signupOwnsDiscord`): one button per action on the page. Its copy is one
+ * plain sentence on why (Tim's call: no ids, tokens or scopes here; the
+ * button says it joins the server, and Discord's own screen says the rest).
+ * The form shows under step 3 once Discord is done, never beside an
+ * unfinished step 2: linking is a full-page round trip, so a half-filled form
+ * would be lost. The invite appears only where it can finish the step (it
+ * joins the server; it never links an account), and "Check again" reloads /me
+ * after an invite join or accepting the rules in Discord.
  */
-export function signupDiscordStep(
-  blocker: SignupDiscordBlocker,
-  input: {
-    /** The OAuth consent also carries guilds.join (bot + guild configured). */
-    oneClick: boolean;
-    /** The linked account's username, when there is one. */
-    handle: string | null;
-  },
-): SignupDiscordStep {
-  const recheck: SignupDiscordCta = { kind: "recheck", label: "Check again" };
-  if (blocker === "link") {
-    return {
-      title: "Link your Discord to sign up",
-      body: input.oneClick
-        ? "Every player has to be in the league's Discord server: it's where captains, standins and admins reach you. The Discord card links your account and adds it to the server in one click, then the signup form opens here."
-        : "Every player has to link a Discord account and be in the league's server: it's where captains, standins and admins reach you. Link yours in the Discord card, then the signup form opens here.",
-      ctas: [{ kind: "card", label: "Link your Discord" }],
-    };
-  }
-  if (blocker === "join") {
-    const account = input.handle
-      ? `The Discord account you linked (@${input.handle})`
-      : "The Discord account you linked";
-    return {
-      title: "Join the league's Discord server to sign up",
-      body: `${account} isn't in the league's server yet, and every player has to be: it's where captains, standins and admins reach you. Join from the Discord card, then check again.`,
-      ctas: [
-        { kind: "card", label: "Get your linked account into the server" },
-        recheck,
-      ],
-    };
-  }
-  return {
-    title: "Accept the server's rules to sign up",
-    body: "You're in the league's Discord server, but you haven't accepted its rules yet, and until you do nobody can reach you there. Accept them in Discord, then check again.",
-    ctas: [recheck],
+export function signupChecklist(input: {
+  steamName: string;
+  discord: SignupChecklistDiscord;
+  /** The OAuth consent also carries guilds.join (bot + guild configured). */
+  oneClick: boolean;
+  /** The league has an invite link (Europe may not). */
+  hasInvite: boolean;
+  /** The linked account's username, when there is one. */
+  handle: string | null;
+  /** The OAuth callback's one-shot ?discord= code, if any. */
+  callback: string | null;
+}): SignupChecklistStep[] {
+  const steam: SignupChecklistStep = {
+    key: "steam",
+    state: "done",
+    label: "Steam",
+    detail: `Signed in as ${input.steamName}.`,
+    ctas: [],
   };
+  const invite = (label: string): SignupChecklistCta[] =>
+    input.hasInvite ? [{ kind: "invite", label }] : [];
+  const recheck: SignupChecklistCta = { kind: "recheck", label: "Check again" };
+  const discordStep = (
+    state: SignupChecklistState,
+    detail: string,
+    ctas: SignupChecklistCta[] = [],
+  ): SignupChecklistStep => ({ key: "discord", state, label: "Discord", detail, ctas });
+  let discord: SignupChecklistStep;
+  const d = input.discord;
+  if (d.status === "done") {
+    // A callback that couldn't finish the join, read while Discord isn't
+    // answering, keeps the invite on offer (the Discord card's rule): the
+    // player may sign up, but the note above it asks them to join.
+    const leftover = d.inServer
+      ? []
+      : input.callback === "join_failed"
+        ? invite("Join the server")
+        : input.callback === "joined_pending"
+          ? invite("Open Discord")
+          : [];
+    discord = discordStep(
+      "done",
+      d.inServer
+        ? input.handle
+          ? `Linked as @${input.handle}, and in the league's server.`
+          : "Linked, and in the league's server."
+        : input.handle
+          ? `Linked as @${input.handle}.`
+          : "Linked.",
+      leftover,
+    );
+  } else if (d.status === "checking") {
+    discord = discordStep("checking", "Checking the league's Discord…");
+  } else if (d.blocker === "link") {
+    discord = input.oneClick
+      ? discordStep(
+          "current",
+          "Link your Discord so teams and admins can contact you about the league. Complete this step to finish signing up.",
+          [{ kind: "oauth", label: "Link Discord & join the server" }],
+        )
+      : discordStep(
+          "current",
+          "Link your Discord and join the league's server so teams and admins can contact you about the league. Complete this step to finish signing up.",
+          [{ kind: "oauth", label: "Link Discord" }, ...invite("Join the server")],
+        );
+  } else if (d.blocker === "join") {
+    discord = discordStep(
+      "current",
+      `Your Discord${input.handle ? ` (@${input.handle})` : ""} is linked but isn't in the league's server yet. Join it so teams and admins can contact you, then finish signing up.`,
+      input.oneClick
+        ? [
+            { kind: "oauth", label: "Join the server" },
+            ...invite("Use the invite instead"),
+            recheck,
+          ]
+        : [...invite("Join the server"), recheck],
+    );
+  } else {
+    discord = discordStep(
+      "current",
+      "You're in the league's Discord, but you haven't accepted its rules yet. Accept them in Discord, then check again.",
+      [...invite("Open Discord"), recheck],
+    );
+  }
+  const signup: SignupChecklistStep =
+    discord.state === "done"
+      ? {
+          key: "signup",
+          state: "current",
+          label: "Your signup",
+          detail: "Fill in the form below.",
+          ctas: [],
+        }
+      : {
+          key: "signup",
+          state: "locked",
+          label: "Your signup",
+          detail: "Opens here once your Discord is done.",
+          ctas: [],
+        };
+  return [steam, discord, signup];
 }
 
 /** How it works' first step, saying what the rule asks for here. */

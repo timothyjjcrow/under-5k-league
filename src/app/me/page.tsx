@@ -26,13 +26,13 @@ import {
   type GuildMemberInfo,
 } from "@/lib/discord-roles";
 import {
+  signupChecklist,
   signupDiscordBlocker,
   signupDiscordJudged,
-  signupDiscordStep,
   type SignupDiscordPolicy,
 } from "@/lib/signup-discord";
 import { AccountDiscordCard } from "@/components/account-discord-card";
-import { SignupDiscordStepPanel } from "@/components/signup-discord-step";
+import { SignupChecklist } from "@/components/signup-checklist";
 import {
   AccountNextStepBanner,
   SignupNextSteps,
@@ -40,6 +40,7 @@ import {
 import {
   accountNextSteps,
   auctionRunning,
+  discordLinkNote,
   favoriteHeroSuggestions,
   fullPlayerChoiceOpen,
   mmrLeadLine,
@@ -363,11 +364,12 @@ export default async function MePage({
     dbUser?.discordId && guildCfg
       ? fetchGuildMember(dbUser.discordId, guildCfg)
       : Promise.resolve(null);
-  // Discord before a new signup (signup-discord.ts): until the linked account
-  // is in the league's server, the signup card shows that step in place of
-  // the form, from the facts saveRegistration judges. An unlinked player is
-  // known here; a linked one waits on the lookup above (behind <Suspense>),
-  // and an unknown answer shows the form, which the action then accepts.
+  // Discord before a new signup (signup-discord.ts): a player the rule
+  // judges sees the steps to join (Steam, Discord, their signup), from the
+  // facts saveRegistration judges, and the form only once Discord is done.
+  // Unlinked is known here; a linked player's membership waits on the lookup
+  // above (behind <Suspense>), and an unknown answer counts as done, as the
+  // action accepts it. Without a bot the link is all there is to check.
   const signupPolicy = signupDiscordPolicy();
   const signupGate: SignupGate =
     !signupDiscordJudged(reg?.status) || !signupPolicy.linkRequired
@@ -376,11 +378,14 @@ export default async function MePage({
         ? "link"
         : signupPolicy.membershipCheckable
           ? "membership"
-          : "none";
-  const signupStepInput = {
+          : "linked";
+  const checklistInput: ChecklistInput = {
+    steamName: dbUser?.name ?? user.name,
     // The consent carries guilds.join exactly when the Discord card's does.
     oneClick: signupPolicy.linkRequired && discordMutationsAllowed() && !!guildCfg,
+    hasInvite: !!DISCORD_INVITE_URL,
     handle: dbUser?.discordName || null,
+    callback: discordParam ?? null,
   };
 
   return (
@@ -442,9 +447,9 @@ export default async function MePage({
                         ? "You withdrew from this season."
                         : "You withdrew from this season. You can rejoin below."
                       : signupsOpen
-                      ? signupGate === "link"
-                        ? "Link your Discord, then fill this out to join the season."
-                        : "Fill this out to join the season."
+                      ? signupGate === "none"
+                        ? "Fill this out to join the season."
+                        : "Three steps to join the season."
                       : "Player signups are closed, but you can still register as a standin."
             }
             action={
@@ -815,7 +820,7 @@ export default async function MePage({
                 <SignupDiscordGate
                   gate={signupGate}
                   policy={signupPolicy}
-                  stepInput={signupStepInput}
+                  checklistInput={checklistInput}
                   memberInfo={memberInfo}
                 >
                 {returningPlan && previous ? (
@@ -1155,7 +1160,7 @@ export default async function MePage({
 
       <div className="min-w-0 space-y-6">
       <Suspense fallback={<section id="profile-discord" className="scroll-mt-24"><Card><CardBody><p role="status">Checking your Discord…</p></CardBody></Card></section>}>
-        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isCaptain={isCaptain} guildCfg={guildCfg} memberInfo={memberInfo} />
+        <ProfileDiscordSection dbUser={dbUser} discordParam={discordParam} isCaptain={isCaptain} signupOwnsDiscord={signupGate !== "none"} guildCfg={guildCfg} memberInfo={memberInfo} />
       </Suspense>
 
       <SteamDotaCard
@@ -1207,74 +1212,145 @@ async function AwayDatesSection({ userId }: { userId: string }) {
 }
 
 /** What the signup card can tell about the Discord rule before Discord answers. */
-type SignupGate = "none" | "link" | "membership";
+type SignupGate = "none" | "link" | "linked" | "membership";
 
-type SignupStepInput = Parameters<typeof signupDiscordStep>[1];
+type ChecklistInput = Omit<Parameters<typeof signupChecklist>[0], "discord">;
 
 /**
- * The signup form, or the Discord step in its place. "link" is known without
- * Discord; "membership" waits on the page's one member lookup and shows a
- * status line meanwhile, never the form: a form swapped out under a player
- * who had started typing would lose their answers.
+ * The steps to join, then the signup form, while the Discord rule applies.
+ * Two fixed slots, the steps and then the form, in every state: the form
+ * must keep its place in the tree when a first signup turns the steps off,
+ * or React remounts it and the open editor and its "Saved" collapse (the
+ * SavedSignupForm rule). "link" (unlinked) and "linked" (no bot to ask) are
+ * known without Discord; "membership" waits on the page's one member lookup,
+ * showing Discord as checking meanwhile and never the form: a form swapped
+ * out under a player who had started typing would lose their answers.
  */
 function SignupDiscordGate({
   gate,
   policy,
-  stepInput,
+  checklistInput,
   memberInfo,
   children,
 }: {
   gate: SignupGate;
   policy: SignupDiscordPolicy;
-  stepInput: SignupStepInput;
+  checklistInput: ChecklistInput;
   memberInfo: Promise<GuildMemberInfo>;
   children: ReactNode;
 }) {
-  if (gate === "none") return <>{children}</>;
-  if (gate === "link") {
-    return <SignupDiscordStepPanel step={signupDiscordStep("link", stepInput)} />;
+  return (
+    <>
+      <SignupChecklistSlot
+        gate={gate}
+        policy={policy}
+        checklistInput={checklistInput}
+        memberInfo={memberInfo}
+      />
+      <Suspense fallback={null}>
+        <SignupFormSlot gate={gate} policy={policy} memberInfo={memberInfo}>
+          {children}
+        </SignupFormSlot>
+      </Suspense>
+    </>
+  );
+}
+
+function SignupChecklistSlot({
+  gate,
+  policy,
+  checklistInput,
+  memberInfo,
+}: {
+  gate: SignupGate;
+  policy: SignupDiscordPolicy;
+  checklistInput: ChecklistInput;
+  memberInfo: Promise<GuildMemberInfo>;
+}) {
+  if (gate === "none") return null;
+  const note = discordLinkNote(checklistInput.callback ?? undefined, null);
+  if (gate === "link" || gate === "linked") {
+    return (
+      <SignupChecklist
+        steps={signupChecklist({
+          ...checklistInput,
+          discord:
+            gate === "link"
+              ? { status: "blocked", blocker: "link" }
+              : { status: "done", inServer: false },
+        })}
+        note={note}
+      />
+    );
   }
   return (
     <Suspense
       fallback={
-        <p role="status" className="text-sm text-muted">
-          Checking the league&apos;s Discord…
-        </p>
+        <SignupChecklist
+          steps={signupChecklist({
+            ...checklistInput,
+            discord: { status: "checking" },
+          })}
+        />
       }
     >
-      <SignupMembershipGate
+      <MembershipChecklist
         policy={policy}
-        stepInput={stepInput}
+        checklistInput={checklistInput}
         memberInfo={memberInfo}
-      >
-        {children}
-      </SignupMembershipGate>
+      />
     </Suspense>
   );
 }
 
-async function SignupMembershipGate({
+async function MembershipChecklist({
   policy,
-  stepInput,
+  checklistInput,
+  memberInfo,
+}: {
+  policy: SignupDiscordPolicy;
+  checklistInput: ChecklistInput;
+  memberInfo: Promise<GuildMemberInfo>;
+}) {
+  const info = await memberInfo;
+  const membership = info === null ? null : info.membership;
+  const blocker = signupDiscordBlocker({ policy, linked: true, membership });
+  return (
+    <SignupChecklist
+      steps={signupChecklist({
+        ...checklistInput,
+        discord: blocker
+          ? { status: "blocked", blocker }
+          : { status: "done", inServer: membership === "member" },
+      })}
+      note={discordLinkNote(checklistInput.callback ?? undefined, membership)}
+    />
+  );
+}
+
+/** The form's slot: shown once the Discord step is done, from the same rule. */
+async function SignupFormSlot({
+  gate,
+  policy,
   memberInfo,
   children,
 }: {
+  gate: SignupGate;
   policy: SignupDiscordPolicy;
-  stepInput: SignupStepInput;
   memberInfo: Promise<GuildMemberInfo>;
   children: ReactNode;
 }) {
-  const info = await memberInfo;
-  const blocker = signupDiscordBlocker({
-    policy,
-    linked: true,
-    membership: info === null ? null : info.membership,
-  });
-  return blocker ? (
-    <SignupDiscordStepPanel step={signupDiscordStep(blocker, stepInput)} />
-  ) : (
-    <>{children}</>
-  );
+  if (gate === "link") return null;
+  if (gate === "membership") {
+    const info = await memberInfo;
+    const blocker = signupDiscordBlocker({
+      policy,
+      linked: true,
+      membership: info === null ? null : info.membership,
+    });
+    if (blocker) return null;
+  }
+  return <>{children}</>;
 }
 
 /**
@@ -1300,10 +1376,12 @@ async function LiveSignupNextSteps({
   );
 }
 
-async function ProfileDiscordSection({ dbUser, discordParam, isCaptain, guildCfg, memberInfo: memberInfoPromise }: {
+async function ProfileDiscordSection({ dbUser, discordParam, isCaptain, signupOwnsDiscord, guildCfg, memberInfo: memberInfoPromise }: {
   dbUser: User | null;
   discordParam?: string;
   isCaptain: boolean;
+  /** The steps to join hold this player's Discord buttons and callback note. */
+  signupOwnsDiscord: boolean;
   guildCfg: GuildConfig | null;
   /** The page's one live member lookup (null without a link or a bot). */
   memberInfo: Promise<GuildMemberInfo>;
@@ -1363,6 +1441,7 @@ async function ProfileDiscordSection({ dbUser, discordParam, isCaptain, guildCfg
         linkAvailable={discordLinkAvailable}
         autoJoins={discordAutoJoins}
         isCaptain={isCaptain}
+        signupOwnsDiscord={signupOwnsDiscord}
         pingOptIn={pingOptIn}
         unlinkAction={unlinkDiscord}
         saveHandleAction={updateDiscordName}

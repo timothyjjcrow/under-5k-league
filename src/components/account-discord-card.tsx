@@ -1,6 +1,7 @@
 import type { ActionResult } from "@/lib/action-result";
 import {
   discordCardCtas,
+  discordConsentText,
   discordLinkNote,
   type AccountMembership,
   type DiscordCta,
@@ -59,6 +60,7 @@ export function AccountDiscordCard({
   linkAvailable,
   autoJoins,
   isCaptain,
+  signupOwnsDiscord = false,
   pingOptIn,
   unlinkAction,
   saveHandleAction,
@@ -76,6 +78,13 @@ export function AccountDiscordCard({
   linkAvailable: boolean;
   autoJoins: boolean;
   isCaptain: boolean;
+  /**
+   * A player joining the season: the steps to join on /me carry the link,
+   * join and invite buttons, their consent text and the callback's note, so
+   * this card keeps only its status (badge, handle, Unlink, ping opt-in) and
+   * points there. One button per action on the page.
+   */
+  signupOwnsDiscord?: boolean;
   /** `on: null` = unknown; rendered as unknown, never as "off". */
   pingOptIn: { available: boolean; on: boolean | null };
   unlinkAction: FormAction;
@@ -83,7 +92,7 @@ export function AccountDiscordCard({
   pingAction: FormAction;
 }) {
   const linked = !!discordId;
-  const note = discordLinkNote(param, membership);
+  const note = signupOwnsDiscord ? null : discordLinkNote(param, membership);
   const ctas = discordCardCtas({
     linked,
     membership,
@@ -94,7 +103,7 @@ export function AccountDiscordCard({
   });
   const oneClick = linkAvailable && autoJoins;
   const ctaRow =
-    ctas.primary || ctas.secondary ? (
+    !signupOwnsDiscord && (ctas.primary || ctas.secondary) ? (
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         {ctas.primary ? <CtaButton cta={ctas.primary} main /> : null}
         {ctas.secondary ? <CtaButton cta={ctas.secondary} main={false} /> : null}
@@ -188,7 +197,12 @@ export function AccountDiscordCard({
             {/* Live state, re-derived on every render, so it survives the
                 scrubbed query param and disappears once the join (or the
                 rules screen) is done. */}
-            {membership === "not-member" ? (
+            {signupOwnsDiscord &&
+            (membership === "not-member" || membership === "pending") ? (
+              <p className="text-sm text-muted">
+                Finish this in step 2 of your signup.
+              </p>
+            ) : membership === "not-member" ? (
               <p className="text-sm text-danger">
                 {/* "The account you linked", never "you": the check is by ID,
                     and the commonest cause is a player in the server on a
@@ -271,6 +285,18 @@ export function AccountDiscordCard({
               </div>
             ) : null}
           </>
+        ) : signupOwnsDiscord ? (
+          <>
+            <p className="text-sm text-muted">
+              Link your Discord in step 2 of your signup.
+            </p>
+            {discordName ? (
+              <div className="flex flex-wrap items-center gap-2 text-sm">
+                <span className="text-muted">Your typed handle:</span>
+                <DiscordTag name={discordName} />
+              </div>
+            ) : null}
+          </>
         ) : (
           <>
             {ctaRow}
@@ -280,8 +306,8 @@ export function AccountDiscordCard({
                     guilds.join in the scope, the copy must name both the
                     stable identity we store and the server write it permits. */}
                 {autoJoins
-                  ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
-                  : "Join the server with the invite, and link your account so captains can ping you. Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
+                  ? discordConsentText(true)
+                  : `Join the server with the invite, and link your account so captains can ping you. ${discordConsentText(false)}`}
               </p>
             ) : null}
             {discordName ? (
