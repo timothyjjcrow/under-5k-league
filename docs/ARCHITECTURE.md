@@ -829,6 +829,9 @@ enums, so every status column is a string whose allowed values live in
   responses. The v2 `Float` is deliberate: JavaScript/PostgreSQL double
   precision represents every positive unsigned 32-bit account id exactly,
   while Prisma's signed 32-bit `Int` cannot represent the full Dota range.
+  Postgres refuses to bind an id of 2^31 or more to the legacy column, so
+  every query leaves the legacy predicate out for such an id
+  (`fitsLegacyDotaAccountColumn`).
 - `MatchNightPoll` / `MatchNightBallot` — the season-independent match-night
   poll (slots as JSON on the league's clock, one `closesAt` deadline, at most
   one open) and one availability ballot per voter per poll (the slots they can

@@ -472,6 +472,19 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   stored columns are each unique, but that can't stop A.v2 = B.legacy, so an
   override copy checks `dotaAccountClaimWhere` across both and Steam; P2002 reads
   "already linked elsewhere".
+- **Never filter the legacy Dota column by an id it can't hold.**
+  `legacyDotaAccountId` is a signed INTEGER (INT4) on Postgres, but Dota ids
+  run to 2^32 - 1, and Steam's newest accounts are past 2^31 (SteamID64
+  76561200107749376 and up). Prisma refuses to bind a larger value, so the
+  whole query throws: every sign-in of such an account failed in
+  `retireStaleDotaAccountClaims`, and so did every lookup through
+  `dotaAccountClaimWhere` (the /me override copy, the `/admin/inhouse-players`
+  search, adding a team coach). Leave the legacy predicate or write out when
+  `fitsLegacyDotaAccountColumn` says no (no stored value can match it). Never
+  set the key to `undefined` instead: Prisma drops it, and the retire writes
+  would clear every other player's legacy claim. SQLite binds 64-bit integers
+  and hides it; `test/integration/dota-account-int4.itest.ts` under
+  `npm run test:pg` is the proof.
 - **Admin signup edits.** "Edit medal & MMR" (`setPlayerRank`) shows for every
   signup, standins included, until COMPLETE. A PLAYER's MMR locks only while the
   auction is live or paused; a standin's never does. `withdrawSignup` has no type
