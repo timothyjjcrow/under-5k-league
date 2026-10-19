@@ -237,6 +237,34 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   Exception: the scouting report's `fetchGamesForScouting`
   (`game-participants.ts`) stays a direct query, because a cached wrapper hung
   the match preview's nested Suspense stream.
+- **Cache what an all-history page shows, never the rows.** The raw
+  all-history snapshot passes Next's 2 MiB entry at about 160 games (about
+  12 KB a game in Next's envelope, where the box-score JSON is escaped twice)
+  and then caches only an `oversize` marker, so each of its readers re-reads
+  and re-decodes every Game on every view. The record book, record watch, the
+  Hall of Fame and /players' last-season token read small derived entries
+  under the same revision key, "games" tag and 60s TTL instead
+  (`getRecordBookView`, `getRecordWatchBook`, `getCareerFacts`), each built
+  from the uncached `fetch*` reads (a nested `unstable_cache` skips its own
+  cache and still writes its entry). `history-cache-size.test.ts` keeps each
+  under a twentieth of the budget on a 500-game synthetic history (the raw
+  rows: 5.9 MB) and checks a later view reads no Game. Keep out of an entry
+  anything a write can change without stamping the revision (series results,
+  champions): read it fresh and fold it in (`careersFromFacts`). Still raw:
+  `/players/compare` (`getAllGameScores`) and the season snapshots, which one
+  season of 110-160 games can also push past the budget.
+- **The participant read pays for its guard on every Game row.**
+  `fetchGamesForPlayers` (the profile, its link picture, the scouting report,
+  Home's match-night card) keeps the exact-source comparison
+  ([HISTORICAL-PARTICIPATION](../HISTORICAL-PARTICIPATION.md)), which on
+  Postgres detoasts both copies of a row's box score. Postgres evaluates the
+  covered arm's terms in order, so the index test goes first and another
+  player's covered game skips the comparison (half the buffers on a 600-game
+  local measurement); the uncovered arm still compares every row, about 15 ms
+  a call there, growing with history. Never run it where its result can't
+  render (the match-night card checks `matchNightWindowOpen` first), and load
+  whole games with `select: GAME_VIEW_COLUMNS`, never `include`, so the copy
+  stays in the database.
 - **Bust `"games"` from request scope, never from lib.** Server Actions call
   `refreshGames()` (`updateTag`; `admin-shared.ts`, copies in `teams.ts` and
   `match-report.ts`) for read-your-own-writes. Never swap it for

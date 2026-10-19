@@ -7,12 +7,18 @@ import {
   fetchAllGameScores,
   fetchAllGamesForRecords,
   fetchAllGamesForScouting,
+  fetchCareerFacts,
+  fetchRecordBookView,
+  fetchRecordWatchBook,
   fetchSeasonGameLeaders,
   fetchSeasonGameScores,
   fetchSeasonGamesForRecap,
   fetchSeasonHeroGames,
 } from "@/lib/cached-queries";
 import { fetchPublicGameSnapshot } from "@/lib/public-game-snapshot";
+import { appearanceCareers, careersFromFacts } from "@/lib/appearance-careers";
+import { hallOfFameGameBoards } from "@/lib/hall-of-fame";
+import { leagueRecords, recordWatchBook, toRecordGames } from "@/lib/records";
 
 // The perf pass replaced five inline `prisma.game.findMany(...)` stat scans
 // with cached wrappers (unstable_cache, 60s TTL) in src/lib/cached-queries.ts.
@@ -90,7 +96,7 @@ describe("cached-queries data-equivalence", () => {
       sortById(scoresInline, "players"),
     );
 
-    // getAllGamesForRecords === the record-book scan (matchup context, ordered)
+    // fetchAllGamesForRecords === the record-book scan (matchup context, ordered)
     const recordsCached = await fetchAllGamesForRecords();
     const recordsInline = await prisma.game.findMany({
       select: {
@@ -289,5 +295,74 @@ describe("cached-queries data-equivalence", () => {
     expect(await measure(() => fetchSeasonHeroGames(season.id))).toBe(3);
     // One Game, one flat Match context, and one bulk Team-name statement.
     expect(await measure(fetchAllGamesForRecords)).toBe(3);
+    // The cached all-history outputs read the same flat statements.
+    expect(await measure(fetchRecordWatchBook)).toBe(3);
+    expect(await measure(() => fetchRecordBookView(season.id))).toBe(3);
+    expect(await measure(fetchCareerFacts)).toBe(2);
+  });
+});
+
+describe("cached all-history outputs", () => {
+  /** A played fixture with two complete five-a-side box scores. */
+  async function playedSeason(name: string, isActive: boolean, startTime: number) {
+    const season = await makeSeason({ name, status: SEASON_STATUS.COMPLETE, isActive });
+    const home = await makeTeam(season.id, `${name} Home`, 0);
+    const away = await makeTeam(season.id, `${name} Away`, 1);
+    const match = await prisma.match.create({
+      data: {
+        seasonId: season.id, week: 1, phase: MATCH_PHASE.REGULAR, homeTeamId: home.id,
+        awayTeamId: away.id, status: MATCH_STATUS.COMPLETED, winnerTeamId: home.id,
+        homeScore: 2, awayScore: 0,
+      },
+    });
+    for (let g = 0; g < 2; g++) {
+      await prisma.game.create({
+        data: {
+          matchId: match.id, dotaMatchId: `${name}-box-${g}`, radiantWin: true,
+          durationSecs: 2000 + g, radiantScore: 30 + g, direScore: 10, startTime: startTime + g,
+          players: JSON.stringify(Array.from({ length: 10 }, (_, i) => ({
+            userId: `${name}-u${i}`, teamId: i < 5 ? home.id : away.id, accountId: 500 + i,
+            heroId: i + 1, isRadiant: i < 5, kills: i + g, deaths: 2, assists: 4,
+            netWorth: 12000 + i, gpm: 400 + i, lastHits: 90 + i,
+          }))),
+        },
+      });
+    }
+    return { season, home, match };
+  }
+
+  it("work out what the pages showed from the same rows, per season scope", async () => {
+    const a = await playedSeason("Archive", false, 1000);
+    const b = await playedSeason("Current", true, 5000);
+    const rows = await fetchAllGamesForRecords();
+    expect(rows).toHaveLength(4);
+
+    expect(await fetchRecordWatchBook()).toEqual(recordWatchBook(toRecordGames(rows)));
+    const archive = await fetchRecordBookView(a.season.id);
+    expect(archive.book).toEqual(
+      leagueRecords(toRecordGames(rows.filter((row) => row.match.seasonId === a.season.id))),
+    );
+    expect(archive).toMatchObject({ scopedGames: 2, eligibleGames: 2 });
+    expect(archive.seasonIdsWithGames.sort()).toEqual([a.season.id, b.season.id].sort());
+    expect(archive.book.games.every((record) => record.matchId === a.match.id)).toBe(true);
+    expect(archive.matchups).toContainEqual({
+      matchId: a.match.id, home: "Archive Home", away: "Archive Away",
+    });
+    expect((await fetchRecordBookView(null)).scopedGames).toBe(4);
+
+    // Careers fold today's results into the cached appearances.
+    const matches = await prisma.match.findMany({
+      select: { id: true, seasonId: true, status: true, winnerTeamId: true, homeTeamId: true, awayTeamId: true },
+    });
+    const champions = [{ seasonId: a.season.id, teamId: a.home.id }];
+    const facts = await fetchCareerFacts();
+    const careers = careersFromFacts(facts.appearances, matches, champions);
+    expect(careers).toEqual(appearanceCareers(await fetchPublicGameSnapshot(null), matches, champions));
+    expect(careers.seriesWins.get("Archive-u0")).toBe(1);
+    expect(careers.championshipContributions.get("Archive-u0")).toBe(1);
+    expect(careers.coverage).toEqual({ importedGames: 4, trustedGames: 4, attributedLines: 40, unattributedLines: 0 });
+    const boards = hallOfFameGameBoards(facts.games);
+    expect(boards.seasonsWithGames).toBe(2);
+    expect(boards.gameCounts.get("Current-u1")).toEqual({ games: 2, wins: 2 });
   });
 });

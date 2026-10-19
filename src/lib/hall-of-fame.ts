@@ -4,6 +4,8 @@
 // just the active season.
 
 import { competitionRanks } from "./leader-ranking";
+import { pointsByPlayer } from "./fantasy";
+import { decodeGamePlayers, trustedGamePlayers } from "./player-stats";
 
 export type HofRow = {
   userId: string;
@@ -90,5 +92,47 @@ export function topPlaces(
         place: places[index],
       })),
     moreTied: end - shown,
+  };
+}
+
+/**
+ * What the game boards read, worked out once per result revision from the
+ * trusted complete games (cached small in cached-queries.ts, so a view decodes
+ * no box score): how many seasons have such games, and each player's games,
+ * wins and impact points. Plain JSON for the public cache; the page turns it
+ * back into maps with `hallOfFameGameBoards`.
+ */
+export type HallOfFameGameFacts = {
+  seasonsWithGames: number;
+  counts: [userId: string, games: number, wins: number][];
+  impact: [userId: string, points: number][];
+};
+
+export function hallOfFameGameFacts(
+  games: readonly { matchId: string; radiantWin: boolean; players: string }[],
+  seasonOfMatch: ReadonlyMap<string, string>,
+): HallOfFameGameFacts {
+  const trustedGames = games.map((game) => ({
+    seasonId: seasonOfMatch.get(game.matchId),
+    radiantWin: game.radiantWin,
+    players: trustedGamePlayers(decodeGamePlayers(game.players)),
+  })).filter((game) => game.players.length === 10);
+  // With one season of games the career game boards are that season's
+  // Leaders again, so the page waits for a second season.
+  const seasonsWithGames = new Set(
+    trustedGames.flatMap((game) => (game.seasonId ? [game.seasonId] : [])),
+  ).size;
+  return {
+    seasonsWithGames,
+    counts: [...careerGameCounts(trustedGames)].map(([userId, count]) => [userId, count.games, count.wins]),
+    impact: [...pointsByPlayer(trustedGames)],
+  };
+}
+
+export function hallOfFameGameBoards(facts: HallOfFameGameFacts) {
+  return {
+    seasonsWithGames: facts.seasonsWithGames,
+    gameCounts: new Map(facts.counts.map(([userId, games, wins]): [string, CareerGameCount] => [userId, { games, wins }])),
+    impact: new Map(facts.impact),
   };
 }

@@ -12,7 +12,7 @@ import { prisma } from "./prisma";
 import { getActiveSeason } from "./season";
 import { getSessionUser } from "./auth";
 import { getSeasonMatches, getSeasonSnapshot } from "./queries";
-import { getAllGamesForRecords } from "./cached-queries";
+import { getRecordWatchBook } from "./cached-queries";
 import { LEAGUE_CONFIG } from "./league-config";
 import { shareMetadata } from "./share-metadata";
 import {
@@ -29,7 +29,6 @@ import { playerCardFacts, type PlayerCardFacts } from "./player-card";
 import { profileGameFolds, profileGameRows } from "./profile-games";
 import { loadProfileSeasonRows } from "./profile-season-history";
 import { hasJoinedLeague } from "./profile-footprint";
-import { leagueRecords, toRecordGames } from "./records";
 import {
   decodeGamePlayers,
   summarizePlayerGames,
@@ -278,7 +277,7 @@ export async function loadPlayerCardFacts(id: string): Promise<
   if (!user) return null;
   if (!joined) return "unjoined";
   const teamRef = { select: { id: true, name: true, logoUrl: true } } as const;
-  const [registration, membership, rosterHistory, gameFacts, covers, recordRows] =
+  const [registration, membership, rosterHistory, gameFacts, covers, recordBook] =
     await Promise.all([
       season
         ? prisma.registration.findUnique({
@@ -306,7 +305,7 @@ export async function loadPlayerCardFacts(id: string): Promise<
           },
         },
       }),
-      getAllGamesForRecords(),
+      getRecordWatchBook(),
     ]);
   const myGameIds = gameFacts
     .filter((game) =>
@@ -365,7 +364,7 @@ export async function loadPlayerCardFacts(id: string): Promise<
       pubHeroes: parsePubStats(user.pubStats)?.topHeroes ?? [],
       report: reportCard,
       achievements: badges,
-      recordsHeld: leagueRecords(toRecordGames(recordRows)).players.filter(
+      recordsHeld: recordBook.records.filter(
         (record) => record.userId === id,
       ).length,
     }),

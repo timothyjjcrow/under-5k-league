@@ -534,7 +534,12 @@ image has changed. The rules are in `next.config.ts`, and
   series (COMPLETED) counts, "latest" is by when a game ended (start plus
   duration), never an update time, and outside the window it renders nothing
   (streamed with a null fallback). It reads the viewer's own games
-  (`getPlayerGameFacts`, as the profile does); no Discord, no schema.
+  (`getPlayerGameFacts`, as the profile does); no Discord, no schema. That
+  read checks every stored game, so the card first reads the start and
+  duration of the season's decided games (by the indexed match id) and stops
+  unless one ended inside the window (`matchNightWindowOpen`, which can never
+  be false when `myMatchNight` would show; tested): on most days of the week
+  nothing can show and the read never runs.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
@@ -786,8 +791,8 @@ the league is already draftable and many visitors have joined. Write for both.
   row under any held-record chips, stored marks only ("Most kills · Career
   best 18 kills · record 21, 3 short"). `profileSections` opens the card and
   its Records tab for a held record OR a within-reach line, and both come
-  from one `recordWatchBook` over the page's record-book read, so they can
-  never disagree with `/records`.
+  from the one cached book (`getRecordWatchBook`, mapped as `/records` maps
+  it; stats-and-side-games.md), so they can never disagree with `/records`.
 - **Compare is two columns from `lg`:** career numbers on the left, the
   head-to-head and both hero cards on the right, by grid placement, so the
   DOM and a phone keep head-to-head, numbers, heroes. The rows are
@@ -999,7 +1004,8 @@ the league is already draftable and many visitors have joined. Write for both.
   whose career best is within reach of a league record, each a profile link
   and one line of stored marks. The card is props-only and stays out of the
   jump bar. The record book is read in `page.tsx`'s body
-  (`loadRecordWatchBook`, the same cached read and mapping as `/records`),
+  (`loadRecordWatchBook`: the cached book the profile reads, mapped as
+  `/records` maps it),
   only for an upcoming fixture of the active season, and passed down: inside
   a card's Suspense the cached read once hung the stream.
   `record-watch.test.ts` pins the order and the hand-off.

@@ -96,10 +96,10 @@ describe("the Record watch hand-off", () => {
       /const \[recordBook, postseason, viewer\] = await Promise\.all\(\[\s*games\.length === 0 && match\.status !== "COMPLETED" && match\.season\.isActive\s*\? loadRecordWatchBook\(\)\s*: null,/,
     );
     expect(page).toMatch(/<MatchPreview[\s\S]*?recordBook=\{recordBook\}/);
-    // The book comes from /records' own cached read and mapping.
-    expect(CARD("load.ts")).toContain(
-      "recordWatchBook(toRecordGames(await getAllGamesForRecords()))",
-    );
+    // The book is the cached one the profile reads (cached-queries.ts), never
+    // a decode of every stored game per view.
+    expect(CARD("load.ts")).toContain("return getRecordWatchBook();");
+    expect(CARD("load.ts")).not.toMatch(/getAllGamesForRecords|toRecordGames/);
   });
 
   it("keeps the card props-only and out of the jump bar", () => {

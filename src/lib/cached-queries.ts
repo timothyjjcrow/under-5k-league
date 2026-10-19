@@ -1,7 +1,17 @@
+import { cache } from "react";
 import { prisma } from "./prisma";
 import { createPublicSnapshot } from "./public-cache";
 import { getSeasonHonorReadiness } from "./honors-readiness-service";
-import { compareRecordChronology } from "./records";
+import {
+  compareRecordChronology,
+  recordBookView,
+  recordWatchBook,
+  recordWatchBookData,
+  recordWatchBookFromData,
+  toRecordGames,
+} from "./records";
+import { appearanceFacts } from "./appearance-careers";
+import { hallOfFameGameFacts } from "./hall-of-fame";
 import type { HeroPageGame } from "./hero-games";
 import {
   fetchPublicGameSnapshot,
@@ -15,10 +25,11 @@ import {
   type PublicTeamNames,
 } from "./public-game-snapshot";
 
-// Viewer-independent projections share one games-tagged, 60-second snapshot
+// Viewer-independent projections share games-tagged, 60-second snapshots
 // instead of independently scanning all history for metadata, careers and
-// records. Season readers keep their SQL predicate. Session/permission reads
-// remain outside this cache. The fetch* seams bypass it for equivalence tests.
+// records (all history as small derived entries, below). Season readers keep
+// their SQL predicate. Session/permission reads remain outside this cache.
+// The fetch* seams bypass it for equivalence tests.
 
 const gameLines = (games: PublicGameSnapshot) =>
   games.map(({ id, players }) => ({ id, players }));
@@ -98,11 +109,52 @@ export async function fetchAllGamesForRecords() {
     fetchPublicGameSnapshot(null), fetchPublicMatchContext(null), fetchPublicTeamNames(null),
   ]));
 }
-export async function getAllGamesForRecords() {
-  return recordGames(...await Promise.all([
-    getPublicGameSnapshot(null), getPublicMatchContext(null), getPublicTeamNames(null),
-  ]));
+
+// All-history readers cache what they show, not the rows. The raw all-history
+// snapshot outgrows Next's 2 MiB entry within about a season and a half; past
+// that it caches only an `oversize` marker and every view re-read and
+// re-decoded every Game row. Each entry below is a small derived output under
+// the same revision key, "games" tag and 60s TTL, computed from the uncached
+// fetch* reads (a nested unstable_cache would bypass its own cache anyway), so
+// a view decodes no box score. Each stays far below the limit at 500 games
+// (history-cache-size.test.ts).
+
+/** The record book with every player's career bests: record watch on the
+ *  match preview, the profile's League records card and its link picture. */
+async function readRecordWatchBookData() {
+  return recordWatchBookData(recordWatchBook(toRecordGames(await fetchAllGamesForRecords())));
 }
+const getRecordWatchBookData = createPublicSnapshot(
+  "record-watch-book-v1",
+  () => readRecordWatchBookData(),
+);
+export const getRecordWatchBook = cache(async () =>
+  recordWatchBookFromData(await getRecordWatchBookData(null)));
+export async function fetchRecordWatchBook() {
+  return recordWatchBookFromData(await readRecordWatchBookData());
+}
+
+/** /records for one scope: all history (null) or one season. The page checks
+ *  the season exists before it reads, so a made-up id never fills an entry. */
+export async function fetchRecordBookView(seasonId: string | null) {
+  return recordBookView(await fetchAllGamesForRecords(), seasonId);
+}
+export const getRecordBookView = createPublicSnapshot("record-book-view-v1", fetchRecordBookView);
+
+/** The Hall of Fame's and /players' career inputs: appearances folded per
+ *  match, player and team (match outcomes and champions are read fresh by the
+ *  page and folded in with careersFromFacts), and the game boards' counts. */
+export async function fetchCareerFacts() {
+  const [games, contexts] = await Promise.all([
+    fetchPublicGameSnapshot(null), fetchPublicMatchContext(null),
+  ]);
+  return {
+    appearances: appearanceFacts(games),
+    games: hallOfFameGameFacts(games, new Map(contexts.map((match) => [match.id, match.seasonId]))),
+  };
+}
+const getCareerFactsSnapshot = createPublicSnapshot("career-facts-v1", () => fetchCareerFacts());
+export const getCareerFacts = () => getCareerFactsSnapshot(null);
 
 /** Keep this direct query: the match preview awaits it in nested Suspense.
  * An unstable_cache wrapper previously hung that stream (e2e-mid/match.spec.ts).

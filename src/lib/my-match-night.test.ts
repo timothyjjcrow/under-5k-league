@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { MY_MATCH_NIGHT_HOURS, myMatchNight } from "./my-match-night";
+import { sourceFiles } from "../../test/support/source-files";
+import {
+  MY_MATCH_NIGHT_HOURS,
+  matchNightWindowOpen,
+  myMatchNight,
+} from "./my-match-night";
 
 /** Ten lines: u1 on Radiant for team "home" (shaped by `mine`), nine others;
  *  the first Dire line is a mapped league player shaped by `rival`. */
@@ -150,5 +155,67 @@ describe("myMatchNight", () => {
         nowMs: endOf(0) + HOUR,
       }),
     ).toBeNull();
+  });
+});
+
+describe("matchNightWindowOpen", () => {
+  const WINDOW = MY_MATCH_NIGHT_HOURS * HOUR;
+
+  it("opens while a decided game ended inside the window, by start plus duration", () => {
+    const ended = [game("g1", "m1", 0)];
+    expect(matchNightWindowOpen(ended, endOf(0))).toBe(true);
+    expect(matchNightWindowOpen(ended, endOf(0) + WINDOW)).toBe(true);
+    expect(matchNightWindowOpen(ended, endOf(0) + WINDOW + 1)).toBe(false);
+    // A game ending in the future (a skewed clock) shows nothing yet.
+    expect(matchNightWindowOpen(ended, endOf(0) - 1)).toBe(false);
+    // It started before the window but ended inside it: still open.
+    const long = [{ ...game("g2", "m2", 0), durationSecs: 3 * 3600 }];
+    expect(matchNightWindowOpen(long, (START + 3 * 3600) * 1000 + WINDOW - 60_000)).toBe(true);
+    expect(matchNightWindowOpen([], endOf(0))).toBe(false);
+  });
+
+  it("is never closed when the card would show a recap", () => {
+    // Seeded scenarios: series spread over three weeks, some decided, the
+    // viewer in some games, and every hour of a week as "now".
+    let state = 11;
+    const rand = () => (state = (state * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
+    let shown = 0;
+    for (let scenario = 0; scenario < 60; scenario++) {
+      const games = Array.from({ length: 12 }, (_, i) => {
+        const startMin = Math.floor(rand() * 21 * 24 * 60) - 14 * 24 * 60;
+        const mine = rand() < 0.5 ? box() : box({ userId: "someone-else" });
+        return { ...game(`g${i}`, `m${i % 6}`, startMin, mine), durationSecs: 600 + Math.floor(rand() * 7200) };
+      });
+      const completed = new Set([...new Set(games.map((g) => g.matchId))].filter(() => rand() < 0.7));
+      const decided = games.filter((g) => completed.has(g.matchId));
+      for (let hour = 0; hour < 7 * 24; hour++) {
+        const nowMs = START * 1000 + hour * HOUR;
+        const recap = myMatchNight({ userId: "u1", games, completedMatchIds: completed, nowMs });
+        if (!recap) continue;
+        shown++;
+        expect(matchNightWindowOpen(decided, nowMs)).toBe(true);
+      }
+    }
+    expect(shown).toBeGreaterThan(100);
+  });
+});
+
+describe("Home's match-night card", () => {
+  it("checks the window from game times before it reads the viewer's career", () => {
+    // Home's sections, wherever the card lives among them: each one that
+    // reads the viewer's games (a scan of every stored game) gates it first.
+    const readers = sourceFiles(["src/app/page.tsx", "src/components/home/*.tsx"], 10)
+      .filter((file) => file.text.includes("getPlayerGameFacts("));
+    expect(readers.map((file) => file.path)).toEqual(["src/components/home/my-match-night.tsx"]);
+    for (const { text } of readers) {
+      const gate = text.indexOf("if (!matchNightWindowOpen(ended, nowMs)) return null;");
+      expect(gate).toBeGreaterThan(-1);
+      expect(text.indexOf("await getPlayerGameFacts(userId)")).toBeGreaterThan(gate);
+      expect(text.match(/getPlayerGameFacts\(/g)).toHaveLength(1);
+      // The gate reads two integers by the indexed match id, never a box score.
+      expect(text).toMatch(
+        /const ended = await prisma\.game\.findMany\(\{\s*where: \{ matchId: \{ in: \[\.\.\.completed\.keys\(\)\] \} \},\s*select: \{ startTime: true, durationSecs: true \},\s*\}\);/,
+      );
+    }
   });
 });

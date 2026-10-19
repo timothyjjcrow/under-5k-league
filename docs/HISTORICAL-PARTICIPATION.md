@@ -22,7 +22,7 @@ The teams page computes a fully tracked draft recap from those receipts, rather 
 
 After the additive migration, existing box scores still work through a safe fallback. In **Admin → Historical records**, an administrator can index up to 20 games or capture up to 50 surviving memberships per batch. Repeat until no work remains. Neither action contacts a game provider or sends an announcement.
 
-The index records the exact source string and projection version. An old application writer that changes the canonical JSON makes its index ineligible immediately; reads fall back to the new source until it is rebuilt. Incomplete or malformed box scores remain stored and are excluded from trusted statistical aggregates. Repeated indexing does not fabricate missing identities.
+The index records the exact source string and projection version. An old application writer that changes the canonical JSON makes its index ineligible immediately; reads fall back to the new source until it is rebuilt. The player read checks the participant index before it compares the source, so the comparison runs on that player's covered games and on the fallback test; its cost is in [admin-and-operations](features/admin-and-operations.md#performance). Incomplete or malformed box scores remain stored and are excluded from trusted statistical aggregates. Repeated indexing does not fabricate missing identities.
 
 A surviving membership can prove its stored start date and observed price. It cannot prove an original rating, captain status, acquisition method, or an already deleted membership. If an older writer removed a captured member without recording departure, reconciliation marks the end date unknown rather than substituting the repair time.
 

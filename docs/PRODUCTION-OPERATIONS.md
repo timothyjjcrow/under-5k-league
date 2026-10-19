@@ -1173,11 +1173,23 @@ read as the unit stops. systemd-run's own `Memory peak:` line in the build
 log is only what systemd 255 last read while the unit ran, often as it
 started (2.4M for the c5de9952 builds). A build needs 5
 GB free; each release takes about 1.2 GB and `box_agent prune <lg>` keeps the
-live, previous and newest. Check `df -h` monthly.
+live, previous and newest. Check `df -h` monthly. A live slot's
+`.next/cache/fetch-cache` also grows until the slot restarts: every result
+change (inhouse results included) writes the public snapshots read since
+under a new key and nothing deletes the old ones; the season snapshots are
+the large ones, up to 1.9 MB each. `du -sh` the folder if the disk climbs
+between releases.
 
 **Logs.** App output goes to journald (capped at 500 MB):
 `journalctl -u ggd2l-us@<slot>` for the live slot, which `box_agent status`
-names (`leagues.<lg>.live.slot`; each release flips it). Caddy writes a JSON access log per host under
+names (`leagues.<lg>.live.slot`; each release flips it). A slot that serves
+writes at most one `{"event":"database-performance",…}` line a minute: query
+counts, pool waits, and the public snapshots' cache sizes. `oversizedSnapshots`
+above 0 means a snapshot passed the 1.9 MB budget (`maxSnapshotBytes` is the
+largest), so its pages read the database on every view (/admin's Database
+performance section says so too); the all-history pages cache small derived
+entries instead and should never be the cause ([admin-and-operations](features/admin-and-operations.md#performance)).
+Caddy writes a JSON access log per host under
 `/var/log/caddy/` (rolled at 50 MiB, ten kept); it holds player IP addresses,
 so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`
 (the line npm ci and the build each print as they stop, `ggd2l cgroup: …`,

@@ -47,8 +47,28 @@ export type MyMatchNight = {
   newBadges: Achievement[];
 };
 
-const endMs = (game: MyMatchNightGameInput) =>
+const endMs = (game: { startTime: number; durationSecs: number }) =>
   (game.startTime + game.durationSecs) * 1000;
+
+/** Whether a series whose last game ended at `finishedAtMs` still shows. */
+const withinWindow = (finishedAtMs: number, nowMs: number, windowHours = MY_MATCH_NIGHT_HOURS) =>
+  nowMs - finishedAtMs <= windowHours * 60 * 60 * 1000 && finishedAtMs <= nowMs;
+
+/**
+ * Home's cheap check before it reads the viewer's career: did any game of the
+ * season's decided series end inside the window? A recap shows only when the
+ * viewer's latest decided series ended inside it, and that series' last game
+ * is one of these, so false means `myMatchNight` is null for every viewer.
+ * It needs each game's start and duration only, never a box score, so on
+ * most days of the week the card answers without the participant read.
+ */
+export function matchNightWindowOpen(
+  games: readonly { startTime: number; durationSecs: number }[],
+  nowMs: number,
+  windowHours?: number,
+): boolean {
+  return games.some((game) => withinWindow(endMs(game), nowMs, windowHours));
+}
 
 /**
  * Their latest decided series (`completedMatchIds`), while it ended within
@@ -79,10 +99,7 @@ export function myMatchNight(input: {
         a.game.startTime - b.game.startTime || a.game.id.localeCompare(b.game.id),
     );
   const finishedAtMs = Math.max(...series.map((row) => endMs(row.game)));
-  const windowMs = (input.windowHours ?? MY_MATCH_NIGHT_HOURS) * 60 * 60 * 1000;
-  if (input.nowMs - finishedAtMs > windowMs || finishedAtMs > input.nowMs) {
-    return null;
-  }
+  if (!withinWindow(finishedAtMs, input.nowMs, input.windowHours)) return null;
 
   const games = series.map((row, index) => ({
     gameNumber: index + 1,

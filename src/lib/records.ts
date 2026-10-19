@@ -200,7 +200,7 @@ export type RecordBook = {
 };
 
 /** The stored-Game row shape the record book needs — a structural subset of
- *  what getAllGamesForRecords selects, so both /records and the profile page
+ *  what fetchAllGamesForRecords selects, so both /records and the profile page
  *  can share one mapping. */
 export type StoredRecordGame = {
   matchId: string;
@@ -317,6 +317,69 @@ export function analyzeRecordGames(
 
 export function toRecordGames(rows: StoredRecordGame[]): RecordGame[] {
   return analyzeRecordGames(rows).games;
+}
+
+/** Whether a game reports the stats only newer imports carry (damage,
+ *  healing, XPM, denies): /records' footnote counts these. */
+export function reportsExtendedStats(game: RecordGame): boolean {
+  return game.lines.some((line) => line.userId != null && (
+    line.xpm != null || line.denies != null || line.heroDamage != null ||
+    line.towerDamage != null || line.heroHealing != null
+  ));
+}
+
+/** A stored game with its fixture's team names, as fetchAllGamesForRecords
+ *  reads it (chronological). */
+export type RecordBookRow = StoredRecordGame & {
+  match: { seasonId: string; homeTeam: { name: string }; awayTeam: { name: string } };
+};
+
+/**
+ * Everything /records shows for one scope (all history when `seasonId` is
+ * null), worked out once per result revision and cached small
+ * (cached-queries.ts), so a view decodes no box score. Plain JSON.
+ */
+export type RecordBookView = {
+  book: RecordBook;
+  diagnostics: RecordGameDiagnostics;
+  /** Stored games in the scope, usable or not. */
+  scopedGames: number;
+  /** The complete games the book counted. */
+  eligibleGames: number;
+  /** Of those, the games that report the newer stats. */
+  extendedGames: number;
+  /** Every season with a stored game, across all history (the switcher). */
+  seasonIdsWithGames: string[];
+  /** Each match record's fixture. */
+  matchups: { matchId: string; home: string; away: string }[];
+};
+
+export function recordBookView(
+  rows: RecordBookRow[],
+  seasonId: string | null,
+): RecordBookView {
+  const scoped = seasonId === null
+    ? rows
+    : rows.filter((row) => row.match.seasonId === seasonId);
+  const analysis = analyzeRecordGames(scoped);
+  const book = leagueRecords(analysis.games);
+  const matchupOf = new Map(rows.map((row) => [
+    row.matchId,
+    { home: row.match.homeTeam.name, away: row.match.awayTeam.name },
+  ]));
+  return {
+    book,
+    diagnostics: analysis.diagnostics,
+    scopedGames: scoped.length,
+    eligibleGames: analysis.games.length,
+    extendedGames: analysis.games.filter(reportsExtendedStats).length,
+    seasonIdsWithGames: [...new Set(rows.map((row) => row.match.seasonId))],
+    matchups: [...new Set(book.games.map((record) => record.matchId))]
+      .flatMap((matchId) => {
+        const matchup = matchupOf.get(matchId);
+        return matchup ? [{ matchId, ...matchup }] : [];
+      }),
+  };
 }
 
 /** Compute the record book. `games` must be in chronological order. */
@@ -492,6 +555,45 @@ export function recordWatchBook(games: RecordGame[]): RecordWatchBook {
     }
   }
   return { games: games.length, records: leagueRecords(games).players, bests };
+}
+
+/**
+ * A RecordWatchBook as plain JSON, for the public cache (a Map does not
+ * survive JSON): each player's best for every record key in `keys`' order,
+ * null where they have none. Cached once per result revision
+ * (cached-queries.ts), so the match preview, the profile and its link
+ * picture decode no box score.
+ */
+export type RecordWatchBookData = {
+  games: number;
+  records: PlayerRecord[];
+  keys: string[];
+  bests: [userId: string, marks: (number | null)[]][];
+};
+
+export function recordWatchBookData(book: RecordWatchBook): RecordWatchBookData {
+  const keys = PLAYER_RECORDS.map((spec) => spec.key);
+  return {
+    games: book.games,
+    records: book.records,
+    keys,
+    bests: [...book.bests].map(([userId, marks]) => [
+      userId,
+      keys.map((key) => marks.get(key) ?? null),
+    ]),
+  };
+}
+
+export function recordWatchBookFromData(data: RecordWatchBookData): RecordWatchBook {
+  return {
+    games: data.games,
+    records: data.records,
+    bests: new Map(data.bests.map(([userId, marks]) => [
+      userId,
+      new Map(marks.flatMap((value, i): [string, number][] =>
+        value === null ? [] : [[data.keys[i], value]])),
+    ])),
+  };
 }
 
 /** One player's distance from one league record: stored facts only. */
