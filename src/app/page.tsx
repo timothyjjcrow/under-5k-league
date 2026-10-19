@@ -12,7 +12,10 @@ import {
   type HeroParts,
   type HomeViewer,
 } from "@/components/home/hero";
-import { InhouseStrip } from "@/components/home/inhouse-strip";
+import {
+  InhouseStrip,
+  loadInhouseQueueLine,
+} from "@/components/home/inhouse-strip";
 import {
   InhouseNightBar,
   loadCurrentInhouseNight,
@@ -30,6 +33,7 @@ import { CardSkeleton } from "@/components/ui";
 import { getSessionUser } from "@/lib/auth";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
+import { inhouseQueueLeadsHome } from "@/lib/home-inhouse";
 import { homeMetadata } from "@/lib/link-preview-metadata";
 import {
   announcedMatchNight,
@@ -68,9 +72,10 @@ export default async function Home() {
   const user = await getSessionUser();
   // eslint-disable-next-line react-hooks/purity -- async server component
   const nowMs = Date.now();
-  const [snapshot, night] = await Promise.all([
+  const [snapshot, night, inhouseLine] = await Promise.all([
     getSeasonSnapshot(user?.id),
     loadCurrentInhouseNight(nowMs),
+    loadInhouseQueueLine(),
   ]);
   // The planned inhouse night's thin bar leads Home in every phase, the
   // offseason too: inhouses don't wait for a season. Rendered inline, not
@@ -78,6 +83,18 @@ export default async function Home() {
   const nightBar = night ? (
     <InhouseNightBar user={user} night={night} nowMs={nowMs} />
   ) : null;
+  // While anyone is queued, the inhouse queue line follows it there, and its
+  // usual place below (the strip after the view, a side-game tile mid-season,
+  // the COMPLETE rail's tile) stands down. Inline for the same reason: its
+  // counts are already read, so it paints with the hero.
+  const inhouseLeads = inhouseQueueLeadsHome(inhouseLine);
+  const top =
+    nightBar || inhouseLeads ? (
+      <div className="space-y-3">
+        {nightBar}
+        {inhouseLeads ? <InhouseStrip /> : null}
+      </div>
+    ) : null;
 
   if (!snapshot) {
     const [latestSeason, defending] = await Promise.all([
@@ -93,7 +110,8 @@ export default async function Home() {
         user={user}
         latestSeason={latestSeason}
         defending={defending}
-        top={nightBar}
+        top={top}
+        inhouseInTop={inhouseLeads}
       />
     );
   }
@@ -203,6 +221,7 @@ export default async function Home() {
             matches={matches}
             gamesOnRecord={gamesOnRecord}
             championTeamId={championPresentation.championTeamId}
+            inhouseTile={!inhouseLeads}
             showCheckins={canViewAvailabilitySummary(
               user,
               hasActiveLeagueParticipation(
@@ -218,8 +237,8 @@ export default async function Home() {
               ),
             )}
             // The news ends the dashboard's second column, and the inhouse
-            // queue is one of its side-game tiles, so neither follows the
-            // view below.
+            // queue is one of its side-game tiles (unless it leads the page),
+            // so neither follows the view below.
             rail={
               <Suspense fallback={null}>
                 <LeagueNews />
@@ -242,13 +261,15 @@ export default async function Home() {
             championPresentation={championPresentation}
             rail={
               <>
-                <Suspense
-                  fallback={
-                    <div className="skeleton h-16 rounded-[var(--radius)]" />
-                  }
-                >
-                  <InhouseStrip variant="tile" />
-                </Suspense>
+                {inhouseLeads ? null : (
+                  <Suspense
+                    fallback={
+                      <div className="skeleton h-16 rounded-[var(--radius)]" />
+                    }
+                  >
+                    <InhouseStrip variant="tile" />
+                  </Suspense>
+                )}
                 <Suspense fallback={null}>
                   <LeagueNews />
                 </Suspense>
@@ -302,7 +323,7 @@ export default async function Home() {
   );
 
   // From the regular season on, the phase's view draws the news and the
-  // inhouse queue itself (in its rail).
+  // inhouse queue itself (in its rail), unless the queue leads the page.
   const seasonDashboard =
     season.status === "REGULAR_SEASON" ||
     season.status === "PLAYOFFS" ||
@@ -310,7 +331,7 @@ export default async function Home() {
 
   return (
     <div className="space-y-5">
-      {nightBar}
+      {top}
       {defending || isAdmin ? (
         <div className="space-y-3">
           {hero}
@@ -362,13 +383,15 @@ export default async function Home() {
           <Suspense fallback={null}>
             <LeagueNews />
           </Suspense>
-          <Suspense
-            fallback={
-              <div className="skeleton h-12 rounded-[var(--radius)]" />
-            }
-          >
-            <InhouseStrip />
-          </Suspense>
+          {inhouseLeads ? null : (
+            <Suspense
+              fallback={
+                <div className="skeleton h-12 rounded-[var(--radius)]" />
+              }
+            >
+              <InhouseStrip />
+            </Suspense>
+          )}
         </>
       )}
     </div>

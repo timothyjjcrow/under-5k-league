@@ -25,13 +25,19 @@ export function OffseasonView({
   latestSeason,
   defending,
   top,
+  inhouseInTop = false,
 }: {
   user: SessionUser | null;
   /** The newest archived season, if any. */
   latestSeason: { id: string; name: string; status: string } | null;
   defending: DefendingChampion | null;
-  /** Above the hero, in the view's column: the inhouse night's bar. */
+  /**
+   * Above the hero, in the view's column: the inhouse night's bar, and the
+   * inhouse queue line while anyone is queued (`inhouseInTop`).
+   */
   top?: ReactNode;
+  /** `top` carries the queue line, so the view's own strip stands down. */
+  inhouseInTop?: boolean;
 }) {
   return (
     <div className="mx-auto max-w-2xl py-10">
@@ -93,15 +99,17 @@ export function OffseasonView({
       {/* Inhouse is the only live play surface during the offseason. Keep its
           actual queue/lobby state visible here too, rather than replacing a
           useful "4/10 queued" signal with a generic hero button. */}
-      <Suspense
-        fallback={
-          <div className="mt-5 skeleton h-12 rounded-[var(--radius)]" />
-        }
-      >
-        <div className="mt-5">
-          <InhouseStrip />
-        </div>
-      </Suspense>
+      {inhouseInTop ? null : (
+        <Suspense
+          fallback={
+            <div className="mt-5 skeleton h-12 rounded-[var(--radius)]" />
+          }
+        >
+          <div className="mt-5">
+            <InhouseStrip />
+          </div>
+        </Suspense>
+      )}
       <Suspense fallback={null}>
         <LeagueNews className="mt-6" />
       </Suspense>
