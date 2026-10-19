@@ -3,7 +3,7 @@
 // as data. Reading an env file registers its secret values with the runner,
 // which then refuses any command line that contains one.
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statfsSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, statfsSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { checkLeagueEnv, parseEnvFile } from "./env-contract.mjs";
 import { AgentError, BIN, createLayout } from "./layout.mjs";
@@ -20,6 +20,9 @@ export function createContext(overrides = {}) {
       const fs = statfsSync(dir);
       return fs.bavail * fs.bsize;
     },
+    // The uid that owns a path itself (never through a link): 0 once the
+    // agent has locked a tree the build user wrote down to root.
+    ownerOf: (file) => lstatSync(file).uid,
     ...overrides,
   };
 }

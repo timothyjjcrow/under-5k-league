@@ -82,8 +82,20 @@ export function makeBox() {
 
   const calls = [];
   const handlers = [];
+  // Who owns what, as the agent's own chown and `install -d -o` calls left it
+  // (they never run here): ctx.ownerOf answers 0 only for a path root took.
+  // Everything else is the build user's, as a clone is until it is locked.
+  const owners = new Map();
+  const BUILD_UID = 1500;
+  const recordOwner = (command, args) => {
+    if (command.endsWith("/chown"))
+      owners.set(path.resolve(args.at(-1)), args.find((arg) => !arg.startsWith("-")).split(":")[0]);
+    else if (command.endsWith("/install") && args[0] === "-d" && args.includes("-o"))
+      owners.set(path.resolve(args.at(-1)), args[args.indexOf("-o") + 1]);
+  };
   const spawnImpl = async (command, args, options) => {
     calls.push({ command, args, env: options.env, input: options.input, cwd: options.cwd });
+    recordOwner(command, args);
     for (const handler of handlers) {
       const result = await handler(command, args, options);
       if (result) {
@@ -115,6 +127,11 @@ export function makeBox() {
     },
     argv: () => calls.map((call) => [call.command, ...call.args]),
     commandsMatching: (pattern) => calls.filter((call) => pattern.test([call.command, ...call.args].join(" "))),
+    /** Mark a path as owned by `owner`, as a chown on the box would. */
+    own(file, owner = "root") {
+      owners.set(path.resolve(file), owner);
+      return box;
+    },
   };
   box.ctx = {
     layout,
@@ -125,6 +142,7 @@ export function makeBox() {
     },
     httpGet: async (url) => box.health(url),
     freeBytes: () => box.free,
+    ownerOf: (file) => (owners.get(path.resolve(file)) === "root" ? 0 : BUILD_UID),
   };
   return box;
 }

@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { caddyConfigSha256, renderMode } from "./caddy-modes.mjs";
 import { SHA, SHA2, T0, TRACKED_DOTENV_EXAMPLES, addRelease, makeBox } from "./harness.test.mjs";
 import { promoteRelease } from "./releases.mjs";
 import { STATUS_UNITS, lastDrill, status } from "./status.mjs";
-import { attest, backup, botDeploy, botStatus, drill, prepareTools, readDrillRecord } from "./tools.mjs";
+import { attest, backup, botDeploy, botStatus, drill, migrate, prepareTools, readDrillRecord } from "./tools.mjs";
 
 function gitBox() {
   const box = makeBox();
@@ -49,10 +49,104 @@ test("prepare clones the sha, installs dev dependencies and points tools/current
   assert.equal(box.calls.filter((call) => call.args.includes("clone")).length, clones, "a ready clone is reused");
 });
 
+// 2026-10-19 audit: the hourly backup and the drill run a tools clone's
+// scripts as ggd2l-ops, which holds the R2 credentials, and the clone stayed
+// the build user's for life, so a dependency's install script could rewrite
+// backup-db.mjs for good.
+test("prepare locks the clone down to root once npm ci has exited, readable by everyone", async () => {
+  const box = gitBox();
+  const { dir } = await prepareTools(box.ctx, SHA);
+  const steps = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
+  const ci = steps.findIndex((step) => step.startsWith("systemd-run") && step.includes(" ci "));
+  const chown = steps.indexOf(`chown -R -P -h root:root ${dir}`);
+  const chmod = steps.indexOf(`chmod -R a+rX,go-w ${dir}`);
+  assert.ok(ci >= 0 && ci < chown && chown < chmod, "npm ci, then root takes the tree, then nobody else may write it");
+  assert.equal(box.ctx.ownerOf(dir), 0);
+  // Every reuse locks it again, which finishes a lockdown a crash cut short.
+  await prepareTools(box.ctx, SHA);
+  assert.equal(box.commandsMatching(new RegExp(`chmod -R a\\+rX,go-w ${dir}$`)).length, 2);
+});
+
+test("a ready clone root never locked down is rebuilt from nothing, and no verb runs from it until then", async () => {
+  const box = gitBox();
+  box.writeEnv("us");
+  const dir = box.layout.toolsDir(SHA);
+  // A clone from before the lockdown: npm ci finished, still the build user's.
+  mkdirSync(path.join(dir, "node_modules"), { recursive: true });
+  writeFileSync(path.join(dir, "node_modules/.package-lock.json"), "{}");
+  writeFileSync(path.join(dir, "planted.mjs"), "// written by an install script\n");
+  box.own(dir, "ggd2l-build");
+  for (const verb of [attest, drill])
+    await assert.rejects(verb(box.ctx, "us", SHA), { code: "tools_missing" }, verb.name);
+  assert.equal(box.calls.filter((call) => call.args.includes("clone")).length, 0);
+  await prepareTools(box.ctx, SHA);
+  assert.equal(box.calls.filter((call) => call.args.includes("clone")).length, 1, "rebuilt, not reused");
+  assert.ok(!existsSync(path.join(dir, "planted.mjs")), "nothing the build user wrote survives");
+  assert.equal(box.ctx.ownerOf(dir), 0);
+});
+
+test("prepare refuses a clone with a link npm planted outside it, and leaves nothing that looks ready", async () => {
+  const box = gitBox();
+  const dir = box.layout.toolsDir(SHA);
+  box.on((command, args) => {
+    if (command.endsWith("/systemd-run") && args.includes("ci")) {
+      mkdirSync(path.join(dir, "node_modules"), { recursive: true });
+      writeFileSync(path.join(dir, "node_modules/.package-lock.json"), "{}");
+      symlinkSync("/etc/ggd2l", path.join(dir, "node_modules/leak"));
+      return { code: 0 };
+    }
+    return undefined;
+  });
+  await assert.rejects(prepareTools(box.ctx, SHA), { code: "link_escapes" });
+  assert.ok(!box.calls.some((call) => call.args.includes("a+rX,go-w")), "no chmod follows the refusal");
+  assert.ok(!existsSync(dir), "the refused clone is gone");
+  box.writeEnv("us");
+  await assert.rejects(attest(box.ctx, "us", SHA), { code: "tools_missing" });
+});
+
 test("attest refuses without a prepared tools clone at the sha", async () => {
   const box = makeBox();
   box.writeEnv("us");
   await assert.rejects(attest(box.ctx, "us", SHA2), { code: "tools_missing" });
+});
+
+// The clone is root's, and release-migrations.mjs writes prisma/schema.prisma
+// (the provider switch and back) and runs git as the build user.
+test("migrate runs on a per-run writable copy of prisma/ mounted over the locked clone's, and removes it", async () => {
+  const box = gitBox();
+  box.writeEnv("us");
+  const { dir } = await prepareTools(box.ctx, SHA);
+  mkdirSync(path.join(dir, "prisma/migrations/0001_init"), { recursive: true });
+  writeFileSync(path.join(dir, "prisma/schema.prisma"), 'datasource db {\n  provider = "sqlite"\n}\n');
+  writeFileSync(path.join(dir, "prisma/migrations/0001_init/migration.sql"), "CREATE TABLE x();\n");
+  let seen = null;
+  box.on((command, args) => {
+    if (!(command.endsWith("/systemd-run") && args.includes("scripts/release-migrations.mjs"))) return undefined;
+    const bind = args.find((arg) => arg.startsWith("BindPaths="));
+    const [copy, target] = bind.slice("BindPaths=".length).split(":");
+    seen = { args, copy, target, schema: readFileSync(path.join(copy, "schema.prisma"), "utf8"), migration: existsSync(path.join(copy, "migrations/0001_init/migration.sql")) };
+    return { code: 0, lines: [`Migration release completed for ${SHA}.`] };
+  });
+  assert.deepEqual(await migrate(box.ctx, "us", SHA), { ok: true });
+  assert.ok(seen, "the migration unit ran");
+  assert.equal(seen.target, path.join(dir, "prisma"));
+  assert.ok(seen.copy.startsWith(`${box.layout.runDir}/ggd2l-migrate-`), seen.copy);
+  assert.match(seen.schema, /provider = "sqlite"/, "the copy holds the committed schema");
+  assert.ok(seen.migration, "and every migration");
+  assert.ok(box.calls.some((call) => call.command.endsWith("/chown") && call.args.join(" ") === `-R -P -h ggd2l-build:ggd2l-build ${seen.copy}`),
+    "the build user may write only the copy");
+  for (const arg of ["GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=safe.directory", `GIT_CONFIG_VALUE_0=${dir}`, "User=ggd2l-build"])
+    assert.ok(seen.args.includes(arg), arg);
+  assert.ok(!existsSync(path.dirname(seen.copy)), "the copy is gone after the run");
+
+  // A failed run removes its copy too.
+  box.on((command, args) => {
+    if (!(command.endsWith("/systemd-run") && args.includes("scripts/release-migrations.mjs"))) return undefined;
+    seen = { copy: args.find((arg) => arg.startsWith("BindPaths=")).slice("BindPaths=".length).split(":")[0] };
+    return { code: 1, lines: ["Migration release: deploy failed"] };
+  });
+  await assert.rejects(migrate(box.ctx, "us", SHA), { code: "migrate_failed" });
+  assert.ok(!existsSync(path.dirname(seen.copy)));
 });
 
 /** The record backup-league.sh (WP-E3) writes to <lg>/state/last-backup.json. */
@@ -142,6 +236,9 @@ test("drill without a sha is the drill unit; with one it runs the helper on that
   // the live commit, and would pass without rehearsing the new migrations.
   assert.deepEqual(args.slice(-4), ["/usr/bin/bash", box.layout.helper("drill-league.sh"), "us", SHA]);
   assert.ok(args.includes(`HOME=${box.layout.buildHome}`) === false, "the drill runs as ggd2l-ops, not the build user");
+  // As in ggd2l-drill@.service: Prisma runs from the clone, and the R2
+  // credentials, which can delete every offsite copy, are out of its reach.
+  assert.ok(args.includes(`InaccessiblePaths=-${box.layout.rcloneConf}`));
 
   box.on((command, args) => (command.endsWith("/systemd-run") && args.some((arg) => arg.endsWith("drill-league.sh")) ? { code: 1, lines: ["drill-us: restore failed"] } : undefined));
   await assert.rejects(drill(box.ctx, "us", SHA), { code: "drill_failed" });

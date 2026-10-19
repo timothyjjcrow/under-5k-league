@@ -47,7 +47,7 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 | Alert state (Discord) | `/var/lib/ggd2l-alerts/` (one JSON file per alert, `ggd2l-ops`) |
 | Releases, slots, live pointer | `/srv/ggd2l/<lg>/releases/<id>/`, `/srv/ggd2l/<lg>/slots/{a,b}`, `/var/lib/ggd2l/<lg>/live.json` |
 | Union static files (14-day prune) | `/srv/ggd2l/<lg>/static/_next/static/` |
-| Tools clones (migrate, attest, drill) | `/srv/ggd2l/tools/<sha12>/`, `/srv/ggd2l/tools/current` |
+| Tools clones (root's; migrate, attest, backups, drills) | `/srv/ggd2l/tools/<sha12>/`, `/srv/ggd2l/tools/current` |
 | Settings and secrets (root) | `/etc/ggd2l/` |
 | Caddy mode files | `/etc/caddy/ggd2l/{us,eu}-mode.caddy`, `/etc/caddy/ggd2l/allow.caddy` |
 | Tunnel | `/etc/cloudflared/config.yml`, `/etc/cloudflared/<uuid>.json` |
@@ -84,6 +84,15 @@ heartbeat), `ggd2l-bot`.
 - Never probe `/api/sync` or `/api/health/automation` on a candidate slot.
 - Every unit refuses to start without a valid `LEAGUE_DEPLOY_ENV`; only
   `production` lets the site write to Discord.
+- **An edit of `/etc/ggd2l/<lg>.env` takes effect at the next start of a
+  slot, with no build:** a restart, the 09:00 UTC reboot, a rollback. A
+  slot's start checks only the env contract, so after every edit, before any
+  restart, run `sudo -n ggd2l-agent envcheck <lg>` and stop on anything but
+  `{"ok":true,...}`. It runs the contract, then the live release's own
+  `scripts/validate-prod-env.mjs` (the gate every build runs: the secrets,
+  `ADMIN_STEAM_IDS`, `STEAM_API_KEY`, the Discord pairs), as the league user,
+  and names keys only; the rule each broke is in
+  `/var/log/ggd2l/tools/envcheck-<lg>-<stamp>-<sha12>.log`.
 - `ggd2l-bot.service` refuses to start on an env that breaks the bot's
   contract (`env-contract.mjs --bot`, names only): `DOTA_BOT_STATE_DIR`
   exactly `/var/lib/ggd2l-bot`, a 32+ character `DOTA_LOBBY_BOT_SECRET`, no
@@ -196,12 +205,57 @@ output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
+<a id="kit-2026-10-19"></a>**The first install after 2026-10-19** (tools clones locked to root, the
+drill without the R2 credentials, `envcheck` running the production
+validation, `rollback` refusing a second time) needs, right after it, in one
+sitting between :20 and :10 past an hour (the backups start at :17 and read
+`tools/current`, which step 1 rebuilds), as the admin user on the box:
+
+1. Find the commit the backups run: `readlink /srv/ggd2l/tools/current` names
+   its `<sha12>` (the last `migrate`'s commit, which can be older than the
+   live one), and `sudo cat /srv/ggd2l/tools/<sha12>/.git/HEAD` its full
+   `<sha>`, which must start with that `<sha12>` (stop if it doesn't). Then
+   `sudo -n ggd2l-agent prepare <sha>`. That clone is the build user's, so
+   prepare deletes it and builds it again, locked (about a minute), and
+   `tools/current` keeps pointing at it. If it fails, run it again at once:
+   until it passes, `tools/current` is missing and every backup fails and
+   alerts. Every other clone stays the build user's until `prune` removes
+   it, and no verb runs from one (`tools_missing`) until a `prepare`
+   rebuilds it.
+2. Check it is root's and nobody else can write it:
+   `sudo stat -c '%U:%G %a' /srv/ggd2l/tools/<sha12> /srv/ggd2l/tools/<sha12>/scripts/backup-db.mjs`
+   (`root:root 755`, then `root:root 644`), and
+   `sudo find /srv/ggd2l/tools/<sha12> -not -user root -print -quit` prints
+   nothing. Git must still read it as the build user, as `migrate` does:
+   `cd / && sudo -u ggd2l-build env HOME=/var/cache/ggd2l-build GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/srv/ggd2l/tools/<sha12> git -C /srv/ggd2l/tools/<sha12> status --porcelain`
+   prints nothing and exits 0.
+3. `sudo systemctl start ggd2l-backup@us`, then `ggd2l-drill@us`, the same for
+   `eu`, and `systemctl show -p Result ggd2l-backup@us ggd2l-drill@us ggd2l-backup@eu ggd2l-drill@eu`
+   says `Result=success` four times (see Backups). The drill unit now hides
+   `rclone.conf`: `systemctl show -p InaccessiblePaths ggd2l-drill@us` names it.
+4. `sudo -n ggd2l-agent envcheck us` and `envcheck eu` each answer
+   `{"ok":true,"problems":[]}`. If one names a key, the live file already
+   fails the production validation: fix it before anything restarts that
+   league (Rules above), and don't wait for the reboot.
+5. `sudo -n ggd2l-agent attest <lg> <sha>` (step 1's commit) for each league
+   answers `{"ok":true}`: the build user's scripts run on the locked clone.
+   The first `migrate` on a locked clone is the next maintenance release's;
+   its `prepare`, `preflight` and `drill <lg> <sha>` run on the new commit's
+   locked clone first.
+6. One config archive (`sudo systemctl start ggd2l-config-archive`), as after
+   every install.
+
 ## Rollback
 
 - **App:** `ssh ggd2l-1 sudo -n ggd2l-agent rollback us`, then the same for
   `eu`, so both leagues stay on one commit. Rollback promotes the previous
   release with a clean restart. The old slot stays warm for at least 90 s
-  after any promote, and `retire` refuses until then.
+  after any promote, and `retire` refuses until then. Run each rollback once:
+  it can sit silent for two minutes, and if its answer is lost or says it
+  failed, read `ggd2l-agent live us` first. While live came from a rollback
+  (`live.json`'s and `status`'s `rolledBackFrom`), a second one refuses with
+  `rolled_back` instead of putting back the release it left; going back on
+  purpose is `ggd2l-agent promote us <rolledBackFrom>`.
 - **A bad migration:** follow "Fully rolled-back failed migration" in
   PRODUCTION-OPERATIONS; the restore point is the dump taken just before it
   (see Restore below).
@@ -285,6 +339,27 @@ R2 lifecycle rules (bucket `ggd2l-backups`): delete `us/hourly/` and
 and `eu/monthly/` after 400, and `config/` after 35. DigitalOcean's weekly
 droplet backups sit on top. The recovery point is one hour or better, plus a
 fresh dump before every migration.
+
+**Who can delete the offsite history.** The R2 token in `rclone.conf` is
+Object Read & Write, and on R2 that includes delete: whatever runs as
+`ggd2l-ops` with that file could wipe every offsite copy along with the local
+dumps it owns. The box keeps third-party code away from it: the backup runs
+only first-party scripts (`backup-db.mjs`, `verify-backup.mjs` and the
+`src/lib` files they import, no `node_modules`) from a tools clone root owns
+and nobody else can write, since the agent locks every clone down after its
+`npm ci` and runs nothing from one it has not; and the drill, which runs
+Prisma's CLI from the clone and uploads nothing, never sees `rclone.conf`
+(`InaccessiblePaths=` in `ggd2l-drill@.service` and in the agent's
+`drill <lg> <sha>`). **The remaining protection is Tim's to set in the
+Cloudflare dashboard (not done yet):** an R2 bucket lock on `ggd2l-backups`
+(the bucket's settings, bucket lock rules; or `wrangler r2 bucket lock add`
+from the Mac with Tim's own login), one rule per prefix,
+retaining objects as long as its lifecycle rule keeps them or less
+(`us/hourly/` and `eu/hourly/` 7 days, `us/daily/` and `eu/daily/` 35,
+`us/monthly/` and `eu/monthly/` 400, `config/` 35), so no credential on the
+box can delete or overwrite an object before then; the box's token can't
+change bucket settings. The scripts only ever upload new keys
+(`rclone copyto`), so a lock breaks nothing they do.
 
 **Before R2 exists,** record when the deferral started, and remove the flag
 once `rclone.conf` is in place:
@@ -521,7 +596,11 @@ The env contract accepts only those two in production. Then on the box,
 `sudo bash /root/ggd2l-kit/ops/selfhost/cutover/compose-env.sh <lg> [--keep-secrets]`
 adds the app-role database URL and fresh AUTH, CRON and BACKUP_RECEIPT secrets
 (or, with `--keep-secrets`, the current ones), keeps the server-action key, and
-replaces the file only if the env contract passes. Staging carries no Discord
+replaces the file only if the env contract passes. Then
+`sudo -n ggd2l-agent envcheck <lg>` runs the production validation on it;
+start, promote or restart nothing on the file until it answers ok (before
+the first release, with no live release to run it from, the build runs the
+same validation and refuses the file instead). Staging carries no Discord
 credential, webhook or lobby bot. The US production env is built twice: first
 `--without-bot` (W9), then, after the site opens and Tim resets the bot token
 into `~/ggd2l-secrets/us-discord-bot-token`, again with the token and

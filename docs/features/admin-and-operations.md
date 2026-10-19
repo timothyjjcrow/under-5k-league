@@ -328,9 +328,17 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 - **Add each new required production env var to
   `scripts/validate-prod-env.mjs`** (it reports names, never values), to
   `/etc/ggd2l/<lg>.env` on the box before the release that needs it, and to the
-  env contract (`ops/selfhost/agent/env-contract.mjs`) when the box must refuse
-  a bad value before a slot starts. Never point a staging slot or a
-  development build at a production database.
+  env contract (`ops/selfhost/agent/env-contract.mjs`) only when a slot must
+  not serve at all without it and a working box always passes it. Never point
+  a staging slot or a development build at a production database.
+- **The production validation runs before a restart, never at a slot's
+  start.** Every build runs `validate-prod-env.mjs`; `box_agent envcheck <lg>`
+  runs the live release's copy against the file as it stands (as the league
+  user, names only), and every runbook that edits an env file runs it before
+  the restart and stops on a problem. The slot's `ExecStartPre` is the env
+  contract alone: a start it refused would turn a broken sign-in into a league
+  that is down, and after a reboot both. Keep `validate-prod-env.mjs`'s
+  messages naming keys (`envcheck` reports the `UPPER_SNAKE` names in them).
 - **Release strictness comes from `scripts/classify-release.mjs` taken from
   the live commit**, never the candidate. A path it does not name is unknown
   and selects the database release and the scheduler pause, so name a new
@@ -340,6 +348,17 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 - **A verified checksum is not a restorable backup.** `db:backup:verify`
   proves bytes; only a restore (`db:backup:rehearse`, which the box's weekly
   drill runs) proves the league comes back.
+- **Keep the backup's code first-party.** The hourly backup runs
+  `scripts/backup-db.mjs` and `verify-backup.mjs` (and the `src/lib/*.mjs`
+  they import) from a tools clone as `ggd2l-ops`, which holds the R2
+  credentials. The agent locks every tools clone to root after its `npm ci`
+  and runs nothing from one it has not, so the build user's npm can't change
+  them; a `node_modules` import in either script would bring third-party code
+  to those credentials. The drill runs Prisma and never sees `rclone.conf`.
+- **A rollback runs once.** `box_agent rollback <lg>` records the release it
+  left (`rolledBackFrom` in `live.json`) and a second one refuses until the
+  next promote, so a retry can't put the bad release back; going back to it
+  is `promote <lg> <id>`.
 - **Never put a credential in argv, a commit, a log, an issue, a screenshot or
   chat** (`backup-db.mjs` passes libpq env fields for this reason).
 

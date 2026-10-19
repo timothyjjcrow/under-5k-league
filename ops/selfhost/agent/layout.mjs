@@ -80,6 +80,9 @@ export function createLayout(root = "/") {
     leagueEnv: (lg) => at("etc/ggd2l", `${lg}.env`),
     migrateEnv: (lg) => at("etc/ggd2l", `${lg}-migrate.env`),
     drillEnv: at("etc/ggd2l/drill.env"),
+    // The R2 credentials: the hourly backup and the config archive upload with
+    // them; the restore drill never sees them (InaccessiblePaths=).
+    rcloneConf: at("etc/ggd2l/rclone.conf"),
     caddyfile: at("etc/caddy/Caddyfile"),
     modeFile: (lg) => at("etc/caddy/ggd2l", `${lg}-mode.caddy`),
     allowFile: at("etc/caddy/ggd2l/allow.caddy"),
@@ -107,6 +110,8 @@ export function createLayout(root = "/") {
     buildHome: at("var/cache/ggd2l-build"),
     npmCache: at("var/cache/ggd2l-build/npm"),
     lock: at("run/ggd2l-agent.lock"),
+    // Root's own folder for a verb's scratch copies (migrate's prisma/).
+    runDir: at("run"),
     rebootRequired: at("var/run/reboot-required"),
     srv: at("srv/ggd2l"),
   });
@@ -131,6 +136,7 @@ export const ERRORS = Object.freeze({
   busy: "another mutating agent verb holds the lock",
   argv_secret: "refused to place a secret in a command line",
   env_contract: "the league env file breaks the env contract",
+  env_invalid: "the league env file fails the production validation (scripts/validate-prod-env.mjs)",
   env_missing: "an env file the verb needs is missing",
   disk_low: "less than 5 GB free under /srv/ggd2l",
   fetch_failed: "git fetch of origin/main failed",
@@ -144,6 +150,7 @@ export const ERRORS = Object.freeze({
   gate_line_missing: "the build output lacks a production gate line",
   artifact_missing: "the built release lacks a required file",
   lockdown_failed: "locking down the release failed",
+  tools_lockdown_failed: "locking down the tools clone failed",
   link_escapes: "a symlink in the release points outside it",
   publish_failed: "publishing static files failed",
   release_missing: "no such release on the box",
@@ -156,6 +163,8 @@ export const ERRORS = Object.freeze({
   too_soon: "the previous slot is inside its 90 s warm overlap",
   no_live: "the league has no live release",
   no_previous: "the league has no previous release to roll back to",
+  rolled_back:
+    "live is already a rollback (rolledBackFrom); to put back the release it replaced, run promote <lg> <rolledBackFrom>",
   is_live: "refused: that release is live",
   mode_is_maintenance: "the league is in maintenance; promote with an explicit --mode",
   live_mismatch: "live.json, the Caddy mode file and the slot symlink disagree",

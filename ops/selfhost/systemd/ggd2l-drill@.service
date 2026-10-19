@@ -36,3 +36,8 @@ PrivateTmp=yes
 # share (they share the scratch database) must need no write outside it
 # (units.test.mjs checks the script).
 ReadWritePaths=/var/backups/ggd2l/%i
+# The drill uploads nothing, and it runs Prisma's CLI from the tools clone:
+# the R2 credentials, which can delete every offsite copy, stay out of its
+# reach. "-": a box with no R2 yet still drills. The agent's `drill <lg> <sha>`
+# passes the same property (agent/tools.mjs).
+InaccessiblePaths=-/etc/ggd2l/rclone.conf

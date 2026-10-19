@@ -146,14 +146,20 @@ export function assertLinksContained(dir, code = "link_escapes") {
   }
 }
 
+// A release or the bot: its group reads it, others nothing. A tools clone,
+// which the build user and ggd2l-ops both read: everyone reads it.
+const RELEASE_TREE_MODE = "g+rX,g-w,o-rwx";
+export const TOOLS_TREE_MODE = "a+rX,go-w";
+
 /**
  * Take a tree the build user wrote: root owns it (never following a link),
- * no link escapes it, then the group can read it and others nothing.
+ * no link escapes it, then nobody but root can write it, and the group (or,
+ * with TOOLS_TREE_MODE, everyone) can read it.
  */
-export async function lockDownTree(runner, dir, group, code) {
+export async function lockDownTree(runner, dir, group, code, mode = RELEASE_TREE_MODE) {
   await must(runner, code, BIN.chown, ["-R", "-P", "-h", `root:${group}`, dir]);
   assertLinksContained(dir);
-  await must(runner, code, BIN.chmod, ["-R", "g+rX,g-w,o-rwx", dir]);
+  await must(runner, code, BIN.chmod, ["-R", mode, dir]);
 }
 
 /**

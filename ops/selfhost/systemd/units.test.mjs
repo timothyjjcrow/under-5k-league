@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { RELEASE_WRITABLE_DIRS } from "../agent/layout.mjs";
+import { RELEASE_WRITABLE_DIRS, createLayout } from "../agent/layout.mjs";
 import { UNIT_ALERTS } from "../backup/discord-alert.mjs";
 
 const DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -25,6 +25,7 @@ const KNOWN = {
     "SuccessExitStatus", "Restart", "RestartSec", "MemoryHigh", "MemoryMax", "UMask",
     "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "ReadWritePaths",
     "Nice", "IOSchedulingClass", "OOMScoreAdjust", "SupplementaryGroups", "StateDirectory",
+    "InaccessiblePaths",
   ]),
   Timer: new Set(["OnCalendar", "Persistent"]),
   Install: new Set(["WantedBy"]),
@@ -55,6 +56,7 @@ const VALUES = {
   OnSuccess: /^ggd2l-alert@[a-z%-]+\.service$/,
   SupplementaryGroups: /^systemd-journal$/,
   StateDirectory: /^ggd2l-alerts$/,
+  InaccessiblePaths: /^-?\/etc\/ggd2l\/[\w.-]+$/,
 };
 
 /** Parse a unit file into Map<section, [key, value][]>, refusing anything systemd would warn about. */
@@ -251,6 +253,8 @@ test("backups run hourly at :17 as ggd2l-ops, with only their own env (§5.1)", 
   // The league folder only: everything the script writes, its lock included,
   // must live there (checked against the script below).
   assert.deepEqual(writable(unit), ["/var/backups/ggd2l/%i"]);
+  // It uploads to R2, so it alone keeps the R2 credentials (the drill doesn't).
+  assert.deepEqual(all(unit, "Service", "InaccessiblePaths"), []);
   assert.ok(!unit.has("Install"), "started by its timer only");
 });
 
@@ -270,6 +274,12 @@ test("restore drills run weekly, US Sunday 10:30Z and Europe 11:30Z (§5.1)", ()
   // drill-league.sh refuses a league folder it cannot write (state/,
   // last-drill.json): without this every drill fails at "config".
   assert.deepEqual(writable(unit), ["/var/backups/ggd2l/%i"]);
+  // The drill uploads nothing and runs Prisma's CLI from the tools clone, so
+  // the R2 credentials (Object Read & Write: they can delete every offsite
+  // copy) are out of its reach. The agent's `drill <lg> <sha>` passes the same
+  // path (tools.test.mjs), and "-" lets a box without R2 yet still drill.
+  assert.deepEqual(all(unit, "Service", "InaccessiblePaths"), [`-${createLayout("/").rcloneConf}`]);
+  assert.doesNotMatch(read("backup/drill-league.sh"), /\brclone\b/, "the drill never needs R2");
   assert.ok(!unit.has("Install"));
 });
 

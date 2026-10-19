@@ -482,7 +482,7 @@ used by every CI job.
 
    The unit sets `NODE_ENV=production` and `PORT`, and the release sets
    `LEAGUE_RELEASE_SHA`; never put them, `HOSTNAME` or any `VERCEL_*` key in
-   the file. The env contract (`box_agent envcheck <lg>`, also run before
+   the file. The env contract (run by `box_agent envcheck <lg>` and before
    every build and every slot start) refuses the file, naming only the
    offending keys, when `LEAGUE_DEPLOY_ENV` is missing or not exactly
    `production` or `staging`, `NEXT_PUBLIC_LEAGUE_REGION` isn't the file's
@@ -492,6 +492,15 @@ used by every CI job.
    differ or point anywhere but the app role on 127.0.0.1, the action key
    isn't 32 bytes, a Vercel or Neon key is present, or a staging file carries
    a Discord or lobby-bot credential.
+
+   The rest of the production rules (the three secrets' length and shape,
+   `ADMIN_STEAM_IDS`, `STEAM_API_KEY`, the Discord pairs) are
+   `scripts/validate-prod-env.mjs`, which every build runs and `envcheck`
+   runs too, from the live release, but a slot's start does not. An edit of
+   the file takes effect at the next restart, reboot or rollback with no
+   build, so run `box_agent envcheck <lg>` after every edit and restart
+   nothing until it answers ok
+   ([Secret compromise](docs/PRODUCTION-OPERATIONS.md#secret-compromise)).
 
    Leave `ALLOW_DEV_LOGIN` unset or set it exactly to `false`. Production does
    not support a first-user admin bootstrap: `ADMIN_STEAM_IDS` must already
@@ -917,8 +926,9 @@ Discord login smoke tests before moving traffic.
 
 Database migrations are forward-only and additive. Rolling the application
 back means promoting a previously tested release (`box_agent rollback <lg>`
-promotes the previous one and restarts it clean), not running SQL down
-migrations. A schema-neutral rollback between releases with the same
+promotes the previous one and restarts it clean, once: a second one refuses
+until the next promote, see [RELEASING](docs/RELEASING.md#rolling-back-a-release-that-finished)),
+not running SQL down migrations. A schema-neutral rollback between releases with the same
 authenticated automation contract does not require a backup or scheduler pause;
 roll back, verify the probes and one database-backed read, and keep watching
 the next two scheduled passes. If the rollback crosses a schema or scheduler

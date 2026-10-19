@@ -866,7 +866,8 @@ test("the agent's backup and drill calls reach these scripts' record and tools",
         // The agent's own housekeeping (log owners and modes) succeeds.
         return { code: 0, stdout: "", stderr: "" };
       };
-      const ctx = { layout, runner: createRunner({ spawnImpl }), now: () => NOW * 1000 };
+      // Both clones stand for prepared ones, which root has locked down.
+      const ctx = { layout, runner: createRunner({ spawnImpl }), now: () => NOW * 1000, ownerOf: () => 0 };
 
       const reported = await backup(ctx, "us");
       const record = JSON.parse(readFileSync(path.join(backupRoot, "us/state/last-backup.json"), "utf8"));

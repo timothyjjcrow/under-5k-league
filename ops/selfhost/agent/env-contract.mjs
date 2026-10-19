@@ -2,10 +2,19 @@
 // the box. It runs in three places and always prints NAMES only, never a value:
 //
 //   ExecStartPre   node env-contract.mjs --league us --slot a      (the unit's own env)
-//   envcheck       node env-contract.mjs --league us --file /etc/ggd2l/us.env
-//   the agent      import { checkLeagueEnv } before every build and attest
+//   install-kit    node env-contract.mjs --league us --file /etc/ggd2l/us.env
+//   the agent      import { checkLeagueEnv } before every build, attest and envcheck
 //   the bot        node env-contract.mjs --bot                      (ggd2l-bot's ExecStartPre)
 //                  node env-contract.mjs --bot --file /etc/ggd2l/bot.env
+//
+// It holds only rules a working box always passes, the ones without which a
+// slot must not serve at all: the database, the origin, the marker, the action
+// key, no Vercel, Neon or test keys, no dev login. The production validation
+// (scripts/validate-prod-env.mjs: the secrets' length and shape,
+// ADMIN_STEAM_IDS, STEAM_API_KEY, the Discord pairs) runs in every build and
+// in `envcheck`, before the restart that reads an edited file, and never at a
+// slot's start: a refused start turns a broken sign-in or admin list into a
+// league that is down, and after a reboot both leagues at once.
 //
 // A file is the league env as written (/etc/ggd2l/<lg>.env): the keys the unit
 // or release sets (NODE_ENV, PORT, LEAGUE_RELEASE_SHA...) must not be in it. A

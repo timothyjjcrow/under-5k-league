@@ -11,11 +11,12 @@
 # check out the new <sha>, run the same line. Kit changes reach the box only
 # this way, as their own recorded step, never with an app release.
 #
-# Never run it from a clone another user owns or can write, such as a tools
-# clone the build user made (npm runs package scripts as that user): root would
-# run that user's git config (core.fsmonitor runs on `git status`) and install
-# files rewritten behind a clean-looking index. It refuses such a clone before
-# it runs git or anything else from it.
+# Never run it from a clone another user owns or can write, or from a tools
+# clone or release under /srv/ggd2l (npm ran package scripts there as the
+# build user before the agent locked it to root): root would run that user's
+# git config (core.fsmonitor runs on `git status`) and install files rewritten
+# behind a clean-looking index. It refuses both before it runs git or anything
+# else from the clone.
 #
 # Idempotent, and safe on a live box. It:
 #   - creates the service users and the directory tree with its modes (§1.1-1.2)
@@ -80,6 +81,12 @@ SELFHOST="${KIT_ROOT}/ops/selfhost"
 untrusted="$(kit_untrusted "${KIT_ROOT}")" || die "could not inspect the kit clone ${KIT_ROOT}"
 [[ -z "$untrusted" ]] \
   || die "${untrusted} is owned or writable by a user other than root; run this only from root's own clone (see the header)"
+# The agent locks every tools clone and release down to root once the build
+# user's npm has run in it, so they pass the check above; what is in them is
+# still the build user's work. The same refusal is in provision-ggd2l.sh.
+case "${KIT_ROOT}/" in
+  /srv/ggd2l/*) die "${KIT_ROOT} is a clone the build user made; run this only from root's own clone (see the header)" ;;
+esac
 [[ "$(id -u)" -eq 0 ]] || die "run as root"
 . /etc/os-release
 [[ "${ID}" == "ubuntu" && "${VERSION_CODENAME}" == "noble" ]] || die "expected Ubuntu 24.04 (noble), found ${PRETTY_NAME}"

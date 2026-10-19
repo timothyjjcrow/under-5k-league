@@ -140,6 +140,13 @@ test("both scripts carry the same check and run it before any git command", () =
       const at = code.search(later);
       if (at !== -1) assert.ok(check < at, `${SCRIPTS[index]}: the check comes before ${later}`);
     }
+    // A tools clone or release passes the ownership check once the agent has
+    // locked it to root (2026-10-19), but npm ran there as the build user
+    // first: both scripts refuse anything under /srv/ggd2l, before git too.
+    const refusal = code.indexOf('case "${KIT_ROOT}/" in\n  /srv/ggd2l/*) die ');
+    assert.ok(refusal > check, `${SCRIPTS[index]} refuses a clone under /srv/ggd2l after the ownership check`);
+    for (const later of [/\bgit(_kit)? /, /\bbash "\$\{HERE\}/])
+      if (code.search(later) !== -1) assert.ok(refusal < code.search(later), `${SCRIPTS[index]}: the refusal comes before ${later}`);
     // Root needs no safe.directory exception for its own clone, and git runs
     // no fsmonitor or hook from it.
     assert.doesNotMatch(code, /safe\.directory/);
