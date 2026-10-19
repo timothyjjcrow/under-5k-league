@@ -747,7 +747,7 @@ read showing Dota's postgame marks the game over (`endInhouseGameFromBot`);
 result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,
 read-only GET of one fixture's overlay data, its version (the result cursor and
 a 10-minute bucket until the series is decided) in the path so an edge cache
-could keep each answer (Vercel's did; on the box none does);
+could keep each answer (Vercel's did; on the box none does), 60/min/IP;
 `/api/cron/automation` — the
 `CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
 60-second route ceiling); `/api/health/live` — dependency-free process
@@ -757,8 +757,10 @@ a bounded status enum (200 for fresh clean success, 503 otherwise);
 `/api/health/release` — public code identity (`ok`, `region`, `commit`, and
 `site` and `deployEnv`, the origin the build was baked with and the box's
 deploy marker) that a release reads to confirm what is live;
-`/api/calendar` — the .ics feed; `/api/calendar/inhouse-night` — the planned
-inhouse night as a one-event .ics download (404 when none);
+`/api/calendar` — the .ics feed, each feed built at most once per 30 seconds
+(an in-process memo keyed by `?team=`; it reads no cookie or session) and
+600/min/IP shared with the two downloads; `/api/calendar/inhouse-night` — the
+planned inhouse night as a one-event .ics download (404 when none);
 `/api/calendar/inhouse-time?at=` — a Play later time as a one-event .ics
 download (404 once nobody is in on it or it's over);
 `/api/reschedule?match=<id>` — read-only,

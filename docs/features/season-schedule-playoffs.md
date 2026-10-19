@@ -240,6 +240,26 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 - **Offer the subscription.** `<AddToCalendar>` (`calendarFeedLinks`) on
   /schedule and active-season team pages gives a download (a one-off copy that
   never updates), a webcal subscription and a Google "add by URL" link.
+- **Each feed is built at most once per 30 seconds per process.** No edge
+  cache sits in front on the box (DECISIONS.md, 2026-10-15), so the route
+  keeps each built feed for 30 seconds (`createShortLivedMemo`,
+  `src/lib/short-lived-memo.ts`; what Vercel's CDN used to keep it for),
+  keyed by the one thing it is built from, the trimmed `?team=` id (the bare
+  feed is `league`). Concurrent misses share one build, a team that doesn't
+  exist is never kept (made-up ids can't fill it; the real ones are bounded
+  by the league's teams) and a failed build is retried by the next caller. A
+  retime shows in a feed within 30 seconds. **The feed reads no cookie,
+  session or header**, which is what lets one copy serve every caller;
+  `route.test.ts` fails on a session, cookie or header read in the route.
+  Tailor it by viewer and the memo must go first.
+- **One address gets 600 requests a minute** (`PUBLIC_GET_LIMITS.calendar`,
+  `src/lib/public-get-limit.ts`, a 429 with Retry-After before any database
+  work), in one bucket with the inhouse night and Play later downloads. Keep
+  it generous: Google, Apple and Microsoft fetch subscriptions from a few
+  shared addresses for every subscriber, and the feed asks for an hourly
+  refresh (`REFRESH-INTERVAL`), so even a thousand subscriptions through one
+  address are under 20 a minute. The memo, not the limit, is what caps the
+  feed's database work; the limit bounds the 404 lookups and the downloads.
 
 ## Standings and tiebreakers
 

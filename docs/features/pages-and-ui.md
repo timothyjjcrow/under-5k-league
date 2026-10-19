@@ -1131,7 +1131,14 @@ the league is already draftable and many visitors have joined. Write for both.
   decided, a 10-minute bucket (`overlayRevision`) that catches a late standin
   or a retimed kickoff, so each version could be cached once for everyone.
   On the box no edge caches them (the zone has no Cache Rules), and an open
-  overlay's few requests are cheap. The page reads `/api/sync` every 30
+  overlay's few requests are cheap. Because a version is whatever the caller
+  types, one address gets 60 data reads a minute
+  (`PUBLIC_GET_LIMITS.overlay`, `src/lib/public-get-limit.ts`; a 429 before
+  any database work, which the page treats like any failed read: it keeps
+  what it shows and asks again on its next poll). The data route keeps no
+  memo: keyed by version, a made-up version walks past it, and keyed by
+  match, it could hand a new version the answer from before the result that
+  moved it. The page reads `/api/sync` every 30
   seconds, asks for data only when the version moves, and asks for nothing
   while OBS hides the source. Never add a per-poll database read, a cookie, or
   anything that differs by viewer to either route.

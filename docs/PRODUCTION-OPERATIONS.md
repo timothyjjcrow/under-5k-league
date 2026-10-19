@@ -639,9 +639,16 @@ straight to local development.
 **The limiter.** `src/lib/rate-limit.ts` keeps its buckets in each process.
 On the box one process serves a league (two during a release's 90-second
 overlap), so the limits hold league-wide, and Cloudflare's own DDoS protection
-sits in front. That limiter covers only the JSON route handlers, so page renders
-had no throttle: about 3 to 5 heavy pages a second from one client pin the one
-vCPU both leagues share (audit, 2026-10-17).
+sits in front. That limiter covers only route handlers, so page renders had no
+throttle: about 3 to 5 heavy pages a second from one client pin the one vCPU
+both leagues share (audit, 2026-10-17). Since 2026-10-19 it also covers the
+public GETs that read the database with no session: the calendar feed and its
+two downloads share 600 a minute per IP, kept generous because calendar
+providers fetch every subscriber's feed from a few shared addresses, and the
+overlay's data route allows 60 (`PUBLIC_GET_LIMITS`,
+`src/lib/public-get-limit.ts`). The health probes stay unthrottled: they are
+one cheap read, and the release agent's loopback checks would all land in the
+one `unknown` bucket.
 
 **The zone's one rate-limiting rule** (Free plan: one rule, matched on the URI
 path only, counted per IP, a 10-second period and a 10-second block). Since
@@ -694,9 +701,11 @@ above if the check ever shows `challenge`.
 **No edge cache for dynamic routes.** The zone has **no Cache Rules** and
 never "Cache Everything". The `vercel-cdn-cache-control` headers in the code
 stay and do nothing here; the box answers `/api/sync`, the calendar and the
-overlay itself. Static files (`/_next/static/*`, images under `public/`) may
-read `cf-cache-status: HIT`. Every dynamic response, signed in or not, must
-read anything but `HIT` (`DYNAMIC` normally): repeat `/api/sync`, a
+overlay itself (`/api/sync` from `unstable_cache`, the calendar from a
+30-second in-process memo of each built feed). Static files
+(`/_next/static/*`, images under `public/`) may read `cf-cache-status: HIT`.
+Every dynamic response, signed in or not, must read anything but `HIT`
+(`DYNAMIC` normally): repeat `/api/sync`, a
 representative `/api/calendar` URL, a page and a signed-in room response and
 record their `cf-cache-status`. A dynamic or personalized HIT is a release
 stop. Confirm the browser-facing `Cache-Control` still requires revalidation.

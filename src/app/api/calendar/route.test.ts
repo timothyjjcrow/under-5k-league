@@ -1,5 +1,9 @@
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { limitPublicGet, PUBLIC_GET_LIMITS } from "@/lib/public-get-limit";
+import { __resetRateLimits } from "@/lib/rate-limit";
+import { __clearShortLivedMemosForTests } from "@/lib/short-lived-memo";
 
 const mocks = vi.hoisted(() => ({
   getActiveSeason: vi.fn(),
@@ -100,12 +104,16 @@ const matchRows = [
   },
 ];
 
-function request(search = "") {
-  return new NextRequest(`https://league.example/api/calendar${search}`);
+function request(search = "", ip = "203.0.113.7") {
+  return new NextRequest(`https://league.example/api/calendar${search}`, {
+    headers: { "x-forwarded-for": ip },
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __clearShortLivedMemosForTests();
+  __resetRateLimits();
   mocks.getActiveSeason.mockResolvedValue(season);
   mocks.findTeams.mockImplementation(
     async ({ where }: { where: { seasonId: string } }) =>
@@ -341,6 +349,126 @@ describe("GET /api/calendar", () => {
     expect(body.endsWith("END:VCALENDAR\r\n")).toBe(true);
     for (const line of body.split("\r\n")) {
       expect(Buffer.byteLength(line, "utf8")).toBeLessThanOrEqual(75);
+    }
+  });
+});
+
+// On the box no edge cache sits in front of the feed, and calendar providers
+// fetch it from a few shared addresses for every subscriber: each feed is
+// built at most once per 30 seconds, and one address is refused only far
+// above what a provider sends.
+describe("GET /api/calendar under load", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const builds = () => mocks.findTeams.mock.calls.length;
+
+  it("builds each feed once per 30 seconds, however many callers ask", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-19T18:00:00Z"));
+    const first = await (await GET(request())).text();
+    for (const ip of ["66.249.64.1", "17.58.0.1", "40.76.0.1"]) {
+      expect(await (await GET(request("", ip))).text()).toBe(first);
+    }
+    expect(builds()).toBe(1);
+    expect(mocks.getActiveSeason).toHaveBeenCalledTimes(1);
+
+    // A retime lands: the feed shows it once its 30 seconds are up.
+    mocks.findMatches.mockImplementation(async () => [
+      { ...matchRows[0], scheduledAt: new Date("2026-08-12T02:00:00Z"), scheduleRevision: 1 },
+    ]);
+    vi.setSystemTime(Date.parse("2026-10-19T18:00:29.999Z"));
+    expect(await (await GET(request())).text()).toBe(first);
+    vi.setSystemTime(Date.parse("2026-10-19T18:00:30Z"));
+    const moved = await (await GET(request())).text();
+    expect(moved).toContain("DTSTART:20260812T020000Z");
+    expect(moved).toContain("SEQUENCE:1");
+    expect(builds()).toBe(2);
+  });
+
+  it("keeps the league's feed and each team's feed apart", async () => {
+    const league = await (await GET(request())).text();
+    const radiant = await (await GET(request("?team=team-radiant"))).text();
+    const old = await (await GET(request("?team=team-old-season"))).text();
+    // The trimmed id is the same feed, not a new one.
+    const padded = await (await GET(request("?team=%20team-radiant%20"))).text();
+
+    expect(league).toContain("X-WR-CALNAME:Summer Finals");
+    expect(league).toContain("match-other-team@ggd2l.vercel.app");
+    expect(radiant).toContain("X-WR-CALNAME:Radiant Raiders — Summer Finals");
+    expect(radiant).not.toContain("match-other-team@ggd2l.vercel.app");
+    expect(old).toContain("X-WR-CALNAME:Ancient Order — Spring Cup");
+    expect(padded).toBe(radiant);
+    expect(builds()).toBe(3);
+    // Each kept feed answers again from memory.
+    expect(await (await GET(request("?team=team-radiant"))).text()).toBe(radiant);
+    expect(await (await GET(request())).text()).toBe(league);
+    expect(builds()).toBe(3);
+  });
+
+  it("never keeps a team that doesn't exist", async () => {
+    expect((await GET(request("?team=team-new"))).status).toBe(404);
+    // The team is created a moment later: its link must work at once.
+    teams.push({ id: "team-new", seasonId: season.id, name: "New Blood" });
+    try {
+      const response = await GET(request("?team=team-new"));
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain("X-WR-CALNAME:New Blood — Summer Finals");
+    } finally {
+      teams.pop();
+    }
+  });
+
+  it("gives concurrent callers of a cold feed one build", async () => {
+    const bodies = await Promise.all(
+      Array.from({ length: 5 }, (_, i) => GET(request("", `192.0.2.${i + 1}`)).then((r) => r.text())),
+    );
+    expect(new Set(bodies).size).toBe(1);
+    expect(builds()).toBe(1);
+  });
+
+  it("serves a provider's whole window from one address, then refuses with Retry-After before any database work", async () => {
+    const { limit } = PUBLIC_GET_LIMITS.calendar;
+    for (let i = 0; i < limit; i += 1) {
+      const response = await GET(request(i % 2 ? "?team=team-radiant" : ""));
+      expect(response.status).toBe(200);
+    }
+    expect(builds()).toBe(2);
+    vi.clearAllMocks();
+    __clearShortLivedMemosForTests();
+
+    const refused = await GET(request("?team=team-radiant"));
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(refused.headers.get("cache-control")).toBe("no-store");
+    expect(mocks.findTeam).not.toHaveBeenCalled();
+    expect(mocks.getActiveSeason).not.toHaveBeenCalled();
+    expect(mocks.findMatches).not.toHaveBeenCalled();
+    // Another address is unaffected.
+    expect((await GET(request("", "198.51.100.2"))).status).toBe(200);
+  });
+
+  it("shares one bucket with the inhouse calendar downloads", async () => {
+    for (let i = 0; i < PUBLIC_GET_LIMITS.calendar.limit; i += 1) {
+      limitPublicGet(request(), "calendar", Date.now());
+    }
+    expect((await GET(request())).status).toBe(429);
+  });
+
+  it("reads nothing about the caller, so one kept feed is right for everyone", () => {
+    // The memo hands one copy to every caller. A feed tailored by cookie,
+    // session or header would leak through it: drop the memo first.
+    const source = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
+    for (const name of [
+      "getSessionUser",
+      "@/lib/auth",
+      "next/headers",
+      "cookies",
+      "req.headers",
+      "authorization",
+    ]) {
+      expect(source).not.toContain(name);
     }
   });
 });
