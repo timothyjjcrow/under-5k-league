@@ -19,6 +19,8 @@ import {
 import { matchNightPollOpen } from "@/lib/match-night-poll-service";
 import { MATCH_NIGHT_POLL_LABEL, leaguePitch } from "@/lib/season-copy";
 import { MatchNightPollNote } from "@/components/match-night-poll/poll-note";
+import { signupDiscordPolicy } from "@/lib/discord-roles";
+import { signupStepDetail } from "@/lib/signup-discord";
 import {
   Card,
   CardBody,
@@ -37,13 +39,13 @@ export const metadata = shareMetadata("How it works", PITCH, "/how-it-works");
 
 // Whether results can come in by themselves depends on the season's league
 // ticket, so the last step and the recording answer are built per request
-// (resultsCopy).
-function steps(results: string) {
+// (resultsCopy). The first step names the Discord a signup needs here
+// (signupStepDetail).
+function steps(results: string, signup: string) {
   return [
     {
       title: "Sign up",
-      detail:
-        "Sign in with Steam and add your roles and favorite heroes. You don't need a team: everyone signs up on their own.",
+      detail: signup,
     },
     {
       title: "Draft night",
@@ -159,7 +161,7 @@ export default async function HowItWorksPage() {
           A season in three steps
         </h2>
         <ol className="grid grid-cols-1 gap-3 md:grid-cols-3">
-          {steps(results.step).map((step, index) => (
+          {steps(results.step, signupStepDetail(signupDiscordPolicy())).map((step, index) => (
             <li key={step.title} className="min-w-0">
               <Card className="h-full">
                 <CardBody>

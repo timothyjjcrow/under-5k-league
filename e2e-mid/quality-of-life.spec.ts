@@ -250,12 +250,21 @@ test("hero table sorts in place and folds unpicked heroes into one line", async 
 test("profile saves optional details with clear dirty state", async ({
   page,
 }) => {
-  await page.goto(
-    "/api/auth/dev?name=QoL+Player&steamId=76561190000991998&redirect=/me",
-  );
+  const noErrors = trackPageErrors(page);
+  const steamId = "76561190000991998";
+  await page.goto(`/api/auth/dev?name=QoL+Player&steamId=${steamId}&redirect=/me`);
   await expect(
     page.getByRole("heading", { name: "My account", level: 1 }),
   ).toBeVisible();
+  // A signup needs a linked Discord, so link one the way the OAuth callback
+  // stores it; the signup form then opens in place of that step.
+  await expect(page.locator("#signup-discord-step")).toBeVisible();
+  await db.user.update({
+    where: { steamId },
+    data: { discordId: `7${steamId.slice(-17)}`, discordName: "qol_player" },
+  });
+  await page.reload();
+  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
   // The old four-tile setup checklist is gone; nothing is asked of someone
   // who hasn't signed up (their only step is the season card itself).
   await expect(page.locator("#signup-next-steps")).toHaveCount(0);
@@ -283,7 +292,15 @@ test("profile saves optional details with clear dirty state", async ({
     page.getByRole("button", { name: "Update signup" }),
   ).toBeVisible();
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-  // Right under the button they just pressed: what is still left to do.
+  // Linked before signing up, so nothing is left to do.
+  await expect(page.locator("#signup-next-steps")).toHaveCount(0);
+  // A player who unlinks after signing up keeps their signup and their form,
+  // and the list right under it asks for the link again.
+  await db.user.update({
+    where: { steamId },
+    data: { discordId: null, discordName: "" },
+  });
+  await page.reload();
   const nextSteps = page.locator("#signup-next-steps");
   await expect(
     nextSteps.getByRole("heading", { name: "You're signed up. Next:" }),
@@ -293,7 +310,7 @@ test("profile saves optional details with clear dirty state", async ({
       name: /^(Link|Add) your Discord so captains can reach you$/,
     }),
   ).toHaveAttribute("href", "#profile-discord");
-  await page.reload();
+  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
   // Returning players see their current participation without the full form.
   const savedSignup = page.locator("#signup-details");
   await expect(savedSignup).not.toHaveAttribute("open", "");
@@ -308,6 +325,7 @@ test("profile saves optional details with clear dirty state", async ({
   await expect(
     page.getByLabel("About you (public, shown to captains)"),
   ).toHaveValue("Practice communication");
+  noErrors();
 });
 
 test("news and admin history paginate while old news hashes still resolve", async ({

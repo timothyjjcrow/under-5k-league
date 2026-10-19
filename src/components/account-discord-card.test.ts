@@ -14,7 +14,6 @@ const base: Props = {
   linkAvailable: true,
   autoJoins: true,
   isCaptain: false,
-  warnBeforeLeaving: false,
   pingOptIn: { available: false, on: false },
   unlinkAction: noop,
   saveHandleAction: noop,

@@ -310,8 +310,10 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Honour `?next=` only on full success.** `safeReturnPath` checks it at pack
   and unpack (the cookie is client-held). `oauthLandingPath` uses it only for
   `joined`/`linked`; every other code goes to `/me?discord=<code>`, the only
-  page that renders and scrubs it. Dashboard cards pass `next="/"`. A
-  half-filled signup form is still lost to the redirect.
+  page that renders and scrubs it. Dashboard cards pass `next="/"`. No
+  half-filled signup form is lost to the redirect: /me shows the Discord step
+  in place of the form until it is done
+  ([players-and-registration](players-and-registration.md#discord-before-a-signup)).
 - **Map only known `?discord=` codes** (`discordLinkNote`, `hasOwnProperty`, so
   `__proto__` gets the generic note); `<StripQueryParam param="discord">`
   scrubs it after render. The live membership answer beats the code.
@@ -335,7 +337,11 @@ actions: `src/app/actions/admin-discord.ts`.
   `SWEEP_DEADLINE_MS` (per-call timeouts compound); late ids come back null.
   The bulk member list would need the GUILD_MEMBERS privileged intent, one more
   way to be half-configured.
-- **Warn and name; never block** signup or `startDraft` on Discord.
+- **A new signup needs Discord; nothing else blocks on it.** Joining a season
+  needs a linked account in the server, and an unknown answer never refuses
+  ([players-and-registration](players-and-registration.md#discord-before-a-signup),
+  Tim's call, 2026-10-19). `startDraft`, standin bookings and every other
+  path warn and name, never block.
 - **/me has one card** (`account-discord-card.tsx`). Pure `discordCardCtas`
   gives one primary button per state, and the callback's join button only when
   membership is unknown, so CTAs never stack. The typed handle hides behind

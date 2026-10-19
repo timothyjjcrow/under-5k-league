@@ -1,9 +1,17 @@
 import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { MID_DB_URL } from "../playwright.midseason.config";
 import {
   expectNoHorizontalOverflow,
   expectNoSqueezedText,
   trackPageErrors,
 } from "./helpers";
+
+// This suite writes only to the explicitly configured disposable fixture.
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
 
 // Signed-in mid-season surfaces: fantasy (locked once games imported — the
 // fixture has games, so assert the locked state renders) and pick'em.
@@ -16,7 +24,10 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
-  await page.goto("/");
+  // A fixed account, so the spec can link its Discord the way the OAuth
+  // callback does, without a trip to Discord.
+  const steamId = "76561190000995101";
+  await page.goto(`/api/auth/dev?name=Late+Standin&steamId=${steamId}&redirect=/`);
 
   const cta = page.getByRole("link", { name: "Register as a standin" });
   await expect(cta).toBeVisible();
@@ -30,6 +41,32 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
   await expect(
     page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
+  // A signup needs a linked Discord first (this suite links accounts, as both
+  // leagues do), so the signup card asks for it in place of the form.
+  const step = page.locator("#signup-discord-step");
+  await expect(
+    step.getByRole("heading", { name: "Link your Discord to sign up" }),
+  ).toBeVisible();
+  // It points at the Discord card, whose button does the link.
+  await expect(
+    step.getByRole("link", { name: "Link your Discord" }),
+  ).toHaveAttribute("href", "#profile-discord");
+  await expect(
+    page
+      .locator("#profile-discord")
+      .getByRole("link", { name: "Link Discord", exact: true }),
+  ).toHaveAttribute("href", "/api/auth/discord");
+  await expect(
+    page.getByRole("button", { name: "Register as a standin", exact: true }),
+  ).toHaveCount(0);
+
+  // Linked, as the callback stores it: the form opens.
+  await db.user.update({
+    where: { steamId },
+    data: { discordId: `7${steamId.slice(-17)}`, discordName: "late_standin" },
+  });
+  await page.reload();
+  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
   // Mid-season only a standin signup is possible, so the form offers no
   // greyed-out Full player choice and its button says what it does.
   await expect(page.getByRole("radio")).toHaveCount(0);

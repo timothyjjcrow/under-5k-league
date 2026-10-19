@@ -59,7 +59,6 @@ export function AccountDiscordCard({
   linkAvailable,
   autoJoins,
   isCaptain,
-  warnBeforeLeaving,
   pingOptIn,
   unlinkAction,
   saveHandleAction,
@@ -77,8 +76,6 @@ export function AccountDiscordCard({
   linkAvailable: boolean;
   autoJoins: boolean;
   isCaptain: boolean;
-  /** Warn that the OAuth link leaves the page (an unsaved signup is lost). */
-  warnBeforeLeaving: boolean;
   /** `on: null` = unknown; rendered as unknown, never as "off". */
   pingOptIn: { available: boolean; on: boolean | null };
   unlinkAction: FormAction;
@@ -285,9 +282,6 @@ export function AccountDiscordCard({
                 {autoJoins
                   ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
                   : "Join the server with the invite, and link your account so captains can ping you. Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."}
-                {warnBeforeLeaving
-                  ? " Linking leaves this page, so save your signup first if you've started it."
-                  : ""}
               </p>
             ) : null}
             {discordName ? (
