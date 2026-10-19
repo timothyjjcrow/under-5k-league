@@ -25,9 +25,9 @@ const KNOWN = {
     "SuccessExitStatus", "Restart", "RestartSec", "MemoryHigh", "MemoryMax", "UMask",
     "NoNewPrivileges", "ProtectSystem", "ProtectHome", "PrivateTmp", "ReadWritePaths",
     "Nice", "IOSchedulingClass", "OOMScoreAdjust", "SupplementaryGroups", "StateDirectory",
-    "InaccessiblePaths",
+    "InaccessiblePaths", "RuntimeDirectory", "RuntimeDirectoryMode",
   ]),
-  Timer: new Set(["OnCalendar", "Persistent"]),
+  Timer: new Set(["OnCalendar", "Persistent", "RandomizedDelaySec"]),
   Install: new Set(["WantedBy"]),
 };
 const VALUES = {
@@ -57,6 +57,9 @@ const VALUES = {
   SupplementaryGroups: /^systemd-journal$/,
   StateDirectory: /^ggd2l-alerts$/,
   InaccessiblePaths: /^-?\/etc\/ggd2l\/[\w.-]+$/,
+  RuntimeDirectory: /^caddy$/,
+  RuntimeDirectoryMode: /^0[0-7]00$/,
+  RandomizedDelaySec: /^\d+m$/,
 };
 
 /** Parse a unit file into Map<section, [key, value][]>, refusing anything systemd would warn about. */
@@ -435,9 +438,13 @@ test("Caddy, the packaged unit both leagues go through, restarts on failure and 
   const dropIn = parseUnit(read("systemd/caddy.service.d/10-ggd2l.conf"), "caddy drop-in");
   assert.deepEqual([...dropIn.keys()], ["Unit", "Service"]);
   assert.deepEqual(dropIn.get("Unit"), [["StartLimitIntervalSec", "0"]], "never gives up, like the tunnel");
-  // Only the restart policy and the OOM priority: the package keeps its own
+  // Only the restart policy, the OOM priority and the admin socket's folder
+  // (caddy.test.mjs ties it to the Caddyfile): the package keeps its own
   // ExecStart, user, sandbox and reload.
-  assert.deepEqual(dropIn.get("Service"), [["Restart", "on-failure"], ["RestartSec", "2"], ["OOMScoreAdjust", "-500"]]);
+  assert.deepEqual(dropIn.get("Service"), [
+    ["Restart", "on-failure"], ["RestartSec", "2"], ["OOMScoreAdjust", "-500"],
+    ["RuntimeDirectory", "caddy"], ["RuntimeDirectoryMode", "0700"],
+  ]);
   // Kill order under memory pressure: a build (600) first, then a slot (0, no
   // setting), then Caddy, and PostgreSQL's postmaster (-900, its package) last.
   const caddy = Number(one(dropIn, "Service", "OOMScoreAdjust"));
@@ -452,6 +459,45 @@ test("Caddy, the packaged unit both leagues go through, restarts on failure and 
   assert.ok(loop > 0, "install-kit.sh walks every drop-in folder");
   assert.ok(code.includes('install_unit_file "$src" "${UNIT_DIR}/$(basename "$dropin")/$(basename "$src")"'));
   assert.ok(code.indexOf("\nsystemctl daemon-reload\n", loop) > loop, "a daemon-reload follows the drop-ins");
+});
+
+// 2026-10-19 audit: stock Ubuntu installs updates at 06:00-07:00 UTC, late
+// evening in the US league's zone, and a PostgreSQL update restarts the
+// cluster as it installs. provision-base.sh moves the run next to the 09:00
+// reboot window. install-kit.sh must never install it: a daemon-reload counts
+// the timer's next run from its last one, so a kit install at another hour
+// could start an upgrade (and that restart) at once.
+test("unattended upgrades install at 08:00 UTC and end before the 09:00 reboot; only provision-base.sh moves the timer", () => {
+  const base = read("provision-base.sh");
+  const target = "/etc/systemd/system/apt-daily-upgrade.timer.d/90-ggd2l.conf";
+  const heredoc = new RegExp(`\\ncat > ${target.replaceAll(".", "\\.")} <<'EOF'\\n([\\s\\S]*?\\n)EOF\\n`).exec(base);
+  assert.ok(heredoc, `provision-base.sh writes ${target}`);
+  const dropIn = parseUnit(heredoc[1], "apt-daily-upgrade drop-in");
+  assert.deepEqual([...dropIn.keys()], ["Timer"]);
+  // An empty OnCalendar= drops the stock 6:00 first; without it both would run.
+  const calendars = all(dropIn, "Timer", "OnCalendar");
+  assert.equal(calendars.length, 2);
+  assert.equal(calendars[0], "");
+  const at = /^\*-\*-\* (\d\d):(\d\d) UTC$/.exec(calendars[1]);
+  assert.ok(at, `one daily UTC time: ${calendars[1]}`);
+  const start = Number(at[1]) * 60 + Number(at[2]);
+  const latest = start + Number(/^(\d+)m$/.exec(one(dropIn, "Timer", "RandomizedDelaySec"))[1]);
+  const reboot = /^Unattended-Upgrade::Automatic-Reboot-Time "(\d\d):(\d\d)";$/m.exec(base);
+  const rebootAt = Number(reboot[1]) * 60 + Number(reboot[2]);
+  // A run still going at the reboot time pushes the reboot to the next day.
+  assert.ok(rebootAt - latest >= 45, `the latest start (minute ${latest}) leaves 45 minutes before the reboot (${rebootAt})`);
+  assert.ok(rebootAt - start <= 60, "next to the reboot window, not in a league's evening");
+  // Written after the last apt-get (a run it starts at once holds the dpkg
+  // lock), then systemd re-reads it.
+  const code = base.replace(/^\s*#.*$/gm, "");
+  const write = code.indexOf(`cat > ${target} <<'EOF'`);
+  assert.ok(code.lastIndexOf("apt-get ") < write, "no apt-get runs after the timer moves");
+  assert.ok(code.indexOf("\nsystemctl daemon-reload\n", write) > write, "a daemon-reload follows it");
+  assert.doesNotMatch(installKit, /apt-daily/, "install-kit.sh never touches the timer");
+  // The box that predates it gets the same file once, by hand.
+  const readme = read("README.md").replace(/^ {3}/gm, "");
+  assert.ok(readme.includes(`sudo tee ${target} > /dev/null <<'EOF'\n${heredoc[1]}EOF\nsudo systemctl daemon-reload\n`),
+    "the README's one-time step writes the same drop-in");
 });
 
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {

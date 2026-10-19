@@ -27,7 +27,10 @@
 #     caddy.service its restart policy), and NEVER enables, disables, starts,
 #     stops or restarts any of them
 #   - installs the Caddyfile; a league with no mode file yet gets the
-#     maintenance one, and an existing mode file (a live site) is never touched
+#     maintenance one, and an existing mode file (a live site) is never touched;
+#     then reloads Caddy, or, when the running Caddy is not on the admin socket
+#     the Caddyfile names, restarts it if no slot or bot runs and otherwise
+#     says it NEEDS A RESTART
 #   - installs the PostgreSQL settings and pg_hba rules, then creates or
 #     re-asserts both league databases and roles (provision-league-db.sh)
 #   - renders /etc/cloudflared/config.yml once the tunnel's credentials exist
@@ -47,6 +50,8 @@ LIB=/usr/local/lib/ggd2l
 AGENT_BIN=/usr/local/sbin/ggd2l-agent
 UNIT_DIR=/etc/systemd/system
 PG_ETC="/etc/postgresql/${PG_MAJOR}/main"
+# The Caddyfile's admin API (caddy.test.mjs keeps the two equal).
+CADDY_ADMIN_SOCKET=/run/caddy/admin.sock
 
 log() { printf '\n== %s\n' "$*"; }
 note() { printf '   %s\n' "$*"; }
@@ -197,6 +202,31 @@ active_units() {
     'ggd2l-us@*.service' 'ggd2l-eu@*.service' 'ggd2l-bot.service' | awk '{print $1}'
 }
 as_build() { runuser -u ggd2l-build -- env HOME=/var/cache/ggd2l-build "$@"; }
+# caddy_reload <1 if a Caddy file changed>: make the running Caddy serve the
+# installed files. `caddy reload` (the unit's ExecReload) reaches the running
+# Caddy at the admin address the NEW Caddyfile names, the socket in /run/caddy.
+# A Caddy started before that socket existed (the package's own config, or a
+# kit from before 2026-10-19 on localhost) cannot take that reload, and only a
+# restart makes the socket and its folder (the drop-in's RuntimeDirectory=):
+# done here only while no slot or bot runs, like PostgreSQL's restart below.
+caddy_reload() {
+  local live
+  if systemctl is-active --quiet caddy && [[ ! -S "${CADDY_ADMIN_SOCKET}" ]]; then
+    live="$(active_units | tr '\n' ' ')"
+    if [[ -z "$live" ]]; then
+      systemctl restart caddy
+      note "restarted: the admin API is now ${CADDY_ADMIN_SOCKET}"
+    else
+      note "NEEDS A RESTART: the running Caddy is not on its admin socket ${CADDY_ADMIN_SOCKET}, so every reload fails (the agent's mode switches, so releases, too) until: systemctl restart caddy"
+      note "do it now, in a quiet minute: both sites answer 502 for a few seconds (${live}is running)"
+    fi
+  elif [[ "$1" -eq 1 ]]; then
+    systemctl reload-or-restart caddy
+    note "reloaded"
+  else
+    note "unchanged"
+  fi
+}
 
 log "Users (§1.1)"
 # The build user's home is its npm cache folder, as the agent sets HOME.
@@ -342,7 +372,7 @@ if [[ -n "$changed_units" ]]; then
   [[ -z "$live" ]] || note "running units keep their old definition until restarted: ${live}"
   case " ${changed_units} " in
     *" caddy.service.d/"*)
-      note "caddy: Restart= applies from now on; OOMScoreAdjust= from its next start (a reboot, or systemctl restart caddy in a quiet minute)" ;;
+      note "caddy: Restart= applies from now on; OOMScoreAdjust= and RuntimeDirectory= (the admin socket's folder) from its next start" ;;
   esac
 else
   note "unchanged"
@@ -433,12 +463,7 @@ else
   mv -f /etc/caddy/Caddyfile.ggd2l-new /etc/caddy/Caddyfile
   caddy_changed=1
 fi
-if [[ "$caddy_changed" -eq 1 ]]; then
-  systemctl reload-or-restart caddy
-  note "reloaded"
-else
-  note "unchanged"
-fi
+caddy_reload "$caddy_changed"
 
 log "Cloudflare Tunnel (§1.8)"
 uuid=""
@@ -511,5 +536,7 @@ Check (as root):
   cat /proc/\$(systemctl show -p MainPID --value caddy.service)/oom_score_adj   # the running Caddy: -500 only after its next start
   # (choom -p <that pid> -n -500 applies it now, without the blink of a restart)
   runuser -u caddy -- env HOME=/var/lib/caddy caddy validate --adapter caddyfile --config /etc/caddy/Caddyfile
+  stat -c '%A %U:%G %n' /run/caddy ${CADDY_ADMIN_SOCKET}   # drwx------ caddy:caddy, then srw------- caddy:caddy
+  curl -sS -m 3 http://localhost:2019/config/   # refused: the admin API is only the socket
   ggd2l-agent status
 EOF

@@ -1098,7 +1098,7 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | --- | --- |
 | `ggd2l-us@a`, `ggd2l-us@b`, `ggd2l-eu@a`, `ggd2l-eu@b` | The leagues' Next slots; only each league's live slot is enabled |
 | `cloudflared-ggd2l.service` | The Cloudflare Tunnel, outbound only |
-| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/`. The package's unit plus the kit's drop-in `caddy.service.d/10-ggd2l.conf`: restart on failure (2 s, never giving up) and `OOMScoreAdjust=-500`, since the packaged unit never restarts and both leagues go through it |
+| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/`. The package's unit plus the kit's drop-in `caddy.service.d/10-ggd2l.conf`: restart on failure (2 s, never giving up) and `OOMScoreAdjust=-500`, since the packaged unit never restarts and both leagues go through it, and `RuntimeDirectory=caddy` (0700) for its admin API, the socket `/run/caddy/admin.sock` (0600) that only caddy and root can open (until 2026-10-19 it was TCP `localhost:2019`, open to every local user) |
 | `postgresql@18-main` | Both leagues' databases on 127.0.0.1:5432 |
 | `ggd2l-backup@us.timer`, `ggd2l-backup@eu.timer` | Hourly dumps at :17 |
 | `ggd2l-drill@us.timer`, `ggd2l-drill@eu.timer` | Weekly restore drills, Sundays 10:30 and 11:30 UTC |
@@ -1130,13 +1130,21 @@ the build creates both). Each slot process holds one Prisma pool of
 PostgreSQL's 47 usable connections; a release built before 2026-10-17 holds
 two pools per process.
 
-**The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
-PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
-reboot at 09:00 UTC when an update needs it. Only live slots are enabled, so
-exactly they come back; the scheduler Workers wait for 10 failed passes in a
-row before alerting until 09:15 UTC, which covers the gap.
-Before a release near 09:00 UTC, check `pending reboot` in `box_agent status`
-and don't run one across it.
+**Package updates and the 09:00 UTC reboot.** Unattended upgrades install
+security updates, plus PostgreSQL, cloudflared, Node and Caddy updates within
+their pinned majors, at 08:00-08:10 UTC (a drop-in for `apt-daily-upgrade.timer`
+from `provision-base.sh`; stock Ubuntu runs them at 06:00-07:00 UTC, late
+evening in the US league's zone), and reboot at 09:00 UTC when an update needs
+it. A PostgreSQL update restarts the cluster as it installs, dropping both
+leagues' connections for a moment, and needrestart may restart a live slot,
+the bot or the tunnel whose Node or libraries changed: a pass or two can fail
+at 08:00-08:15, under the 3 an alert needs. Only live slots are enabled, so
+exactly they come back from the reboot; the scheduler Workers wait for 10
+failed passes in a row before alerting until 09:15 UTC, which covers the gap.
+Before a release between 08:00 and 09:15 UTC, check `pending reboot` in
+`box_agent status`, and don't run one across the package window or the
+reboot. The box that predates the drop-in gets it once by hand
+(`ops/selfhost/README.md`, Kit changes).
 
 **Alerts.** Discord, in the admin channel ([DECISIONS](DECISIONS.md#hosting)):
 
@@ -1187,11 +1195,13 @@ alias `ggd2l-1` pins the host key. Review `authorized_keys` monthly.
 verified, gzipped, age-encrypted to Tim's offline key and copied to R2
 (`ggd2l-backups`). Daily at 04:47 UTC, `ggd2l-config-archive.timer` runs
 `config-archive.sh` as root: an age-encrypted archive of `/etc/ggd2l`,
-`/etc/cloudflared` and `/etc/caddy` to R2 (`config/`), so a rebuild can
-recover the secrets. After changing anything in those folders (an env file, a
-secret, the tunnel, or an `install-kit.sh` run, which rewrites files in all
-three), run `sudo systemctl start ggd2l-config-archive` right away rather
-than waiting up to a day for the timer. The uploads pass rclone
+`/etc/cloudflared`, `/etc/caddy` and the lobby bot's state in
+`/var/lib/ggd2l-bot` (its Steam session, `steam/` and `lobbies.json`, never its
+locks or logs) to R2 (`config/`), so a rebuild can recover the secrets and the
+bot without a new Steam sign-in. After changing anything in those folders (an
+env file, a secret, the tunnel, or an `install-kit.sh` run, which rewrites
+files in the first three), run `sudo systemctl start ggd2l-config-archive`
+right away rather than waiting up to a day for the timer. The uploads pass rclone
 `--s3-no-check-bucket` (the token may not create the bucket) and
 `--s3-no-head` (the box's rclone 1.60.1 would HEAD each fresh upload with a
 versionId R2 refuses; the kit README's Backups section has the detail and a
@@ -1224,11 +1234,19 @@ decrypt drill.
 root's own clone (for example `/root/ggd2l-kit`; the script refuses a clone any
 other user could change). Tim decrypts the newest dumps on the Mac, and they are
 copied with their `.sha256` into `/var/backups/ggd2l/cutover/<lg>/`. Restore
-`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` from the newest config
+`/etc/ggd2l`, `/etc/cloudflared`, `/etc/caddy` and the lobby bot's state
+(`/var/lib/ggd2l-bot`, in archives from 2026-10-19 on) from the newest config
 archive (Tim decrypts it on the Mac and streams it in, as the kit README's
 "Rebuild from zero" shows); if none exists, regenerate or supply again every
 file in them, a new tunnel included (Tim's `cloudflared tunnel login`). Then
 `box_agent import` each league (a fresh install leaves every site in
 maintenance, which `import` requires; run `box_agent identity <lg>` only if
 a dump predates the cutover's identity markers), build, start and promote
-each league at the live commit, and start the tunnel.
+each league at the live commit, and bring the lobby bot back once the old
+box's bot is surely off (one Steam account never runs in two places):
+`box_agent bot-deploy <live sha>`, `sudo systemctl enable --now ggd2l-bot`,
+then `box_agent bot-status`. Without a saved session in the restored state,
+Tim signs the bot in from his own terminal before the enable (the
+`systemd-run` login in [DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md#on-the-box), step 7);
+if Steam refuses the saved one, stop the unit, sign in, start it. Then start
+the tunnel.

@@ -75,7 +75,8 @@ site in maintenance, empty league databases. To bring the leagues back
     offline age key and stream it straight in, so no plaintext lands on
     either disk:
       age -d -i <key file> config-<stamp>.tar.gz.age | ssh ggd2l-1 'sudo tar -C / -xzpf -'
-    That restores /etc/ggd2l, /etc/cloudflared and /etc/caddy.
+    That restores /etc/ggd2l, /etc/cloudflared, /etc/caddy and (in an
+    archive from 2026-10-19 on) the lobby bot's state, /var/lib/ggd2l-bot.
  3. Re-run install-kit.sh ${SHA}, so the database roles take the restored
     passwords, owners and modes match the new users, and the tunnel config
     renders.
@@ -88,7 +89,12 @@ site in maintenance, empty league databases. To bring the leagues back
     attests them), and identity refuses a database it would not change.
  6. systemctl enable --now cloudflared-ggd2l, then the timers:
     ggd2l-backup@us.timer ggd2l-backup@eu.timer ggd2l-drill@us.timer
-    ggd2l-drill@eu.timer ggd2l-heartbeat.timer ggd2l-config-archive.timer
-    (and ggd2l-bot after §7). Take one backup per league and watch
-    healthchecks go green.
+    ggd2l-drill@eu.timer ggd2l-heartbeat.timer ggd2l-config-archive.timer.
+    Take one backup per league and watch healthchecks go green.
+ 7. The lobby bot, once the old box's bot is surely stopped (one Steam
+    account never runs in two places): ggd2l-agent bot-deploy ${SHA}, then
+    systemctl enable --now ggd2l-bot and ggd2l-agent bot-status. With no
+    saved session in /var/lib/ggd2l-bot Tim signs it in from his own
+    terminal first; if Steam refuses the saved one, stop the unit, Tim signs
+    it in, start it (ops/selfhost/README.md, Rebuild from zero, step 7).
 EOF

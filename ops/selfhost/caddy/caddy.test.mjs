@@ -65,7 +65,7 @@ test("Caddy listens only on 127.0.0.1:8080 and trusts CF-Connecting-IP from clou
     "http://:8080",
   ]);
   assert.deepEqual(caddyfile.get(""), [
-    "admin localhost:2019",
+    "admin unix//run/caddy/admin.sock|0600",
     "auto_https off",
     "servers {",
     "trusted_proxies static 127.0.0.1/32 ::1/128",
@@ -74,6 +74,39 @@ test("Caddy listens only on 127.0.0.1:8080 and trusts CF-Connecting-IP from clou
   ]);
   for (const [address, body] of caddyfile)
     if (address) assert.equal(body[0], "bind 127.0.0.1", `${address} binds loopback only`);
+});
+
+// 2026-10-19 audit: on localhost:2019 the admin API took POST /load from any
+// local user with no authentication, so either league's slot, the bot or a
+// build could reroute both leagues. It is a socket only caddy and root open.
+test("Caddy's admin API is a socket only caddy and root can open, in the folder systemd makes for it", () => {
+  const admin = caddyfile.get("").filter((line) => line.startsWith("admin "));
+  assert.equal(admin.length, 1);
+  const match = /^admin unix\/(\/run\/([a-z]+)\/[a-z]+\.sock)\|(0[0-7]{3})$/.exec(admin[0]);
+  assert.ok(match, `the admin API is a unix socket with an explicit mode, never a TCP address: ${admin[0]}`);
+  const [, socket, folder, mode] = match;
+  assert.equal(Number.parseInt(mode, 8) & 0o077, 0, "the socket has no group or other access");
+  // Without the suffix Caddy makes the socket 0200; the folder is the second
+  // fence, and systemd makes it at each start for the unit's user (caddy).
+  const dropIn = read("systemd/caddy.service.d/10-ggd2l.conf");
+  assert.match(dropIn, new RegExp(`^RuntimeDirectory=${folder}$`, "m"));
+  assert.match(dropIn, /^RuntimeDirectoryMode=0700$/m);
+  // install-kit.sh decides between a reload and a restart by that socket.
+  const installKit = read("install-kit.sh");
+  assert.equal(/^CADDY_ADMIN_SOCKET=(.*)$/m.exec(installKit)?.[1], socket);
+  // Nothing the kit runs calls the admin API itself: every reload is the
+  // unit's ExecReload (`caddy reload --config /etc/caddy/Caddyfile`, which
+  // reads the address from the Caddyfile), through systemctl. (install-kit.sh's
+  // closing checks are printed for the operator, not run.)
+  const files = [
+    "install-kit.sh", "provision-base.sh", "provision-ggd2l.sh",
+    ...["caddy-modes.mjs", "releases.mjs", "status.mjs", "ggd2l-agent.mjs"].map((f) => `agent/${f}`),
+    ...["heartbeat.sh", "discord-alert.mjs"].map((f) => `backup/${f}`),
+  ];
+  for (const file of files) {
+    const code = read(file).split("\nCheck (as root):\n")[0].replace(/^\s*(#|\/\/|\*).*$/gm, "");
+    assert.doesNotMatch(code, /:2019\b|caddy reload|--address|\/load\b|\/config\/|unix-socket/, `${file} calls Caddy's admin API`);
+  }
 });
 
 test("each league block serves its own static union and imports its own mode file", () => {

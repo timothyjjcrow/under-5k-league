@@ -53,7 +53,11 @@ govern them.
   holds no other credential.
 - It is between **07:00 and 19:00 UTC**, and no match night, inhouse night or
   draft is on. The release refuses outside those hours unless you pass
-  `--outside-window`, which is for a reviewed emergency only.
+  `--outside-window`, which is for a reviewed emergency only. Keep it clear
+  of the box's package updates at 08:00-08:15 UTC and of a pending 09:00
+  reboot (`pending reboot` in `box_agent status`): either can restart
+  PostgreSQL or a slot under it
+  ([PRODUCTION-OPERATIONS](PRODUCTION-OPERATIONS.md#box-operations)).
 - Nobody else is releasing: check for another release session first.
 
 ### 1. Plan

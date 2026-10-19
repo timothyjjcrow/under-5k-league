@@ -36,7 +36,7 @@ R2 bucket ggd2l-backups: age-encrypted dumps and config archives
 ```
 
 Ubuntu 24.04, 1 vCPU, 2 GB RAM plus 4 GB swap, ufw open for SSH only, unattended
-upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
+upgrades at 08:00 UTC with a reboot window at 09:00 UTC, journald capped at 500 MB.
 
 | What | Where |
 |---|---|
@@ -51,6 +51,8 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 | Settings and secrets (root) | `/etc/ggd2l/` |
 | Caddy mode files | `/etc/caddy/ggd2l/{us,eu}-mode.caddy`, `/etc/caddy/ggd2l/allow.caddy` |
 | Tunnel | `/etc/cloudflared/config.yml`, `/etc/cloudflared/<uuid>.json` |
+| Caddy's admin API | the socket `/run/caddy/admin.sock` (0600 in a 0700 folder, both `caddy`'s): only caddy and root can open it |
+| Lobby bot | code `/srv/ggd2l/bot/current` (`agent bot-deploy <sha>`), settings `/etc/ggd2l/bot.env`, state `/var/lib/ggd2l-bot` (0700 `ggd2l-bot`, in the daily config archive) |
 | Backups | `/var/backups/ggd2l/<lg>/{local,offsite,state}/`, `/var/backups/ggd2l/config/` |
 | Cutover dumps | `/var/backups/ggd2l/cutover/<lg>/` (root, 0700) |
 | Logs | journald; Caddy JSON access logs in `/var/log/caddy/{us,eu,apex}.access.json` |
@@ -62,14 +64,25 @@ enabled), `cloudflared-ggd2l.service`, `ggd2l-backup@<lg>.timer`,
 drill and config-archive units, never enabled), and the caddy package's
 `caddy.service` with the kit's
 drop-in `caddy.service.d/10-ggd2l.conf`: the packaged unit never restarts, so
-the drop-in adds `Restart=on-failure` (every 2 s, never giving up) and
+the drop-in adds `Restart=on-failure` (every 2 s, never giving up),
 `OOMScoreAdjust=-500` (the kernel kills a build or a slot before Caddy;
-PostgreSQL stays at -900). `install-kit.sh` installs it; `Restart=` applies at
-once, `OOMScoreAdjust=` from Caddy's next start (the next reboot, or
-`sudo systemctl restart caddy` in a quiet minute: both sites blink for about a
-second; `sudo choom -p <pid> -n -500` sets it on the running process with no
-blink). `systemctl show` reports the unit's value at once, so check the live
-process: `cat /proc/$(systemctl show -p MainPID --value caddy)/oom_score_adj`.
+PostgreSQL stays at -900) and `RuntimeDirectory=caddy` (0700), the folder of
+Caddy's admin API socket. `install-kit.sh` installs it; `Restart=` applies at
+once, the rest from Caddy's next start (the next reboot, or
+`sudo systemctl restart caddy` in a quiet minute: both sites blink for a
+second or a few; `sudo choom -p <pid> -n -500` sets the OOM score on the
+running process with no blink). `systemctl show` reports the unit's value at
+once, so check the live process:
+`cat /proc/$(systemctl show -p MainPID --value caddy)/oom_score_adj`.
+
+**Caddy's admin API** can replace the whole live configuration, so it is the
+socket `/run/caddy/admin.sock` (0600) in that 0700 folder, which only caddy
+and root can open. Until 2026-10-19 it listened on `localhost:2019` with no
+authentication, where any local user (either league's slot, the bot, a build)
+could reroute both leagues. Nothing calls it but `caddy reload`, the unit's
+`ExecReload`, which reads the socket from the Caddyfile: the agent and
+`install-kit.sh` reload through `systemctl`. Read the live configuration as
+root with `sudo curl -sS --unix-socket /run/caddy/admin.sock http://localhost/config/`.
 
 Linux users: `ggd2l` (admin, sudo), `ggd2l-build` (builds; holds no secret),
 `ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, drills,
@@ -152,9 +165,17 @@ heartbeat), `ggd2l-bot`.
   healthchecks.io pings still go out where `healthchecks.env` names a check
   (below), as they always did: `box`, `automation`, `backup-us`, `backup-eu`,
   `drill`, `bot` and `config`.
-- **The 09:00 UTC reboot** brings back exactly the enabled (live) slots. The
-  Workers' reboot window (10 failed passes before an alert until 09:15 UTC)
-  covers it.
+- **Package updates** install at 08:00-08:10 UTC, from `provision-base.sh`'s
+  drop-in for `apt-daily-upgrade.timer` (stock Ubuntu runs them at
+  06:00-07:00 UTC, late evening in the US league's zone). A PostgreSQL update
+  restarts the cluster as it installs, and needrestart may restart a live slot,
+  the bot or the tunnel whose Node or libraries changed, so a pass or two can
+  fail then; an alert needs 3. `systemctl list-timers apt-daily-upgrade.timer`
+  shows the next run.
+- **The 09:00 UTC reboot** (when an update needs one) brings back exactly the
+  enabled (live) slots. The Workers' reboot window (10 failed passes before an
+  alert until 09:15 UTC) covers it. Keep releases clear of 08:00-08:15 UTC and
+  of a pending reboot.
 - **Maintenance page:** `sudo -n ggd2l-agent mode <lg> maintenance`, and
   `mode <lg> proxy` to reopen. The page answers the scheduler with a 503, so
   a maintenance window with the scheduler running posts that league as
@@ -205,13 +226,35 @@ output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
-<a id="kit-2026-10-19"></a>**The first install after 2026-10-19** (tools clones locked to root, the
-drill without the R2 credentials, `envcheck` running the production
-validation, `rollback` refusing a second time) needs, right after it, in one
-sitting between :20 and :10 past an hour (the backups start at :17 and read
-`tools/current`, which step 1 rebuilds), as the admin user on the box:
+<a id="kit-2026-10-19"></a>**The first install after 2026-10-19, once,** brings Caddy's admin
+socket, the 08:00 package window, the bot's state in the config archive,
+tools clones locked to root, the drill without the R2 credentials,
+`envcheck` running the production validation, and `rollback` refusing a
+second time. Do the install and every step below in one sitting between
+07:20 and 08:10 UTC, with no release, match night, inhouse night or draft
+on: that is inside the release window and step 7's package window, and
+clear of the backups at :17 (they read `tools/current`, which step 2
+rebuilds). As the admin user on the box, straight after `install-kit.sh`:
 
-1. Find the commit the backups run: `readlink /srv/ggd2l/tools/current` names
+1. **Caddy's admin API moves to its socket.** `install-kit.sh` installs the new
+   agent, Caddyfile and drop-in together, then finds the running Caddy still
+   on `localhost:2019`: it skips the reload (`caddy reload` would dial the
+   socket the new Caddyfile names, which nothing listens on yet) and prints
+   `NEEDS A RESTART`. Until Caddy restarts, every reload fails, the agent's
+   mode switches and so every release included (each puts its file back and
+   reports `caddy_reload_failed`), so restart it straight after the install,
+   before any `agent mode` or release, and never before the install (the old
+   Caddyfile has no socket):
+
+   ```bash
+   sudo systemctl restart caddy   # both sites answer 502 for a few seconds; at most one scheduler pass fails
+   sudo stat -c '%A %U:%G %n' /run/caddy /run/caddy/admin.sock   # drwx------ caddy:caddy, srw------- caddy:caddy
+   curl -sS -m 3 http://localhost:2019/config/   # refused
+   sudo systemctl reload caddy && sudo -n ggd2l-agent status   # the reload path works; units and live slots as before
+   ```
+
+   The restart also gives Caddy its `OOMScoreAdjust=-500`.
+2. **Lock the tools clone the backups run (steps 2-6).** Find the commit the backups run: `readlink /srv/ggd2l/tools/current` names
    its `<sha12>` (the last `migrate`'s commit, which can be older than the
    live one), and `sudo cat /srv/ggd2l/tools/<sha12>/.git/HEAD` its full
    `<sha>`, which must start with that `<sha12>` (stop if it doesn't). Then
@@ -222,28 +265,56 @@ sitting between :20 and :10 past an hour (the backups start at :17 and read
    alerts. Every other clone stays the build user's until `prune` removes
    it, and no verb runs from one (`tools_missing`) until a `prepare`
    rebuilds it.
-2. Check it is root's and nobody else can write it:
+3. Check it is root's and nobody else can write it:
    `sudo stat -c '%U:%G %a' /srv/ggd2l/tools/<sha12> /srv/ggd2l/tools/<sha12>/scripts/backup-db.mjs`
    (`root:root 755`, then `root:root 644`), and
    `sudo find /srv/ggd2l/tools/<sha12> -not -user root -print -quit` prints
    nothing. Git must still read it as the build user, as `migrate` does:
    `cd / && sudo -u ggd2l-build env HOME=/var/cache/ggd2l-build GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/srv/ggd2l/tools/<sha12> git -C /srv/ggd2l/tools/<sha12> status --porcelain`
    prints nothing and exits 0.
-3. `sudo systemctl start ggd2l-backup@us`, then `ggd2l-drill@us`, the same for
+4. `sudo systemctl start ggd2l-backup@us`, then `ggd2l-drill@us`, the same for
    `eu`, and `systemctl show -p Result ggd2l-backup@us ggd2l-drill@us ggd2l-backup@eu ggd2l-drill@eu`
    says `Result=success` four times (see Backups). The drill unit now hides
    `rclone.conf`: `systemctl show -p InaccessiblePaths ggd2l-drill@us` names it.
-4. `sudo -n ggd2l-agent envcheck us` and `envcheck eu` each answer
+5. `sudo -n ggd2l-agent envcheck us` and `envcheck eu` each answer
    `{"ok":true,"problems":[]}`. If one names a key, the live file already
    fails the production validation: fix it before anything restarts that
    league (Rules above), and don't wait for the reboot.
-5. `sudo -n ggd2l-agent attest <lg> <sha>` (step 1's commit) for each league
+6. `sudo -n ggd2l-agent attest <lg> <sha>` (step 2's commit) for each league
    answers `{"ok":true}`: the build user's scripts run on the locked clone.
    The first `migrate` on a locked clone is the next maintenance release's;
    its `prepare`, `preflight` and `drill <lg> <sha>` run on the new commit's
    locked clone first.
-6. One config archive (`sudo systemctl start ggd2l-config-archive`), as after
-   every install.
+7. **Move the package window** on the box that predates `provision-base.sh`'s
+   drop-in. Do it between 07:10 and 08:30 UTC. systemd counts the next run
+   from the last one (today's stock run, 06:00-07:00): before 08:00 the first
+   new run is today's 08:00, and after it the reload starts one within 10
+   minutes, still inside the window. At any other hour the reload would start
+   a run at once, a PostgreSQL restart included.
+
+   ```bash
+   sudo install -d -m 0755 /etc/systemd/system/apt-daily-upgrade.timer.d
+   sudo tee /etc/systemd/system/apt-daily-upgrade.timer.d/90-ggd2l.conf > /dev/null <<'EOF'
+   # GGD2L (ops/selfhost/provision-base.sh): unattended upgrades install at
+   # 08:00-08:10 UTC, so their restarts land before the 09:00 UTC reboot.
+   [Timer]
+   OnCalendar=
+   OnCalendar=*-*-* 08:00 UTC
+   RandomizedDelaySec=10m
+   EOF
+   sudo systemctl daemon-reload
+   systemctl list-timers apt-daily-upgrade.timer   # NEXT: 08:00-08:10 UTC
+   ```
+
+   If `NEXT` still shows a 06:xx time, `sudo systemctl restart apt-daily-upgrade.timer`
+   in the same window.
+8. **One config archive**, as after every install; this one also adds the
+   bot's state. Run it
+   (`sudo systemctl start ggd2l-config-archive`, `Result=success` in
+   `systemctl show -p Result ggd2l-config-archive`): from then on a rebuild
+   gets the bot's Steam session back. Only Tim's key reads it; on the Mac,
+   `age -d -i <key file> config-<stamp>.tar.gz.age | tar -tzf - | grep ggd2l-bot`
+   lists `steam-auth.json`, `lobbies.json` and `steam/`, and no lock or log.
 
 ## Rollback
 
@@ -327,12 +398,20 @@ systemctl show -p Result ggd2l-backup@us ggd2l-drill@us   # Result=success for b
 ```
 
 **The daily config archive** (`config-archive.sh`, as root) streams
-`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` through tar, gzip and
-`age -R` into `/var/backups/ggd2l/config/`, so no plaintext touches disk, and
-uploads it to `ggd2l-backups/config/<date>/` (or queues it under the same 48 h
-`offsite-pending` rule). After changing anything in those folders, run it at
-once rather than waiting for the timer:
-`sudo systemctl start ggd2l-config-archive`.
+`/etc/ggd2l`, `/etc/cloudflared`, `/etc/caddy` and the lobby bot's state in
+`/var/lib/ggd2l-bot` through tar, gzip and `age -R` into
+`/var/backups/ggd2l/config/`, so no plaintext touches disk, and uploads it to
+`ggd2l-backups/config/<date>/` (or queues it under the same 48 h
+`offsite-pending` rule). Of the bot's state it keeps what
+[DOTA-LOBBY-BOT](../../docs/DOTA-LOBBY-BOT.md#on-the-box) says to retain
+(`steam-auth.json`, `steam/`, `lobbies.json`) and leaves out its locks
+(`worker.lock`, `worker.os-lock`), its logs, a sign-in's `steam-login.png` and
+`*.tmp` files. The bot writes while the archive runs; when tar says a file
+changed as it read it, the archive is made again (three tries). After
+changing anything in those folders, run it at once rather than waiting for
+the timer: `sudo systemctl start ggd2l-config-archive`. Never extract an
+archive over a running bot: stop it first, or leave its state out
+(`tar --exclude=var/lib/ggd2l-bot`).
 
 R2 lifecycle rules (bucket `ggd2l-backups`): delete `us/hourly/` and
 `eu/hourly/` after 7 days, `us/daily/` and `eu/daily/` after 35, `us/monthly/`
@@ -510,8 +589,10 @@ written after the dump is lost, so say so in the incident record):
 4. Tim decrypts the newest `config/` archive on the Mac and streams it straight
    in, so no plaintext lands on either disk:
    `age -d -i <key file> config-<stamp>.tar.gz.age | ssh ggd2l-1 'sudo tar -C / -xzpf -'`.
-   That restores `/etc/ggd2l` (env files, passwords, rclone and healthchecks
-   settings), `/etc/cloudflared` (the tunnel's credentials) and `/etc/caddy`.
+   That restores `/etc/ggd2l` (env files, `bot.env`, passwords, rclone and
+   healthchecks settings), `/etc/cloudflared` (the tunnel's credentials),
+   `/etc/caddy` and, in an archive from 2026-10-19 on, the lobby bot's state in
+   `/var/lib/ggd2l-bot` (the bot is installed disabled, so nothing runs it yet).
    Re-run `install-kit.sh` so modes and owners match the new users.
 5. The restored Caddy mode files are the old box's (usually `proxy`), and
    `agent import` runs only in maintenance: first `agent mode <lg> maintenance`
@@ -521,9 +602,29 @@ written after the dump is lost, so say so in the incident record):
    the markers.
 6. `agent prepare <live sha>`, then per league `agent build`, `start`, `check`
    and `promote` at the live SHA.
-7. `sudo systemctl enable --now cloudflared-ggd2l`. The tunnel id and DNS are
+7. **The lobby bot,** once the old box's bot is surely stopped (a lost droplet;
+   otherwise `sudo systemctl disable --now ggd2l-bot` there first): one Steam
+   account never runs in two places. `agent bot-deploy <live sha>` installs
+   its code. If `sudo test -s /var/lib/ggd2l-bot/steam-auth.json` fails (no
+   saved session: an archive from before 2026-10-19), Tim signs it in first
+   (below). Then `sudo systemctl enable --now ggd2l-bot`, watch
+   `sudo journalctl -u ggd2l-bot -f` for "Control service listening" and
+   "Game Coordinator connected", and check `agent bot-status`: `active`,
+   `enabled`, the release, and `lobby` null. A `set` lobby is a claim from the
+   archive's day: release it from the admin controls on `/inhouse`. If Steam
+   refuses the saved session (the journal shows
+   `Steam login/connection failed`, the unit still active),
+   `sudo systemctl stop ggd2l-bot`, sign in, then
+   `sudo systemctl start ggd2l-bot`.
+   **Signing in** is Tim's, in his own terminal, and nobody else sees any part
+   of it: the bot's `npm run login` helper, run as the bot's user with its
+   environment, showing a QR code to approve with the bot account's Steam
+   Guard (append `--password` for its credentials and an email code instead):
+   `ssh -t ggd2l-1 'sudo systemd-run --pty --wait -p User=ggd2l-bot -p EnvironmentFile=/etc/ggd2l/bot.env -p WorkingDirectory=/srv/ggd2l/bot/current/ops/dota-lobby-bot /usr/bin/node login.mjs'`
+   ([DOTA-LOBBY-BOT](../../docs/DOTA-LOBBY-BOT.md#on-the-box), step 7).
+8. `sudo systemctl enable --now cloudflared-ggd2l`. The tunnel id and DNS are
    unchanged, so traffic returns once it connects.
-8. Enable the backup, drill, heartbeat and config-archive timers, start one
+9. Enable the backup, drill, heartbeat and config-archive timers, start one
    backup and then one drill per league and check `Result=success` (see
    Backups), and watch the admin channel for the box's 👋 hello (the first
    heartbeat after the restored `alerts.env`), then

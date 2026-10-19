@@ -177,6 +177,28 @@ systemctl restart "postgresql@${PG_MAJOR}-main"
 log "Caddy: installed, idle until the web layer is configured"
 systemctl enable caddy >/dev/null
 
+log "Package window: unattended upgrades at 08:00 UTC, before the 09:00 reboot"
+# Stock Ubuntu installs them at 06:00-07:00 UTC (apt-daily-upgrade.timer: 6:00
+# plus up to an hour), which is late evening in the US league's zone. A
+# PostgreSQL update restarts the cluster as it installs, dropping both
+# leagues' connections, and needrestart may restart a live slot, the bot or
+# the tunnel whose Node or libraries changed: those belong in the quiet window
+# with the reboot. 08:00-08:10 leaves the run time to finish before 09:00 (one
+# still going at 09:00 would push `shutdown -r 09:00` to the next day). This
+# step comes after every apt-get here: a timer whose new time has passed since
+# its last run fires at once, and its run would hold the dpkg lock. The box
+# that predates it got the same file by hand (ops/selfhost/README.md).
+mkdir -p /etc/systemd/system/apt-daily-upgrade.timer.d
+cat > /etc/systemd/system/apt-daily-upgrade.timer.d/90-ggd2l.conf <<'EOF'
+# GGD2L (ops/selfhost/provision-base.sh): unattended upgrades install at
+# 08:00-08:10 UTC, so their restarts land before the 09:00 UTC reboot.
+[Timer]
+OnCalendar=
+OnCalendar=*-*-* 08:00 UTC
+RandomizedDelaySec=10m
+EOF
+systemctl daemon-reload
+
 log "Versions"
 node --version
 npm --version

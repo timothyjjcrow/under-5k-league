@@ -770,9 +770,16 @@ test("the config archive is encrypted from the stream, uploaded under config/, a
     writeFileSync(path.join(ggd2l, "us.env"), "AUTH_SECRET=example\n");
     writeFileSync(path.join(ggd2l, "secrets", "us-app.pw"), "deadbeef\n");
     writeFileSync(path.join(caddy, "Caddyfile"), "{}\n");
+    // The lobby bot's state as the running bot leaves it (DOTA-LOBBY-BOT.md).
+    const bot = path.join(box.dir, "state", "ggd2l-bot");
+    mkdirSync(path.join(bot, "steam"), { recursive: true });
+    mkdirSync(path.join(bot, "logs"), { recursive: true });
+    for (const kept of ["steam-auth.json", "lobbies.json", "steam/cm-servers.json"]) writeFileSync(path.join(bot, kept), "{}\n");
+    for (const dropped of ["worker.lock", "worker.os-lock", "logs/stdout.log", "steam-login.png", "lobbies.json.tmp", ".steam-auth.json.0f3c.tmp"])
+      writeFileSync(path.join(bot, dropped), "x\n");
     writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
-    const dirs = `${ggd2l} ${path.join(box.dir, "conf", "cloudflared")} ${caddy}`;
-    const result = box.run("config-archive.sh", [], { GGD2L_CONFIG_DIRS: dirs, HC_PING_CONFIG: HC.HC_PING_CONFIG });
+    const dirs = `${ggd2l} ${path.join(box.dir, "conf", "cloudflared")} ${caddy} ${bot}`;
+    const result = box.run("config-archive.sh", [], { GGD2L_CONFIG_DIRS: dirs, GGD2L_BOT_STATE_DIR: bot, HC_PING_CONFIG: HC.HC_PING_CONFIG });
     assert.equal(result.status, 0, result.stderr);
     assert.match(result.stderr, /skipping .*cloudflared: not present/);
     const report = JSON.parse(result.stdout.trim().split("\n").pop());
@@ -787,6 +794,11 @@ test("the config archive is encrypted from the stream, uploaded under config/, a
     assert.match(listing, /conf\/ggd2l\/us\.env/);
     assert.match(listing, /conf\/ggd2l\/secrets\/us-app\.pw/);
     assert.match(listing, /conf\/caddy\/Caddyfile/);
+    // The bot's Steam session, its job history and steam/ come back with a
+    // rebuild; its locks, logs, QR code and half-written saves never do.
+    const botFiles = listing.split("\n").filter((entry) => entry.includes("state/ggd2l-bot/"))
+      .map((entry) => entry.slice(entry.indexOf("state/ggd2l-bot/") + "state/ggd2l-bot/".length)).filter(Boolean).sort();
+    assert.deepEqual(botFiles, ["lobbies.json", "steam-auth.json", "steam/", "steam/cm-servers.json"]);
     const files = readdirSync(path.dirname(report.file)).sort();
     assert.deepEqual(files, [
       path.basename(report.file), `${path.basename(report.file)}.sha256`,
@@ -798,6 +810,75 @@ test("the config archive is encrypted from the stream, uploaded under config/, a
     const missing = box.run("config-archive.sh", [], { GGD2L_CONFIG_DIRS: path.join(box.dir, "absent") });
     assert.equal(missing.status, 1);
     assert.match(missing.stderr, /absent is missing/);
+  } finally {
+    box.cleanup();
+  }
+});
+
+// The bot writes lobbies.json (write, then rename) while the archive runs, and
+// tar exits 1 when a file changes or vanishes as it reads it. That copy may be
+// torn: the archive is made again, a few times, and anything worse fails.
+test("a config archive that tar read while the bot wrote its state is made again, and kept only when clean", () => {
+  const box = sandbox();
+  try {
+    const ggd2l = path.join(box.dir, "conf", "ggd2l");
+    mkdirSync(ggd2l, { recursive: true });
+    writeFileSync(path.join(ggd2l, "us.env"), "AUTH_SECRET=example\n");
+    writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
+    // The real tar does the work; the fake then reports "changed" as many
+    // times as tar-changed says, or a fatal error with tar-fatal.
+    fake(path.join(box.dir, "bin", "tar"), `const { spawnSync } = require("node:child_process");
+const real = ["/usr/bin/tar", "/bin/tar"].find((candidate) => existsSync(candidate));
+const ran = spawnSync(real, process.argv.slice(2), { stdio: "inherit" });
+const left = existsSync(${JSON.stringify(path.join(box.dir, "tar-changed"))}) ? Number(readFileSync(${JSON.stringify(path.join(box.dir, "tar-changed"))}, "utf8")) : 0;
+appendFileSync(${JSON.stringify(path.join(box.dir, "tar-runs"))}, "run\\n");
+if (existsSync(${JSON.stringify(path.join(box.dir, "tar-fatal"))})) process.exit(2);
+if (ran.status === 0 && left > 0) {
+  writeFileSync(${JSON.stringify(path.join(box.dir, "tar-changed"))}, String(left - 1));
+  console.error("tar: state/ggd2l-bot/lobbies.json: file changed as we read it");
+  process.exit(1);
+}
+process.exit(ran.status ?? 2);
+`.replace(/^/, "const { appendFileSync, existsSync, readFileSync, writeFileSync } = require(\"node:fs\");\n"));
+    const archive = (extra = {}) => box.run("config-archive.sh", [], { GGD2L_CONFIG_DIRS: ggd2l, GGD2L_ARCHIVE_RETRY_SECONDS: "0", ...extra });
+    const runs = () => {
+      const file = path.join(box.dir, "tar-runs");
+      const count = existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").length : 0;
+      rmSync(file, { force: true });
+      return count;
+    };
+    const archives = () => readdirSync(path.join(box.root, "config")).filter((f) => /^config-.*\.tar\.gz\.age$/.test(f));
+
+    // Once changed, then clean: one archive, from the clean run.
+    box.set("tar-changed", "1");
+    let result = archive();
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(runs(), 2);
+    assert.match(result.stderr, /a file changed while tar read it; archiving again/);
+    const report = lastReport(result);
+    const listing = spawnSync("tar", ["-tf", "-"], { input: gunzipSync(readFileSync(report.file).subarray("FAKE-AGE\n".length)), encoding: "utf8" }).stdout;
+    assert.match(listing, /conf\/ggd2l\/us\.env/);
+    assert.deepEqual(archives(), [path.basename(report.file)]);
+    assert.deepEqual(readdirSync(path.join(box.root, "config")).filter((f) => f.includes(".tmp.")), [], "no half-made archive is left");
+
+    // Changed on every try: it gives up after three and keeps nothing new.
+    rmSync(path.join(box.root, "config"), { recursive: true, force: true });
+    box.set("tar-changed", "9");
+    result = archive({ HC_PING_CONFIG: HC.HC_PING_CONFIG });
+    assert.equal(result.status, 1);
+    assert.equal(runs(), 3);
+    assert.match(result.stderr, /files kept changing while tar read them \(3 tries\)/);
+    assert.match(result.stderr, /FAILED at step encrypt/);
+    assert.equal(pings(box).at(-1).url, `${HC.HC_PING_CONFIG}/fail`);
+    assert.deepEqual(readdirSync(path.join(box.root, "config")).filter((f) => !f.startsWith("last-")), []);
+
+    // A real tar error is not retried.
+    box.set("tar-changed", "0");
+    box.set("tar-fatal");
+    result = archive();
+    assert.equal(result.status, 1);
+    assert.equal(runs(), 1);
+    assert.match(result.stderr, /tar \| gzip \| age failed \(exit 2 0 0\)/);
   } finally {
     box.cleanup();
   }
@@ -924,6 +1005,19 @@ test("the backup and drill units let the scripts write their league folder",
     // shared lock is a read-only descriptor of /var/backups/ggd2l.
     assertMayWrite("ggd2l-backup@.service", ["/var/backups/ggd2l/%i", "/var/backups/ggd2l/%i/state"]);
     assertMayWrite("ggd2l-drill@.service", ["/var/backups/ggd2l/%i", "/var/backups/ggd2l/%i/state"]);
+  });
+
+// 2026-10-19 audit: the bot's state was in no backup a rebuild restores, so a
+// rebuilt box needed Tim's interactive Steam sign-in before any lobby.
+test("the config archive's default folders hold the bot unit's state directory",
+  { skip: !hasUnits && "the units (WP-E2) are not on this branch" }, () => {
+    const script = readFileSync(path.join(HERE, "config-archive.sh"), "utf8");
+    const botDir = /^BOT_STATE_DIR="\$\{GGD2L_BOT_STATE_DIR:-([^}]+)\}"$/m.exec(script)?.[1];
+    const dirs = /^CONFIG_DIRS="\$\{GGD2L_CONFIG_DIRS:-(.+)\}"$/m.exec(script)?.[1].split(" ");
+    assert.deepEqual(dirs, ["/etc/ggd2l", "/etc/cloudflared", "/etc/caddy", "${BOT_STATE_DIR}"]);
+    const bot = unitSettings(path.join(UNIT_DIR, "ggd2l-bot.service"));
+    assert.deepEqual(bot["Service.ReadWritePaths"], [botDir], "the folder the bot writes");
+    assert.match(bot["Service.Environment"].join(" "), new RegExp(`(^| )DOTA_BOT_STATE_DIR=${botDir}( |$)`));
   });
 
 test("the README's config-archive unit is one the kit ships, and its sandbox lets the script write",

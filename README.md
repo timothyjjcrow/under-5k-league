@@ -412,7 +412,7 @@ release with another Node major. `package.json` declares the same runtime line
 used by every CI job.
 
 1. **Provision the box.** `ops/selfhost/provision-base.sh` prepares a fresh
-   Ubuntu 24.04 droplet (security updates with the 09:00 UTC reboot, swap,
+   Ubuntu 24.04 droplet (security updates at 08:00 UTC with the 09:00 UTC reboot, swap,
    journald capped, ufw allowing SSH only, the `ggd2l` admin user, Node 22,
    PostgreSQL 18, Caddy and age), and `ops/selfhost/harden-ssh.sh` then
    closes root login. Then

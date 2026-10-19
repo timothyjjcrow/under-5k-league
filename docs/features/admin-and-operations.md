@@ -366,8 +366,7 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 
 Production is one self-hosted box for both leagues
 ([PRODUCTION-OPERATIONS](../PRODUCTION-OPERATIONS.md#box-operations); status:
-planned, the move happens on the cutover day). What a code change must
-respect there:
+live since the cutover on 2026-10-17). What a code change must respect there:
 
 - **One process per league, two during a release.** Caddy sends a league's
   traffic to one slot at a time; a promote keeps the old slot running at
@@ -436,3 +435,24 @@ respect there:
 - **Treat the box's logs as personal data.** Caddy's access logs hold player
   IP addresses (size-bounded, kept on the box); never copy them into an issue
   or a report.
+- **Caddy's admin API is a socket only caddy and root can open**
+  (`/run/caddy/admin.sock`, 0600, in the drop-in's 0700 `RuntimeDirectory=`).
+  It can replace both leagues' routing with no authentication, so never put it
+  back on TCP (it was `localhost:2019`, open to every local user, until
+  2026-10-19) and never call it from the agent or a script: change Caddy by
+  writing a file and `systemctl reload caddy`, whose `caddy reload` reads the
+  socket from the Caddyfile (`caddy.test.mjs`). A change of the admin
+  address needs one Caddy restart, which `install-kit.sh` does only while
+  nothing is live and otherwise asks for (`caddy_reload`).
+- **Expect PostgreSQL and the slots to restart at 08:00-08:15 UTC.**
+  Unattended upgrades install then (`provision-base.sh` moves
+  `apt-daily-upgrade.timer` next to the 09:00 reboot): a PostgreSQL update
+  restarts the cluster, and needrestart may restart a live slot or the bot.
+  Code that holds a connection or a lease must survive that, as it survives
+  the reboot.
+- **The lobby bot's state is in the daily config archive**
+  (`config-archive.sh`), less its locks, `logs/`, `steam-login.png` and
+  `*.tmp` files, so a rebuild brings its Steam session and `lobbies.json`
+  back. A bot change that adds a state file to keep needs nothing; one that
+  adds a temporary file must name it `*.tmp`, and tar's "file changed as we
+  read it" makes the archive run again rather than keep a torn copy.
