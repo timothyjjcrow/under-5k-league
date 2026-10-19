@@ -285,6 +285,7 @@ export async function SeasonView({
   championTeamId,
   showCheckins,
   rail,
+  inhouseTile = true,
 }: {
   snapshot: SeasonSnapshot;
   userId?: string;
@@ -294,6 +295,11 @@ export async function SeasonView({
   showCheckins: boolean;
   /** Home's own sections that end the second column (League news). */
   rail?: ReactNode;
+  /**
+   * The Inhouse side-game tile. Off while the queue line leads the page
+   * (`inhouseQueueLeadsHome`), so it shows once.
+   */
+  inhouseTile?: boolean;
 }) {
   const { season, teams } = snapshot;
   const playoffField = projectPlayoffField(teams, matches);
@@ -447,8 +453,9 @@ export async function SeasonView({
   // Leaders and Hero meta tiles are gone: they repeated the menus. The
   // Inhouse tile is the live queue line itself (who is queued, whether a
   // lobby is on); Home used to print a static Inhouse tile AND that strip
-  // under it. auto-fit, because the count runs from one to three.
-  const sideGames = (
+  // under it. auto-fit, because the count runs from one to three (none when
+  // the queue line leads the page and nothing else is live).
+  const sideGames = pickemOpen > 0 || showFantasy || inhouseTile ? (
     <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(14rem,100%),1fr))]">
       {pickemOpen > 0 ? (
         <SideGameLink
@@ -472,20 +479,22 @@ export async function SeasonView({
           hint={fantasyLocked ? "Rosters locked — standings" : "Build your five"}
         />
       ) : null}
-      <Suspense
-        fallback={
-          <SideGameLink
-            href="/inhouse"
-            icon="⚔️"
-            title="Inhouse"
-            hint="Pick-up 5v5s, any night"
-          />
-        }
-      >
-        <InhouseStrip variant="tile" />
-      </Suspense>
+      {inhouseTile ? (
+        <Suspense
+          fallback={
+            <SideGameLink
+              href="/inhouse"
+              icon="⚔️"
+              title="Inhouse"
+              hint="Pick-up 5v5s, any night"
+            />
+          }
+        >
+          <InhouseStrip variant="tile" />
+        </Suspense>
+      ) : null}
     </div>
-  );
+  ) : null;
 
   // The viewer's own team card. Mid-season it carries only what the table
   // can't: the playoff stakes of the next series (their row is already

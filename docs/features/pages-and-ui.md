@@ -552,6 +552,18 @@ image has changed. The rules are in `next.config.ts`, and
   other phases keep the full-width strip after the view. The night itself
   is the bar's: the strip and the tile only turn their call to action into
   "Jump in" while it's on.
+- **While anyone is queued, the queue line leads Home instead**
+  (`inhouseQueueLeadsHome`, `src/lib/home-inhouse.ts`): the full-width strip
+  right under the night's bar, above the hero, in every phase and in the
+  offseason view's column, and its usual place (strip, tile or rail tile)
+  stands down so it shows once. Players looking for a game is the one inhouse
+  fact a visitor can act on now, and the usual place is below the news on a
+  phone. While the night is on, the night's bar already prints the queue
+  count and "Join the queue", so the line stays put. Home reads the line's
+  counts with the season snapshot (`loadInhouseQueueLine`, request-cached, so
+  the strip reuses them) and renders it inline, never streamed, for the
+  night bar's reason. `src/app/home-inhouse-guards.test.ts` pins that every
+  other strip on Home sits behind the flag.
 - **The match-night poll card sits under the pinned notices in every phase**
   (and in the offseason view), streamed with a null fallback because it is
   usually absent. Its ballot and live count stack, never side by side: a

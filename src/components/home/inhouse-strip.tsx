@@ -1,4 +1,5 @@
 import Link from "@/components/app-link";
+import { cache } from "react";
 import { LinkArrow } from "@/components/ui";
 import { loadCurrentInhouseNight } from "@/components/inhouse-night";
 import { INHOUSE, INHOUSE_ACTIVE_STATUSES } from "@/lib/constants";
@@ -13,12 +14,13 @@ import { prisma } from "@/lib/prisma";
 // `tile` is the same live line drawn as one of the dashboard's side-game
 // tiles (season-view.tsx), which used to print a static "Inhouse" tile and
 // this strip under it.
-export async function InhouseStrip({
-  variant = "strip",
-}: {
-  variant?: "strip" | "tile";
-} = {}) {
-  // eslint-disable-next-line react-hooks/purity -- async server component
+
+/**
+ * The line's counts, once per request: Home reads them before it paints to
+ * decide whether the line leads the page (`inhouseQueueLeadsHome`), and the
+ * strip or tile it then renders reuses them.
+ */
+export const loadInhouseQueueLine = cache(async () => {
   const nowMs = Date.now();
   const [queued, liveGames, night] = await Promise.all([
     // Same presence rule as /inhouse: only recently-seen players count.
@@ -35,6 +37,15 @@ export async function InhouseStrip({
     loadCurrentInhouseNight(nowMs),
   ]);
   const nightOn = !!night && inhouseNightPhase(night, nowMs) === "on";
+  return { queued, liveGames, nightOn };
+});
+
+export async function InhouseStrip({
+  variant = "strip",
+}: {
+  variant?: "strip" | "tile";
+} = {}) {
+  const { queued, liveGames, nightOn } = await loadInhouseQueueLine();
 
   const liveLobby = liveGames > 0;
   const live =
