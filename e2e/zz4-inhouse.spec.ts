@@ -426,7 +426,11 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   const signInForNext = spectatorPage.getByRole("link", {
     name: "Sign in for next game",
   });
-  await expect(signInForNext).toHaveAttribute("href", "/login?next=/inhouse");
+  // Signing in comes back to the queue's invite link, which joins them.
+  await expect(signInForNext).toHaveAttribute(
+    "href",
+    "/login?next=%2Finhouse%3Fjoin%3D1",
+  );
 
   await spectatorPage.goto(
     "/api/auth/dev?name=IH+Next+Player&steamId=76561190000002997&redirect=/inhouse",

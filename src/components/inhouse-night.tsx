@@ -21,6 +21,7 @@ import {
 import { getSessionUser, type SessionUser } from "@/lib/auth";
 import { INHOUSE } from "@/lib/constants";
 import { queuePresentCutoff } from "@/lib/inhouse";
+import { INHOUSE_QUEUE_INVITE_PATH } from "@/lib/inhouse-queue-invite";
 import {
   INHOUSE_NIGHT_INVITE_PATH,
   INHOUSE_NIGHT_LINK_DISCORD_PATH,
@@ -271,7 +272,7 @@ export async function InhouseNightBar({
       {on ? (
         // The Discord start post's one-tap join (?join=1): the label says
         // it joins, so the tap does.
-        <Link href="/inhouse?join=1" className={buttonClasses("primary", "sm")}>
+        <Link href={INHOUSE_QUEUE_INVITE_PATH} className={buttonClasses("primary", "sm")}>
           Join the queue <LinkArrow />
         </Link>
       ) : (

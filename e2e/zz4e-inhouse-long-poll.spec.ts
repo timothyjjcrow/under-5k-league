@@ -109,12 +109,30 @@ async function roomTab(browser: Browser, as: { name: string; steamId: string } |
 }
 type Tab = Awaited<ReturnType<typeof roomTab>>;
 
-/** Until the tab has a long-poll in flight (sent with `since`, no reply yet). */
+/** How long a request must have been in flight to count as held. */
+const HELD_MS = 500;
+
+/**
+ * Until the tab has a long-poll held: sent with `since`, no reply yet, and in
+ * flight for HELD_MS. A request merely in flight proves nothing. While the
+ * setup's own sign-ins still move the room version, the server answers a
+ * stale `since` at once, and the tab can then wait a step of its ladder with
+ * nothing held (CI, 2026-10-19: a 26 ms answer counted as held, and the join
+ * landed in the gap that followed).
+ */
 async function untilHeld(tab: Tab) {
   await expect
-    .poll(() => tab.log.some((r) => r.since !== null && r.end === null && !r.failed), {
-      timeout: 15_000,
-    })
+    .poll(
+      () =>
+        tab.log.some(
+          (r) =>
+            r.since !== null &&
+            r.end === null &&
+            !r.failed &&
+            Date.now() - r.start >= HELD_MS,
+        ),
+      { timeout: 15_000 },
+    )
     .toBe(true);
 }
 

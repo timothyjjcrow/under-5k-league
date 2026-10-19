@@ -9,6 +9,7 @@ const reads = vi.hoisted(() => ({
   loadPlayerCard: vi.fn(),
   loadSeasonCard: vi.fn(),
   loadInhouseNightCard: vi.fn(),
+  loadInhouseQueueCard: vi.fn(),
 }));
 const draws = vi.hoisted(() => ({ drawOgImage: vi.fn() }));
 
@@ -20,6 +21,7 @@ vi.mock("@/lib/og-assets", async (importOriginal) => ({
 }));
 
 import {
+  inhouseQueueShareImage,
   inhouseShareImage,
   matchShareImage,
   playerShareImage,
@@ -83,6 +85,37 @@ describe("link preview pictures in production", () => {
     expect(reads.loadMatchCard).toHaveBeenCalledTimes(2);
     expect(reads.loadTeamCard).toHaveBeenCalledTimes(1);
     expect(draws.drawOgImage).toHaveBeenCalledTimes(3);
+  });
+
+  it("draw the queue invite's picture apart from /inhouse's night", async () => {
+    reads.loadInhouseNightCard.mockResolvedValue({
+      on: false,
+      day: "Fri",
+      date: "Oct 23",
+      time: "8:00 PM Eastern",
+      note: "",
+      headcount: "6 coming",
+    });
+    reads.loadInhouseQueueCard.mockResolvedValue({
+      queued: 4,
+      lobbySize: 10,
+      liveGames: 0,
+      players: [{ name: "Sam", avatar: null }],
+      asOf: "8:42 PM Eastern",
+    });
+    const [og, twitter] = await Promise.all([
+      inhouseQueueShareImage(),
+      inhouseQueueShareImage(),
+    ]);
+    for (const res of [og, twitter]) {
+      expect(res.status).toBe(200);
+      expect(await bytes(res)).toEqual([...PNG]);
+    }
+    expect(reads.loadInhouseQueueCard).toHaveBeenCalledTimes(1);
+    // /inhouse's own picture is the night's, kept under its own address.
+    expect((await inhouseShareImage()).status).toBe(200);
+    expect(reads.loadInhouseNightCard).toHaveBeenCalledTimes(1);
+    expect(draws.drawOgImage).toHaveBeenCalledTimes(2);
   });
 
   it("draw again after five minutes, and say how old a kept picture is", async () => {

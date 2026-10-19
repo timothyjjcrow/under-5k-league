@@ -1,12 +1,14 @@
 // The link preview pictures' route bodies: each opengraph-image and
-// twitter-image file beside the match, team, player and season pages, and
-// /inhouse's, is one line calling these. A missing page's picture is a 404 like the page; a
+// twitter-image file beside the match, team, player and season pages,
+// /inhouse's, and the queue invite's (/inhouse/queue), is one line calling
+// these. A missing page's picture is a 404 like the page; a
 // picture that can't be read or drawn is the league's own share image
 // (fallbackOgImage), never a broken one.
 
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import {
   loadInhouseNightCard,
+  loadInhouseQueueCard,
   loadMatchCard,
   loadPlayerCard,
   loadSeasonCard,
@@ -22,6 +24,7 @@ import { OG_CACHE_TTL_MS } from "@/lib/og-image";
 import { createPictureCache, type PictureCache } from "@/lib/picture-cache";
 import {
   OgInhouseNightCard,
+  OgInhouseQueueCard,
   OgMatchCard,
   OgPlayerCard,
   OgSeasonCard,
@@ -139,5 +142,18 @@ export function inhouseShareImage(): Promise<Response> {
     const card = await loadInhouseNightCard(Date.now());
     if (!card) return null;
     return drawOgImage(<OgInhouseNightCard {...card} {...await brand()} />);
+  });
+}
+
+/**
+ * The queue invite link's picture (`/inhouse?join=1` names it in its
+ * metadata, since /inhouse's own picture is the night's): how full the queue
+ * is right now, who's in it, and whether a game is live. Kept five minutes
+ * like every picture, so a burst of unfurls draws once.
+ */
+export function inhouseQueueShareImage(): Promise<Response> {
+  return sharePicture("/inhouse/queue", async () => {
+    const card = await loadInhouseQueueCard(Date.now());
+    return drawOgImage(<OgInhouseQueueCard {...card} {...await brand()} />);
   });
 }

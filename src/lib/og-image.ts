@@ -313,6 +313,21 @@ export type InhouseNightCardData = {
   headcount: string | null;
 };
 
+/** What the inhouse queue's picture shows (OgInhouseQueueCard): the preview
+ *  of the queue's invite link (`/inhouse?join=1`). */
+export type InhouseQueueCardData = {
+  /** Present players in the queue (queuePresentCutoff), every one of them. */
+  queued: number;
+  lobbySize: number;
+  /** Inhouse games being played or set up now. */
+  liveGames: number;
+  /** The first `lobbySize` present players in queue order, their avatar a
+   *  data URL from fetchOgImage, or null for the initials. */
+  players: { name: string; avatar: string | null }[];
+  /** When it was drawn, on the league's clock: "8:42 PM Eastern". */
+  asOf: string;
+};
+
 /** What a season's picture shows (OgSeasonCard). */
 export type SeasonCardData = {
   seasonName: string;

@@ -8,7 +8,14 @@
 
 import { seedsFromFirstRound } from "./bracket-view";
 import { resolveChampionPresentation } from "./champion-presentation";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
+import {
+  INHOUSE,
+  INHOUSE_ACTIVE_STATUSES,
+  MATCH_PHASE,
+  MATCH_STATUS,
+  SEASON_STATUS,
+} from "./constants";
+import { queuePresentCutoff } from "./inhouse";
 import {
   loadMatchPreviewFacts,
   loadPlayerCardFacts,
@@ -21,6 +28,7 @@ import {
   matchCardStatus,
   playerPictureText,
   type InhouseNightCardData,
+  type InhouseQueueCardData,
   type MatchCardData,
   type PlayerCardData,
   type SeasonCardData,
@@ -302,5 +310,61 @@ export async function loadInhouseNightCard(
     ...leagueMatchTimeParts(new Date(night.startsAtMs)),
     note: night.note,
     headcount: inhouseNightHeadcountText(count),
+  };
+}
+
+/** Inhouse games being played or set up now (up to INHOUSE.MAX_LIVE_GAMES). */
+function countLiveInhouseGames(): Promise<number> {
+  return prisma.inhouseLobby.count({
+    where: { status: { in: INHOUSE_ACTIVE_STATUSES } },
+  });
+}
+
+/**
+ * The queue invite link's preview counts (inhouseQueuePreviewText): present
+ * players, the presence rule every queue count uses, and live games.
+ */
+export async function loadInhouseQueuePreviewCounts(
+  nowMs: number,
+): Promise<{ queued: number; liveGames: number }> {
+  const [queued, liveGames] = await Promise.all([
+    prisma.inhouseQueueEntry.count({
+      where: { lastSeenAt: { gte: queuePresentCutoff(nowMs) } },
+    }),
+    countLiveInhouseGames(),
+  ]);
+  return { queued, liveGames };
+}
+
+/**
+ * The queue invite link's picture: how full the queue is, the players in its
+ * ten slots in queue order ([joinedAt, userId], as the room and formation
+ * order it), and whether a game is live. The queue's names and avatars are
+ * the ones /inhouse shows anyone.
+ */
+export async function loadInhouseQueueCard(
+  nowMs: number,
+): Promise<InhouseQueueCardData> {
+  const [entries, liveGames] = await Promise.all([
+    prisma.inhouseQueueEntry.findMany({
+      where: { lastSeenAt: { gte: queuePresentCutoff(nowMs) } },
+      orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
+      select: { user: { select: { name: true, avatar: true } } },
+    }),
+    countLiveInhouseGames(),
+  ]);
+  const shown = entries.slice(0, INHOUSE.LOBBY_SIZE);
+  const avatars = await Promise.all(
+    shown.map((entry) => fetchOgImage(entry.user.avatar)),
+  );
+  return {
+    queued: entries.length,
+    lobbySize: INHOUSE.LOBBY_SIZE,
+    liveGames,
+    players: shown.map((entry, i) => ({
+      name: entry.user.name,
+      avatar: avatars[i] ?? null,
+    })),
+    asOf: leagueMatchTimeParts(new Date(nowMs)).time,
   };
 }
