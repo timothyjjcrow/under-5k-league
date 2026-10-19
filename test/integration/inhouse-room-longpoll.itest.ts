@@ -274,7 +274,13 @@ describe("the long-poll: a held request ends by itself", () => {
     expect(reply.ms).toBeLessThan(600 + INHOUSE.LONG_POLL_JITTER_MS + INSTANT_MS);
   });
 
-  /** A ready check two accepts short, its clock running out in `inMs`. */
+  /**
+   * A ready check two accepts short, its clock running out in `inMs`. Give
+   * the setup room to read the check while it is still open: its signed-in
+   * poll runs the room's maintenance, which resolves a check whose clock has
+   * run out, and on a busy CI runner 200 ms wasn't enough (the poll found no
+   * lobby). Callers sleep out the rest of the clock.
+   */
   async function readyCheckEnding(inMs: number) {
     const p = await users(10, "RC-");
     const acceptEndsAt = new Date(Date.now() + inMs);
@@ -350,7 +356,7 @@ describe("the long-poll: a held request ends by itself", () => {
     // or its own end, instead of polling every 2.25s for nothing.
     // SABOTAGE CHECK: `maintains: true` in holdInhouseRoomPoll ends this at
     // LONG_POLL_DUE_RETRY_MS.
-    const { acceptEndsAt, version } = await readyCheckEnding(200);
+    const { acceptEndsAt, version } = await readyCheckEnding(1_500);
     await sleep(
       Math.max(0, acceptEndsAt.getTime() + INHOUSE.LONG_POLL_CLOCK_GRACE_MS + 50 - Date.now()),
     );
@@ -368,7 +374,7 @@ describe("the long-poll: a held request ends by itself", () => {
     // it shows is from before the deadline, so it must not sit out a hold.
     // SABOTAGE CHECK: drop `fromMs: o.hold.sinceNowMs` from
     // holdInhouseRoomPoll and the signed-out request holds its whole hold.
-    const { acceptEndsAt, version } = await readyCheckEnding(300);
+    const { acceptEndsAt, version } = await readyCheckEnding(1_500);
     const shown = (await plainPoll(null)).state;
     expect(Number(shown.now)).toBeLessThan(acceptEndsAt.getTime());
     await sleep(
