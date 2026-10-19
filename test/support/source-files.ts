@@ -112,9 +112,14 @@ const HOME_PAGE_SOURCES = [
   "src/components/home/**/*.{ts,tsx}",
 ] as const;
 
+/** Every Home source file (see HOME_PAGE_SOURCES). */
+export function homePageFiles(): SourceFile[] {
+  return sourceFiles(HOME_PAGE_SOURCES, 14);
+}
+
 /** Every Home source file's text, joined (see HOME_PAGE_SOURCES). */
 export function homePageSource(): string {
-  return haystackOf(sourceFiles(HOME_PAGE_SOURCES, 14));
+  return haystackOf(homePageFiles());
 }
 
 /**
