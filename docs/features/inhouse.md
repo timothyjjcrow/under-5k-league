@@ -736,6 +736,30 @@ Every transition is a guarded claim; keep it that way (general rules:
   players get their own line under the slots.
 - **Seeded demo entries are born away** (`prisma/seed.ts`), so they dress a
   fresh `/inhouse` but never join a real lobby.
+- **The queue's invite link (Tim, 2026-10-19) is `/inhouse?join=1`**
+  (`INHOUSE_QUEUE_INVITE_PATH`, `src/lib/inhouse-queue-invite.ts`): one link
+  anyone pastes in Discord or anywhere else, and opening it joins the queue
+  in one tap (the room's auto-join, under "The room" and in
+  [discord](discord.md)). It is the link the Discord pings and the night's
+  "Join the queue" already carried.
+  - **"Copy invite link" sits under the queue card** (`QueueInvite`,
+    `src/components/inhouse/queue-invite.tsx`) for anyone, signed in or
+    not: under the queue, and under a queued player's next-game queue
+    beside a live game. It is below the card so the card keeps a phone's
+    first screen. It copies the address on the viewer's own origin and
+    says "Copied" only when the clipboard took it; otherwise the toast
+    shows the link to copy by hand.
+  - **Signing in comes back to it:** the queue's "Sign in to queue" (and
+    "Sign in for next game") is `signInHref(INHOUSE_QUEUE_INVITE_PATH)`, so
+    a friend who opens the invite signed out still ends up queued, and the
+    button does what it says.
+  - **It unfurls as the queue:** `/inhouse`'s metadata answers `?join=1`
+    with `inhouseQueuePreviewText` (how full the queue is, a live game,
+    what the link does) and names the queue's own picture
+    (`/inhouse/queue/opengraph-image`, `OgInhouseQueueCard`: N/10, the
+    players' avatars in the ten slots, "Game live", and the time it was
+    drawn), in place of /inhouse's own (the night's). Rules for the picture:
+    [pages-and-ui](pages-and-ui.md#link-previews-discord-x-slack).
 
 ## Ready check and captain vote
 

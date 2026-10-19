@@ -213,7 +213,10 @@ actions: `src/app/actions/admin-discord.ts`.
   with `history.replaceState`, and defers `act()` a tick (state set inside an
   effect cascades a render). `autoJoinDecision` (`inhouse.ts`, tested): nothing
   signed out, "already in" if queued or in the lobby; a live lobby doesn't
-  refuse, since the join is for the next game.
+  refuse, since the join is for the next game. It is also the queue's
+  invite link (/inhouse's "Copy invite link"; [inhouse](inhouse.md#queue)):
+  pasted bare it unfurls as the queue, with its own picture, so the bot's
+  posts keep it in angle brackets as before.
 - **The inhouse night's invite (`?imin=1`, `INHOUSE_NIGHT_INVITE_PATH`) is the
   one site link in its planned post** (`inhouseNightInviteLink`): before the
   night it says "I'm in" on the site (after the account link for a player

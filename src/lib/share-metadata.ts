@@ -12,13 +12,21 @@ import type { Metadata } from "next";
  * opengraph-image and a twitter-image file: the match, team, player and
  * season pages). It leaves the images out, because Next uses a folder's image
  * files only where the page's metadata names no images itself.
+ *
+ * `image` names a picture drawn somewhere else (the queue invite's
+ * `/inhouse/queue` pictures, which `/inhouse?join=1` shows in place of
+ * /inhouse's own): its opengraph and twitter addresses and their alt text.
  */
 export function shareMetadata(
   title: string,
   description: string,
   pathname?: string,
-  options: { pageImage?: boolean } = {},
+  options: {
+    pageImage?: boolean;
+    image?: { openGraph: string; twitter: string; alt: string };
+  } = {},
 ): Metadata {
+  const { image } = options;
   return {
     title,
     description,
@@ -28,18 +36,26 @@ export function shareMetadata(
       description,
       siteName: LEAGUE_CONFIG.name,
       type: "website",
-      ...(options.pageImage
-        ? {}
-        : { images: [LEAGUE_CONFIG.branding.openGraphImage] }),
+      ...(image
+        ? {
+            images: [
+              { url: image.openGraph, width: 1200, height: 630, alt: image.alt },
+            ],
+          }
+        : options.pageImage
+          ? {}
+          : { images: [LEAGUE_CONFIG.branding.openGraphImage] }),
       ...(pathname ? { url: pathname } : {}),
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
-      ...(options.pageImage
-        ? {}
-        : { images: [LEAGUE_CONFIG.branding.twitterImage] }),
+      ...(image
+        ? { images: [{ url: image.twitter, alt: image.alt }] }
+        : options.pageImage
+          ? {}
+          : { images: [LEAGUE_CONFIG.branding.twitterImage] }),
     },
   };
 }

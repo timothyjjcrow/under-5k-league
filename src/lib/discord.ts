@@ -28,6 +28,7 @@ import { capacityInfo } from "./capacity";
 import { PLAYER_SIGNUPS_OPEN_UNTIL } from "./season-copy";
 import { POLL_ANCHOR } from "./match-night-poll";
 import { INHOUSE_NIGHT_INVITE_PATH } from "./inhouse-night";
+import { INHOUSE_QUEUE_INVITE_PATH } from "./inhouse-queue-invite";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -723,7 +724,7 @@ export function rolePrefix(roleId: string | null | undefined): string {
 /** Deep-links straight into the queue: one tap from a phone notification to
  *  actually being in it, instead of link → page → find the button → tap. */
 export function joinLink(): string {
-  return `${resolveSiteUrl()}/inhouse?join=1`;
+  return `${resolveSiteUrl()}${INHOUSE_QUEUE_INVITE_PATH}`;
 }
 
 /** The inhouse night's invite: "I'm in" before the night, the queue once it's

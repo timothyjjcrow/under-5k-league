@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 import {
   hueHex,
   type InhouseNightCardData,
+  type InhouseQueueCardData,
   type MatchCardData,
   type MatchCardStatus,
   type OgMedal,
@@ -778,6 +779,190 @@ export function OgInhouseNightCard({
           {headcount ? <OgChip>{headcount}</OgChip> : null}
           <OgChip gold>{on ? "The lobby fires at ten" : "Tap to say you're in"}</OgChip>
           {on ? null : <OgChip>Captains draft the teams</OgChip>}
+        </div>
+      </div>
+    </OgFrame>
+  );
+}
+
+/**
+ * The inhouse queue, the picture its invite link (`/inhouse?join=1`) unfurls
+ * with: how full the queue is, who's in its ten slots, whether a game is
+ * live, and what the link does. "As of" says when it was drawn, since a chat
+ * keeps a preview long after the queue has moved.
+ */
+export function OgInhouseQueueCard({
+  emblem,
+  leagueName,
+  queued,
+  lobbySize,
+  liveGames,
+  players,
+  asOf,
+}: InhouseQueueCardData & OgBrand) {
+  const needed = Math.max(0, lobbySize - queued);
+  const next = liveGames > 0 ? "the next game" : "a game";
+  const slots = Array.from({ length: lobbySize }, (_, i) => players[i] ?? null);
+  const slotSize = 88;
+  const slotGap = Math.floor((1000 - lobbySize * slotSize) / Math.max(1, lobbySize - 1));
+  // Four names, or three and a count of everyone else in the queue (past
+  // the ten slots too).
+  const named = players
+    .slice(0, queued > 4 ? 3 : 4)
+    .map((player) => player.name);
+  const rest = queued - named.length;
+  const names = rest > 0 ? [...named, `+${rest} more`] : named;
+  return (
+    <OgFrame
+      emblem={emblem}
+      leagueName={leagueName}
+      kicker="Inhouse queue"
+      pill={
+        liveGames > 1
+          ? `${liveGames} games live`
+          : liveGames === 1
+            ? "Game live"
+            : "Inhouse 5v5s"
+      }
+      pillGold={liveGames > 0}
+    >
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          justifyContent: "center",
+          padding: "0 8px",
+        }}
+      >
+        {queued > 0 ? (
+          <div style={{ display: "flex", alignItems: "flex-end" }}>
+            <span
+              style={{
+                fontSize: 150,
+                fontWeight: 600,
+                lineHeight: 1,
+                color: COLOR.accent,
+              }}
+            >
+              {queued}
+            </span>
+            <span
+              style={{
+                fontSize: 84,
+                fontWeight: 600,
+                lineHeight: 1,
+                color: COLOR.muted,
+                marginBottom: 10,
+              }}
+            >
+              {`/${lobbySize}`}
+            </span>
+            <div
+              style={{
+                display: "flex",
+                flexDirection: "column",
+                marginLeft: 36,
+                marginBottom: 12,
+              }}
+            >
+              <span style={{ fontSize: 54, fontWeight: 600, lineHeight: 1.1 }}>
+                {liveGames > 0 ? "queued for the next game" : "in the queue"}
+              </span>
+              <span style={{ fontSize: 34, color: COLOR.muted, lineHeight: 1.25 }}>
+                {needed > 0
+                  ? `${needed} more ${needed === 1 ? "starts" : "start"} ${next}`
+                  : "Full: join for the game after"}
+              </span>
+            </div>
+          </div>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column" }}>
+            <span style={{ fontSize: 112, fontWeight: 600, lineHeight: 1.02 }}>
+              The queue is open
+            </span>
+            <span
+              style={{
+                fontSize: 52,
+                fontWeight: 600,
+                lineHeight: 1.2,
+                color: COLOR.accent,
+                marginTop: 4,
+              }}
+            >
+              {`Be the first in: ten start ${next}`}
+            </span>
+          </div>
+        )}
+        <div style={{ display: "flex", marginTop: 34 }}>
+          {slots.map((player, index) => (
+            <div
+              key={index}
+              style={{
+                width: slotSize,
+                height: slotSize,
+                marginRight: index < slots.length - 1 ? slotGap : 0,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                overflow: "hidden",
+                borderRadius: slotSize / 2,
+                border: `3px solid ${player ? COLOR.accent : COLOR.line}`,
+                backgroundColor: player ? COLOR.surface : "rgba(18,26,41,0.55)",
+                fontSize: player ? 32 : 44,
+                fontWeight: 600,
+                color: COLOR.muted,
+              }}
+            >
+              {player ? (
+                player.avatar ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- Satori draws <img>, not next/image
+                  <img
+                    src={player.avatar}
+                    width={slotSize - 6}
+                    height={slotSize - 6}
+                    alt=""
+                    style={{ objectFit: "cover", borderRadius: (slotSize - 6) / 2 }}
+                  />
+                ) : (
+                  teamInitials(player.name)
+                )
+              ) : (
+                "+"
+              )}
+            </div>
+          ))}
+        </div>
+        {names.length > 0 ? (
+          <div
+            style={{
+              display: "block",
+              fontSize: 30,
+              lineHeight: 1.2,
+              color: COLOR.muted,
+              maxWidth: 1060,
+              lineClamp: 1,
+              wordBreak: "break-word",
+              marginTop: 16,
+            }}
+          >
+            {names.join("  ·  ")}
+          </div>
+        ) : null}
+        <div style={{ display: "flex", alignItems: "center", marginTop: 26 }}>
+          <OgChip gold>Open the link to join</OgChip>
+          <OgChip>Captains draft the teams</OgChip>
+          <span
+            style={{
+              display: "flex",
+              fontSize: 26,
+              color: COLOR.muted,
+              marginLeft: "auto",
+              marginBottom: 14,
+            }}
+          >
+            {`As of ${asOf}`}
+          </span>
         </div>
       </div>
     </OgFrame>

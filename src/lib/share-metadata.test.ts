@@ -47,6 +47,32 @@ describe("shareMetadata", () => {
     expect(meta.twitter).toMatchObject({ card: "summary_large_image" });
   });
 
+  it("names a picture drawn elsewhere in place of the page's own", () => {
+    // /inhouse?join=1 shows the queue's picture, though /inhouse's folder
+    // draws the night's: naming images is what makes Next skip the folder's.
+    const meta = shareMetadata("4/10 in the inhouse queue", "Join them", "/inhouse", {
+      pageImage: true,
+      image: {
+        openGraph: "/inhouse/queue/opengraph-image?v=4-0",
+        twitter: "/inhouse/queue/twitter-image?v=4-0",
+        alt: "The inhouse queue",
+      },
+    });
+    expect(meta.openGraph).toMatchObject({
+      images: [
+        {
+          url: "/inhouse/queue/opengraph-image?v=4-0",
+          width: 1200,
+          height: 630,
+          alt: "The inhouse queue",
+        },
+      ],
+    });
+    expect(meta.twitter).toMatchObject({
+      images: [{ url: "/inhouse/queue/twitter-image?v=4-0", alt: "The inhouse queue" }],
+    });
+  });
+
   it("adds a canonical and Open Graph URL when the route supplies a pathname", () => {
     const meta = shareMetadata(
       "Record book",
