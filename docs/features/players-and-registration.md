@@ -1,10 +1,11 @@
 # Players, registration and team identity
 
-Joining a GGD2L season on `/me`, medal-checked MMR, the uncapped pool and its
-`/players` scouting rows, the profile Seasons card, `/players/compare`, and
-team names, logos, crest colours and jerseys. Main files: `saveRegistration`
-(`src/app/actions/registration.ts`), `src/lib/registration.ts`, `rank.ts`,
-`capacity.ts`, `player-pool.ts`, `pub-stats.ts`, `team-identity*.ts`.
+Joining a GGD2L season on `/me`, the Discord a signup needs, medal-checked
+MMR, the uncapped pool and its `/players` scouting rows, the profile Seasons
+card, `/players/compare`, and team names, logos, crest colours and jerseys.
+Main files: `saveRegistration` (`src/app/actions/registration.ts`),
+`src/lib/registration.ts`, `signup-discord.ts`, `rank.ts`, `capacity.ts`,
+`player-pool.ts`, `pub-stats.ts`, `team-identity*.ts`.
 
 ## Who can sign up
 
@@ -41,6 +42,50 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   5,000, and How it works said 5,000 MMR players can join and that above
   5,000 an admin reviews them. The admin hint says it flags nobody.
 
+## Discord before a signup
+
+- **A new signup needs a linked Discord account in the league's server**
+  (Tim's call, 2026-10-19: players signed up whom nobody could reach).
+  `signupDiscordBlocker` (`src/lib/signup-discord.ts`, pure) is the rule: the
+  link wherever accounts can be linked (`discordLinkingConfigured`), and
+  "member" wherever the bot can look the account up (`getGuildConfig`).
+  Pending (Membership Screening) is not enough: nothing can reach a pending
+  member. `signupDiscordPolicy` (`discord-roles.ts`) reads the deployment for
+  both the action and /me, so the page never shows a form the action refuses.
+- **Judge it at admission only** (`signupDiscordJudged`): no signup yet, or a
+  WITHDRAWN one coming back, standins included. An ACTIVE signup keeps
+  editing (admitted before the rule, or unlinked since: /me's next-steps list
+  asks for the link again, and nothing removes them), and a REMOVED one gets
+  the write's own refusal. Admin reinstatements never pass through it.
+- **Unknown never blocks.** A Discord that doesn't answer, or a bot gone from
+  the server (Unknown Guild), lets a linked player through, so an outage or a
+  kicked bot can't close signups; the admin reach card counts who couldn't be
+  checked.
+- **Read it live in the action, before the OpenDota fetch**
+  (`signupDiscordStanding`: one member GET, primed into the memo), so a player
+  who just joined with the invite isn't refused by a memo's 30-second
+  "not-member", and a refused submit spends nothing. The account it judged is
+  re-read inside the write's transaction (`RegistrationDiscordChangedError`),
+  so an unlink or a re-link mid-submit can't admit an account nobody checked.
+  A refusal revalidates /me, so a stale page turns into the step.
+- **/me shows the step in place of the form, never beside it**
+  (`signupDiscordStep`, `<SignupDiscordStepPanel>`): linking is a full-page
+  round trip, so a half-filled form would be lost. The returning one-tap card
+  hides with it. The step points at the Discord card ("Link your Discord ↓"),
+  as the next-steps list does, rather than repeating its buttons: the card
+  keeps the consent text beside them, and no two controls on /me share a
+  name. Unlinked is known at render; a linked player's card waits on
+  the page's one member lookup behind `<Suspense>` with a status line, never
+  the form (a form swapped out mid-typing loses its answers), and an unknown
+  answer shows the form. "Check again" is a plain link that reloads /me. How
+  it works' first step says what a signup needs here (`signupStepDetail`).
+- **Tests:** `signup-discord.test.ts` (the rule, the copy, and source guards on
+  the action's order and the /me wrap), `signup-discord-step.test.ts` (the
+  panel's links), `test/integration/signup-discord.itest.ts`
+  (the real action over HTTP to a stand-in member route, with the seams), and
+  the mid-season e2e, which links accounts (`signed-in.spec.ts`,
+  `quality-of-life.spec.ts`).
+
 ## Medal-checked MMR
 
 - **Judge a claim against the medal's window** (`rank.ts`, pure).
@@ -52,9 +97,9 @@ team names, logos, crest colours and jerseys. Main files: `saveRegistration`
   `approxRankTierFromMmr` shares the constants, and `rank.test.ts` pins that
   the two never disagree.
 - **Keep `saveRegistration`'s order:** gate what no medal could change (the
-  ceiling, closed player signups) with the medal on file, fetch a brand-new
-  signup's missing medal, then gate the RAW claim plus medal, then clamp and
-  store. Never gate the clamped value: the clamp snaps under the ceiling, so
+  ceiling, closed player signups) with the medal on file, then an admission's
+  Discord ([above](#discord-before-a-signup)), fetch a brand-new signup's
+  missing medal, then gate the RAW claim plus medal, then clamp and store. Never gate the clamped value: the clamp snaps under the ceiling, so
   any overstated claim would pass. The early gate comes before the fetch
   because a refused submit stores nothing: every retry used to call OpenDota
   again. The fetch also takes the player's `open-dota-profile` cooldown (the

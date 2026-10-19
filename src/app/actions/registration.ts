@@ -33,7 +33,10 @@ import {
   getRoleConfig,
   inhousePingToggleKey,
   setPingRole,
+  signupDiscordPolicy,
+  signupDiscordStanding,
 } from "@/lib/discord-roles";
+import { signupDiscordJudged, signupDiscordRefusal } from "@/lib/signup-discord";
 import { bool, clampInt, str } from "@/lib/form";
 import {
   parseAccountId,
@@ -84,6 +87,7 @@ class DraftConfirmationChangedError extends Error {}
 class RegistrationLifecycleChangedError extends Error {}
 class RegistrationRosterChangedError extends Error {}
 class RegistrationIdentityChangedError extends Error {}
+class RegistrationDiscordChangedError extends Error {}
 class RegistrationMmrChangedError extends Error {}
 class RegistrationStateChangedError extends Error {}
 class DotaAccountCollisionError extends Error {}
@@ -302,6 +306,7 @@ export async function saveRegistration(
       legacyDotaAccountId: true,
       rankTier: true,
       rankTierManual: true,
+      discordId: true,
     },
   });
   let rankTier = dbUser?.rankTier ?? null;
@@ -326,6 +331,23 @@ export async function saveRegistration(
   // spend the league's shared allowance a refusal at a time.
   const earlyGateError = registrationGate({ ...gateFacts, rankTier });
   if (earlyGateError) return { error: earlyGateError };
+  // Discord before a new signup (signup-discord.ts): a linked account that is
+  // in the league's server. Judged at admission only, before the OpenDota
+  // fetch for the same reason as the early gate (a refused submit stores
+  // nothing, so it must spend nothing), and live (signupDiscordStanding). The
+  // account it judged is re-read inside the write's transaction below: a
+  // re-link to another account in between would sign up an account nobody
+  // checked. A refusal re-renders /me, whose signup card then shows the step.
+  const discordJudged =
+    signupDiscordJudged(existing?.status) && signupDiscordPolicy().linkRequired;
+  const discordBlocker = discordJudged
+    ? await signupDiscordStanding(dbUser?.discordId ?? null)
+    : null;
+  if (discordBlocker) {
+    revalidatePath("/me");
+    return { error: signupDiscordRefusal(discordBlocker) };
+  }
+  const judgedDiscordId = discordJudged ? (dbUser?.discordId ?? null) : undefined;
   if (!existing && dbUser && dbUser.rankTier == null && !dbUser.rankTierManual) {
     const accountId = effectiveDotaAccountId({
       ...dbUser,
@@ -573,7 +595,7 @@ export async function saveRegistration(
             }),
             tx.user.findUnique({
               where: { id: user.id },
-              select: { rankTier: true },
+              select: { rankTier: true, discordId: true },
             }),
             type === REGISTRATION_TYPE.STANDIN
               ? tx.teamMember.findUnique({
@@ -607,6 +629,15 @@ export async function saveRegistration(
           }
           if (!currentUser || currentUser.rankTier !== rankTier) {
             throw new RegistrationIdentityChangedError();
+          }
+          // The Discord account the signup rule judged, still the one linked:
+          // an unlink or a re-link to another account since would admit a
+          // player on an account nobody checked.
+          if (
+            judgedDiscordId !== undefined &&
+            currentUser.discordId !== judgedDiscordId
+          ) {
+            throw new RegistrationDiscordChangedError();
           }
           // An admin can correct MMR while this request is in flight without
           // changing the medal. Keep that newer correction and let the player
@@ -676,6 +707,13 @@ export async function saveRegistration(
         return {
           error:
             "Your verified Dota details changed while you submitted — reload before trying again.",
+        };
+      }
+      if (error instanceof RegistrationDiscordChangedError) {
+        revalidatePath("/me");
+        return {
+          error:
+            "Your Discord link changed while you submitted — check the Discord card, then try again.",
         };
       }
       if (error instanceof RegistrationMmrChangedError) {

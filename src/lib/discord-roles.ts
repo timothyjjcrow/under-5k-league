@@ -3,6 +3,12 @@ import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
 import { getInhousePingRoleId } from "./discord";
 import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { discordLinkingConfigured } from "./discord-oauth";
+import {
+  signupDiscordBlocker,
+  type SignupDiscordBlocker,
+  type SignupDiscordPolicy,
+} from "./signup-discord";
 
 // Self-serve opt-in to the inhouse ping role.
 //
@@ -367,6 +373,39 @@ export function _clearMembershipMemoForTests(): void {
   membershipMemo.clear();
   membershipInflight.clear();
   _clearMemberRouteGateForTests();
+}
+
+/**
+ * What the signup rule (`signup-discord.ts`) can require on this deployment:
+ * a linked account wherever accounts can be linked, and that account in the
+ * server wherever the bot can look it up. The action and /me both read it
+ * here, so the page never shows a form the action would refuse.
+ */
+export function signupDiscordPolicy(): SignupDiscordPolicy {
+  return {
+    linkRequired: discordLinkingConfigured(),
+    membershipCheckable: getGuildConfig() !== null,
+  };
+}
+
+/**
+ * The signup rule's answer for one player, read LIVE: a player who joined
+ * with the invite a moment ago must not be refused by a memo's 30-second
+ * "not-member". One member GET, the cost of one /me render, and it primes the
+ * memo for the pages that follow. Unknown reads as no blocker
+ * (`signupDiscordBlocker`), so this never refuses on a guess.
+ */
+export async function signupDiscordStanding(
+  discordId: string | null,
+): Promise<SignupDiscordBlocker | null> {
+  const policy = signupDiscordPolicy();
+  if (!policy.linkRequired) return null;
+  if (!discordId) return "link";
+  const cfg = getGuildConfig();
+  if (!cfg) return null;
+  const membership = await guildMembership(discordId, cfg);
+  primeMembershipMemo(discordId, membership);
+  return signupDiscordBlocker({ policy, linked: true, membership });
 }
 
 /**
