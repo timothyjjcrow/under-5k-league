@@ -12,10 +12,13 @@ import {
 import { cn } from "@/lib/utils";
 import { avgKnownMmr, queueSlots } from "@/lib/inhouse";
 import { HARD_MMR_CEILING, INHOUSE } from "@/lib/constants";
+import { INHOUSE_QUEUE_INVITE_PATH } from "@/lib/inhouse-queue-invite";
+import { signInHref } from "@/lib/sign-in";
 import { roleCoverage } from "@/lib/pool-stats";
 import { parseRoleOrder } from "@/lib/roles";
 import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
+import { QueueInvite } from "@/components/inhouse/queue-invite";
 import { RolePicker } from "@/components/inhouse/role-picker";
 
 /**
@@ -125,9 +128,15 @@ function QueueAction({
   // A phone's size: a 44px button, not 48 (40, the kit's small control
   // there, in the filled card's ring row, beside its 40px ring).
   const big = cn(compact ? "max-md:h-10" : "max-md:h-11", "max-md:px-4 max-md:text-sm");
+  // Signing in comes back to the queue's invite link, which joins them: the
+  // button says "Sign in to queue", and a friend who opened the invite
+  // signed out still ends up in the queue.
   if (!me.isLoggedIn) {
     return (
-      <a href="/login?next=/inhouse" className={buttonClasses("primary", "lg", big)}>
+      <a
+        href={signInHref(INHOUSE_QUEUE_INVITE_PATH)}
+        className={buttonClasses("primary", "lg", big)}
+      >
         {nextGame ? "Sign in for next game" : "Sign in to queue"}
       </a>
     );
@@ -963,6 +972,8 @@ export function QueueView({
       {present.length > 0 && mmrHint ? (
         <QueueMmrHint mmrHint={mmrHint} dense className="px-1 text-center md:hidden" />
       ) : null}
+      {/* Under the card, so the card keeps a phone's first screen. */}
+      <QueueInvite />
       <p className="px-1 text-center text-xs text-muted">
         {/* A queued phone player's ready-check reminder, which the card keeps
             for screen readers only: here it costs no first-screen space. */}

@@ -551,6 +551,17 @@ test("match, team, player and season links unfurl with their own picture", async
   const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
   await expectOwnPicture(`/seasons/${season.id}`, "seasons");
 
+  // The inhouse queue's invite link draws the queue (/inhouse/queue, its
+  // address changing with the counts it shows), though /inhouse's own
+  // folder draws the night's.
+  await page.goto("/inhouse?join=1");
+  const queuePicture = await picturePath('meta[property="og:image"]');
+  expect(queuePicture).toMatch(/^\/inhouse\/queue\/opengraph-image\?v=\d+-\d+$/);
+  expect(await picturePath('meta[name="twitter:image"]')).toMatch(
+    /^\/inhouse\/queue\/twitter-image\?v=\d+-\d+$/,
+  );
+  await expectPicture(queuePicture);
+
   // Every other page keeps the league's own picture (each region has its own).
   await page.goto("/schedule");
   expect(

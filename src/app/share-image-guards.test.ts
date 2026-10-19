@@ -10,13 +10,14 @@ import {
 
 /**
  * Source contracts for the link preview pictures: the opengraph-image and
- * twitter-image routes beside the match, team, player and season pages, and
- * /inhouse's (the inhouse night). The
+ * twitter-image routes beside the match, team, player and season pages,
+ * /inhouse's (the inhouse night), and the queue invite's (/inhouse/queue,
+ * which /inhouse?join=1 names in its metadata). The
  * e2e suite checks that the pages point at them; these pin what no request
  * shows: that every picture is drawn per request, and that the server only
  * ever fetches a crest or avatar through the allowlisted fetchOgImage.
  */
-const ROUTES = sourceFiles("src/app/**/{opengraph,twitter}-image.tsx", 8);
+const ROUTES = sourceFiles("src/app/**/{opengraph,twitter}-image.tsx", 10);
 
 describe("link preview picture routes", () => {
   it("come in pairs, so Discord and X show the same picture", () => {
@@ -27,6 +28,7 @@ describe("link preview picture routes", () => {
     expect(folders("opengraph-image.tsx")).toEqual(folders("twitter-image.tsx"));
     expect(folders("opengraph-image.tsx")).toEqual([
       "src/app/inhouse",
+      "src/app/inhouse/queue",
       "src/app/matches/[id]",
       "src/app/players/[id]",
       "src/app/seasons/[id]",
@@ -44,7 +46,7 @@ describe("link preview picture routes", () => {
       expect(text, route.path).toContain('export const contentType = "image/png";');
       expect(text, route.path).toMatch(/export const alt = "[^"]+";/);
       expect(text, route.path).toMatch(
-        /return (?:(match|team|player|season)ShareImage\(\(await params\)\.id\)|inhouseShareImage\(\));/,
+        /return (?:(match|team|player|season)ShareImage\(\(await params\)\.id\)|inhouse(?:Queue)?ShareImage\(\));/,
       );
       expect(text, route.path).not.toMatch(/ImageResponse|prisma\.|fetch\(/);
     }

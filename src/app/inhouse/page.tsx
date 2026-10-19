@@ -63,6 +63,13 @@ import {
   type InhouseTimeLinked,
 } from "@/lib/inhouse-times";
 import { readInhouseTime } from "@/lib/inhouse-times-service";
+import {
+  INHOUSE_QUEUE_INVITE_PATH,
+  inhouseQueuePicturePath,
+  inhouseQueuePreviewText,
+  isInhouseQueueInvite,
+} from "@/lib/inhouse-queue-invite";
+import { loadInhouseQueuePreviewCounts } from "@/lib/link-preview-images";
 import { DotaLobbyRecovery } from "@/components/dota-lobby-recovery";
 import { inhouseLobbyBotConfigured } from "@/lib/dota-lobby-service";
 import { inhouseTicketGuideStep } from "@/lib/inhouse";
@@ -96,16 +103,19 @@ const INHOUSE_DESCRIPTION =
  * who's coming and what the link does, with the night's own picture
  * (opengraph-image.tsx). A Play later time's link (`?at=`,
  * inhouseTimeLinkPath) unfurls as that time instead, with the league's
- * picture, since the page's picture is the night's. The tab keeps the
- * page's name.
+ * picture, since the page's picture is the night's. The queue's invite link
+ * (`?join=1`, INHOUSE_QUEUE_INVITE_PATH) unfurls as the queue: how full it
+ * is and whether a game is live, with the queue's own picture
+ * (`inhouse/queue/opengraph-image.tsx`). The tab keeps the page's name.
  */
 export async function generateMetadata({
   searchParams,
 }: {
-  searchParams: Promise<{ at?: string | string[] }>;
+  searchParams: Promise<{ at?: string | string[]; join?: string | string[] }>;
 }): Promise<Metadata> {
   const nowMs = Date.now();
-  const at = singleSearchParam((await searchParams).at);
+  const params = await searchParams;
+  const at = singleSearchParam(params.at);
   const linkedMs = typeof at === "string" ? parseInhouseTimeParam(at) : null;
   const time = linkedMs === null ? null : await readInhouseTime(linkedMs, nowMs);
   if (time) {
@@ -116,6 +126,23 @@ export async function generateMetadata({
     });
     return {
       ...shareMetadata(preview.title, preview.description, "/inhouse"),
+      title: "Inhouse",
+    };
+  }
+  if (isInhouseQueueInvite(singleSearchParam(params.join))) {
+    const counts = await loadInhouseQueuePreviewCounts(nowMs);
+    const preview = inhouseQueuePreviewText({
+      ...counts,
+      lobbySize: INHOUSE.LOBBY_SIZE,
+    });
+    return {
+      ...shareMetadata(preview.title, preview.description, "/inhouse", {
+        image: {
+          openGraph: inhouseQueuePicturePath("opengraph-image", counts),
+          twitter: inhouseQueuePicturePath("twitter-image", counts),
+          alt: "The inhouse queue: how full it is, who's in it, and a link that joins it",
+        },
+      }),
       title: "Inhouse",
     };
   }
@@ -175,7 +202,7 @@ export default async function InhousePage({
       mine: false,
       needsDiscord: false,
     });
-    if (action === "join") redirect("/inhouse?join=1");
+    if (action === "join") redirect(INHOUSE_QUEUE_INVITE_PATH);
   }
 
   // The player's fixed MMR, if any (an admin's inhouse MMR, else their most

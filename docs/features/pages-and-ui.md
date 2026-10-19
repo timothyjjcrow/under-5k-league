@@ -157,6 +157,17 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   bundled fonts lack while it draws (Twemoji for an emoji).
   `share-image-guards.test.ts` checks the picture files and the card rules
   they borrow words from.
+- **The queue's invite link (`/inhouse?join=1`) unfurls with the queue's
+  picture,** drawn in `src/app/inhouse/queue/` (no page there) by
+  `OgInhouseQueueCard`: N/10 in the queue, the first ten players' avatars
+  in their slots (initials without one), the names, "Game live" while one
+  is, and "As of" the time it was drawn on the league's clock, since a chat
+  keeps a preview long after the queue moves. /inhouse's metadata names it
+  for `?join=1` (`shareMetadata`'s `image`), which is what makes Next skip
+  /inhouse's own picture. Its address carries the counts
+  (`inhouseQueuePicturePath`, `?v=4-1`), so a new count is a new address
+  for Discord's image cache; the route ignores the query and draws what it
+  reads, kept five minutes under `/inhouse/queue`.
 - **Leave the images out of those pages' metadata**
   (`shareMetadata(..., { pageImage: true })`): Next uses a folder's image files
   only where the page's metadata names no images at all, so the failure is
@@ -865,7 +876,8 @@ the league is already draftable and many visitors have joined. Write for both.
     their label for screen readers, and one order line under them cut off
     with an ellipsis (the toggles' ranks and names carry the order; a
     phone says "Tap your favorite first" and "from your signup"). "How your
-    MMR is set" sits right under the card on a phone (in it from md). The
+    MMR is set" sits right under the card on a phone (in it from md), then
+    the invite row ("Copy queue link"; [inhouse](inhouse.md#queue)). The
     slots are 32px rows (the name and MMR at 16px, then the slot, or "You"
     in your own, and 14px pills), and the positions count rides the
     "Who's playing" row. That row never wraps (a second line cost a phone
