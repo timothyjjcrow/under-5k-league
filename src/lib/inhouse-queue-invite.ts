@@ -3,7 +3,7 @@
  * paste in Discord or anywhere else, and opening it joins the queue in one
  * tap. It is the room's `?join=1` (autoJoinDecision, inhouse-room.tsx), the
  * link every Discord ping and the night's "Join the queue" already carry.
- * /inhouse's "Copy invite link" under the queue copies it, a signed-out
+ * /inhouse's "Copy queue link" under the queue copies it, a signed-out
  * "Sign in to queue" comes back to it, and its preview shows the queue
  * (inhouseQueuePreviewText, and the picture OgInhouseQueueCard draws).
  */

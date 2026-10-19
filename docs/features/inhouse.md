@@ -742,13 +742,14 @@ Every transition is a guarded claim; keep it that way (general rules:
   in one tap (the room's auto-join, under "The room" and in
   [discord](discord.md)). It is the link the Discord pings and the night's
   "Join the queue" already carried.
-  - **"Copy invite link" sits under the queue card** (`QueueInvite`,
+  - **"Copy queue link" sits under the queue card** (`QueueInvite`,
     `src/components/inhouse/queue-invite.tsx`) for anyone, signed in or
     not: under the queue, and under a queued player's next-game queue
     beside a live game. It is below the card so the card keeps a phone's
     first screen. It copies the address on the viewer's own origin and
     says "Copied" only when the clipboard took it; otherwise the toast
-    shows the link to copy by hand.
+    shows the link to copy by hand. Its name is its own: /inhouse also has
+    the night's "Copy invite link" and Play later's "Copy link".
   - **Signing in comes back to it:** the queue's "Sign in to queue" (and
     "Sign in for next game") is `signInHref(INHOUSE_QUEUE_INVITE_PATH)`, so
     a friend who opens the invite signed out still ends up queued, and the

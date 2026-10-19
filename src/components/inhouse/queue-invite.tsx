@@ -6,12 +6,15 @@ import { buttonClasses } from "@/components/ui";
 import { INHOUSE_QUEUE_INVITE_PATH } from "@/lib/inhouse-queue-invite";
 
 /**
- * The queue's invite, under the queue card (Tim, 2026-10-19): "Copy invite
+ * The queue's invite, under the queue card (Tim, 2026-10-19): "Copy queue
  * link" copies the link that joins whoever opens it to the queue in one tap
  * (INHOUSE_QUEUE_INVITE_PATH), for anyone to paste in Discord or anywhere
  * else; it unfurls as the queue, showing how full it is. The address comes
  * from `window.location.origin` at click time, so a preview, a custom domain
- * and localhost each copy themselves, as the night's invite does.
+ * and localhost each copy themselves, as the night's invite does. Its name
+ * is its own: /inhouse also has the night's "Copy invite link" and Play
+ * later's "Copy link", and one name for two controls is two buttons a
+ * screen reader can't tell apart.
  */
 export function QueueInvite() {
   const [copied, setCopied] = useState(false);
@@ -39,7 +42,7 @@ export function QueueInvite() {
         }}
       >
         <span aria-hidden>{copied ? "✓" : "🔗"}</span>
-        {copied ? "Copied!" : "Copy invite link"}
+        {copied ? "Copied!" : "Copy queue link"}
       </button>
     </div>
   );

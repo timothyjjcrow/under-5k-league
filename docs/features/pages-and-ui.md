@@ -865,7 +865,7 @@ the league is already draftable and many visitors have joined. Write for both.
     with an ellipsis (the toggles' ranks and names carry the order; a
     phone says "Tap your favorite first" and "from your signup"). "How your
     MMR is set" sits right under the card on a phone (in it from md), then
-    the invite row ("Copy invite link"; [inhouse](inhouse.md#queue)). The
+    the invite row ("Copy queue link"; [inhouse](inhouse.md#queue)). The
     slots are 32px rows (the name and MMR at 16px, then the slot, or "You"
     in your own, and 14px pills), and the positions count rides the
     "Who's playing" row. That row never wraps (a second line cost a phone
