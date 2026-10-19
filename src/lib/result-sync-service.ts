@@ -70,6 +70,7 @@ import { maybeNudgeMissingResults } from "./result-nudge-service";
 import { announceInhouseNightStart } from "./inhouse-night-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
+import { recordLeagueFeedWait } from "./league-feed-wait-service";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
 // Automatic result sync — the league updates itself instead of waiting on a
@@ -242,17 +243,36 @@ async function syncDueMatches(
         signal: options.signal,
       });
       leagueImported = res.imported;
-      if (res.unreachable || res.deadlineReached || res.pending) {
+      if (
+        res.unreachable ||
+        res.deadlineReached ||
+        (res.pending && !res.blocked)
+      ) {
         // Roll our own claim back so the next tick can retry immediately —
         // otherwise every outage tick costs one full throttle interval (the
         // roster path's rollback pattern). Value-scoped to the exact ISO
         // claimThrottle stamped, so a NEWER claim is never deleted.
+        //
+        // A pass that stopped only on feed games in review or retry backoff
+        // (`blocked`) keeps its claim: the next tick could only read the feed
+        // and stop on the same games, so it waits out the interval, and the
+        // automation gate sleeps to their earliest retry (LEAGUE_FEED_WAIT).
         await prisma.setting.deleteMany({
           where: {
             key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
             value: new Date(nowMs).toISOString(),
           },
         });
+      }
+      if (!res.unreachable && !res.deadlineReached) {
+        // What this pass waited on, for /admin and the gate. Best-effort:
+        // the record only names games and times a wake, so failing to write
+        // it must not cost this run its roster fallback.
+        try {
+          await recordLeagueFeedWait(season.id, nowMs, res.waitingOn ?? []);
+        } catch (error) {
+          logStepFailure("league feed wait", error);
+        }
       }
       if (res.deadlineReached) {
         return {

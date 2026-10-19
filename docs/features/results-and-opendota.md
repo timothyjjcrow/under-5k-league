@@ -131,6 +131,16 @@ Captain report, admin import, league feed and roster scan all end in
   ignore with a reason (`src/app/actions/import-progress.ts`). A retryable
   failure never becomes a permanent exclusion. Manual sync skips the fetch cap
   and the legacy skip list, but never admin removals.
+- **One stuck feed game holds every feed import, on purpose.** While any feed
+  game is in review, still in its retry backoff, or failed this pass,
+  discovery is incomplete and no fixture imports from the feed: a partial
+  newest-first buffer can't prove the real series (a counted 4v5 skipped as
+  game 1 would record game 2 alone as the series). Don't import around it.
+  The result says why: `waitingOn` lists those games, and `blocked` means
+  discovery stopped on nothing else (no fetch cap, deadline or failure this
+  pass). Manual sync's toast names a game whose details failed and points at
+  Saved import progress. Per-fixture blocking and an alert are deferred
+  ([decisions](../DECISIONS.md#deferred-on-purpose)).
 - **Admin removals exclude a game from every import but the override.**
   `removeGame` writes an `ImportSuppression` row, deletes the game and
   releases its `DotaMatchClaim` in one transaction; importers re-check
@@ -160,7 +170,7 @@ Captain report, admin import, league feed and roster scan all end in
   may sleep until `AUTOMATION_GATE_HARD_HORIZON_MS`. Give a new automated step
   its own wake in the gate, and bump `AUTOMATION_GATE_VERSION` and its key when
   the snapshot shape or deadline rules change (`automation-gate-constants.ts`,
-  currently 12). Version, cache key, tag and the tests that pin them move
+  currently 13). Version, cache key, tag and the tests that pin them move
   together. When two branches each bumped it, the merge takes a number above
   both, so neither build's cached decision is trusted.
 - **Isolate steps and name failures.** Each `runResultSync` step checks its
@@ -209,6 +219,20 @@ Captain report, admin import, league feed and roster scan all end in
   the roster scan, for lobbies hosted with an old or wrong ticket. If the feed
   was unreachable, pending or out of time, delete the throttle claim (scoped to
   this run's exact stamp) so the next run retries.
+- **A blocked feed keeps its claim.** A pass that stopped only on games in
+  review or retry backoff (`blocked`) keeps the claim: the next tick could
+  only stop on the same games, and rolling it back made the worker read
+  `/leagues/{id}/matchIds` and run a full pass every minute for nothing.
+  After every feed pass that ran, `syncDueMatches` records what it waited on
+  in `leagueFeedWait` (`SETTING_KEYS.LEAGUE_FEED_WAIT`, pure rules in
+  `src/lib/league-feed-wait.ts`, reads in `league-feed-wait-service.ts`), or
+  clears it. While that pass's claim still stands and every recorded game is
+  waiting to retry, the gate wakes the feed at their earliest
+  `nextAttemptAt` instead of the throttle; a game in review keeps the
+  ordinary 3-minute cadence, and a recorded game that clears (Retry next
+  sync, Ignore this game, an import) drops the delay at once, because the
+  gate re-reads the rows. Tests: "a league feed waiting on a stuck game" in
+  `test/integration/result-sync.itest.ts`.
 - **One roster scan per run, claimed.** A scan costs about a dozen OpenDota
   calls. Take the stalest `Match.autoSyncedAt`, win the global
   `rosterAutoSyncAt` claim (`SCAN_GAP_SECONDS`) so concurrent workers can't fan
@@ -234,6 +258,13 @@ Captain report, admin import, league feed and roster scan all end in
   `NO_ELIGIBLE_FIXTURE*` reason, which only `syncLeagueGames` writes and every
   pass reconsiders) and the players with private match data. Never count the
   legacy skip Settings there: nothing writes them.
+- **Name the games a blocked feed waits on.** From `loadLeagueFeedWaiting`
+  (the recorded games whose rows are still in review or waiting to retry):
+  the card's danger line (`leagueFeedWaitText`), a line on each such Saved
+  import progress row, and, for a game in review, a Needs attention item
+  (`adminAttention`'s `feedWaitingForReview`). Each names the controls that
+  clear it, Retry next sync and Ignore this game; `admin-copy-guard.test.ts`
+  pins both names and that the page renders the lines. No Discord ping.
 - **Inhouse resolvers run here too.** `syncInhouse` runs them behind a cheap
   lobby/queue read, so a lobby whose ten players all closed /inhouse still
   advances and records its result (see `inhouse.md`).

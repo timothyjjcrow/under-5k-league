@@ -33,7 +33,8 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
  * admin components they mount. Globbed rather than listed, so splitting the
  * admin page into card components keeps every string in view; the floor of 5
  * files (three /admin pages, the rank editor, the import controls) fails the
- * run if a pattern stops matching.
+ * run if a pattern stops matching. Saved import progress and its Retry and
+ * Ignore controls are admin-only components too.
  *
  * Only rendering files count here, never the .ts copy that QUOTES a control:
  * copy naming "the Discord reach card" must not be able to satisfy its own
@@ -45,6 +46,7 @@ const ADMIN_UI = sourceFiles(
     "src/components/admin-*.tsx",
     "src/components/admin/**/*.tsx",
     "src/components/match-import-controls.tsx",
+    "src/components/import-progress*.tsx",
   ],
   5,
 );
@@ -115,6 +117,12 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   // this disclosure. The rendered form is the JSX entity, which the quoting
   // copy (a plain "&") can never satisfy on its own.
   { quoted: "Edit medal & MMR", rendered: "Edit medal &amp; MMR" },
+  // The league feed's "waiting on" lines (Needs attention, the Automatic
+  // result sync card, each Saved import progress row) send admins to these.
+  // Matched with their closing tags: the rows' own copy quotes the names.
+  { quoted: "Saved import progress", rendered: "Saved import progress</h3>" },
+  { quoted: "Retry next sync", rendered: "Retry next sync</SubmitButton>" },
+  { quoted: "Ignore this game", rendered: "Ignore this game</summary>" },
 ];
 
 describe("admin copy names only controls that exist", () => {
@@ -243,6 +251,24 @@ describe("admin copy names only controls that exist", () => {
     expect(
       tools.slice(tools.indexOf("export function StandinMatchBlock(")),
     ).toContain("action={assignStandin}");
+  });
+
+  // Discovery fails closed on a feed game in review or retry backoff, so one
+  // stuck game holds every feed import. leagueFeedWaitText and the attention
+  // line are unit-tested; these pin that /admin actually shows them.
+  it("the admin page names the feed games automatic feed imports wait on", () => {
+    const page = read("src/app/admin/page.tsx");
+    const card = page.slice(
+      page.indexOf("async function AutoSyncHealth("),
+      page.indexOf("function LeagueControls("),
+    );
+    expect(card).toContain("loadLeagueFeedWaiting(season.id)");
+    expect(card).toContain("{leagueFeedWaitText(feedWaiting)}");
+    expect(page).toContain("loadLeagueFeedWaiting(seasonId),");
+    expect(page).toMatch(/feedWaitingForReview: data\.feedWaiting\s*\.filter\(\(row\) => row\.status === "NEEDS_REVIEW"\)/);
+    const progress = read("src/components/import-progress.tsx");
+    expect(progress).toContain("loadLeagueFeedWaiting(seasonId)");
+    expect(progress).toContain("feedWaiting.has(row.dotaMatchId) ? (");
   });
 
   // The REFERENCED_CONTROLS check once read the quoting copy too, and

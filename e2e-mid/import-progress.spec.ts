@@ -3,6 +3,11 @@ import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page, type Response } from "@playwright/test";
 import { MID_DB_URL } from "../playwright.midseason.config";
 import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { serializeLeagueFeedWait } from "../src/lib/league-feed-wait";
+
+// SETTING_KEYS.LEAGUE_FEED_WAIT, spelled out: importing settings.ts would
+// load the app's Prisma client beside this suite's hard-wired one.
+const LEAGUE_FEED_WAIT = "leagueFeedWait";
 
 // Hard-wire writes to this suite's disposable SQLite database, never an
 // inherited DATABASE_URL. Each test owns and removes only its fixture rows.
@@ -87,6 +92,14 @@ async function withImportCandidates(
           },
         ],
       }),
+      // The last automatic league-feed pass stopped on these (the ignored
+      // one has cleared since, so nothing may name it).
+      db.setting.create({
+        data: {
+          key: LEAGUE_FEED_WAIT,
+          value: serializeLeagueFeedWait(season.id, now.getTime(), [GAME_IDS.review, GAME_IDS.retryable, GAME_IDS.ignored]),
+        },
+      }),
     ]);
     await run(payloadMarker);
   } finally {
@@ -94,6 +107,7 @@ async function withImportCandidates(
       db.adminAction.deleteMany({ where: { actorId: { in: userIds } } }),
       db.importSuppression.deleteMany({ where: { seasonId: season.id, dotaMatchId: { in: Object.values(GAME_IDS) } } }),
       db.importCandidate.deleteMany({ where: { id: { in: candidateIds } } }),
+      db.setting.deleteMany({ where: { key: LEAGUE_FEED_WAIT } }),
       db.user.deleteMany({ where: { id: { in: userIds } } }),
     ]);
   }
@@ -138,6 +152,19 @@ test("admins see saved import states without downloading provider payloads", asy
     await expect(row(GAME_IDS.review)).toContainText("no safe fixture");
     await expect(row(GAME_IDS.review)).not.toContainText("Retry after");
     await expect(page.getByText(`Game ${GAME_IDS.ignored}`, { exact: true })).toHaveCount(0);
+    // The feed games the last pass waited on say so, and name their controls.
+    const waiting = "Automatic league-feed imports are waiting on this game";
+    await expect(row(GAME_IDS.review)).toContainText(waiting);
+    await expect(row(GAME_IDS.review)).toContainText("Retry next sync fetches it again; Ignore this game excludes it.");
+    await expect(row(GAME_IDS.retryable)).toContainText(waiting);
+    await expect(row(GAME_IDS.pending)).not.toContainText(waiting);
+    await expect(row(GAME_IDS.ready)).not.toContainText(waiting);
+    // A game in review never clears alone, so Needs attention names it too.
+    await expect(
+      page.getByText(
+        `Automatic league-feed imports are waiting on game ${GAME_IDS.review}, which needs review. Under Saved import progress, press Retry next sync or Ignore this game.`,
+      ),
+    ).toBeVisible();
     await expectPayloadPrivate(page, response, payloadMarker);
 
     for (const width of [390, 1440]) {
