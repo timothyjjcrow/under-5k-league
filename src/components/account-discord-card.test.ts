@@ -115,4 +115,45 @@ describe("AccountDiscordCard", () => {
       expect(new Set(names).size, JSON.stringify(state)).toBe(names.length);
     }
   });
+
+  it("leaves a joining player's Discord buttons and callback note to the signup steps", () => {
+    // Unlinked: no link, no invite, no typed-handle fallback (a typed handle
+    // can't sign them up), and no consent line without a button beside it.
+    const unlinked = render({ signupOwnsDiscord: true, param: "denied" });
+    expect(controls(unlinked)).toEqual([]);
+    expect(unlinked).toContain("Link your Discord in step 2 of your signup.");
+    expect(unlinked).not.toContain("/api/auth/discord");
+    expect(unlinked).not.toContain("Discord gives us your account ID");
+    expect(unlinked).not.toContain("<details");
+    expect(unlinked).not.toContain("Discord link cancelled");
+    // Linked but not in the server: status and Unlink stay, the fix is step 2.
+    const notIn = render({
+      signupOwnsDiscord: true,
+      discordId: "1",
+      discordName: "gone4",
+      membership: "not-member",
+      param: "join_failed",
+    });
+    const joinButtons = [
+      "Link Discord & join the server",
+      "Link Discord",
+      "Join the server",
+      "Use the invite instead",
+      "Open Discord",
+    ];
+    expect(notIn).toContain("Not in the server");
+    expect(controls(notIn)).toContain("Unlink");
+    for (const name of joinButtons) expect(controls(notIn)).not.toContain(name);
+    expect(notIn).toContain("Finish this in step 2 of your signup.");
+    expect(notIn).not.toContain("couldn&#x27;t add you");
+    const pending = render({
+      signupOwnsDiscord: true,
+      discordId: "1",
+      discordName: "a",
+      membership: "pending",
+    });
+    expect(controls(pending)).toContain("Unlink");
+    for (const name of joinButtons) expect(controls(pending)).not.toContain(name);
+    expect(pending).toContain("Finish this in step 2 of your signup.");
+  });
 });

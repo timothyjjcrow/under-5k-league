@@ -42,31 +42,33 @@ test("signed-in newcomers can register as a standin from the dashboard", async (
     page.getByRole("heading", { name: "My account" }),
   ).toBeVisible();
   // A signup needs a linked Discord first (this suite links accounts, as both
-  // leagues do), so the signup card asks for it in place of the form.
-  const step = page.locator("#signup-discord-step");
+  // leagues do), so the signup card shows the steps to join: Steam done,
+  // Discord next with the real link button, the form not yet.
+  const checklist = page.locator("#signup-checklist");
+  const discordStep = page.locator("#signup-discord-step");
+  await expect(checklist.getByText("Signed in as Late Standin.")).toBeVisible();
+  await expect(discordStep).toHaveAttribute("data-state", "current");
   await expect(
-    step.getByRole("heading", { name: "Link your Discord to sign up" }),
-  ).toBeVisible();
-  // It points at the Discord card, whose button does the link.
-  await expect(
-    step.getByRole("link", { name: "Link your Discord" }),
-  ).toHaveAttribute("href", "#profile-discord");
-  await expect(
-    page
-      .locator("#profile-discord")
-      .getByRole("link", { name: "Link Discord", exact: true }),
+    discordStep.getByRole("link", { name: "Link Discord", exact: true }),
   ).toHaveAttribute("href", "/api/auth/discord");
+  // The Discord card doesn't repeat it: one button per action on the page.
+  await expect(
+    page.locator("#profile-discord").getByRole("link", { name: "Link Discord", exact: true }),
+  ).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "Link Discord", exact: true })).toHaveCount(1);
   await expect(
     page.getByRole("button", { name: "Register as a standin", exact: true }),
   ).toHaveCount(0);
+  await expectNoHorizontalOverflow(page, "/me signup steps");
 
-  // Linked, as the callback stores it: the form opens.
+  // Linked, as the callback stores it: Discord is done and the form opens.
   await db.user.update({
     where: { steamId },
     data: { discordId: `7${steamId.slice(-17)}`, discordName: "late_standin" },
   });
   await page.reload();
-  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
+  await expect(discordStep).toHaveAttribute("data-state", "done");
+  await expect(discordStep).toContainText("Linked as @late_standin.");
   // Mid-season only a standin signup is possible, so the form offers no
   // greyed-out Full player choice and its button says what it does.
   await expect(page.getByRole("radio")).toHaveCount(0);

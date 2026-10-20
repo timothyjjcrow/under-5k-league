@@ -355,7 +355,12 @@ actions: `src/app/actions/admin-discord.ts`.
 - **/me has one card** (`account-discord-card.tsx`). Pure `discordCardCtas`
   gives one primary button per state, and the callback's join button only when
   membership is unknown, so CTAs never stack. The typed handle hides behind
-  "Can't link? Type your handle" unless linking isn't configured.
+  "Can't link? Type your handle" unless linking isn't configured. For a
+  player joining the season, the signup card's steps own the Discord buttons
+  and callback note (`signupOwnsDiscord`,
+  [players-and-registration](players-and-registration.md#discord-before-a-signup)):
+  the card keeps its badge, handle, Unlink and ping opt-in, and points to
+  step 2.
 - **On /me, ask for Discord through the next-steps list, not the Home
   prompt.** The season card comes first, and its derived "Next" list (pure
   `accountNextSteps`, `src/lib/account-page.ts`, tested in

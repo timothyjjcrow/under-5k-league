@@ -226,6 +226,19 @@ export function discordLinkNote(
     : DISCORD_LINK_NOTES.error;
 }
 
+/**
+ * What Discord's consent screen grants, said beside the buttons that start
+ * the link on the Discord card and the dashboard prompt (the signup steps keep
+ * to one plain sentence instead). It must describe the real scope: with a bot
+ * and server configured the consent also carries guilds.join, so the copy
+ * names that server write too.
+ */
+export function discordConsentText(autoJoins: boolean): string {
+  return autoJoins
+    ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
+    : "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback.";
+}
+
 /** A button on the Discord card: the OAuth round trip, or the invite link. */
 export type DiscordCta = { kind: "oauth" | "invite"; label: string };
 
