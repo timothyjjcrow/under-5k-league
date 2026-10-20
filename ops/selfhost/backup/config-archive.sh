@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
 # Daily encrypted archive of the box's configuration (design §5.1;
-# ops/selfhost/README.md): /etc/ggd2l (env files, database passwords, rclone
-# and healthchecks settings), /etc/cloudflared (the tunnel credentials) and
-# /etc/caddy, so a rebuilt box can recover every secret it held.
+# ops/selfhost/README.md): /etc/ggd2l (env files, bot.env, database passwords,
+# rclone and healthchecks settings), /etc/cloudflared (the tunnel
+# credentials), /etc/caddy and the lobby bot's state in /var/lib/ggd2l-bot
+# (its Steam session steam-auth.json, steam/ and the job history in
+# lobbies.json), so a rebuilt box can recover every secret it held and the bot
+# comes back without a new Steam sign-in.
 #
 #   config-archive.sh
 #
@@ -10,26 +13,30 @@
 # root-only; under the unit's ProtectSystem=strict it writes only its output
 # folder, /var/backups/ggd2l/config. The plaintext never touches disk:
 # tar | gzip | age -R straight into config/config-<UTC stamp>.tar.gz.age,
-# readable only with Tim's offline key.
+# readable only with Tim's offline key. The bot keeps writing its state while
+# this runs, so a run that tar says changed under it is made again.
 # The copy goes to <remote>/config/<date>/ through rclone, or waits locally
 # under the same 48 h offsite-pending rule as the league backups. Local copies
 # are kept 14 days once uploaded. Pings HC_PING_CONFIG when configured.
 #
-# Test hooks, never set on the box: GGD2L_CONFIG_DIRS, GGD2L_BACKUP_ROOT,
-# GGD2L_ETC, GGD2L_NOW.
+# Test hooks, never set on the box: GGD2L_CONFIG_DIRS, GGD2L_BOT_STATE_DIR,
+# GGD2L_BACKUP_ROOT, GGD2L_ETC, GGD2L_NOW, GGD2L_ARCHIVE_RETRY_SECONDS.
 set -euo pipefail
 umask 077
 export LC_ALL=C
 
 [ "$#" -eq 0 ] || { echo "usage: config-archive.sh" >&2; exit 2; }
 
-CONFIG_DIRS="${GGD2L_CONFIG_DIRS:-/etc/ggd2l /etc/cloudflared /etc/caddy}"
+BOT_STATE_DIR="${GGD2L_BOT_STATE_DIR:-/var/lib/ggd2l-bot}"
+CONFIG_DIRS="${GGD2L_CONFIG_DIRS:-/etc/ggd2l /etc/cloudflared /etc/caddy ${BOT_STATE_DIR}}"
 BACKUP_ROOT="${GGD2L_BACKUP_ROOT:-/var/backups/ggd2l}"
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
 OFFSITE_REMOTE="${GGD2L_OFFSITE_REMOTE:-r2:ggd2l-backups}"
 OUT_DIR="${BACKUP_ROOT}/config"
 PENDING_LIMIT_SECONDS=172800
 KEEP_MINUTES=20160
+ARCHIVE_TRIES=3
+RETRY_SECONDS="${GGD2L_ARCHIVE_RETRY_SECONDS:-5}"
 
 STEP=config
 TMP_AGE=""
@@ -104,7 +111,7 @@ if [ ! -r "${RECIPIENTS}" ] || ! grep -q '^age1' "${RECIPIENTS}"; then
 fi
 # tar runs from /, so each directory is named relative to it. /etc/ggd2l (the
 # first) is required; the others are skipped until they exist (cloudflared
-# arrives with the tunnel).
+# arrives with the tunnel, the bot's state with install-kit.sh).
 set --
 first=1
 for dir in ${CONFIG_DIRS}; do
@@ -119,6 +126,19 @@ for dir in ${CONFIG_DIRS}; do
   first=0
 done
 
+# The bot's state, less what a restore must never carry (DOTA-LOBBY-BOT.md,
+# "On the box"): its locks (worker.os-lock, worker.lock), its logs, a
+# sign-in's QR code and the temporary files of its atomic saves.
+bot="${BOT_STATE_DIR#/}"
+EXCLUDES=(
+  "--exclude=${bot}/worker.lock"
+  "--exclude=${bot}/worker.os-lock"
+  "--exclude=${bot}/logs"
+  "--exclude=${bot}/steam-login.png"
+  "--exclude=${bot}/*.tmp"
+  "--exclude=${bot}/.*.tmp"
+)
+
 # --- archive and encrypt -----------------------------------------------------
 STEP=encrypt
 now="$(now_epoch)"
@@ -126,9 +146,27 @@ name="config-$(fmt_epoch "${now}" %Y%m%dT%H%M%SZ).tar.gz.age"
 file="${OUT_DIR}/${name}"
 TMP_AGE="${OUT_DIR}/.${name}.tmp.$$"
 # Owners are stored by name, so a rebuilt box whose service users got other
-# uids still restores them correctly.
-tar -C / -cf - "$@" | gzip -9 -n | age -R "${RECIPIENTS}" -o "${TMP_AGE}" ||
-  fail encrypt "tar | gzip | age failed"
+# uids still restores them correctly. tar exits 1, and nothing worse, when a
+# file changed or vanished while it read it ("file changed as we read it"):
+# the running bot saving lobbies.json. That copy may be torn, so the whole
+# archive is made again, and only a run tar calls clean is kept.
+tries=1
+while :; do
+  statuses=0
+  tar -C / -cf - "${EXCLUDES[@]}" "$@" | gzip -9 -n | age -R "${RECIPIENTS}" -o "${TMP_AGE}" ||
+    statuses="${PIPESTATUS[*]}"
+  case "${statuses}" in
+    0) break ;;
+    "1 0 0") ;;
+    *) fail encrypt "tar | gzip | age failed (exit ${statuses})" ;;
+  esac
+  [ "${tries}" -lt "${ARCHIVE_TRIES}" ] ||
+    fail encrypt "files kept changing while tar read them (${tries} tries)"
+  log "a file changed while tar read it; archiving again in ${RETRY_SECONDS}s"
+  rm -f -- "${TMP_AGE}"
+  tries=$((tries + 1))
+  sleep "${RETRY_SECONDS}"
+done
 [ -s "${TMP_AGE}" ] || fail encrypt "age wrote an empty file"
 sha="$(sha256_of "${TMP_AGE}")"
 mv -f -- "${TMP_AGE}" "${file}"

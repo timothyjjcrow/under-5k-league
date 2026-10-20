@@ -2,13 +2,13 @@ import { describe, expect, it } from "vitest";
 import { prisma } from "@/lib/prisma";
 import { MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { loadPoolLastSeasons } from "@/lib/pool-history";
-import { fetchPublicGameSnapshot } from "@/lib/public-game-snapshot";
+import { fetchCareerFacts } from "@/lib/cached-queries";
 import { makeTeam, makeUser } from "./factories";
 
 // The /players "last season" token reads real appearances and roster rows.
-// Outside a Next request the games snapshot can't use its cache, so the test
-// passes the uncached query through the loader's seam.
-const readGames = () => fetchPublicGameSnapshot(null);
+// Outside a Next request the career facts can't use their cache, so the test
+// passes the uncached read through the loader's seam.
+const readFacts = async () => (await fetchCareerFacts()).appearances;
 
 async function season(name: string, createdAt: string, extra: {
   status?: string; isActive?: boolean;
@@ -71,7 +71,7 @@ describe("loadPoolLastSeasons", () => {
       status: SEASON_STATUS.SIGNUPS, isActive: true,
     });
     const u = await makeUser("First Timer");
-    expect(await loadPoolLastSeasons(active, [u.id], readGames)).toEqual({});
+    expect(await loadPoolLastSeasons(active, [u.id], readFacts)).toEqual({});
   });
 
   it("names each returning player's team, series record, price and title", async () => {
@@ -86,7 +86,7 @@ describe("loadPoolLastSeasons", () => {
     const out = await loadPoolLastSeasons(
       active,
       [captain.id, bought.id, loser.id, newcomer.id],
-      readGames,
+      readFacts,
     );
 
     expect(out[captain.id]).toEqual({
@@ -116,7 +116,7 @@ describe("loadPoolLastSeasons", () => {
     });
     const later = await playedSeason("Season 2", "2026-06-01");
     expect(
-      await loadPoolLastSeasons(active, [later.users[0].id], readGames),
+      await loadPoolLastSeasons(active, [later.users[0].id], readFacts),
     ).toEqual({});
   });
 });

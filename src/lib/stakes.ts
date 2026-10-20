@@ -109,9 +109,11 @@ function memoized(key: string, compute: () => ScenarioReport): ScenarioReport {
 
 /**
  * Scenario report for the season as the playoff seeder will see it: cut from
- * pickBracketSize(teamCount), exactly like createPlayoffBracket. Null when the
- * cut wouldn't drop anyone (everyone makes the bracket — no race to narrate)
- * or when there are no teams yet.
+ * the projected field's bracket (pickBracketSize(teamCount) without one),
+ * exactly like createPlayoffBracket. Null when the cut wouldn't drop anyone
+ * (everyone makes the bracket — no race to narrate) or when there are no
+ * teams yet. A group-stage season runs one race per group, each against its
+ * own cut, and merges them (`groupScenarioReport`).
  */
 export function seasonScenarioReport(
   standings: TeamStanding[],
@@ -120,6 +122,7 @@ export function seasonScenarioReport(
   field?: PlayoffFieldProjection,
 ): ScenarioReport | null {
   if (teamCount === 0) return null;
+  if (field?.groups) return groupScenarioReport(standings, matches, field);
   const cut = field?.bracketSize ?? pickBracketSize(teamCount);
   if (cut === 0 || (!field && cut >= teamCount)) return null;
   const remaining = remainingRegular(matches);
@@ -156,6 +159,60 @@ export function seasonScenarioReport(
         matches as MatchLike[], remaining);
     }
     return report;
+  });
+}
+
+/**
+ * A group-stage season's race: each group is its own league with its own cut
+ * (`PlayoffGroupProjection.qualifiers`), its own remaining fixtures and its
+ * own tiebreakers, so each gets a one-table report and the teams merge. Ranks
+ * in it (bestRank, worstRank) are places in the team's group. The forecast is
+ * "final" only once every group's is, and counts every group's scorelines.
+ */
+function groupScenarioReport(
+  standings: TeamStanding[],
+  matches: StakesMatchRow[],
+  field: PlayoffFieldProjection,
+): ScenarioReport | null {
+  const reports = (field.groups ?? []).flatMap((group) => {
+    const ids = new Set(group.standings.map((row) => row.teamId));
+    const rows = standings.filter((row) => ids.has(row.teamId));
+    if (rows.length === 0 || group.qualifiers === 0) return [];
+    const own = matches.filter((m) => ids.has(m.homeTeamId) && ids.has(m.awayTeamId));
+    const groupReport = seasonScenarioReport(rows, own, rows.length, {
+      ...field,
+      kind: "TABLE",
+      groups: null,
+      standings: group.standings,
+      eligibleStandings: group.eligibleStandings,
+      eligibleTeamIds: group.eligibleStandings.map((row) => row.teamId),
+      bracketSize: group.qualifiers,
+      // A fault outside every group (a tiebreaker between the groups) still
+      // stops every group's final classification.
+      tiebreakers: group.tiebreakers.error || !field.tiebreakers.error
+        ? group.tiebreakers
+        : { ...group.tiebreakers, error: field.tiebreakers.error, resolved: false },
+    });
+    if (!groupReport) return [];
+    // The memoised report is frozen: tag copies of its teams with the group.
+    return [{
+      ...groupReport,
+      teams: new Map([...groupReport.teams].map(([teamId, scenario]) =>
+        [teamId, Object.freeze({ ...scenario, groupKey: group.key })])),
+    }];
+  });
+  if (reports.length === 0) return null;
+  const forecasts = reports.map((report) => report.forecast);
+  const forecast = forecasts.every((f) => f !== undefined)
+    ? forecasts.every((f) => f!.basis === "final")
+      ? { basis: "final" as const, total: 1 }
+      : { basis: "normal_series" as const, total: forecasts.reduce((product, f) => product * f!.total, 1) }
+    : undefined;
+  return Object.freeze({
+    cut: Math.max(...reports.map((report) => report.cut)),
+    exact: reports.every((report) => report.exact),
+    teams: new Map(reports.flatMap((report) => [...report.teams])),
+    ...(forecast ? { forecast: Object.freeze(forecast) } : {}),
   });
 }
 

@@ -1,10 +1,8 @@
 import { prisma } from "./prisma";
-import { appearanceCareers } from "./appearance-careers";
+import { careersFromFacts, type AppearanceFacts } from "./appearance-careers";
 import { resolveChampionPresentation } from "./champion-presentation";
-import { getPublicGameSnapshot } from "./public-game-snapshot";
+import { getCareerFacts } from "./cached-queries";
 import { buildPoolLastSeasons, type PoolLastSeason } from "./player-pool";
-
-type GameFact = Parameters<typeof appearanceCareers>[0][number];
 
 /**
  * The /players "last season" scouting token for every pool row: each
@@ -12,16 +10,18 @@ type GameFact = Parameters<typeof appearanceCareers>[0][number];
  * price, title), from the same recorded appearances and roster rows the
  * profile's Seasons card reads.
  *
- * A first season costs one small query and returns {}: the all-games scan only
- * runs once an earlier season exists, and it reads the shared games-tagged
- * snapshot the stat pages already keep warm. `readGames` is the test seam
- * (integration tests run outside a Next request, where the cache can't).
+ * A first season costs one small query and returns {}: the appearances are
+ * read only once an earlier season exists, from the small games-tagged
+ * career facts the Hall of Fame keeps warm (cached-queries.ts), so a view
+ * decodes no box score. Match outcomes and champions are this view's own
+ * reads. `readFacts` is the test seam (integration tests run outside a Next
+ * request, where the cache can't).
  */
 export async function loadPoolLastSeasons(
   activeSeason: { id: string; createdAt: Date },
   userIds: readonly string[],
-  readGames: () => Promise<readonly GameFact[]> = () =>
-    getPublicGameSnapshot(null),
+  readFacts: () => Promise<AppearanceFacts> = async () =>
+    (await getCareerFacts()).appearances,
 ): Promise<Record<string, PoolLastSeason>> {
   if (userIds.length === 0) return {};
   // Seasons created before this one (a reactivated older season must not
@@ -33,8 +33,8 @@ export async function loadPoolLastSeasons(
   });
   if (seasons.length === 0) return {};
   const seasonIds = seasons.map((season) => season.id);
-  const [games, matches, memberships, teams] = await Promise.all([
-    readGames(),
+  const [facts, matches, memberships, teams] = await Promise.all([
+    readFacts(),
     prisma.match.findMany({
       where: { seasonId: { in: seasonIds } },
       select: {
@@ -65,10 +65,10 @@ export async function loadPoolLastSeasons(
     ).championTeamId;
     if (teamId) champions.set(season.id, teamId);
   }
-  // Games from the active season are skipped inside appearanceCareers: only
+  // Games from the active season are skipped inside careersFromFacts: only
   // earlier seasons' matches are passed in.
-  const careers = appearanceCareers(
-    games,
+  const careers = careersFromFacts(
+    facts,
     matches,
     [...champions].map(([seasonId, teamId]) => ({ seasonId, teamId })),
   );

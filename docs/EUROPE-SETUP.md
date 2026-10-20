@@ -109,7 +109,11 @@ Rebuild from zero).
    `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` values on the box; set
    `APP_URL=NEXT_PUBLIC_SITE_URL=https://eu.ggd2l.com`,
    `LEAGUE_DEPLOY_ENV=production` and `CLIENT_IP_HEADER=cf-connecting-ip`.
-   `box_agent envcheck eu` reports problems by name only. The approved
+   `box_agent envcheck eu` (the env contract, then the production
+   validation from the live release) reports problems by name only; run it
+   after every edit, before any restart. Before Europe's first release it
+   answers `env_invalid` (no live release to run the validation from), and
+   the build is the gate. The approved
    shared lobby bot uses the existing relay's app credential as described below.
    Set `ADMIN_STEAM_IDS` to the trusted Europe admins. A verified Steam login
    creates the account and applies that allowlist; there is no fabricated admin

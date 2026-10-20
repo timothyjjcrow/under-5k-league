@@ -1,15 +1,14 @@
 import Link from "@/components/app-link";
-import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
 import { prisma } from "@/lib/prisma";
-import { getPublicGameSnapshot } from "@/lib/public-game-snapshot";
+import { getCareerFacts } from "@/lib/cached-queries";
 import {
-  careerGameCounts,
+  hallOfFameGameBoards,
   rankCounts,
   topPlaces,
   type HofBoardRows,
 } from "@/lib/hall-of-fame";
-import { appearanceCareers } from "@/lib/appearance-careers";
-import { impactPointsRule, pointsByPlayer } from "@/lib/fantasy";
+import { careersFromFacts } from "@/lib/appearance-careers";
+import { impactPointsRule } from "@/lib/fantasy";
 import { PICKEM_RANKING_NOTE, pickemStandings } from "@/lib/pickem";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -174,32 +173,25 @@ export default async function HallOfFamePage() {
     );
   }
 
-  const [games, predictions] = await Promise.all([
-    getPublicGameSnapshot(null),
+  // The box scores' part, cached small per result revision (cached-queries.ts),
+  // so a view decodes none. Series results and champions stay this render's
+  // own reads, folded in here.
+  const [careerFacts, predictions] = await Promise.all([
+    getCareerFacts(),
     prisma.prediction.findMany({ select: { matchId: true, userId: true, pickedTeamId: true } }),
   ]);
   const championTeamIds = champions.map((row) => row.teamId);
-  const careers = appearanceCareers(games, matches,
+  const careers = careersFromFacts(careerFacts.appearances, matches,
     champions.map(({ season, teamId }) => ({ seasonId: season.id, teamId })));
   const titles = careers.championshipContributions;
   const seriesWins = careers.seriesWins;
   const memberships = careers.rows.filter((row) => row.championshipContribution);
-  const seasonOfMatch = new Map(matches.map((match) => [match.id, match.seasonId]));
-  const trustedGames = games.map((game) => ({
-    seasonId: seasonOfMatch.get(game.matchId),
-    radiantWin: game.radiantWin,
-    players: trustedGamePlayers(decodeGamePlayers(game.players)),
-  })).filter((game) => game.players.length === 10);
   // With one season of games the career game boards are that season's
-  // Leaders again, so they wait for a second season.
-  const seasonsWithGames = new Set(
-    trustedGames.flatMap((game) => (game.seasonId ? [game.seasonId] : [])),
-  ).size;
-  const gameCounts = careerGameCounts(trustedGames);
+  // Leaders again, so they wait for a second season. Impact points: the
+  // per-game score behind Player of the Week and match MVPs (fantasy scores
+  // the same way, but most readers never play it).
+  const { seasonsWithGames, gameCounts, impact } = hallOfFameGameBoards(careerFacts.games);
   const gameWins = new Map([...gameCounts].map(([id, count]) => [id, count.wins]));
-  // Impact points: the per-game score behind Player of the Week and match
-  // MVPs (fantasy scores the same way, but most readers never play it).
-  const impact = pointsByPlayer(trustedGames);
   const winRate = [...gameCounts].filter(([, count]) => count.games >= 5)
     .map(([userId, count]) => ({ userId, value: count.wins / count.games * 100, games: count.games }))
     .sort((a, b) => b.value - a.value || b.games - a.games || a.userId.localeCompare(b.userId));

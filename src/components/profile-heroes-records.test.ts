@@ -75,7 +75,9 @@ describe("the League records card's record watch", () => {
 describe("the profile's record hand-off", () => {
   it("reads held records and the watch from one book, and shows the card for either", () => {
     const page = sourceFile("src/app/players/[id]/page.tsx").text;
-    expect(page).toContain("recordWatchBook(toRecordGames(recordRows))");
+    // The cached book (cached-queries.ts), never a decode of every game.
+    expect(page).toContain("getRecordWatchBook(),");
+    expect(page).not.toMatch(/getAllGamesForRecords|toRecordGames\(/);
     expect(page).toContain(
       "recordBook.records.filter((r) => r.userId === id)",
     );

@@ -39,7 +39,7 @@ import { playoffStatusChip, playoffStatuses } from "./playoff-status";
 import { prisma } from "./prisma";
 import { rankMedalName } from "./rank";
 import { seasonPhaseLabel } from "./season-copy";
-import { ordinalPlace } from "./tale-of-the-tape";
+import { bracketSeedLabels, placeInTable, placeOfLabel } from "./season-groups";
 import { seriesRecordText } from "./team-matches";
 import { hashHue, seasonTeamHues } from "./team-hues";
 import { formatLeagueTime } from "./zoned-time";
@@ -139,9 +139,10 @@ export async function loadTeamCard(
   });
   if (!team) return null;
   const [teams, matches, logo, hue] = await Promise.all([
+    // The group too: a group season's places and seeds are the group's.
     prisma.team.findMany({
       where: { seasonId: team.seasonId },
-      select: { id: true, withdrawn: true },
+      select: { id: true, withdrawn: true, groupKey: true },
     }),
     prisma.match.findMany({ where: { seasonId: team.seasonId } }),
     fetchOgImage(team.logoUrl),
@@ -154,15 +155,20 @@ export async function loadTeamCard(
   const postseason =
     team.season.status === SEASON_STATUS.PLAYOFFS ||
     team.season.status === SEASON_STATUS.COMPLETE;
-  const standings = projectPlayoffField(teams, matches).standings;
-  const rank = standings.findIndex((row) => row.teamId === id) + 1;
-  const row = standings[rank - 1];
+  const field = projectPlayoffField(teams, matches);
+  const row = field.standings.find((r) => r.teamId === id);
+  // "2nd of 6 in Group A" in a group season, "2nd of 10" for one table.
+  const place = placeInTable(field, id);
   const played = matches.some((m) => m.status === MATCH_STATUS.COMPLETED);
+  // The bracket's name for the seed: "A1" in a group season.
   const seed = postseason
-    ? seedsFromFirstRound(
-        matches.filter(
-          (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+    ? bracketSeedLabels(
+        seedsFromFirstRound(
+          matches.filter(
+            (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
+          ),
         ),
+        teams,
       ).get(id)
     : undefined;
   const playoff = postseason
@@ -172,7 +178,7 @@ export async function loadTeamCard(
   const facts: string[] = [];
   if (played && row) facts.push(seriesRecordText(row));
   if (seed) facts.push(`Seed ${seed}`);
-  else if (played && rank > 0) facts.push(`${ordinalPlace(rank)} of ${teams.length}`);
+  else if (played && place) facts.push(placeOfLabel(place));
   if (playoff && playoff.kind !== "champion") facts.push(playoffStatusChip(playoff));
   if (team.withdrawn && playoff?.kind !== "missed") facts.push("Withdrawn");
 

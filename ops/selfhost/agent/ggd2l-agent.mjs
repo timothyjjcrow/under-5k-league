@@ -42,7 +42,7 @@ import {
 } from "./releases.mjs";
 import { acquireLock } from "./runner.mjs";
 import { status } from "./status.mjs";
-import { attest, backup, botDeploy, botStatus, drill, migrate, preflight, prepareTools } from "./tools.mjs";
+import { attest, backup, botDeploy, botStatus, drill, migrate, preflight, prepareTools, productionEnvProblems } from "./tools.mjs";
 
 function modeArg(value) {
   if (!MODES.includes(value)) throw new UsageError("bad_mode");
@@ -108,10 +108,20 @@ export const VERBS = Object.freeze({
   "bot-status": { args: [], run: (ctx) => botStatus(ctx) },
 });
 
-function envcheck(ctx, lg) {
+/**
+ * `envcheck <lg>`: the league env file against the env contract, then, as in
+ * every build, the production validation (productionEnvProblems), names only.
+ * Run it after every edit of the file and before the restart that reads it:
+ * the slot's own start check is the contract alone.
+ */
+async function envcheck(ctx, lg) {
   const { env, problems } = loadEnvFile(ctx, ctx.layout.leagueEnv(lg));
-  const all = [...problems, ...checkLeagueEnv(env, lg, { mode: "file" })];
-  if (all.length) throw new AgentError("env_contract", { problems: all });
+  const contract = [...problems, ...checkLeagueEnv(env, lg, { mode: "file" })];
+  // A file the contract refuses never reaches the validator (a NODE_ENV in it
+  // would skip the gate), as before a build.
+  if (contract.length) throw new AgentError("env_contract", { problems: contract });
+  const production = await productionEnvProblems(ctx, lg, env);
+  if (production.length) throw new AgentError("env_invalid", { problems: production });
   return { ok: true, problems: [] };
 }
 
@@ -149,8 +159,9 @@ export function parseCommand(argv) {
   return { name, verb, values, flags };
 }
 
-// Extra fields an error may carry: names, verdicts and counts, never output.
-const SAFE_EXTRAS = ["problems", "checks", "changed"];
+// Extra fields an error may carry: names, verdicts, counts and release ids,
+// never output.
+const SAFE_EXTRAS = ["problems", "checks", "changed", "live", "rolledBackFrom"];
 
 function errorBody(error) {
   const body = { ok: false, code: error.code, message: error.message };

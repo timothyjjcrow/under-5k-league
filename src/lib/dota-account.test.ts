@@ -3,6 +3,7 @@ import {
   dotaAccountClaimWhere,
   dotaAccountLinkSnapshot,
   effectiveDotaAccountId,
+  fitsLegacyDotaAccountColumn,
   sameDotaAccountLink,
   storedDotaAccountId,
 } from "./dota-account";
@@ -73,6 +74,23 @@ describe("Dota account rollback bridge", () => {
         { dotaAccountIdV2: 123_456_789 },
         { legacyDotaAccountId: 123_456_789 },
         { steamId: accountIdToSteamId64(123_456_789) },
+      ],
+    });
+  });
+
+  it("leaves the legacy INT4 column out of a claim it can't hold", () => {
+    // Postgres refuses to bind 2^31 or more to INTEGER; the whole query
+    // would throw (test/integration/dota-account-int4.itest.ts).
+    expect(fitsLegacyDotaAccountColumn(2_147_483_647)).toBe(true);
+    expect(fitsLegacyDotaAccountColumn(2_147_483_648)).toBe(false);
+    expect(fitsLegacyDotaAccountColumn(0xffffffff)).toBe(false);
+    expect(dotaAccountClaimWhere(2_147_483_647).OR).toContainEqual({
+      legacyDotaAccountId: 2_147_483_647,
+    });
+    expect(dotaAccountClaimWhere(2_147_483_648)).toEqual({
+      OR: [
+        { dotaAccountIdV2: 2_147_483_648 },
+        { steamId: accountIdToSteamId64(2_147_483_648) },
       ],
     });
   });

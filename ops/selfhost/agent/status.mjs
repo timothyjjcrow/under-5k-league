@@ -58,7 +58,7 @@ export function parseMeminfo(text) {
 /**
  * A league's newest drill, from two sources. The drill unit's last run
  * (Result, ExecMainExitTimestamp) covers the weekly timer and `drill <lg>`,
- * failures included. state/last-drill.json, which every passing drill writes,
+ * failures included. last-drill.json (readDrillRecord), which every passing drill writes,
  * also covers `drill <lg> <sha>`, which runs outside the unit. The later one
  * answers: a failed run writes no record, so a failure after the last pass
  * shows, and a pass after a failure clears it. Times are ISO when readable.
@@ -97,6 +97,8 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     leagues[lg] = {
       live: live ? { id: live.id, sha: live.sha, slot: live.slot, promotedAt: live.promotedAt } : null,
       previous: live?.previous ?? null,
+      // Set while live came from `rollback`, which then refuses a second one.
+      rolledBackFrom: live?.rolledBackFrom ?? null,
       mode: readModeFile(layout.modeFile(lg)).mode,
       slots: Object.fromEntries(SLOTS.map((slot) => [slot, slotTarget(ctx, lg, slot)])),
       lastBackupAt: backup?.finishedAt ?? (dump ? new Date(dump.mtimeMs).toISOString() : null),

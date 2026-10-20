@@ -276,7 +276,8 @@ Complete only the branches selected by `needs_db_release` and
    seconds after the last possible attempt and prove no active lease remains
    (`box_agent lease <lg>` answers `null` for both fields).
 3. When `needs_db_release` is true, validate production configuration with no
-   test overrides (`box_agent envcheck <lg>` reports names only). The migration
+   test overrides (`box_agent envcheck <lg>`: the env contract, then the live
+   release's own `scripts/validate-prod-env.mjs`, names only). The migration
    runs with the league's owner role: the agent loads `/etc/ggd2l/<lg>.env`
    (which must pass the env contract, because the migration first validates
    the full production environment) and then `/etc/ggd2l/<lg>-migrate.env`,
@@ -575,8 +576,11 @@ second Cloudflare/external schedule exists.
 
 For `CRON_SECRET` rotation, pause first and drain the lease. Generate one new
 value on the box into a root-only file, write it into the league's
-`CRON_SECRET` in `/etc/ggd2l/<lg>.env` file to file, and restart the league's
-live slot so it reads the file (`sudo systemctl restart ggd2l-<lg>@<slot>`,
+`CRON_SECRET` in `/etc/ggd2l/<lg>.env` file to file, and run
+`box_agent envcheck <lg>`; stop and fix the file if it reports anything (it
+names keys only; the rule each broke is in
+`/var/log/ggd2l/tools/envcheck-<lg>-<stamp>-<sha12>.log`). Then restart the
+league's live slot so it reads the file (`sudo systemctl restart ggd2l-<lg>@<slot>`,
 with `<slot>` from `box_agent live <lg>`; about 15 seconds of errors, so do it
 in the quiet window). Copy the value to the Mac as a 0600 file (`scp -p`), then
 replace the Worker's encrypted binding from it through stdin and shred it:
@@ -639,9 +643,16 @@ straight to local development.
 **The limiter.** `src/lib/rate-limit.ts` keeps its buckets in each process.
 On the box one process serves a league (two during a release's 90-second
 overlap), so the limits hold league-wide, and Cloudflare's own DDoS protection
-sits in front. That limiter covers only the JSON route handlers, so page renders
-had no throttle: about 3 to 5 heavy pages a second from one client pin the one
-vCPU both leagues share (audit, 2026-10-17).
+sits in front. That limiter covers only route handlers, so page renders had no
+throttle: about 3 to 5 heavy pages a second from one client pin the one vCPU
+both leagues share (audit, 2026-10-17). Since 2026-10-19 it also covers the
+public GETs that read the database with no session: the calendar feed and its
+two downloads share 600 a minute per IP, kept generous because calendar
+providers fetch every subscriber's feed from a few shared addresses, and the
+overlay's data route allows 60 (`PUBLIC_GET_LIMITS`,
+`src/lib/public-get-limit.ts`). The health probes stay unthrottled: they are
+one cheap read, and the release agent's loopback checks would all land in the
+one `unknown` bucket.
 
 **The zone's one rate-limiting rule** (Free plan: one rule, matched on the URI
 path only, counted per IP, a 10-second period and a 10-second block). Since
@@ -694,9 +705,11 @@ above if the check ever shows `challenge`.
 **No edge cache for dynamic routes.** The zone has **no Cache Rules** and
 never "Cache Everything". The `vercel-cdn-cache-control` headers in the code
 stay and do nothing here; the box answers `/api/sync`, the calendar and the
-overlay itself. Static files (`/_next/static/*`, images under `public/`) may
-read `cf-cache-status: HIT`. Every dynamic response, signed in or not, must
-read anything but `HIT` (`DYNAMIC` normally): repeat `/api/sync`, a
+overlay itself (`/api/sync` from `unstable_cache`, the calendar from a
+30-second in-process memo of each built feed). Static files
+(`/_next/static/*`, images under `public/`) may read `cf-cache-status: HIT`.
+Every dynamic response, signed in or not, must read anything but `HIT`
+(`DYNAMIC` normally): repeat `/api/sync`, a
 representative `/api/calendar` URL, a page and a signed-in room response and
 record their `cf-cache-status`. A dynamic or personalized HIT is a release
 stop. Confirm the browser-facing `Cache-Control` still requires revalidation.
@@ -929,7 +942,12 @@ compatible with the additive schema already applied.
 A schema-neutral rollback between releases that preserve the authenticated cron
 contract may roll back without pausing the scheduler (`box_agent rollback <lg>`
 for each league, which promotes the previous release and restarts it clean);
-verify the normal probes and observe two scheduled successes. If the
+verify the normal probes and observe two scheduled successes. A rollback can
+take two silent minutes; if its answer is lost or says it failed, read
+`box_agent live <lg>` before anything else, and never just run it again. A
+second `rollback` refuses (`rolled_back`) while live came from one, since the
+release it left is now the previous one: its answer names both ids, and going
+back on purpose is `box_agent promote <lg> <rolledBackFrom>`. If the
 rollback crosses a schema or scheduler boundary, predates that contract, or has
 uncertain compatibility, use the strict sequence below.
 
@@ -1011,13 +1029,26 @@ lost unless they can be carried over by hand.
 
 Every production secret lives in a root-only file under `/etc/ggd2l/` (0700).
 Change a value file to file (a 0600 file, `scp -p`, `shred -u` the copy),
-never through argv, a log or chat; `box_agent envcheck <lg>` reports names
-only. A slot reads its env file when it starts, so restart the league's live
-slot afterwards (`sudo systemctl restart ggd2l-<lg>@<slot>`, about 15 seconds
-of errors) or release again.
+never through argv, a log or chat. A slot reads its env file when it starts,
+with no build: a restart, the 09:00 UTC reboot and a rollback all start on
+the file as it stands, and the slot's own start check is only the env
+contract. So after every edit of `/etc/ggd2l/<lg>.env`, before any restart,
+run `box_agent envcheck <lg>`: the env contract, then the live release's own
+`scripts/validate-prod-env.mjs`, the gate every build runs (the secrets'
+length and shape, `ADMIN_STEAM_IDS`, `STEAM_API_KEY`, the Discord pairs). It
+answers `{"ok":true}` or names the keys at fault, never a value; the rule
+each broke is in `/var/log/ggd2l/tools/envcheck-<lg>-<stamp>-<sha12>.log`.
+**Stop if it reports anything** and fix the file first: a 31-character
+`AUTH_SECRET` or an empty `ADMIN_STEAM_IDS` passes the start check, and then
+every sign-in fails or every admin is locked out with no alert. Only then
+restart the league's live slot (`sudo systemctl restart ggd2l-<lg>@<slot>`,
+`<slot>` from `box_agent live <lg>`, about 15 seconds of errors) or release
+again.
 
 - `AUTH_SECRET`: rotate it under the traffic freeze and expect every existing
-  session to be invalidated.
+  session to be invalidated. After the restart, from your allowed IP, sign in
+  with Steam and open `/admin` before lifting the freeze: no probe or smoke
+  check signs in.
 - `CRON_SECRET`: run the league's scheduler pause, wait the full propagation
   bound and lease drain, rotate the league's value and the Worker's encrypted
   `AUTOMATION_SECRET` to the same new value ([Rotate or roll back](#rotate-or-roll-back)),
@@ -1027,8 +1058,9 @@ of errors) or release again.
 - Database credentials: set a new password for the role over `psql` stdin as
   the `postgres` superuser (never `-c` or argv), write it into every file that
   carries that role's URL (`<lg>.env` and `backup-<lg>.env` for the app role,
-  `<lg>-migrate.env` for the owner, and its `secrets/` file), restart, then
-  rerun readiness and an app-role read/write test.
+  `<lg>-migrate.env` for the owner, and its `secrets/` file), run
+  `box_agent envcheck <lg>`, restart, then rerun readiness and an app-role
+  read/write test.
 - `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`: rotate only on compromise. The next
   build and start need it, and every form open in a browser breaks once.
 - Discord bot token or webhook: revoke/rotate at Discord first, replace the
@@ -1066,7 +1098,7 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 | --- | --- |
 | `ggd2l-us@a`, `ggd2l-us@b`, `ggd2l-eu@a`, `ggd2l-eu@b` | The leagues' Next slots; only each league's live slot is enabled |
 | `cloudflared-ggd2l.service` | The Cloudflare Tunnel, outbound only |
-| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/`. The package's unit plus the kit's drop-in `caddy.service.d/10-ggd2l.conf`: restart on failure (2 s, never giving up) and `OOMScoreAdjust=-500`, since the packaged unit never restarts and both leagues go through it |
+| `caddy` | Host routing, the union static files, the mode files in `/etc/caddy/ggd2l/`. The package's unit plus the kit's drop-in `caddy.service.d/10-ggd2l.conf`: restart on failure (2 s, never giving up) and `OOMScoreAdjust=-500`, since the packaged unit never restarts and both leagues go through it, and `RuntimeDirectory=caddy` (0700) for its admin API, the socket `/run/caddy/admin.sock` (0600) that only caddy and root can open (until 2026-10-19 it was TCP `localhost:2019`, open to every local user) |
 | `postgresql@18-main` | Both leagues' databases on 127.0.0.1:5432 |
 | `ggd2l-backup@us.timer`, `ggd2l-backup@eu.timer` | Hourly dumps at :17 |
 | `ggd2l-drill@us.timer`, `ggd2l-drill@eu.timer` | Weekly restore drills, Sundays 10:30 and 11:30 UTC |
@@ -1077,14 +1109,20 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 
 `box_agent status` reports the units (the config archive's included), each
 league's live release and slots, disk, memory, swap, the last backup, the last
-drill (the later of the drill unit's last run and `state/last-drill.json`,
-which every passing drill writes, the agent's `drill <lg> <sha>` included), a
+drill (the later of the drill unit's last run and the drill's
+`last-drill.json`, which every passing drill writes, the agent's
+`drill <lg> <sha>` included), a
 pending reboot, and two counts for the last 24 hours: real 5xx
 (`serverErrors24h`) and the maintenance page's own 503s
 (`maintenance503s24h`). Every unit refuses to start without a valid
 environment (the env contract: `LEAGUE_DEPLOY_ENV`, the league's region, the
 canonical origin `https://<lg>.ggd2l.com` in production and staging alike, the
-app role's local URL, no Vercel or Neon keys).
+app role's local URL, no Vercel or Neon keys). The production validation
+(`scripts/validate-prod-env.mjs`) runs in every build and in
+`box_agent envcheck <lg>`, never at a start: a start it refused would take the
+league down, and after a reboot both. So every edit of an env file is
+followed by `envcheck` before the restart that reads it
+([Secret compromise](#secret-compromise)).
 
 **Slots.** A slot runs `next start` as `ggd2l-<lg>`, which can write only the
 release's `.next/cache` and `.next/server/route-cache` (`RELEASE_WRITABLE_DIRS`;
@@ -1093,13 +1131,21 @@ the build creates both). Each slot process holds one Prisma pool of
 PostgreSQL's 47 usable connections; a release built before 2026-10-17 holds
 two pools per process.
 
-**The 09:00 UTC reboot.** Unattended upgrades install security updates, plus
-PostgreSQL, cloudflared, Node and Caddy updates within their pinned majors, and
-reboot at 09:00 UTC when an update needs it. Only live slots are enabled, so
-exactly they come back; the scheduler Workers wait for 10 failed passes in a
-row before alerting until 09:15 UTC, which covers the gap.
-Before a release near 09:00 UTC, check `pending reboot` in `box_agent status`
-and don't run one across it.
+**Package updates and the 09:00 UTC reboot.** Unattended upgrades install
+security updates, plus PostgreSQL, cloudflared, Node and Caddy updates within
+their pinned majors, at 08:00-08:10 UTC (a drop-in for `apt-daily-upgrade.timer`
+from `provision-base.sh`; stock Ubuntu runs them at 06:00-07:00 UTC, late
+evening in the US league's zone), and reboot at 09:00 UTC when an update needs
+it. A PostgreSQL update restarts the cluster as it installs, dropping both
+leagues' connections for a moment, and needrestart may restart a live slot,
+the bot or the tunnel whose Node or libraries changed: a pass or two can fail
+at 08:00-08:15, under the 3 an alert needs. Only live slots are enabled, so
+exactly they come back from the reboot; the scheduler Workers wait for 10
+failed passes in a row before alerting until 09:15 UTC, which covers the gap.
+Before a release between 08:00 and 09:15 UTC, check `pending reboot` in
+`box_agent status`, and don't run one across the package window or the
+reboot. The box that predates the drop-in gets it once by hand
+(`ops/selfhost/README.md`, Kit changes).
 
 **Alerts.** Discord, in the admin channel ([DECISIONS](DECISIONS.md#hosting)):
 
@@ -1128,19 +1174,31 @@ read as the unit stops. systemd-run's own `Memory peak:` line in the build
 log is only what systemd 255 last read while the unit ran, often as it
 started (2.4M for the c5de9952 builds). A build needs 5
 GB free; each release takes about 1.2 GB and `box_agent prune <lg>` keeps the
-live, previous and newest. Check `df -h` monthly.
+live, previous and newest. Check `df -h` monthly. A live slot's
+`.next/cache/fetch-cache` also grows until the slot restarts: every result
+change (inhouse results included) writes the public snapshots read since
+under a new key and nothing deletes the old ones; the season snapshots are
+the large ones, up to 1.9 MB each. `du -sh` the folder if the disk climbs
+between releases.
 
 **Logs.** App output goes to journald (capped at 500 MB):
 `journalctl -u ggd2l-us@<slot>` for the live slot, which `box_agent status`
-names (`leagues.<lg>.live.slot`; each release flips it). Caddy writes a JSON access log per host under
+names (`leagues.<lg>.live.slot`; each release flips it). A slot that serves
+writes at most one `{"event":"database-performance",…}` line a minute: query
+counts, pool waits, and the public snapshots' cache sizes. `oversizedSnapshots`
+above 0 means a snapshot passed the 1.9 MB budget (`maxSnapshotBytes` is the
+largest), so its pages read the database on every view (/admin's Database
+performance section says so too); the all-history pages cache small derived
+entries instead and should never be the cause ([admin-and-operations](features/admin-and-operations.md#performance)).
+Caddy writes a JSON access log per host under
 `/var/log/caddy/` (rolled at 50 MiB, ten kept); it holds player IP addresses,
 so treat it as personal data. Build logs are in `/var/log/ggd2l/builds/`
 (the line npm ci and the build each print as they stop, `ggd2l cgroup: …`,
 holds that unit's real memory and swap peak, limits and memory events, and
 the agent's `==` line after systemd-run's summary gives the peaks in MB), and
-the output of `attest`, `preflight`, `migrate` and `drill <lg> <sha>` in
-`/var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log` (0640 `root:ggd2l`),
-with every environment value redacted.
+the output of `attest`, `preflight`, `migrate`, `drill <lg> <sha>` and
+`envcheck` in `/var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log` (0640
+`root:ggd2l`), with every environment value redacted.
 
 **SSH.** Key-only login as `ggd2l`, the only account with a shell and sudo;
 everything else runs as its own user with no login. The Mac's `~/.ssh/config`
@@ -1150,17 +1208,25 @@ alias `ggd2l-1` pins the host key. Review `authorized_keys` monthly.
 verified, gzipped, age-encrypted to Tim's offline key and copied to R2
 (`ggd2l-backups`). Daily at 04:47 UTC, `ggd2l-config-archive.timer` runs
 `config-archive.sh` as root: an age-encrypted archive of `/etc/ggd2l`,
-`/etc/cloudflared` and `/etc/caddy` to R2 (`config/`), so a rebuild can
-recover the secrets. After changing anything in those folders (an env file, a
-secret, the tunnel, or an `install-kit.sh` run, which rewrites files in all
-three), run `sudo systemctl start ggd2l-config-archive` right away rather
-than waiting up to a day for the timer. The uploads pass rclone
+`/etc/cloudflared`, `/etc/caddy` and the lobby bot's state in
+`/var/lib/ggd2l-bot` (its Steam session, `steam/` and `lobbies.json`, never its
+locks or logs) to R2 (`config/`), so a rebuild can recover the secrets and the
+bot without a new Steam sign-in. After changing anything in those folders (an
+env file, a secret, the tunnel, or an `install-kit.sh` run, which rewrites
+files in the first three), run `sudo systemctl start ggd2l-config-archive`
+right away rather than waiting up to a day for the timer. The uploads pass rclone
 `--s3-no-check-bucket` (the token may not create the bucket) and
 `--s3-no-head` (the box's rclone 1.60.1 would HEAD each fresh upload with a
 versionId R2 refuses; the kit README's Backups section has the detail and a
 diagnosis command). The weekly drill restores the newest dump on the box. Quarterly,
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
+The hourly backup runs the kit's own copies of its scripts, so `ggd2l-ops`,
+which holds the R2 credentials, runs nothing the build user wrote; the drill,
+which runs Prisma from a tools clone, runs as `ggd2l-drill`, which cannot
+read `rclone.conf`. The R2 token can still delete objects, so an R2 bucket
+lock on the backup prefixes is the remaining protection of the offsite
+history (kit README, Backups).
 
 **Cutover cleanup.** Once the 14 days are over (the old origins on 308 and
 both Neon databases deleted), shred the plaintext Neon dumps left in
@@ -1181,11 +1247,19 @@ decrypt drill.
 root's own clone (for example `/root/ggd2l-kit`; the script refuses a clone any
 other user could change). Tim decrypts the newest dumps on the Mac, and they are
 copied with their `.sha256` into `/var/backups/ggd2l/cutover/<lg>/`. Restore
-`/etc/ggd2l`, `/etc/cloudflared` and `/etc/caddy` from the newest config
+`/etc/ggd2l`, `/etc/cloudflared`, `/etc/caddy` and the lobby bot's state
+(`/var/lib/ggd2l-bot`, in archives from 2026-10-19 on) from the newest config
 archive (Tim decrypts it on the Mac and streams it in, as the kit README's
 "Rebuild from zero" shows); if none exists, regenerate or supply again every
 file in them, a new tunnel included (Tim's `cloudflared tunnel login`). Then
 `box_agent import` each league (a fresh install leaves every site in
 maintenance, which `import` requires; run `box_agent identity <lg>` only if
 a dump predates the cutover's identity markers), build, start and promote
-each league at the live commit, and start the tunnel.
+each league at the live commit, and bring the lobby bot back once the old
+box's bot is surely off (one Steam account never runs in two places):
+`box_agent bot-deploy <live sha>`, `sudo systemctl enable --now ggd2l-bot`,
+then `box_agent bot-status`. Without a saved session in the restored state,
+Tim signs the bot in from his own terminal before the enable (the
+`systemd-run` login in [DOTA-LOBBY-BOT](DOTA-LOBBY-BOT.md#on-the-box), step 7);
+if Steam refuses the saved one, stop the unit, sign in, start it. Then start
+the tunnel.

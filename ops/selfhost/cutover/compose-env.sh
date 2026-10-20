@@ -17,7 +17,8 @@
 #
 # The new file is checked by the env contract before it replaces the old one;
 # nothing is printed but key names and the contract's verdict. The partial is
-# shredded afterwards.
+# shredded afterwards. Then `ggd2l-agent envcheck <lg>` runs the production
+# validation on it, before anything starts on it.
 set -euo pipefail
 umask 077
 
@@ -74,3 +75,6 @@ fi
 mv -f "$NEW" "$TARGET"
 shred -u "$PARTIAL"
 echo "compose-env: ${TARGET} written ($(sed -n 's/^\([A-Z0-9_]*\)=.*/\1/p' "$TARGET" | wc -l) keys); the partial is shredded"
+# The contract is not the production validation (AUTH_SECRET, CRON_SECRET,
+# ADMIN_STEAM_IDS...), which only a build or envcheck runs.
+echo "compose-env: next, ggd2l-agent envcheck ${lg}; start or restart nothing on this file until it answers ok"

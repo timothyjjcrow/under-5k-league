@@ -145,6 +145,9 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { SeasonFormatControls } from "@/components/admin/season-format-controls";
+import { teamCountSeasonNote } from "@/lib/season-format";
+import { playoffPlacesPhrase } from "@/lib/season-groups";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
 import { readInhouseNight } from "@/lib/inhouse-night-service";
@@ -173,6 +176,8 @@ import {
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
+import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
+import { leagueFeedWaitText } from "@/lib/league-feed-wait";
 import {
   AUTOMATION_BACKLOG_STUCK_MS,
   automationAttention,
@@ -1310,7 +1315,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -1328,6 +1333,8 @@ async function loadSeasonAdminData(seasonId: string) {
     prisma.importCandidate.count({
       where: { seasonId, status: "NEEDS_REVIEW" },
     }),
+    // Feed games the last automatic league-feed pass stopped on.
+    loadLeagueFeedWaiting(seasonId),
   ]);
   return {
     players,
@@ -1343,6 +1350,7 @@ async function loadSeasonAdminData(seasonId: string) {
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
     importsNeedingReview,
+    feedWaiting,
     captainsInRoom,
   };
 }
@@ -1549,6 +1557,9 @@ function AdminAttention({
       draftComplete: draftRostersReady(season, data),
       automation,
       importsNeedingReview: data.importsNeedingReview,
+      feedWaitingForReview: data.feedWaiting
+        .filter((row) => row.status === "NEEDS_REVIEW")
+        .map((row) => row.dotaMatchId),
       shortTeams: shortTeams(data.teams, season.teamSize).map(
         ({ team, missing }) => ({ name: team.name, missing }),
       ),
@@ -2691,6 +2702,13 @@ function CaptainControls({
                     ? `${poolCount} draftable so far; the seat fit shows once there are 2 captains`
                     : seatFitSentence(seats, season.teamSize)}
               </li>
+              {captainCount >= 2 ? (
+                <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                  <b className="text-fg">Season format:</b>{" "}
+                  {teamCountSeasonNote(captainCount)} One captain is one team,
+                  and the site picks the format from that count.
+                </li>
+              ) : null}
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
                 <ActionForm
                   action={setDraftNight}
@@ -3693,7 +3711,12 @@ function ScheduleControls({
     (m) => m.phase === "TIEBREAKER",
   );
   const playoffField = projectPlayoffField(data.teams, data.matches);
+  const seasonGrouped = playoffField.kind === "GROUPS";
   const collateral = data.collateral;
+  const lastRegularWeek = regularMatches.reduce(
+    (max, match) => Math.max(max, match.week),
+    0,
+  );
   const draftStatus = data.draft?.status ?? null;
   const scheduleEditingOpen = postAuctionWorkOpen(season.status, draftStatus);
   const scheduleEditingLockedReason = scheduleEditingOpen
@@ -3723,7 +3746,7 @@ function ScheduleControls({
       <CardHeader
         headingLevel={2}
         title="Schedule & results"
-        subtitle="Generate the round-robin and enter weekly scores."
+        subtitle="Generate the schedule (the team count sets the format) and enter weekly scores."
         action={
           // The lock reason sits where the control would be, not in a banner
           // over the card: once any result exists it is true all season.
@@ -3764,21 +3787,23 @@ function ScheduleControls({
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
-              {/* The lib always supported the mirrored second leg; this box is
-                what finally wires it. Decide BEFORE generating: switching
-                later is a full Regenerate, which clears every check-in, pick
-                and booking on the old fixtures. */}
-              <label
-                className="flex items-center gap-1.5 text-xs text-muted"
-                title="Every pairing plays twice, home/away swapped — roughly doubles the season length. Best for small leagues (4-6 teams), whose single round robin is only 3-5 weeks."
-              >
-                <input
-                  type="checkbox"
-                  name="doubleRound"
-                  className="h-3.5 w-3.5 accent-[var(--color-brand)]"
-                />
-                double round robin
-              </label>
+              {/* The team count picks one table or two groups (and a
+                  double round robin for four teams or fewer); nothing to
+                  choose here. A regenerate keeps the groups it finds, so a
+                  swap survives a new first night, unless this is ticked. */}
+              {seasonGrouped ? (
+                <label
+                  className="flex items-center gap-1.5 text-xs text-muted"
+                  title="Deal the groups again by each roster's average signup MMR, undoing any swap. Unticked, the regenerated schedule keeps today's groups."
+                >
+                  <input
+                    type="checkbox"
+                    name="redrawGroups"
+                    className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+                  />
+                  redraw the groups
+                </label>
+              ) : null}
               {/* GENERATE and REGENERATE are the same action and were the same
                 button. The first is routine; the second deletes every regular
                 fixture and recreates the identical pairings with NEW ids, so
@@ -3792,7 +3817,9 @@ function ScheduleControls({
                   token={season.name}
                   title="Replace the regular-season schedule?"
                   consequences={[
-                    `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
+                    seasonGrouped
+                      ? `All ${regularCount} regular-season fixture(s) are deleted and recreated with new ids — the same pairings unless "redraw the groups" is ticked.`
+                      : `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
                     ...(collateral.rsvps
                       ? [`${collateral.rsvps} player check-in(s) are cleared.`]
                       : []),
@@ -3818,7 +3845,9 @@ function ScheduleControls({
                 <SubmitButton
                   variant="secondary"
                   size="sm"
-                  confirm="Generate the regular-season schedule?"
+                  confirm={`Generate the regular-season schedule? ${
+                    teamCountSeasonNote(data.teams.length)?.split(". ")[0] ?? ""
+                  }.`}
                 >
                   Generate schedule
                 </SubmitButton>
@@ -3828,12 +3857,35 @@ function ScheduleControls({
         }
       />
       <CardBody>
+        <SeasonFormatControls
+          season={season}
+          teams={data.teams}
+          firstMatchNight={season.firstMatchNight}
+          lastRegularWeek={lastRegularWeek}
+          regenerateOpen={!scheduleGenerationLockedReason && regularCount > 0}
+          regenerateConsequences={[
+            ...(collateral.rsvps
+              ? [`${collateral.rsvps} player check-in(s) are cleared.`]
+              : []),
+            ...(collateral.picks
+              ? [`${collateral.picks} pick'em pick(s) are deleted.`]
+              : []),
+            ...(collateral.covers
+              ? [
+                  `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
+                ]
+              : []),
+            ...(collateral.proposals
+              ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
+              : []),
+          ]}
+        />
         {data.matches.length === 0 ? (
-          <p className="text-sm text-muted">
+          <p className="mt-3 text-sm text-muted">
             No fixtures have been generated for this season.
           </p>
         ) : (
-          <div className="space-y-2">
+          <div className="mt-3 space-y-2">
             {status.total > 0 ? (
               <div
                 className={`rounded-lg border px-3 py-2 text-sm ${
@@ -4560,7 +4612,13 @@ function PlayoffControls({
           <p className="text-muted">
             {playoffField.eligibleTeamIds.length < 2
               ? "At least two non-withdrawn teams are needed before a bracket can be seeded."
-              : `Will seed the top ${bracketSize} of ${playoffField.eligibleTeamIds.length} eligible team(s) by standings${data.teams.length !== playoffField.eligibleTeamIds.length ? `; ${data.teams.length - playoffField.eligibleTeamIds.length} withdrawn team(s) keep their results but cannot take a seed` : ""}. Start this after the regular season is finished.`}
+              : `${
+                  playoffField.groups
+                    ? `Will seed ${playoffPlacesPhrase(playoffField)}, crosswise (${playoffField.pairings
+                        .map((pairing) => `${playoffField.seedLabelByTeam.get(pairing.home) ?? "?"}–${playoffField.seedLabelByTeam.get(pairing.away) ?? "?"}`)
+                        .join(", ")}), from ${playoffField.eligibleTeamIds.length} eligible team(s)`
+                    : `Will seed the top ${bracketSize} of ${playoffField.eligibleTeamIds.length} eligible team(s) by standings`
+                }${data.teams.length !== playoffField.eligibleTeamIds.length ? `; ${data.teams.length - playoffField.eligibleTeamIds.length} withdrawn team(s) keep their results but cannot take a seed` : ""}. Start this after the regular season is finished; round one plays the week after the tiebreaker week.`}
           </p>
         )}
         {data.tiebreakerArchive.length > 0 ? (
@@ -5212,7 +5270,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
   // for client components.
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
-  const [inWindow, leagueSyncAt, cursor, setAside, privatePlayers] =
+  const [inWindow, leagueSyncAt, cursor, setAside, privatePlayers, feedWaiting] =
     await Promise.all([
       prisma.match.findMany({
         where: {
@@ -5257,6 +5315,10 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       }),
+      // Feed games automatic feed imports are waiting on (fail closed).
+      season.dotaLeagueId
+        ? loadLeagueFeedWaiting(season.id)
+        : Promise.resolve([]),
     ]);
   const ts = (iso: string | null) => {
     const t = iso ? Date.parse(iso) : NaN;
@@ -5277,6 +5339,11 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         }
       />
       <CardBody className="space-y-3">
+        {feedWaiting.length > 0 ? (
+          <p className="text-sm text-danger">
+            {leagueFeedWaitText(feedWaiting)}
+          </p>
+        ) : null}
         {inWindow.length === 0 ? (
           <p className="text-sm text-muted">
             No matches in their detection window — the sync sleeps until{" "}

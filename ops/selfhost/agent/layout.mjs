@@ -53,6 +53,7 @@ export const BIN = Object.freeze({
   node: "/usr/bin/node",
   npm: "/usr/bin/npm",
   psql: "/usr/bin/psql",
+  rm: "/usr/bin/rm",
   rsync: "/usr/bin/rsync",
   runuser: "/usr/sbin/runuser",
   systemctl: "/usr/bin/systemctl",
@@ -64,6 +65,8 @@ export const USERS = Object.freeze({
   build: "ggd2l-build",
   caddy: "caddy",
   ops: "ggd2l-ops",
+  // Runs the restore drill: the build user's tools clone, so never as ggd2l-ops.
+  drill: "ggd2l-drill",
   bot: "ggd2l-bot",
   league: (lg) => `ggd2l-${lg}`,
 });
@@ -103,6 +106,8 @@ export function createLayout(root = "/") {
     toolLog: (name) => at("var/log/ggd2l/tools", `${name}.log`),
     caddyLogs: at("var/log/caddy"),
     backupDir: (lg) => at("var/backups/ggd2l", lg),
+    // The drill's own folder: its record and its private copy of the dump.
+    drillState: (lg) => at("var/lib/ggd2l-drill", lg),
     cutoverDir: (lg) => at("var/backups/ggd2l/cutover", lg),
     buildHome: at("var/cache/ggd2l-build"),
     npmCache: at("var/cache/ggd2l-build/npm"),
@@ -131,6 +136,7 @@ export const ERRORS = Object.freeze({
   busy: "another mutating agent verb holds the lock",
   argv_secret: "refused to place a secret in a command line",
   env_contract: "the league env file breaks the env contract",
+  env_invalid: "the league env file fails the production validation (scripts/validate-prod-env.mjs)",
   env_missing: "an env file the verb needs is missing",
   disk_low: "less than 5 GB free under /srv/ggd2l",
   fetch_failed: "git fetch of origin/main failed",
@@ -145,6 +151,7 @@ export const ERRORS = Object.freeze({
   artifact_missing: "the built release lacks a required file",
   lockdown_failed: "locking down the release failed",
   link_escapes: "a symlink in the release points outside it",
+  unsafe_path: "refused a link or unexpected file where the agent works as root",
   publish_failed: "publishing static files failed",
   release_missing: "no such release on the box",
   release_not_built: "the release did not finish building",
@@ -156,6 +163,8 @@ export const ERRORS = Object.freeze({
   too_soon: "the previous slot is inside its 90 s warm overlap",
   no_live: "the league has no live release",
   no_previous: "the league has no previous release to roll back to",
+  rolled_back:
+    "live is already a rollback (rolledBackFrom); to put back the release it replaced, run promote <lg> <rolledBackFrom>",
   is_live: "refused: that release is live",
   mode_is_maintenance: "the league is in maintenance; promote with an explicit --mode",
   live_mismatch: "live.json, the Caddy mode file and the slot symlink disagree",
@@ -180,6 +189,7 @@ export const ERRORS = Object.freeze({
   backup_failed: "the backup unit failed",
   drill_failed: "the restore drill failed",
   bot_deploy_failed: "deploying the lobby bot failed",
+  prune_failed: "removing an old release or tools clone failed",
   internal: "the agent hit an unexpected error",
 });
 

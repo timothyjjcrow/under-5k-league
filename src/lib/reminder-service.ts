@@ -123,8 +123,9 @@ export async function releaseRetimedReminderMarker(
  * traffic rather than a single admin action. The send itself is AWAITED:
  * fire-and-forget promises can be killed on serverless hosts.
  *
- * Match.week is set on playoff rounds too (lastRegularWeek+1, +1 per round),
- * so the per-week marker covers both phases.
+ * Match.week is set on playoff rounds too (`firstPlayoffWeek`: the week after
+ * the reserved tiebreaker week, then +1 per round), so the per-week marker
+ * covers both phases.
  */
 export async function maybeAnnounceUpcomingWeek(season: {
   id: string;

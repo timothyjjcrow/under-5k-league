@@ -180,17 +180,42 @@ describe("playoffs bracket + champion (integration)", () => {
     ]);
   });
 
-  it("crowns a champion for an 8-team bracket (QF → SF → F)", async () => {
+  it("crowns a champion for an 8-team bracket from two groups (QF → SF → F)", async () => {
+    const season = await makeSeason({ teamSize: 3, minTeams: 10 });
+    const ids = await makeSeededTeams(season.id, 10);
+    // The MMR snake's split: A gets the 1st, 4th, 5th, 8th and 9th strongest.
+    // Each group's table counts only its own results.
+    const groupA = [0, 3, 4, 7, 8].map((i) => ids[i]);
+    await prisma.team.updateMany({ where: { id: { in: groupA } }, data: { groupKey: "A" } });
+    await prisma.team.updateMany({
+      where: { seasonId: season.id, id: { notIn: groupA } },
+      data: { groupKey: "B" },
+    });
+    await createPlayoffBracket(season.id);
+    const roundOne = (await playoffMatches(season.id))
+      .filter((m) => m.bracketSlot?.startsWith("R0"))
+      .sort((a, b) => a.bracketSlot!.localeCompare(b.bracketSlot!));
+    // A1–B4, B2–A3, B1–A4, A2–B3: the group winners meet only in the final.
+    expect(roundOne.map((m) => [m.homeTeamId, m.awayTeamId])).toEqual([
+      [ids[0], ids[6]],
+      [ids[2], ids[4]],
+      [ids[1], ids[7]],
+      [ids[3], ids[5]],
+    ]);
+    const final = await driveToChampion(season.id);
+    expect(final.status).toBe("COMPLETE");
+    expect(final.championTeamId).toBe(ids[0]);
+  });
+
+  it("sends the top 4 of an eight-team table to the semifinals", async () => {
     const season = await makeSeason({ teamSize: 3, minTeams: 8 });
     const ids = await makeSeededTeams(season.id, 8);
     await createPlayoffBracket(season.id);
-    expect(
-      (await playoffMatches(season.id)).filter((m) =>
-        m.bracketSlot?.startsWith("R0"),
-      ),
-    ).toHaveLength(4);
+    const inBracket = (await playoffMatches(season.id))
+      .filter((m) => m.bracketSlot?.startsWith("R0"))
+      .flatMap((m) => [m.homeTeamId, m.awayTeamId]);
+    expect(inBracket.sort()).toEqual(ids.slice(0, 4).sort());
     const final = await driveToChampion(season.id);
-    expect(final.status).toBe("COMPLETE");
     expect(final.championTeamId).toBe(ids[0]);
   });
 

@@ -51,6 +51,21 @@ export function sameDotaAccountLink(
 }
 
 /**
+ * Whether an account id can be stored in, and so filtered on, the rollback
+ * column. `legacyDotaAccountId` is Prisma `Int`, a signed INTEGER (INT4) on
+ * Postgres, while Dota ids run to 2^32 - 1. Prisma refuses to bind a larger
+ * value there ("Unable to fit integer value … into an INT4"), so the whole
+ * query throws instead of matching nothing (on sign-in, every time). No
+ * stored legacy value can be larger, so a filter for one can only match zero
+ * rows: leave that filter or that write OUT. Never set the key to `undefined`:
+ * Prisma drops it, and the write then hits every row the rest of its WHERE
+ * allows. SQLite binds 64-bit integers and hides all of this.
+ */
+export function fitsLegacyDotaAccountColumn(accountId: number): boolean {
+  return accountId >= -2_147_483_648 && accountId <= 2_147_483_647;
+}
+
+/**
  * Query fragment for every way another user can claim an account: the current
  * column, rollback column, or their canonical Steam identity.
  */
@@ -58,7 +73,9 @@ export function dotaAccountClaimWhere(accountId: number) {
   return {
     OR: [
       { dotaAccountIdV2: accountId },
-      { legacyDotaAccountId: accountId },
+      ...(fitsLegacyDotaAccountColumn(accountId)
+        ? [{ legacyDotaAccountId: accountId }]
+        : []),
       { steamId: accountIdToSteamId64(accountId) },
     ],
   };

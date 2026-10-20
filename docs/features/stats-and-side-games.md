@@ -75,7 +75,9 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   (`weekOracles`), the best single game (`bestGameOfWeek`: highest impact line
   by a league player, ties by kills, fewer deaths, user id), the table after
   the week with places moved (`weekWrapTable`: `regularTableBeforeWeek(week +
-  1)` against `(week)`, no arrows until a week of results is behind it), and
+  1)` against `(week)`, no arrows until a week of results is behind it; in a
+  group season `weekWrapTables` over `standingsSections` gives each group its
+  own table, places and arrows, each waiting for its own results), and
   next week's fixtures. Under the season's own URL (`weekWrapPath`), so an old
   link opens its week after the handoff; an unknown week is a 404.
 - **Linked from where a week ends:** each finished week on /schedule, the
@@ -122,6 +124,16 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
 - **Equal scores share a place, and ties at the cutoff show** (`topPlaces`:
   1, 1, 3; top 5 by place, capped at 10 rows plus "+N more tied"). Decimal
   boards place on the shown precision (`placeKey`).
+- **Box scores come from cached facts; results and champions are read
+  fresh.** The page reads `getCareerFacts()` (`cached-queries.ts`: the result
+  revision, the "games" tag, 60s): every trusted line folded per match,
+  player and team (`appearanceFacts`) and the game boards' per-player counts
+  (`hallOfFameGameFacts`), about 68 KB at 500 games, so a view decodes no box
+  score. Series results and champions stay the render's own reads, folded in
+  by `careersFromFacts`, so a final or a crowned champion shows at once.
+  `appearanceCareers` is the same fold over raw games (the profile's Seasons
+  card), and `appearance-careers.test.ts` pins the cached fold to the
+  per-line walk it replaced. /players' last-season token reads the same entry.
 
 ## Record book
 
@@ -139,6 +151,16 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   profile chips): a malformed, partial or duplicated box drops the whole game;
   unsafe stored duration/scores become 0 and show in `StatsDataNotice`;
   missing economy fields are null, never 0.
+- **The book is cached as what it shows, never as rows.** `/records` reads
+  `getRecordBookView(scope)` (`recordBookView`: the book, its diagnostics and
+  counts, the seasons with games, each match record's fixture) and the match
+  preview, the profile and its link picture read `getRecordWatchBook()` (the
+  book plus every career best, as JSON through `recordWatchBookData`), both in
+  `cached-queries.ts` under the result revision, the "games" tag and 60s:
+  about 5 KB and 12 KB at 500 games, where the raw all-history rows pass
+  Next's 2 MiB entry at about 160 (`history-cache-size.test.ts`). `/records`
+  reads its scope only after the season is found, so a made-up `?season=`
+  never fills an entry.
 - **A broken player record rides the series result post**: one line at most,
   inside `announceSeriesResultOnce`'s marker (no new send). Silent until
   `RECORD_ANNOUNCE_MIN_GAMES` (20) complete games exist outside the series;
@@ -171,7 +193,10 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 - **Playoffs judge the frozen seeds** (`seedsFromFirstRound` over PLAYOFF and
   FINAL rows only, because a tiebreaker's `TB1` slot parses as round 0). The
   higher seed number winning is the upset; a side without a seed gets no
-  tag. **Draws, forfeits and TIEBREAKER series are never upsets.**
+  tag. In a group season (`upsetContext`'s `teams`) the place within the
+  group decides and the seeds are named like the bracket's ("seed A3 over
+  seed B2"); two teams at the same place in different groups are no upset.
+  **Draws, forfeits and TIEBREAKER series are never upsets.**
 - **The upset of the week** (`biggestUpset`) comes from the latest week with
   a played series: the largest gap, then the lowest match id. When that
   week had none there is no line; an older week's never stands in. Forfeits
@@ -187,7 +212,8 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
   PLAYOFFS), never a finished or archived one.
 - **Record watch is the league record minus a career best**
   (`recordWatchBook`, `recordWatchFor`, `recordWatchLines` in `records.ts`),
-  both read through the record book's own mapping and metrics. Silent until
+  both read through the record book's own mapping and metrics, and cached
+  with the book (`getRecordWatchBook`, above). Silent until
   `RECORD_WATCH_MIN_GAMES` (20) complete games; a line only within
   `RECORD_WATCH_WITHIN_PERCENT` (15, inclusive) of the record and never for
   a record the player holds; one line a player, their closest by share of
@@ -259,7 +285,9 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
   `max(2, ceil(picks / 25))` floor), else most picked; `comfortPicks` falls
   back to stored pub heroes, labelled "pubs".
 - **Keep its read uncached** (`fetchGamesForScouting`): `unstable_cache` hung
-  the preview's nested Suspense stream (`e2e-mid/match.spec.ts`).
+  the preview's nested Suspense stream (`e2e-mid/match.spec.ts`). It is the
+  participant read, whose cost grows with history (admin-and-operations.md,
+  Performance).
 
 ## Fantasy and pick'em: shared rules
 

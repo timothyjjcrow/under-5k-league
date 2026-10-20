@@ -53,7 +53,11 @@ govern them.
   holds no other credential.
 - It is between **07:00 and 19:00 UTC**, and no match night, inhouse night or
   draft is on. The release refuses outside those hours unless you pass
-  `--outside-window`, which is for a reviewed emergency only.
+  `--outside-window`, which is for a reviewed emergency only. Keep it clear
+  of the box's package updates at 08:00-08:15 UTC and of a pending 09:00
+  reboot (`pending reboot` in `box_agent status`): either can restart
+  PostgreSQL or a slot under it
+  ([PRODUCTION-OPERATIONS](PRODUCTION-OPERATIONS.md#box-operations)).
 - Nobody else is releasing: check for another release session first.
 
 ### 1. Plan
@@ -177,6 +181,15 @@ box_agent rollback eu
 
 Roll back both leagues: one commit serves both. Never undo a migration: the
 database stays as it is and the older build keeps working with it.
+
+Each rollback runs once. It restarts a slot and waits for it, up to about two
+silent minutes; if the answer is lost or reports a failure, read
+`box_agent live <lg>` first: the switch may have happened. A second
+`rollback` while live came from one refuses with `rolled_back`, because the
+release it left has become the previous one and a bare retry would put it
+back. Its answer names `live` and `rolledBackFrom`; to return to that release
+on purpose, `box_agent promote <lg> <rolledBackFrom>`. Any promote, a release
+included, makes `rollback` available again.
 
 - A schema-neutral rollback between releases with the same authenticated
   automation contract needs no backup or scheduler pause: roll back, check

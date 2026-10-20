@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server";
+import { NextResponse, type NextRequest } from "next/server";
 import { buildCalendar } from "@/lib/ics";
 import { currentInhouseNight, inhouseNightCalendarEvent } from "@/lib/inhouse-night";
 import { readInhouseNight } from "@/lib/inhouse-night-service";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { limitPublicGet } from "@/lib/public-get-limit";
 import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
@@ -12,8 +13,12 @@ export const dynamic = "force-dynamic";
  * Outlook calendar" on /inhouse. A download, not a feed: the UID and SEQUENCE
  * (the night's id and revision) let a calendar app that re-imports it update
  * its copy. Read-only, so a browser loading it as an image changes nothing.
+ * Never memoized: a night an admin just moved must download as moved. One
+ * address shares the calendar feed's per-IP limit (`PUBLIC_GET_LIMITS`).
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
+  const limited = limitPublicGet(request, "calendar", Date.now());
+  if (limited) return limited;
   const { night } = await readInhouseNight();
   const current = currentInhouseNight(night, Date.now());
   if (!current) {

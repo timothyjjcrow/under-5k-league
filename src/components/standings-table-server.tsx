@@ -28,6 +28,8 @@ export function StandingsTable({
   playoffSeedByTeam,
   unresolvedPlayoffTeamIds = [],
   eligibleTeams,
+  seedLabelByTeam,
+  label,
 }: {
   standings: ReturnType<typeof computeStandings>;
   teamName: Map<string, string>;
@@ -57,6 +59,10 @@ export function StandingsTable({
   unresolvedPlayoffTeamIds?: string[];
   /** Number of non-withdrawn teams competing for playoff places. */
   eligibleTeams?: number;
+  /** Bracket names for the seeds ("A2") when they aren't the seed numbers. */
+  seedLabelByTeam?: Map<string, string>;
+  /** The table's accessible name (default "League standings"). */
+  label?: string;
 }) {
   // "Everyone makes the bracket" must be judged against the whole league,
   // not the (possibly sliced) rows this table happens to show.
@@ -115,6 +121,9 @@ export function StandingsTable({
     playoffSeed: pending || confirmedOut
       ? null
       : playoffSeedByTeam?.get(s.teamId) ?? null,
+    ...(seedLabelByTeam?.has(s.teamId)
+      ? { playoffSeedLabel: seedLabelByTeam.get(s.teamId) }
+      : {}),
     // A withdrawn team's run ended with its forfeits; never badge it.
     streak: withdrawnIds?.has(s.teamId) ? undefined : streakByTeam?.get(s.teamId),
   });
@@ -126,6 +135,7 @@ export function StandingsTable({
       viewerTeamId={viewerTeamId}
       totalTeams={fieldSize}
       eligibleTeams={eligibleFieldSize}
+      {...(label ? { label } : {})}
     />
   );
 }

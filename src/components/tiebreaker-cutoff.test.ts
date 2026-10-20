@@ -5,7 +5,7 @@ import { singleEliminationPlan } from "@/lib/single-elimination";
 import { TiebreakerBracket } from "./tiebreaker-bracket";
 import type { TiebreakerBracketView } from "./tiebreaker-bracket-view";
 
-const teams = Array.from({ length: 9 }, (_, i) => ({ id: `team-${i}`, name: `Team ${i}` }));
+const teams = Array.from({ length: 9 }, (_, i) => ({ id: `team-${i}`, name: `Team ${i}`, groupKey: null }));
 const bracket: TiebreakerBracketView = {
   key: "cutoff", format: "BO1_SINGLE_ELIMINATION", round: 1, bestOf: 1,
   teamIds: teams.map((t) => t.id), status: "needed", byeTeamId: null,

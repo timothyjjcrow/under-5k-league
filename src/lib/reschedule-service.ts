@@ -250,7 +250,7 @@ async function calendarProblem(
     Date.now(),
   );
   if (deadline && time.getTime() >= deadline.getTime())
-    return "Regular-season matches must be played before the playoffs start — pick an earlier time, or ask an admin";
+    return "Regular-season matches must be played before the tiebreaker week, the week ahead of the playoffs — pick an earlier time, or ask an admin";
   return null;
 }
 

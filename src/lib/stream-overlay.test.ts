@@ -229,9 +229,9 @@ function baseInput(over: Partial<StreamOverlayInput> = {}): StreamOverlayInput {
     },
     kickoffText: "Sat, Oct 10, 6:00 PM Pacific",
     teams: [
-      { id: "A", name: "Alpha Wolves", withdrawn: false, createdAtMs: 1 },
-      { id: "B", name: "Bravo Bears", withdrawn: false, createdAtMs: 2 },
-      { id: "C", name: "Charlie Cats", withdrawn: false, createdAtMs: 3 },
+      { id: "A", name: "Alpha Wolves", withdrawn: false, groupKey: null, createdAtMs: 1 },
+      { id: "B", name: "Bravo Bears", withdrawn: false, groupKey: null, createdAtMs: 2 },
+      { id: "C", name: "Charlie Cats", withdrawn: false, groupKey: null, createdAtMs: 3 },
     ],
     seasonMatches: [live, drew, done2, done1],
     roster: [
@@ -370,12 +370,70 @@ describe("buildStreamOverlay", () => {
     const payload = buildStreamOverlay({
       ...input,
       match: { ...input.match, ...semi1, awayTeamId: "D", homeTeamId: "A" },
-      teams: [...input.teams, { id: "D", name: "Delta Dogs", withdrawn: false, createdAtMs: 4 }],
+      teams: [
+        ...input.teams,
+        { id: "D", name: "Delta Dogs", withdrawn: false, groupKey: null, createdAtMs: 4 },
+      ],
       seasonMatches: [...input.seasonMatches, semi1, semi2],
     });
     expect(payload.match.round).toBe("Semifinal");
     expect(payload.home.standing).toBe("Seed 1");
     expect(payload.away.standing).toBe("Seed 4");
+  });
+
+  describe("in a group season", () => {
+    // Two groups of two. The league's rows are group A's table then group
+    // B's, so D, top of Group B, is the third row of four: never "3rd of 4".
+    const teams = [
+      { id: "A", name: "Alpha Wolves", withdrawn: false, groupKey: "A", createdAtMs: 1 },
+      { id: "B", name: "Bravo Bears", withdrawn: false, groupKey: "B", createdAtMs: 2 },
+      { id: "C", name: "Charlie Cats", withdrawn: false, groupKey: "A", createdAtMs: 3 },
+      { id: "D", name: "Delta Dogs", withdrawn: false, groupKey: "B", createdAtMs: 4 },
+    ];
+    const names = new Map(teams.map((team) => [team.id, team.name]));
+    const won = (home: string, away: string) =>
+      fixture({
+        homeTeamId: home,
+        awayTeamId: away,
+        status: "COMPLETED",
+        homeScore: 2,
+        winnerTeamId: home,
+      });
+    const sides = (m: OverlaySeasonMatch) => ({
+      ...m,
+      homeTeam: { name: names.get(m.homeTeamId)!, logoUrl: null },
+      awayTeam: { name: names.get(m.awayTeamId)!, logoUrl: null },
+    });
+
+    it("places each team within its own group", () => {
+      matchSeq = 300;
+      const results = [won("A", "C"), won("D", "B")];
+      const live = fixture({ week: 2, homeTeamId: "D", awayTeamId: "B", status: "LIVE" });
+      const { home, away } = buildStreamOverlay({
+        ...baseInput(),
+        teams,
+        match: sides(live),
+        seasonMatches: [...results, live],
+      });
+      expect(home).toMatchObject({ record: "1W 0D 0L", standing: "1st of 2 in Group B" });
+      expect(away).toMatchObject({ record: "0W 0D 1L", standing: "2nd of 2 in Group B" });
+    });
+
+    it("names a knockout's seeds as the bracket does", () => {
+      matchSeq = 400;
+      const results = [won("A", "C"), won("D", "B")];
+      // Seeds alternate the groups place by place: A1 1, B1 2, A2 3, B2 4.
+      const semi1 = fixture({ phase: "PLAYOFF", bracketSlot: "R0M0", homeTeamId: "A", awayTeamId: "B", week: 4 });
+      const semi2 = fixture({ phase: "PLAYOFF", bracketSlot: "R0M1", homeTeamId: "D", awayTeamId: "C", week: 4 });
+      const { home, away } = buildStreamOverlay({
+        ...baseInput(),
+        teams,
+        match: sides(semi1),
+        seasonMatches: [...results, semi1, semi2],
+      });
+      expect(home.standing).toBe("Seed A1");
+      expect(away.standing).toBe("Seed B2");
+    });
   });
 
   it("lists tonight's players home side first, captain first", () => {

@@ -389,6 +389,12 @@ export function regularSeasonStartedMessage(
     week: number;
     fixtures: { home: string; away: string; whenMs: number | null }[];
     byes: string[];
+    /** A group-stage season's format line and groups (season-format.ts). */
+    format?: string;
+    groups?: { key: string; teams: string[] }[];
+    /** The reserved tiebreaker night and the first playoff night, epoch ms. */
+    tiebreakerMs?: number | null;
+    playoffsMs?: number | null;
   },
   /** Fantasy rosters aren't locked yet (no game imported), so say it's open. */
   fantasyOpen = false,
@@ -399,6 +405,17 @@ export function regularSeasonStartedMessage(
   if (!opening || opening.fixtures.length === 0) {
     return `${head} Check the schedule, match times, and availability for opening week: ${link}${fantasy}`;
   }
+  const format = opening.format ? ` ${opening.format}` : "";
+  const groups = (opening.groups ?? [])
+    .map((group) => `\n**Group ${group.key}:** ${group.teams.map((team) => name(team)).join(", ")}`)
+    .join("");
+  const stamp = (ms: number | null | undefined) =>
+    ms != null && Number.isFinite(ms) ? `<t:${Math.floor(ms / 1000)}:D>` : null;
+  const tiebreakers = stamp(opening.tiebreakerMs);
+  const playoffs = stamp(opening.playoffsMs);
+  const calendar = playoffs
+    ? `\nPlayoffs from ${playoffs}${tiebreakers ? `; the week before (${tiebreakers}) is kept for tiebreakers.` : "."}`
+    : "";
   const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
   const lines = shown.map((f) => {
     const when =
@@ -412,7 +429,12 @@ export function regularSeasonStartedMessage(
   const byes = opening.byes.length
     ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
     : "";
-  return `${head} Week ${opening.week}:\n${lines.join("\n")}${byes}\nCheck in for your match and see the full schedule: ${link}${fantasy}`;
+  // A one-table season reads as it always did; groups get their own lines.
+  const intro =
+    format || groups
+      ? `${head}${format}${groups}\nWeek ${opening.week}:`
+      : `${head} Week ${opening.week}:`;
+  return `${intro}\n${lines.join("\n")}${byes}${calendar}\nCheck in for your match and see the full schedule: ${link}${fantasy}`;
 }
 
 export function draftPausedMessage(seasonName: string): string {
@@ -588,14 +610,17 @@ export function playoffsStartedMessage(
   pairings: {
     home: string;
     away: string;
-    /** Seeds from the first-round pairings (`seedsFromFirstRound`). */
-    homeSeed?: number | null;
-    awaySeed?: number | null;
+    /**
+     * Seeds from the first-round pairings (`seedsFromFirstRound`), or their
+     * names in a group season (`bracketSeedLabels`: "A1", "B4").
+     */
+    homeSeed?: number | string | null;
+    awaySeed?: number | string | null;
     /** Kickoff, epoch ms — rendered in each reader's own timezone. */
     whenMs?: number | null;
   }[],
 ): string {
-  const side = (team: string, seed?: number | null) =>
+  const side = (team: string, seed?: number | string | null) =>
     seed ? `(${seed}) ${name(team)}` : name(team);
   const lines = pairings
     .map((p) => {

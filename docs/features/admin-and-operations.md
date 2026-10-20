@@ -237,6 +237,34 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   Exception: the scouting report's `fetchGamesForScouting`
   (`game-participants.ts`) stays a direct query, because a cached wrapper hung
   the match preview's nested Suspense stream.
+- **Cache what an all-history page shows, never the rows.** The raw
+  all-history snapshot passes Next's 2 MiB entry at about 160 games (about
+  12 KB a game in Next's envelope, where the box-score JSON is escaped twice)
+  and then caches only an `oversize` marker, so each of its readers re-reads
+  and re-decodes every Game on every view. The record book, record watch, the
+  Hall of Fame and /players' last-season token read small derived entries
+  under the same revision key, "games" tag and 60s TTL instead
+  (`getRecordBookView`, `getRecordWatchBook`, `getCareerFacts`), each built
+  from the uncached `fetch*` reads (a nested `unstable_cache` skips its own
+  cache and still writes its entry). `history-cache-size.test.ts` keeps each
+  under a twentieth of the budget on a 500-game synthetic history (the raw
+  rows: 5.9 MB) and checks a later view reads no Game. Keep out of an entry
+  anything a write can change without stamping the revision (series results,
+  champions): read it fresh and fold it in (`careersFromFacts`). Still raw:
+  `/players/compare` (`getAllGameScores`) and the season snapshots, which one
+  season of 110-160 games can also push past the budget.
+- **The participant read pays for its guard on every Game row.**
+  `fetchGamesForPlayers` (the profile, its link picture, the scouting report,
+  Home's match-night card) keeps the exact-source comparison
+  ([HISTORICAL-PARTICIPATION](../HISTORICAL-PARTICIPATION.md)), which on
+  Postgres detoasts both copies of a row's box score. Postgres evaluates the
+  covered arm's terms in order, so the index test goes first and another
+  player's covered game skips the comparison (half the buffers on a 600-game
+  local measurement); the uncovered arm still compares every row, about 15 ms
+  a call there, growing with history. Never run it where its result can't
+  render (the match-night card checks `matchNightWindowOpen` first), and load
+  whole games with `select: GAME_VIEW_COLUMNS`, never `include`, so the copy
+  stays in the database.
 - **Bust `"games"` from request scope, never from lib.** Server Actions call
   `refreshGames()` (`updateTag`; `admin-shared.ts`, copies in `teams.ts` and
   `match-report.ts`) for read-your-own-writes. Never swap it for
@@ -328,9 +356,17 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 - **Add each new required production env var to
   `scripts/validate-prod-env.mjs`** (it reports names, never values), to
   `/etc/ggd2l/<lg>.env` on the box before the release that needs it, and to the
-  env contract (`ops/selfhost/agent/env-contract.mjs`) when the box must refuse
-  a bad value before a slot starts. Never point a staging slot or a
-  development build at a production database.
+  env contract (`ops/selfhost/agent/env-contract.mjs`) only when a slot must
+  not serve at all without it and a working box always passes it. Never point
+  a staging slot or a development build at a production database.
+- **The production validation runs before a restart, never at a slot's
+  start.** Every build runs `validate-prod-env.mjs`; `box_agent envcheck <lg>`
+  runs the live release's copy against the file as it stands (as the league
+  user, names only), and every runbook that edits an env file runs it before
+  the restart and stops on a problem. The slot's `ExecStartPre` is the env
+  contract alone: a start it refused would turn a broken sign-in into a league
+  that is down, and after a reboot both. Keep `validate-prod-env.mjs`'s
+  messages naming keys (`envcheck` reports the `UPPER_SNAKE` names in them).
 - **Release strictness comes from `scripts/classify-release.mjs` taken from
   the live commit**, never the candidate. A path it does not name is unknown
   and selects the database release and the scheduler pause, so name a new
@@ -340,6 +376,10 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 - **A verified checksum is not a restorable backup.** `db:backup:verify`
   proves bytes; only a restore (`db:backup:rehearse`, which the box's weekly
   drill runs) proves the league comes back.
+- **A rollback runs once.** `box_agent rollback <lg>` records the release it
+  left (`rolledBackFrom` in `live.json`) and a second one refuses until the
+  next promote, so a retry can't put the bad release back; going back to it
+  is `promote <lg> <id>`.
 - **Never put a credential in argv, a commit, a log, an issue, a screenshot or
   chat** (`backup-db.mjs` passes libpq env fields for this reason).
 
@@ -347,8 +387,7 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 
 Production is one self-hosted box for both leagues
 ([PRODUCTION-OPERATIONS](../PRODUCTION-OPERATIONS.md#box-operations); status:
-planned, the move happens on the cutover day). What a code change must
-respect there:
+live since the cutover on 2026-10-17). What a code change must respect there:
 
 - **One process per league, two during a release.** Caddy sends a league's
   traffic to one slot at a time; a promote keeps the old slot running at
@@ -411,9 +450,62 @@ respect there:
   255 can repeat from the unit's first second. Count a new dependency's
   install and build cost on one vCPU, and a new background request's
   database work.
+- **Root never works through a link a service user could have left.** The
+  build user runs third-party install scripts (and until 2026-10-19
+  `ggd2l-ops` ran the build user's tools clone), so a link can sit wherever
+  they write,
+  and GNU `install -d`, `chown` and `chmod` change a link's target (until
+  2026-10-19 that let a build re-own the agent's own code). In
+  `ops/selfhost/`:
+  - Root changes only folders in a parent no service user can write.
+  - A folder the build user fills is made by `makeBuildDir`: root's
+    `mkdir`, then the mode, then `chown -h`.
+  - A tree comes back through `takeBackTree` before root reads, chmods or
+    writes through it.
+  - Such trees are deleted with `removeTree` (GNU `rm`). Node 22's
+    `rmSync` follows a folder swapped for a link mid-walk.
+  - Records go through `writeFileAtomic`.
+  - A folder inside a service user's own folder is that user's to make
+    (`buildUserEnv`'s npm cache, `ensure_user_dir`).
+
+  `install-kit.test.mjs` fails an `ensure_dir` whose parent a service user
+  can write.
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups. Code the build user wrote, including whatever a dependency's
+  install script changed in the tools clone, runs only as users without
+  them. The hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and their imports
+  (`/usr/local/lib/ggd2l/app/`). A change to those files therefore reaches
+  the box with `install-kit.sh`, not with an app release, and they must
+  stay free of packages: `install-kit.test.mjs` keeps `BACKUP_APP_FILES`
+  equal to their imports. The restore drill needs the tools clone, so it
+  runs as `ggd2l-drill`, from a private copy of the one dump each backup
+  hands it (`drill/`). `backup-scripts.test.mjs` fails a `ggd2l-ops` unit or
+  agent call that reaches for a tools clone.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.
 - **Treat the box's logs as personal data.** Caddy's access logs hold player
   IP addresses (size-bounded, kept on the box); never copy them into an issue
   or a report.
+- **Caddy's admin API is a socket only caddy and root can open**
+  (`/run/caddy/admin.sock`, 0600, in the drop-in's 0700 `RuntimeDirectory=`).
+  It can replace both leagues' routing with no authentication, so never put it
+  back on TCP (it was `localhost:2019`, open to every local user, until
+  2026-10-19) and never call it from the agent or a script: change Caddy by
+  writing a file and `systemctl reload caddy`, whose `caddy reload` reads the
+  socket from the Caddyfile (`caddy.test.mjs`). A change of the admin
+  address needs one Caddy restart, which `install-kit.sh` does only while
+  nothing is live and otherwise asks for (`caddy_reload`).
+- **Expect PostgreSQL and the slots to restart at 08:00-08:15 UTC.**
+  Unattended upgrades install then (`provision-base.sh` moves
+  `apt-daily-upgrade.timer` next to the 09:00 reboot): a PostgreSQL update
+  restarts the cluster, and needrestart may restart a live slot or the bot.
+  Code that holds a connection or a lease must survive that, as it survives
+  the reboot.
+- **The lobby bot's state is in the daily config archive**
+  (`config-archive.sh`), less its locks, `logs/`, `steam-login.png` and
+  `*.tmp` files, so a rebuild brings its Steam session and `lobbies.json`
+  back. A bot change that adds a state file to keep needs nothing; one that
+  adds a temporary file must name it `*.tmp`, and tar's "file changed as we
+  read it" makes the archive run again rather than keep a torn copy.

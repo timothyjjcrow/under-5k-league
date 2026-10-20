@@ -265,6 +265,7 @@ describe("adminAttention", () => {
     draftComplete: true,
     automation: [],
     importsNeedingReview: 0,
+    feedWaitingForReview: [],
     shortTeams: [],
     standinClashes: [],
     outStandins: [],
@@ -283,6 +284,7 @@ describe("adminAttention", () => {
       ...base,
       automation: ["Automation's last run failed."],
       importsNeedingReview: 2,
+      feedWaitingForReview: ["7712345"],
       shortTeams: [{ name: "Couriers", missing: 1 }],
       standinClashes: [{ standin: "Sam", first: "A vs B", second: "C vs D" }],
       outStandins: [{ standin: "Lee", fixture: "E vs F" }],
@@ -291,6 +293,10 @@ describe("adminAttention", () => {
     expect(items.map((item) => [item.text, item.href])).toEqual([
       ["Automation's last run failed.", "#adm-automation"],
       ["2 imported games need review before they count.", "#adm-sync"],
+      [
+        "Automatic league-feed imports are waiting on game 7712345, which needs review. Under Saved import progress, press Retry next sync or Ignore this game.",
+        "#adm-sync",
+      ],
       [
         "Couriers is a player short. Sign a free agent, or book a standin for the empty seat.",
         "#adm-roster",
@@ -310,7 +316,7 @@ describe("adminAttention", () => {
     ]);
     expect(new Set(items.map((item) => item.key)).size).toBe(items.length);
     expect(attentionTitle("Season 9", items.length)).toBe(
-      "Season 9: 6 things need attention",
+      "Season 9: 7 things need attention",
     );
     expect(attentionTitle("Season 9", 1)).toBe(
       "Season 9: 1 thing needs attention",

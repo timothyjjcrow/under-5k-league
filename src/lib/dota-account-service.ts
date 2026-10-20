@@ -1,4 +1,5 @@
 import type { Prisma } from "@prisma/client";
+import { fitsLegacyDotaAccountColumn } from "./dota-account";
 
 /**
  * Steam OpenID proves this account belongs to `ownerSteamId`. Retire only the
@@ -35,39 +36,45 @@ export async function retireStaleDotaAccountClaims(
     },
   });
 
-  // A legacy claim is effective only while v2 is null. Retiring that effective
-  // claim also retires the OpenDota metadata fetched through it.
-  await tx.user.updateMany({
-    where: {
-      steamId: { not: ownerSteamId },
-      dotaAccountIdV2: null,
-      legacyDotaAccountId: verifiedAccountId,
-      rankTierManual: false,
-    },
-    data: { rankTier: null },
-  });
-  await tx.user.updateMany({
-    where: {
-      steamId: { not: ownerSteamId },
-      dotaAccountIdV2: null,
-      legacyDotaAccountId: verifiedAccountId,
-    },
-    data: {
-      legacyDotaAccountId: null,
-      fhUnavailable: null,
-      pubStats: null,
-      pubStatsAt: null,
-    },
-  });
+  // The legacy INTEGER column cannot hold an id of 2^31 or more, so no row
+  // can carry such a legacy claim, and binding one would throw and fail the
+  // sign-in (see fitsLegacyDotaAccountColumn). Only the legacy writes are
+  // skipped then: the v2 writes above always run.
+  if (fitsLegacyDotaAccountColumn(verifiedAccountId)) {
+    // A legacy claim is effective only while v2 is null. Retiring that
+    // effective claim also retires the OpenDota metadata fetched through it.
+    await tx.user.updateMany({
+      where: {
+        steamId: { not: ownerSteamId },
+        dotaAccountIdV2: null,
+        legacyDotaAccountId: verifiedAccountId,
+        rankTierManual: false,
+      },
+      data: { rankTier: null },
+    });
+    await tx.user.updateMany({
+      where: {
+        steamId: { not: ownerSteamId },
+        dotaAccountIdV2: null,
+        legacyDotaAccountId: verifiedAccountId,
+      },
+      data: {
+        legacyDotaAccountId: null,
+        fhUnavailable: null,
+        pubStats: null,
+        pubStatsAt: null,
+      },
+    });
 
-  // A shadowed legacy claim can be removed without touching metadata for the
-  // different v2 account that remains authoritative on that row.
-  await tx.user.updateMany({
-    where: {
-      steamId: { not: ownerSteamId },
-      dotaAccountIdV2: { not: null },
-      legacyDotaAccountId: verifiedAccountId,
-    },
-    data: { legacyDotaAccountId: null },
-  });
+    // A shadowed legacy claim can be removed without touching metadata for
+    // the different v2 account that remains authoritative on that row.
+    await tx.user.updateMany({
+      where: {
+        steamId: { not: ownerSteamId },
+        dotaAccountIdV2: { not: null },
+        legacyDotaAccountId: verifiedAccountId,
+      },
+      data: { legacyDotaAccountId: null },
+    });
+  }
 }

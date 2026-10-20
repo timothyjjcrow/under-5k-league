@@ -5,19 +5,25 @@ vi.mock("@/lib/stream-overlay-service", () => ({
   loadStreamOverlay: vi.fn(),
 }));
 
+import { PUBLIC_GET_LIMITS } from "@/lib/public-get-limit";
+import { __resetRateLimits } from "@/lib/rate-limit";
 import { loadStreamOverlay } from "@/lib/stream-overlay-service";
 import { GET } from "./route";
 
 const load = vi.mocked(loadStreamOverlay);
 const SOURCE = readFileSync(new URL("./route.ts", import.meta.url), "utf8");
 
-const get = (id: string, rev: string) =>
-  GET(new Request(`http://localhost/api/overlay/${id}/${rev}`), {
-    params: Promise.resolve({ id, rev }),
-  });
+const get = (id: string, rev: string, ip = "203.0.113.7") =>
+  GET(
+    new Request(`http://localhost/api/overlay/${id}/${rev}`, {
+      headers: { "x-forwarded-for": ip },
+    }),
+    { params: Promise.resolve({ id, rev }) },
+  );
 
 beforeEach(() => {
   load.mockReset();
+  __resetRateLimits();
 });
 
 describe("the overlay data route", () => {
@@ -48,6 +54,30 @@ describe("the overlay data route", () => {
       expect((await get(id, rev)).status).toBe(404);
     }
     expect(load).not.toHaveBeenCalled();
+  });
+
+  it("refuses one address past its per-IP limit before reading anything", async () => {
+    // A version is whatever the caller types, so nothing else caps a loop.
+    load.mockResolvedValue({ version: 1, match: { id: "m1" } } as never);
+    const { limit } = PUBLIC_GET_LIMITS.overlay;
+    for (let i = 0; i < limit; i += 1) {
+      expect((await get("m1", `${i.toString(36)}.f`)).status).toBe(200);
+    }
+    expect(load).toHaveBeenCalledTimes(limit);
+    const refused = await get("m1", "zz.f");
+    expect(refused.status).toBe(429);
+    expect(Number(refused.headers.get("retry-after"))).toBeGreaterThan(0);
+    expect(refused.headers.get("cache-control")).toBe("no-store");
+    expect(await refused.json()).toEqual({ error: "Too many requests" });
+    expect(load).toHaveBeenCalledTimes(limit);
+    // Another address (another caster) is unaffected.
+    expect((await get("m1", "zz.f", "198.51.100.2")).status).toBe(200);
+  });
+
+  it("stays well above what a room of OBS sources asks for", () => {
+    // Each source asks once per version (a result, or every ten minutes);
+    // five casters with all three layouts open is 15 at a version change.
+    expect(PUBLIC_GET_LIMITS.overlay.limit).toBeGreaterThanOrEqual(60);
   });
 
   it("exports no mutating handler", async () => {

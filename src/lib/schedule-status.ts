@@ -115,19 +115,29 @@ export function standingsCaption({
   postseason,
   bracketSize,
   eligibleTeams,
+  groupQualifiers = null,
 }: {
   status: RegularStatus;
   postseason: boolean;
   bracketSize: number;
   eligibleTeams: number;
+  /** Places each group sends, in a group-stage season. */
+  groupQualifiers?: number[] | null;
 }): string {
-  const places =
-    bracketSize > 0
-      ? `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`
+  const evenShare =
+    groupQualifiers && groupQualifiers.every((count) => count === groupQualifiers[0])
+      ? groupQualifiers[0]
       : null;
+  const places =
+    bracketSize <= 0
+      ? null
+      : groupQualifiers && evenShare
+        ? `Top ${evenShare} of each group make the playoffs`
+        : `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`;
   if (status.completed === 0)
     return ["No results yet", places].filter(Boolean).join(" · ");
-  if (status.allComplete || postseason) return "Final regular-season table";
+  if (status.allComplete || postseason)
+    return groupQualifiers ? "Final group tables" : "Final regular-season table";
   return [places, `${eligibleTeams} eligible teams`]
     .filter(Boolean)
     .join(" · ");

@@ -10,8 +10,8 @@ import { changedRows, resolveDump } from "./database.mjs";
 import { VERBS, main, parseCommand } from "./ggd2l-agent.mjs";
 import { ENV_GATE_LINE, SCHEMA_GATE_LINE } from "./build.mjs";
 import { parseEnvFile } from "./env-contract.mjs";
-import { AgentError } from "./layout.mjs";
-import { SHA, addRelease, makeBox, secretsOf } from "./harness.test.mjs";
+import { AgentError, ERRORS } from "./layout.mjs";
+import { SHA, SHA2, addRelease, leagueEnv, makeBox, secretsOf } from "./harness.test.mjs";
 import { createRedactor, createRunner, pgEnv, secretValues } from "./runner.mjs";
 
 const AGENT = fileURLToPath(new URL("./ggd2l-agent.mjs", import.meta.url));
@@ -102,6 +102,8 @@ test("mutating verbs hold the agent lock; read-only verbs never take it", async 
   assert.deepEqual(locks, [box.layout.lock, "released"]);
   locks.length = 0;
   box.writeEnv("us");
+  writeFileSync(box.layout.liveJson("us"), JSON.stringify({ slot: "a", id: ID, sha: SHA, promotedAt: "2026-10-16T15:00:00.000Z", previous: null }));
+  box.on((command, args) => (command.endsWith("/systemd-run") && args.includes("scripts/validate-prod-env.mjs") ? { lines: [ENV_GATE_LINE] } : undefined));
   assert.deepEqual((await run(["envcheck", "us"])).body, { ok: true, problems: [] });
   assert.deepEqual((await run(["cron-requests", "us", "0"])).body, { ok: true, count: 0 });
   assert.deepEqual((await run(["logs", "us", "0"])).body, []);
@@ -134,6 +136,102 @@ test("errors carry a fixed message and never a child's output", async () => {
   const code = await main(["lease", "us"], { write: (text) => (output += text), uid: () => 0, context: () => box.ctx, lock: () => () => {} });
   assert.equal(code, 1);
   assert.deepEqual(JSON.parse(output), { ok: false, code: "psql_failed", message: "a database query failed" });
+});
+
+/** Run one command line against a fake box; resolves its exit code and JSON. */
+async function runAgent(box, argv) {
+  let output = "";
+  const code = await main(argv, { write: (text) => (output += text), uid: () => 0, context: () => box.ctx, lock: () => () => {} });
+  return { code, body: JSON.parse(output) };
+}
+
+// 2026-10-19 audit: an env edit takes effect at the next restart, reboot or
+// rollback, with no build, and the slot's ExecStartPre runs only the env
+// contract. A 31-character AUTH_SECRET or an empty ADMIN_STEAM_IDS passed
+// both, then broke every sign-in or every admin. envcheck, which every env
+// runbook runs before that restart, now runs the gate a build would.
+test("envcheck runs the live release's production validation on the file, and reports names only", async () => {
+  const box = makeBox();
+  // A value shaped like an env name, which only redaction keeps out of the answer.
+  const env = box.writeEnv("us", leagueEnv("us", { DISCORD_CLIENT_SECRET: "LEAKED_CLIENT_SECRET_42" }));
+  const validator = (lines, code = 1) =>
+    box.on((command, args) => (command.endsWith("/systemd-run") && args.includes("scripts/validate-prod-env.mjs") ? { code, lines } : undefined));
+
+  // No live release: no validator to run, so envcheck cannot pass.
+  assert.deepEqual(await runAgent(box, ["envcheck", "us"]), {
+    code: 1,
+    body: { ok: false, code: "env_invalid", message: ERRORS.env_invalid, problems: ["production validation: no live release to run it from (a build runs it)"] },
+  });
+
+  writeFileSync(box.layout.liveJson("us"), JSON.stringify({ slot: "b", id: ID, sha: SHA, promotedAt: "2026-10-16T15:00:00.000Z", previous: null }));
+  validator([
+    "Production environment validation failed:",
+    "  - AUTH_SECRET must contain at least 32 characters",
+    "  - every ADMIN_STEAM_IDS entry must be a valid individual SteamID64",
+    `  - TypeError at secret() (${env.DISCORD_CLIENT_SECRET}, ${env.CRON_SECRET})`,
+  ]);
+  const failed = await runAgent(box, ["envcheck", "us"]);
+  assert.deepEqual(failed, {
+    code: 1,
+    body: {
+      ok: false,
+      code: "env_invalid",
+      message: ERRORS.env_invalid,
+      problems: ["AUTH_SECRET: fails the production validation", "ADMIN_STEAM_IDS: fails the production validation"],
+    },
+  });
+  for (const secret of [...secretsOf(env), env.DISCORD_CLIENT_SECRET]) assert.ok(!JSON.stringify(failed.body).includes(secret));
+  // The live release's own copy, as the league user, reading the file itself.
+  const call = box.calls.findLast((entry) => entry.args.includes("scripts/validate-prod-env.mjs"));
+  assert.ok(call.command.endsWith("/systemd-run"));
+  for (const arg of ["User=ggd2l-us", `WorkingDirectory=${box.layout.release(ID)}`, `EnvironmentFile=${box.layout.leagueEnv("us")}`, "NODE_ENV=production"])
+    assert.ok(call.args.includes(arg), arg);
+  assert.deepEqual(call.args.slice(-2), ["/usr/bin/node", "scripts/validate-prod-env.mjs"]);
+  // The rule each key broke is in the redacted tool log.
+  const folder = path.dirname(box.layout.toolLog("x"));
+  const log = readdirSync(folder).find((name) => name.startsWith("envcheck-us-") && name.endsWith(`-${SHA.slice(0, 12)}.log`));
+  const text = readFileSync(path.join(folder, log), "utf8");
+  assert.match(text, /AUTH_SECRET must contain at least 32 characters/);
+  assert.ok(!text.includes(env.DISCORD_CLIENT_SECRET) && !text.includes(env.CRON_SECRET));
+
+  // As before a build, a file the contract refuses never reaches the
+  // validator: a NODE_ENV in it would skip the gate.
+  const runs = box.commandsMatching(/validate-prod-env/).length;
+  writeFileSync(box.layout.leagueEnv("us"), readFileSync(box.layout.leagueEnv("us"), "utf8") + "NODE_ENV=development\n");
+  assert.deepEqual((await runAgent(box, ["envcheck", "us"])).body, {
+    ok: false,
+    code: "env_contract",
+    message: ERRORS.env_contract,
+    problems: ["NODE_ENV: set by the unit, not the league env file"],
+  });
+  assert.equal(box.commandsMatching(/validate-prod-env/).length, runs);
+  box.writeEnv("us", env);
+
+  // Exit 0 without the pass line (a skipped gate) is no pass.
+  validator(["validate-prod-env: VERCEL_ENV=(unset) — production validation skipped"], 0);
+  assert.deepEqual((await runAgent(box, ["envcheck", "us"])).body.problems, [
+    "production validation: failed or printed no pass line (the envcheck tool log says why)",
+  ]);
+  validator([ENV_GATE_LINE], 0);
+  assert.deepEqual(await runAgent(box, ["envcheck", "us"]), { code: 0, body: { ok: true, problems: [] } });
+});
+
+test("a refused second rollback names the release live came from and the one it left", async () => {
+  const box = makeBox();
+  const { promoteRelease } = await import("./releases.mjs");
+  const OLD = "us-20261015T120000Z-0123456789ab";
+  const NEW = "us-20261016T140000Z-fedcba987654";
+  addRelease(box, OLD);
+  addRelease(box, NEW, { sha: SHA2 });
+  await promoteRelease(box.ctx, "us", OLD);
+  box.clock.t += 120_000;
+  await promoteRelease(box.ctx, "us", NEW);
+  box.clock.t += 120_000;
+  assert.deepEqual(await runAgent(box, ["rollback", "us"]), { code: 0, body: { ok: true, id: OLD } });
+  assert.deepEqual(await runAgent(box, ["rollback", "us"]), {
+    code: 1,
+    body: { ok: false, code: "rolled_back", message: ERRORS.rolled_back, live: OLD, rolledBackFrom: NEW },
+  });
 });
 
 test("the runner refuses a command line that carries a secret it has seen", async () => {

@@ -2,15 +2,12 @@ import Link from "@/components/app-link";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { getAllGamesForRecords } from "@/lib/cached-queries";
+import { getRecordBookView } from "@/lib/cached-queries";
 import { getPublicLeagueContent } from "@/lib/public-navigation";
 import {
-  analyzeRecordGames,
   formatGameDuration,
-  leagueRecords,
   type GameRecord,
   type PlayerRecord,
-  type RecordGame,
 } from "@/lib/records";
 import { heroById } from "@/lib/heroes";
 import { formatNetWorth } from "@/lib/utils";
@@ -58,13 +55,6 @@ function gameValue(record: GameRecord): string {
   if (record.key === "closest") return `${record.value} kill${record.value === 1 ? "" : "s"}`;
   return number.format(record.value);
 }
-function reportsExtendedStats(game: RecordGame): boolean {
-  return game.lines.some((line) => line.userId != null && (
-    line.xpm != null || line.denies != null || line.heroDamage != null ||
-    line.towerDamage != null || line.heroHealing != null
-  ));
-}
-
 // One grid for both lists. Phone: record and value on the first line, who
 // and the match link on the second. sm and up: one line per record, with the
 // title track wide enough for the longest titles ("Most tower damage",
@@ -133,8 +123,7 @@ export default async function RecordsPage({
 }: {
   searchParams: Promise<{ season?: string | string[] }>;
 }) {
-  const [games, seasons, query, { hasChampion }] = await Promise.all([
-    getAllGamesForRecords(),
+  const [seasons, query, { hasChampion }] = await Promise.all([
     prisma.season.findMany({
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       select: { id: true, name: true, isActive: true },
@@ -148,27 +137,25 @@ export default async function RecordsPage({
   if (seasonParam === null) notFound();
   const selectedSeason = seasons.find((season) => season.id === seasonParam);
   if (seasonParam && !selectedSeason) notFound();
-  const scopedGames = selectedSeason
-    ? games.filter((game) => game.match.seasonId === selectedSeason.id)
-    : games;
-  const analysis = analyzeRecordGames(scopedGames);
-  const eligibleGames = analysis.games;
-  const book = leagueRecords(eligibleGames);
+  // The scope's book, cached small per result revision (cached-queries.ts):
+  // read only once the season is known, so a made-up id never fills an entry.
+  const view = await getRecordBookView(selectedSeason?.id ?? null);
+  const { book } = view;
   const userIds = [...new Set(book.players.map((record) => record.userId))];
   const users = userIds.length
     ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, avatar: true } })
     : [];
   const userOf = new Map(users.map((user) => [user.id, user]));
   const seasonName = new Map(seasons.map((season) => [season.id, season.name]));
-  const matchupOf = new Map(games.map((game) => [
-    game.matchId,
-    { home: game.match.homeTeam.name, away: game.match.awayTeam.name },
+  const matchupOf = new Map(view.matchups.map(({ matchId, home, away }) => [
+    matchId,
+    { home, away },
   ]));
   // The picker offers the seasons with games (and a picked one). With one
   // season of games there is no picker: "All seasons" and that season are
   // the same list. A picked season keeps it as the way back to the all-time
   // book.
-  const seasonIdsWithGames = new Set(games.map((game) => game.match.seasonId));
+  const seasonIdsWithGames = new Set(view.seasonIdsWithGames);
   const multiSeason = seasonIdsWithGames.size >= 2;
   const switcherSeasons = seasonSwitcherChoices(
     seasons.map((season) => ({
@@ -186,7 +173,7 @@ export default async function RecordsPage({
   };
   const playerRecords = [...book.players].sort((a, b) => orderOf(a.key) - orderOf(b.key));
   const categoryCount = playerRecords.length + book.games.length;
-  const extendedGames = eligibleGames.filter(reportsExtendedStats).length;
+  const { extendedGames, eligibleGames } = view;
   const showsExtended = playerRecords.some((record) => EXTENDED_KEYS.has(record.key));
 
   return (
@@ -199,7 +186,7 @@ export default async function RecordsPage({
         action={hasChampion ? <Link href="/hall-of-fame" className={textLink("text-sm font-semibold")}>Career legends <LinkArrow /></Link> : undefined}
       />
       <StatsNav active="records" seasonId={selectedSeason?.id} />
-      <StatsDataNotice {...analysis.diagnostics} />
+      <StatsDataNotice {...view.diagnostics} />
       <SeasonSwitcher
         label="records"
         basePath="/records"
@@ -211,7 +198,7 @@ export default async function RecordsPage({
       {categoryCount === 0 ? (
         <EmptyState
           title={selectedSeason ? `No ${selectedSeason.name} records yet` : "No records yet"}
-          description={scopedGames.length > 0
+          description={view.scopedGames > 0
             ? "Stored games need a complete, valid 5v5 box score before they enter the record book."
             : "Records appear after league games are imported."}
         />
@@ -255,8 +242,8 @@ export default async function RecordsPage({
 
           <p className="border-t border-line-soft pt-4 text-xs leading-relaxed text-muted">
             Only complete 5v5 box scores count, and a tie goes to whoever set the mark first. The closest finish needs 20 or more total kills.
-            {showsExtended && extendedGames < eligibleGames.length
-              ? ` Damage, healing, XPM and denies come from the ${extendedGames} of ${eligibleGames.length} games that report them.`
+            {showsExtended && extendedGames < eligibleGames
+              ? ` Damage, healing, XPM and denies come from the ${extendedGames} of ${eligibleGames} games that report them.`
               : ""}
           </p>
         </>

@@ -1377,7 +1377,11 @@ site: `src/components/inhouse-night.tsx`. Tests: `inhouse-night.test.ts`,
   Play later card with the note, "I'm in", the headcount with its sources,
   who said they're in on the site, the Discord event link, Google Calendar
   and an `.ics` download (`/api/calendar/inhouse-night`, one event whose UID
-  and SEQUENCE are the night's id and revision), and answers the invite
+  and SEQUENCE are the night's id and revision; never memoized, so a night
+  an admin just moved downloads as moved, and in the calendar feed's per-IP
+  bucket with the Play later file,
+  [season-schedule-playoffs](season-schedule-playoffs.md#calendar-feed)),
+  and answers the invite
   link. The chip and the card share one request-cached read
   (`loadInhouseNightView`). The Discord
   half of the headcount streams, so a slow Discord never holds a page; the

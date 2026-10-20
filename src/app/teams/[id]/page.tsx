@@ -65,6 +65,7 @@ import {
 } from "@/lib/constants";
 import { playoffStatuses } from "@/lib/playoff-status";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { bracketSeedLabels, placeInTable, rankOfLabel } from "@/lib/season-groups";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { SeriesRecord } from "@/components/series-record";
 import { rosterOrder } from "@/lib/team-roster";
@@ -243,7 +244,9 @@ export default async function TeamPage({
   const playoffField = projectPlayoffField(allTeams, allMatches);
   const playoffRounds = playoffTotalRounds(allMatches);
   const standings = playoffField.standings;
-  const rank = standings.findIndex((s) => s.teamId === id) + 1;
+  // Its place in its own table and that table's size: its group's in a group
+  // season ("#2 of 6 in Group A"), where a standings index is no place.
+  const place = placeInTable(playoffField, id);
   const row = standings.find((s) => s.teamId === id);
   const teamName = new Map(allTeams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(allTeams.map((t) => [t.id, t.logoUrl]));
@@ -337,14 +340,23 @@ export default async function TeamPage({
         nowMs,
       ).get(id) ?? null)
     : null;
-  const seed = postseason
+  const seeds = postseason
     ? seedsFromFirstRound(
         allMatches.filter(
           (m) =>
             m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
         ),
-      ).get(id)
-    : undefined;
+      )
+    : new Map<string, number>();
+  const seed = seeds.get(id);
+  // The bracket's name for it in a group season ("A1"); for one table the
+  // badge keeps its number ("Seed #2").
+  const seedLabel = seed ? bracketSeedLabels(seeds, allTeams).get(id) : undefined;
+  const seedText = !seed
+    ? null
+    : seedLabel && seedLabel !== String(seed)
+      ? `Seed ${seedLabel}`
+      : `Seed #${seed}`;
   const featuredMatch = profileMatch(
     myMatches,
     nowMs,
@@ -519,16 +531,16 @@ export default async function TeamPage({
                     }
                     where="in the playoff bracket"
                   >
-                    Seed #{seed}
+                    {seedText}
                   </StandingBadge>
-                ) : played && rank > 0 ? (
+                ) : played && place ? (
                   <StandingBadge
                     href={
                       team.season.isActive ? "/schedule#standings" : undefined
                     }
                     where="in the standings"
                   >
-                    #{rank} of {allTeams.length}
+                    {rankOfLabel(place)}
                   </StandingBadge>
                 ) : null}
                 {settledStatus ? (
@@ -557,10 +569,10 @@ export default async function TeamPage({
                   <span className="text-muted">
                     {row.points === 1 ? "pt" : "pts"}
                   </span>
-                  {seed && rank > 0 ? (
+                  {seed && place ? (
                     <span className="text-muted">
                       {" "}
-                      · #{rank} of {allTeams.length}
+                      · {rankOfLabel(place)}
                     </span>
                   ) : null}
                 </p>
@@ -1109,9 +1121,9 @@ export default async function TeamPage({
 }
 
 /**
- * The team's place beside its name ("#2 of 8", "Seed #2"). In the active
- * season it opens that table on Schedule; an archived team's page links its
- * season archive separately.
+ * The team's place beside its name ("#2 of 8", "Seed #2"; in a group season
+ * "#2 of 6 in Group A", "Seed A1"). In the active season it opens that table
+ * on Schedule; an archived team's page links its season archive separately.
  */
 function StandingBadge({
   href,

@@ -60,6 +60,12 @@ import {
   INHOUSE_NIGHT_START_POST_WINDOW_MS,
   parseInhouseNight,
 } from "./inhouse-night";
+import {
+  leagueFeedRetryAtMs,
+  parseLeagueFeedWait,
+  type LeagueFeedWaitRow,
+} from "./league-feed-wait";
+import { readLeagueFeedWaitRows } from "./league-feed-wait-service";
 
 export {
   AUTOMATION_GATE_CACHE_KEY,
@@ -210,6 +216,11 @@ export type AutomationGateInputs = {
   globalAnnouncementMarkers: Array<{ key: string; value: string }>;
   /** Result of a fresh canonical board digest probe on cache fills. */
   boardNeedsSync: boolean;
+  /**
+   * Candidate rows of the games the last league-feed pass waited on
+   * (`LEAGUE_FEED_WAIT`), read only while that pass's claim still stands.
+   */
+  leagueFeedWaitRows: LeagueFeedWaitRow[];
 };
 
 type Candidate = { at: number; reason: AutomationGateReason };
@@ -601,6 +612,20 @@ export function computeAutomationGateSnapshot(
       SETTING_KEYS.ROSTER_AUTO_SYNC_AT,
       AUTO_SYNC.SCAN_GAP_SECONDS * 1_000,
     );
+    // A feed pass that stopped only on games still in retry backoff kept its
+    // claim; reading the feed again before the earliest retry would stop on
+    // the same games, so the feed's wake is that retry when it is later.
+    for (const [index, row] of inputs.leagueFeedWaitRows.entries()) {
+      optionalDateMs(row.nextAttemptAt, `leagueFeedWaitRows[${index}].nextAttemptAt`);
+    }
+    const leagueFeedRetryAt =
+      leagueFeedRetryAtMs({
+        wait: parseLeagueFeedWait(inputs.settings[SETTING_KEYS.LEAGUE_FEED_WAIT]),
+        seasonId: season.id,
+        throttleValue: inputs.settings[SETTING_KEYS.LEAGUE_AUTO_SYNC_AT],
+        rows: inputs.leagueFeedWaitRows,
+        nowMs,
+      }) ?? 0;
     for (const match of season.matches) {
       if (match.status === MATCH_STATUS.COMPLETED || !match.scheduledAt) continue;
       const scheduledAt = dateMs(match.scheduledAt, "match.scheduledAt");
@@ -613,7 +638,7 @@ export function computeAutomationGateSnapshot(
       }
 
       if (season.dotaLeagueId?.trim()) {
-        const leagueAt = Math.max(nowMs, leagueThrottle);
+        const leagueAt = Math.max(nowMs, leagueThrottle, leagueFeedRetryAt);
         if (leagueAt <= closesAt) {
           addCandidate(candidates, nowMs, leagueAt, "LEAGUE");
         }
@@ -1276,6 +1301,7 @@ export async function loadAutomationGateSnapshot(
               in: [
                 SETTING_KEYS.DISCORD_WEBHOOK_URL,
                 SETTING_KEYS.LEAGUE_AUTO_SYNC_AT,
+                SETTING_KEYS.LEAGUE_FEED_WAIT,
                 SETTING_KEYS.ROSTER_AUTO_SYNC_AT,
                 SETTING_KEYS.ANNOUNCE_RETRY_AT,
                 SETTING_KEYS.INHOUSE_BOARD,
@@ -1412,6 +1438,16 @@ export async function loadAutomationGateSnapshot(
     settings[SETTING_KEYS.INHOUSE_BOARD],
     nowMs,
   );
+  // Only a wait list whose pass still holds the feed claim can move the
+  // feed's wake, so the candidate rows are read only then.
+  const feedWait = parseLeagueFeedWait(settings[SETTING_KEYS.LEAGUE_FEED_WAIT]);
+  const leagueFeedWaitRows =
+    feedWait &&
+    season &&
+    feedWait.seasonId === season.id &&
+    feedWait.at === settings[SETTING_KEYS.LEAGUE_AUTO_SYNC_AT]
+      ? await readLeagueFeedWaitRows(feedWait, nowMs)
+      : [];
   const configuredWebhook =
     normalizeDiscordWebhookUrl(settings[SETTING_KEYS.DISCORD_WEBHOOK_URL]) ??
     normalizeDiscordWebhookUrl(process.env.DISCORD_WEBHOOK_URL);
@@ -1433,6 +1469,7 @@ export async function loadAutomationGateSnapshot(
       outboxClock,
       globalAnnouncementMarkers,
       boardNeedsSync,
+      leagueFeedWaitRows,
     },
     nowMs,
   );

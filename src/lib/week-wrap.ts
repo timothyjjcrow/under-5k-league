@@ -31,19 +31,25 @@ export type WeekWrapRow = {
 };
 
 /**
- * The regular-season table after `week` (every completed regular result up to
- * and including it, as regularTableBeforeWeek(week + 1) counts them), with
- * each team's movement against the table going into the week.
+ * The regular-season table of `teamIds` after `week` (every completed regular
+ * result up to and including it, as regularTableBeforeWeek(week + 1) counts
+ * them), with each team's movement against the table going into the week.
+ * Only fixtures between these teams count, so a group's table is the group's
+ * own; for the league's one table that is every fixture.
  */
 export function weekWrapTable(
   teamIds: string[],
   matches: readonly WeekMatch[],
   week: number,
 ): WeekWrapRow[] {
-  const after = regularTableBeforeWeek(teamIds, matches, week + 1);
-  const moved = regularWeeksWithResultsBefore(matches, week) > 0;
+  const ids = new Set(teamIds);
+  const own = matches.filter((m) => ids.has(m.homeTeamId) && ids.has(m.awayTeamId));
+  const after = regularTableBeforeWeek(teamIds, own, week + 1);
+  // The arrows need this table's own evidence: a group whose first results
+  // are still to come has only the all-zero order to move against.
+  const moved = regularWeeksWithResultsBefore(own, week) > 0;
   const beforeRank = new Map(
-    regularTableBeforeWeek(teamIds, matches, week).map((row, i) => [row.teamId, i]),
+    regularTableBeforeWeek(teamIds, own, week).map((row, i) => [row.teamId, i]),
   );
   return after.map((row, i) => ({
     teamId: row.teamId,
@@ -55,6 +61,43 @@ export function weekWrapTable(
     points: row.points,
     gameDiff: row.gameDiff,
     movement: moved ? (beforeRank.get(row.teamId) ?? i) - i : null,
+  }));
+}
+
+/** One table of the week wrap: the league's, or one group's. */
+export type WeekWrapTable = {
+  /** "A", "B"; null for a one-table season. */
+  key: string | null;
+  /** "Group A"; null for the league's one table. */
+  title: string | null;
+  rows: WeekWrapRow[];
+};
+
+/**
+ * The tables after `week`, one per standings section (`standingsSections`
+ * over the season's playoff field, which decides whether the season plays
+ * groups): the league's one table, or each group's own, with places and
+ * arrows inside the group. A group's table ignores results against the other
+ * group, as its live table does.
+ */
+export function weekWrapTables(
+  sections: readonly {
+    key: string | null;
+    title: string | null;
+    /** Every team in the table, in any order: only the ids are read. */
+    standings: readonly { teamId: string }[];
+  }[],
+  matches: readonly WeekMatch[],
+  week: number,
+): WeekWrapTable[] {
+  return sections.map((section) => ({
+    key: section.key,
+    title: section.title,
+    rows: weekWrapTable(
+      section.standings.map((row) => row.teamId),
+      matches,
+      week,
+    ),
   }));
 }
 

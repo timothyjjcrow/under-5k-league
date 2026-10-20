@@ -2,7 +2,7 @@
 //
 //   /srv/ggd2l/<lg>/releases/<id>/release.json   what was built, and its role
 //   /srv/ggd2l/<lg>/slots/{a,b}                   symlinks into releases/
-//   /var/lib/ggd2l/<lg>/live.json                 {slot, id, sha, promotedAt, previous}
+//   /var/lib/ggd2l/<lg>/live.json                 {slot, id, sha, promotedAt, previous[, rolledBackFrom]}
 //
 // live.json is written last, only after Caddy has loaded the new mode file,
 // so it always names what Caddy serves.
@@ -37,7 +37,7 @@ import {
   otherSlot,
   unitName,
 } from "./layout.mjs";
-import { asUser, must } from "./runner.mjs";
+import { asUser, must, removeTree } from "./runner.mjs";
 
 export function readLive(ctx, lg) {
   const live = readJson(ctx.layout.liveJson(lg));
@@ -128,8 +128,10 @@ export async function startRelease(ctx, lg, id) {
 /**
  * `promote <lg> <id> [--mode proxy|allowlist]`: restart the target slot clean,
  * wait for live and ready, swap the mode file, reload Caddy, then record it.
+ * Only a rollback passes `rolledBackFrom` (the release it leaves); live.json
+ * keeps it until the next promote.
  */
-export async function promoteRelease(ctx, lg, id, { mode = "proxy" } = {}) {
+export async function promoteRelease(ctx, lg, id, { mode = "proxy", rolledBackFrom = null } = {}) {
   if (mode !== "proxy" && mode !== "allowlist") throw new AgentError("bad_mode");
   const release = requireRelease(ctx, lg, id);
   const live = readLive(ctx, lg);
@@ -162,6 +164,7 @@ export async function promoteRelease(ctx, lg, id, { mode = "proxy" } = {}) {
     sha: release.sha,
     promotedAt: new Date(ctx.now()).toISOString(),
     previous,
+    ...(rolledBackFrom ? { rolledBackFrom } : {}),
   });
   writeRelease(ctx, id, { state: "READY", role: "live" });
   if (previous && previous !== id) writeRelease(ctx, previous, { role: "previous" });
@@ -175,14 +178,27 @@ export async function promoteRelease(ctx, lg, id, { mode = "proxy" } = {}) {
   return { id, previous };
 }
 
-/** `rollback <lg>`: promote the previous release, restarted clean, in the current mode. */
+/**
+ * `rollback <lg>`: promote the previous release, restarted clean, in the
+ * current mode, and record the release it left as live.json's rolledBackFrom.
+ * The promote makes that release the previous one, so a second rollback would
+ * put it straight back: a retry after a slow or lost answer, or a failure
+ * reported after the switch (enable, disable). So a rollback refuses while
+ * live came from one; going back to that release on purpose is
+ * `promote <lg> <rolledBackFrom>`, and any promote clears the mark.
+ */
 export async function rollbackRelease(ctx, lg) {
   const live = readLive(ctx, lg);
   if (!live) throw new AgentError("no_live");
+  if (live.rolledBackFrom)
+    throw new AgentError("rolled_back", {
+      live: live.id,
+      rolledBackFrom: ID_RE.test(String(live.rolledBackFrom)) ? live.rolledBackFrom : null,
+    });
   if (!live.previous) throw new AgentError("no_previous");
   const { mode } = readModeFile(ctx.layout.modeFile(lg));
   if (mode !== "proxy" && mode !== "allowlist") throw new AgentError("mode_is_maintenance");
-  const { id } = await promoteRelease(ctx, lg, live.previous, { mode });
+  const { id } = await promoteRelease(ctx, lg, live.previous, { mode, rolledBackFrom: live.id });
   return { id };
 }
 
@@ -367,7 +383,7 @@ function removeEmptyDirs(root, relative = "") {
  * Resolves {removed: [release ids and "tools/<sha12>"], staticFilesRemoved};
  * release-box.mjs counts `removed` as an array.
  */
-export function pruneLeague(ctx, lg) {
+export async function pruneLeague(ctx, lg) {
   const { layout } = ctx;
   const live = readLive(ctx, lg);
   const ids = (() => {
@@ -390,7 +406,8 @@ export function pruneLeague(ctx, lg) {
   const removedReleases = [];
   for (const id of ids) {
     if (keep.has(id)) continue;
-    rmSync(layout.release(id), { recursive: true, force: true });
+    // Other users wrote parts of it: the build user, the league user's caches.
+    await removeTree(ctx.runner, layout.release(id), "prune_failed");
     removedReleases.push(id);
   }
 
@@ -406,12 +423,14 @@ export function pruneLeague(ctx, lg) {
       .filter((name) => /^[0-9a-f]{12}$/.test(name))
       .map((name) => ({ name, mtime: statSync(path.join(layout.tools, name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime || b.name.localeCompare(a.name));
-    clones.slice(TOOLS_KEPT).forEach(({ name }) => {
-      if (name === current) return;
-      rmSync(path.join(layout.tools, name), { recursive: true, force: true });
+    for (const { name } of clones.slice(TOOLS_KEPT)) {
+      if (name === current) continue;
+      // A tools clone stays the build user's tree.
+      await removeTree(ctx.runner, path.join(layout.tools, name), "prune_failed");
       removedTools.push(name);
-    });
-  } catch {
+    }
+  } catch (error) {
+    if (error instanceof AgentError) throw error;
     // No tools folder yet.
   }
 

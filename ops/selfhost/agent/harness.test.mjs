@@ -1,7 +1,7 @@
 // A fake box for the agent's tests: the installed layout under a temporary
 // root, and a runner whose spawns are recorded and answered by handlers.
 // Named *.test.mjs so the install never copies it; it holds no tests itself.
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createLayout } from "./layout.mjs";
@@ -94,6 +94,12 @@ export function makeBox() {
     // A oneshot unit the test did not script finished successfully.
     if (command.endsWith("/systemctl") && args[0] === "show" && args.includes("--property=Result"))
       return { code: 0, stdout: "success\n", stderr: "" };
+    // Root's `rm -rf --one-file-system -- <dir>` (removeTree) deletes, inside the box only.
+    if (command === "/usr/bin/rm" && args[0] === "-rf") {
+      const target = args.at(-1);
+      if (!target.startsWith(`${root}${path.sep}`)) return { code: 1, stdout: "", stderr: "outside the box" };
+      rmSync(target, { recursive: true, force: true });
+    }
     return { code: 0, stdout: "", stderr: "" };
   };
   const clock = { t: T0 };

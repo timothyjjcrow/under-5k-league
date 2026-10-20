@@ -78,9 +78,10 @@ function everything(rules: LeagueRules): string {
 }
 
 describe("leagueRules", () => {
-  it("covers the ten sections in reading order and ends on the closing line", () => {
+  it("covers the eleven sections in reading order and ends on the closing line", () => {
     const rules = build();
     expect(rules.sections.map((s) => s.id)).toEqual([
+      "format",
       "series",
       "standings",
       "playoffs",
@@ -285,17 +286,19 @@ describe("leagueRules", () => {
   });
 
   it("sizes the playoff field from the teams still in the season", () => {
-    const steps =
-      "2–3 teams send 2, 4–7 send 4, 8–15 send 8, 16–31 send 16";
     const six = section(build({ teamCount: 6 }), "playoffs");
-    expect(six).toContain(steps);
+    expect(six).toContain(
+      "the top 2 of a table of 2–3 teams, the top 4 of a table of 4–9 teams and the top 4 of each group from 10 teams",
+    );
     expect(six).toContain(
       "This season has 6 teams in it, so the top 4 make the playoffs.",
     );
     expect(six).toContain("Round one: 1 v 4, 2 v 3; the higher seed hosts.");
+    expect(six).toContain("Round one is played on the match night after the tiebreaker week");
 
+    // Eight teams play one table and send four.
     expect(section(build({ teamCount: 8 }), "playoffs")).toContain(
-      "Round one: 1 v 8, 2 v 7, 3 v 6, 4 v 5; the higher seed hosts.",
+      "This season has 8 teams in it, so the top 4 make the playoffs.",
     );
     const three = section(build({ teamCount: 3 }), "playoffs");
     expect(three).toContain("so the top 2 make the playoffs");
@@ -308,6 +311,25 @@ describe("leagueRules", () => {
         "Round one pairs the top seed with the lowest, the second with the second lowest, and so on; the higher seed hosts.",
       );
     }
+  });
+
+  it("crosses a group season's bracket and says the season's format", () => {
+    const twelve = build({ teamCount: 12 });
+    const playoffs = section(twelve, "playoffs");
+    expect(playoffs).toContain("This season plays two groups, so the top 4 of each group make the playoffs.");
+    expect(playoffs).toContain(
+      "Round one crosses the groups: A1 v B4, B2 v A3, B1 v A4, A2 v B3, so the two group winners can only meet in the final; the higher seed hosts.",
+    );
+    const format = section(twelve, "format");
+    expect(format).toContain("10 or more teams play two groups");
+    expect(format).toContain(
+      "This season has 12 teams: two groups of 6. Each group plays a round robin over 5 weeks, then the top 4 of each group play the quarterfinals, the semifinals and the grand final. That's 9 weeks in all: 5 group weeks, the tiebreaker week and 3 playoff weeks.",
+    );
+    expect(format).toContain("The week after the regular season is kept for tiebreakers");
+    // A withdrawal leaves the format as the schedule made it.
+    expect(section(build({ teamCount: 9, formatTeamCount: 10 }), "playoffs")).toContain(
+      "This season plays two groups",
+    );
   });
 
   it("writes durations and clocks in words", () => {
@@ -446,7 +468,7 @@ describe("the rules page's claims hold in the code", () => {
 
   it("keeps withdrawn teams' results but not the teams in the bracket", () => {
     const field = projectPlayoffField(
-      [{ id: "a" }, { id: "b" }, { id: "c" }, { id: "d", withdrawn: true }],
+      [{ id: "a", groupKey: null }, { id: "b", groupKey: null }, { id: "c", groupKey: null }, { id: "d", groupKey: null, withdrawn: true }],
       [game("a", "d", 2, 0), game("b", "c", 2, 0)],
     );
     expect(field.seededTeamIds).not.toContain("d");

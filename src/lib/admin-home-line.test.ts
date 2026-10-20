@@ -29,7 +29,7 @@ const won = (home: string, away: string): Partial<Row> => ({
   winnerTeamId: home,
 });
 
-const teams = ["a", "b", "c", "d"].map((id) => ({ id }));
+const teams = ["a", "b", "c", "d"].map((id) => ({ id, groupKey: null }));
 /** The day after the fixtures' kickoff, so an unplayed one is due. */
 const NOW = Date.parse("2026-09-21T00:00:00Z");
 
@@ -111,6 +111,22 @@ describe("adminHomeLine", () => {
         matches: [match(won("a", "b")), match(won("c", "d")), match(won("a", "c"))],
       }).step,
     ).toBe("Next step: schedule a tiebreaker week.");
+  });
+
+  it("judges a group season's ties inside each group", () => {
+    // One result per group: a and c are level on points as one table (and so
+    // are b and d), but each group's order is settled.
+    const results = [match(won("a", "b")), match(won("c", "d"))];
+    expect(line({ matches: results }).step).toBe(
+      "Next step: schedule a tiebreaker week.",
+    );
+    const grouped = teams.map((team) => ({
+      ...team,
+      groupKey: team.id === "a" || team.id === "b" ? "A" : "B",
+    }));
+    expect(line({ teams: grouped, matches: results }).step).toBe(
+      "Next step: Start playoffs.",
+    );
   });
 
   it("follows the bracket and the finished season", () => {

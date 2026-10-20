@@ -5,7 +5,7 @@ const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) 
 import { computeStandings, type MatchLike } from "./standings";
 import { tiebreakerSlot, type TiebreakerGroup } from "./tiebreakers";
 
-const teams = (ids: string[]) => ids.map((id) => ({ id }));
+const teams = (ids: string[]) => ids.map((id) => ({ id, groupKey: null }));
 function result(home: string, away: string, hs: number, as: number): MatchLike {
   return { homeTeamId: home, awayTeamId: away, homeScore: hs, awayScore: as,
     winnerTeamId: hs > as ? home : as > hs ? away : null, phase: "REGULAR", status: "COMPLETED" };

@@ -57,7 +57,7 @@ const STATE_MARKERS: {
   pattern: RegExp;
   min: number;
 }[] = [
-  { file: "src/components/standings-table.tsx", what: "seed label", pattern: /seed \{row\.playoffSeed\}/g, min: 1 },
+  { file: "src/components/standings-table.tsx", what: "seed label", pattern: /seed \{row\.playoffSeedLabel \?\? row\.playoffSeed\}/g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "movement arrows", pattern: /^\s*\{Math\.abs\(row\.move\)\}$/gm, min: 1 },
   { file: "src/components/standings-table.tsx", what: "Your team chip", pattern: />\s*Your team\s*</g, min: 1 },
   { file: "src/components/standings-table.tsx", what: "withdrawn status", pattern: />\s*Withdrawn\s*</g, min: 1 },

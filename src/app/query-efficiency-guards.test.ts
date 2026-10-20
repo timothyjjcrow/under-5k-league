@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { homePageSource } from "../../test/support/source-files";
+import { homePageSource, sourceFiles } from "../../test/support/source-files";
 
 const read = (...path: string[]) => readFileSync(join(__dirname, ...path), "utf8");
 const HOME = homePageSource();
@@ -103,5 +103,30 @@ describe("homepage query efficiency", () => {
     expect(HOME.match(/prisma\.game\.count\(\{/g)).toHaveLength(1);
     expect(HOME).toContain("gamesOnRecord={gamesOnRecord}");
     expect(HOME).toMatch(/gamesOnRecord: number;/);
+  });
+});
+
+describe("all-history query efficiency", () => {
+  // The raw all-history snapshot passes Next's 2 MiB entry at about 160
+  // games, after which each of its readers re-reads and re-decodes every Game
+  // per view. Pages read the small derived entries in cached-queries.ts.
+  const files = sourceFiles(["src/app/**/*.{ts,tsx}", "src/components/**/*.tsx", "src/lib/**/*.ts"], 300);
+  const callers = (pattern: RegExp) =>
+    files.filter((file) => pattern.test(file.text)).map((file) => file.path);
+
+  it("leaves only compare on the raw all-history rows", () => {
+    expect(callers(/getPublicGameSnapshot\(null\)/)).toEqual(["src/lib/cached-queries.ts"]);
+    expect(callers(/getAllGame(?:Scores|Lines)\(\)/).filter((path) => path !== "src/lib/cached-queries.ts"))
+      .toEqual(["src/app/players/compare/page.tsx"]);
+    expect(callers(/getRecordWatchBook\(\)/).length).toBeGreaterThanOrEqual(3);
+    expect(callers(/getCareerFacts\(\)/).length).toBeGreaterThanOrEqual(2);
+  });
+
+  it("reads /records' scope only after the season is found", () => {
+    const page = read("records/page.tsx");
+    const found = page.indexOf("if (seasonParam && !selectedSeason) notFound();");
+    expect(found).toBeGreaterThan(-1);
+    expect(page.indexOf("await getRecordBookView(selectedSeason?.id ?? null)")).toBeGreaterThan(found);
+    expect(page.match(/getRecordBookView\(/g)).toHaveLength(1);
   });
 });

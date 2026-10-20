@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 
-// The record book's cached scan (unstable_cache) needs Next's server runtime;
+// The cached record book (unstable_cache) needs Next's server runtime;
 // its uncached twin reads the same rows (cached-queries.itest.ts).
 vi.mock("@/lib/cached-queries", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/cached-queries")>();
-  return { ...actual, getAllGamesForRecords: actual.fetchAllGamesForRecords };
+  return { ...actual, getRecordWatchBook: actual.fetchRecordWatchBook };
 });
 
 import { prisma } from "@/lib/prisma";

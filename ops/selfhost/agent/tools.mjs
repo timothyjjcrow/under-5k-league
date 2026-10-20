@@ -1,5 +1,6 @@
 // The tools clone and what runs from it (design §2.1, §2.5, §5.1, §7):
-// prepare, attest, preflight, migrate, backup, drill, bot-deploy, bot-status.
+// prepare, attest, preflight, migrate, backup, drill, bot-deploy, bot-status,
+// and envcheck's production validation.
 //
 // Each repo script runs as ggd2l-build from /srv/ggd2l/tools/<sha12> inside a
 // systemd-run unit that reads the env files itself (-p EnvironmentFile=), so
@@ -9,11 +10,12 @@
 // JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { buildUserEnv, cloneAt, fetchMain, lockDownTree, requireOnMain } from "./build.mjs";
+import { ENV_GATE_LINE, buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
-import { asUser, must, systemdRunArgs } from "./runner.mjs";
+import { readLive } from "./releases.mjs";
+import { asUser, createRedactor, must, removeTree, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
 
@@ -70,8 +72,9 @@ export async function prepareTools(ctx, commit) {
   const dir = ctx.layout.toolsDir(commit);
   if (!(await toolsReady(ctx, commit))) {
     // A half-made clone (a crash inside npm ci) is rebuilt from nothing.
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(ctx.runner, dir, "clone_failed");
     mkdirSync(ctx.layout.tools, { recursive: true });
+    await makeBuildDir(ctx, dir, "0755", "clone_failed");
     await cloneAt(ctx, dir, commit);
     await npmCi(ctx, dir, ["--include=dev"], "install_failed");
   }
@@ -136,6 +139,56 @@ export async function attest(ctx, lg, commit) {
     const schema = await runTool(ctx, { ...common, script: "scripts/production-schema-check.mjs" });
     if (!schema.some((line) => line.includes("Production schema attestation passed"))) throw new AgentError("attest_failed");
     return { ok: true };
+  });
+}
+
+// scripts/validate-prod-env.mjs: the production gate every build, attest and
+// migrate runs. envcheck runs it too, against the file as it stands.
+const PROD_ENV_SCRIPT = "scripts/validate-prod-env.mjs";
+const ENVCHECK_PROPERTIES = Object.freeze(["CPUWeight=20", "Nice=10", "RuntimeMaxSec=120"]);
+// An env name as the validator's messages spell one (AUTH_SECRET, APP_URL).
+const ENV_NAME_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
+
+/**
+ * `envcheck`'s production validation: the league env file as it stands,
+ * checked by the live release's own scripts/validate-prod-env.mjs. A restart,
+ * a reboot or a rollback starts a slot on that file with no build, and the
+ * slot's ExecStartPre runs only the env contract, which never checks
+ * AUTH_SECRET, CRON_SECRET, ADMIN_STEAM_IDS or STEAM_API_KEY. It runs as the
+ * league user, which already reads the file, from the release that user
+ * already runs, in a unit that reads the file itself. Resolves problems that
+ * name env keys only, never a value or the script's text; which rule each
+ * broke is in the redacted tool log, envcheck-<lg>-<stamp>-<sha12>.log.
+ */
+export async function productionEnvProblems(ctx, lg, env) {
+  const live = readLive(ctx, lg);
+  if (!live) return ["production validation: no live release to run it from (a build runs it)"];
+  const unit = systemdRunArgs({
+    user: USERS.league(lg),
+    cwd: ctx.layout.release(live.id),
+    envFiles: [ctx.layout.leagueEnv(lg)],
+    properties: ENVCHECK_PROPERTIES,
+    setEnv: { NODE_ENV: "production" },
+    command: BIN.node,
+    args: [PROD_ENV_SCRIPT],
+  });
+  const redact = createRedactor([env]);
+  return withToolLog(ctx, "envcheck", lg, live.sha, [env], async (log) => {
+    log.write(`== ${PROD_ENV_SCRIPT} from ${live.id} (${new Date(ctx.now()).toISOString()})`);
+    const lines = [];
+    const onLine = (line) => {
+      lines.push(redact(line));
+      log.write(line);
+    };
+    const result = await ctx.runner.run(BIN.systemdRun, unit, { onLine, capture: false });
+    log.write(`== exit ${result.code}`);
+    if (result.code === 0 && lines.some((line) => line.includes(ENV_GATE_LINE))) return [];
+    // Its failures are "  - <message>" lines, each naming the keys it broke.
+    const names = new Set();
+    for (const line of lines.filter((text) => /^\s*- /.test(text)))
+      for (const [name] of line.matchAll(ENV_NAME_RE)) names.add(name);
+    if (names.size === 0) return ["production validation: failed or printed no pass line (the envcheck tool log says why)"];
+    return [...names].map((name) => `${name}: fails the production validation`);
   });
 }
 
@@ -218,15 +271,22 @@ export function readBackupRecord(ctx, lg) {
 /**
  * The record drill-league.sh writes after a passing drill, whether the weekly
  * unit or `drill <lg> <sha>` (systemd-run, outside the unit) ran it:
- * /var/backups/ggd2l/<lg>/state/last-drill.json, {ok, league, dump,
- * dumpSha256, tools, finishedAt}. A failed drill writes none, so this is the
- * last pass. Only a record for this league that says ok and carries a
- * readable finishedAt counts.
+ * /var/lib/ggd2l-drill/<lg>/last-drill.json, {ok, league, dump, dumpSha256,
+ * tools, finishedAt}. A failed drill writes none, so this is the last pass.
+ * Drills before 2026-10-19 ran as ggd2l-ops and wrote
+ * /var/backups/ggd2l/<lg>/state/last-drill.json; of the two, the later
+ * finishedAt answers. Only a record for this league that says ok and carries
+ * a readable finishedAt counts.
  */
 export function readDrillRecord(ctx, lg) {
-  const record = readJson(path.join(ctx.layout.backupDir(lg), "state", "last-drill.json"));
-  if (record?.ok !== true || record.league !== lg || !Number.isFinite(Date.parse(record.finishedAt ?? ""))) return null;
-  return record;
+  let best = null;
+  for (const file of [path.join(ctx.layout.drillState(lg), "last-drill.json"), path.join(ctx.layout.backupDir(lg), "state", "last-drill.json")]) {
+    const record = readJson(file);
+    const finishedAt = Date.parse(record?.finishedAt ?? "");
+    if (record?.ok !== true || record.league !== lg || !Number.isFinite(finishedAt)) continue;
+    if (!best || finishedAt > Date.parse(best.finishedAt)) best = record;
+  }
+  return best;
 }
 
 /**
@@ -270,8 +330,11 @@ export function newestDump(ctx, lg) {
 }
 
 /**
- * `drill <lg> [sha]`: the newest local dump restored into ld2l_restore_test by
- * rehearse-backup-restore.mjs as ggd2l_rehearsal, then dropped. Without a sha
+ * `drill <lg> [sha]`: the newest dump the backup handed to the drill, restored
+ * into ld2l_restore_test by rehearse-backup-restore.mjs as ggd2l_rehearsal,
+ * then dropped. It runs as ggd2l-drill, never ggd2l-ops: the drill runs the
+ * tools clone, which the build user's npm ci wrote, and ggd2l-ops holds the R2
+ * key and the backups. Without a sha
  * this is the weekly drill unit; with one, the same helper runs against that
  * sha's tools clone (design §2.5 step 4), so the new migrations are
  * rehearsed before `migrate` applies them.
@@ -290,7 +353,7 @@ export async function drill(ctx, lg, commit) {
   if (!existsSync(ctx.layout.drillEnv)) throw new AgentError("env_missing");
   const { env } = loadEnvFile(ctx, ctx.layout.drillEnv);
   const unit = systemdRunArgs({
-    user: USERS.ops,
+    user: USERS.drill,
     envFiles: [ctx.layout.drillEnv],
     properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },
@@ -319,16 +382,17 @@ export async function botDeploy(ctx, commit) {
   const dir = path.join(layout.botReleases, short);
   const botDir = path.join(dir, "ops/dota-lobby-bot");
   if (!existsSync(path.join(botDir, "node_modules/.package-lock.json"))) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(runner, dir, "bot_deploy_failed");
     mkdirSync(layout.botReleases, { recursive: true });
-    await must(runner, "bot_deploy_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0755", dir]);
+    await makeBuildDir(ctx, dir, "0755", "bot_deploy_failed");
     const archive = path.join(dir, ".source.tar");
+    // The folder is the build user's until the lockdown, so it removes the archive too.
     for (const [command, args] of [
       asUser(USERS.build, BIN.git, ["-c", "safe.directory=*", "-C", layout.repo, "archive", "--format=tar", `--output=${archive}`, commit, "ops/dota-lobby-bot"]),
       asUser(USERS.build, BIN.tar, ["-x", "-f", archive, "-C", dir]),
+      asUser(USERS.build, BIN.rm, ["-f", "--", archive]),
     ])
       await must(runner, "bot_deploy_failed", command, args);
-    rmSync(archive, { force: true });
     await npmCi(ctx, botDir, ["--omit=dev"], "bot_deploy_failed");
     await lockDownTree(runner, dir, USERS.bot, "bot_deploy_failed");
   }

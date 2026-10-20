@@ -104,6 +104,13 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Write times as `<t:epoch:F|R|T>`**, never formatted strings, and keep
   content within 2,000 characters (`isValidDiscordContent` checks the exact
   rendered text).
+- **Say a group season's shape where the season is announced.** The
+  regular-season start post (`regularSeasonStartedMessage`, from
+  `seasonOpeningSlate`) adds the format line and each group's teams, plus the
+  first playoff night and the reserved tiebreaker night (`<t:…:D>`); a
+  one-table season's post reads as before except for that calendar line. The
+  playoffs post names a group season's seeds as the bracket does ("(A1) …
+  vs (B4) …", `bracketSeedLabels`).
 
 ## Mentions
 
@@ -532,9 +539,11 @@ call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
 One message in the read-only #schedule channel, rewritten in place, that says
 where the league is: signups and the team goal, the match-night poll's
 turnout, draft night, the live draft, this week's fixtures with their standins,
-open reschedule offers and moved kickoffs, the table with its playoff line,
-last week's Player and Team of the week, the playoff round, the champion, and
-a planned inhouse night (Tim's call, 2026-10-12). Render: `league-status.ts`
+open reschedule offers and moved kickoffs, the table with its playoff line
+(in a group season, one block per group under **Group A** / **Group B**, with
+places within the group and the line under that group's qualifiers, in the
+same one text display), last week's Player and Team of the week, the playoff
+round, the champion, and a planned inhouse night (Tim's call, 2026-10-12). Render: `league-status.ts`
 (pure, `league-status.test.ts`). Read: `league-status-snapshot.ts`
 (`league-status-snapshot.itest.ts`). Service: `league-status-service.ts`
 (`league-status.itest.ts`). It is the queue board's machinery, and the board's

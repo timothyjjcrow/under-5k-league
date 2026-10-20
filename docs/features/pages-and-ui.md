@@ -95,8 +95,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   active season. Only the current tiebreaker format is described
   (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
 - **Every sentence is derived or left out.** Points come from probing
-  `computeStandings`, bracket sizes from `pickBracketSize`, round one from
-  `playoffFirstRound`, the withdrawal forfeit score from
+  `computeStandings`, the season format and who makes the playoffs from
+  `seasonFormat` (`formatSteps`, `playoffSteps`, `describeSeasonFormat`), the
+  bracket size from `playoffBracketSize`, round one from
+  `playoffFirstRound` (crossed between groups in a group season), the withdrawal forfeit score from
   `withdrawalForfeitScore` (which the withdraw action uses too), the import
   window from `league-result-window.ts`, the reschedule limits from
   `schedule.ts`, the standin clash and MMR gap from the standin constants and
@@ -534,7 +536,12 @@ image has changed. The rules are in `next.config.ts`, and
   series (COMPLETED) counts, "latest" is by when a game ended (start plus
   duration), never an update time, and outside the window it renders nothing
   (streamed with a null fallback). It reads the viewer's own games
-  (`getPlayerGameFacts`, as the profile does); no Discord, no schema.
+  (`getPlayerGameFacts`, as the profile does); no Discord, no schema. That
+  read checks every stored game, so the card first reads the start and
+  duration of the season's decided games (by the indexed match id) and stops
+  unless one ended inside the window (`matchNightWindowOpen`, which can never
+  be false when `myMatchNight` would show; tested): on most days of the week
+  nothing can show and the read never runs.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
   Your team / Coming up / Recent results band and the side games. The
@@ -670,6 +677,17 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Schedule (`/schedule`)
 
+- **A group season shows one table per group** (`<SeasonStandings>` over
+  `standingsSections`, `src/components/season-standings.tsx`): each titled,
+  named "Group A standings" for screen readers, with the group's own cut
+  line, places, seed names and movement. Home, the archive and the COMPLETE
+  view use the same wrapper, and the head-to-head grid splits by group. A
+  one-table season renders exactly the one table it always did.
+- **The season plan folds to one line** (`SeasonPlanFold`,
+  `src/components/season-plan.tsx`): "Season plan · Two groups of 6 ·
+  playoffs from Sat, Dec 19", opening to every step (`seasonPlan`), dates on
+  the viewer's clock. /schedule shows it in DRAFT (with fixtures) and the
+  regular season, Home above the standings in the regular season.
 - **The regular season is two columns from `xl`:** the weeks, and a 30rem
   rail with the standings and the analysis folds. The rail stretches to the
   weeks' height and its inner block is `xl:sticky xl:top-20` with a
@@ -786,8 +804,8 @@ the league is already draftable and many visitors have joined. Write for both.
   row under any held-record chips, stored marks only ("Most kills · Career
   best 18 kills · record 21, 3 short"). `profileSections` opens the card and
   its Records tab for a held record OR a within-reach line, and both come
-  from one `recordWatchBook` over the page's record-book read, so they can
-  never disagree with `/records`.
+  from the one cached book (`getRecordWatchBook`, mapped as `/records` maps
+  it; stats-and-side-games.md), so they can never disagree with `/records`.
 - **Compare is two columns from `lg`:** career numbers on the left, the
   head-to-head and both hero cards on the right, by grid placement, so the
   DOM and a phone keep head-to-head, numbers, heroes. The rows are
@@ -999,7 +1017,8 @@ the league is already draftable and many visitors have joined. Write for both.
   whose career best is within reach of a league record, each a profile link
   and one line of stored marks. The card is props-only and stays out of the
   jump bar. The record book is read in `page.tsx`'s body
-  (`loadRecordWatchBook`, the same cached read and mapping as `/records`),
+  (`loadRecordWatchBook`: the cached book the profile reads, mapped as
+  `/records` maps it),
   only for an upcoming fixture of the active season, and passed down: inside
   a card's Suspense the cached read once hung the stream.
   `record-watch.test.ts` pins the order and the hand-off.
@@ -1131,7 +1150,14 @@ the league is already draftable and many visitors have joined. Write for both.
   decided, a 10-minute bucket (`overlayRevision`) that catches a late standin
   or a retimed kickoff, so each version could be cached once for everyone.
   On the box no edge caches them (the zone has no Cache Rules), and an open
-  overlay's few requests are cheap. The page reads `/api/sync` every 30
+  overlay's few requests are cheap. Because a version is whatever the caller
+  types, one address gets 60 data reads a minute
+  (`PUBLIC_GET_LIMITS.overlay`, `src/lib/public-get-limit.ts`; a 429 before
+  any database work, which the page treats like any failed read: it keeps
+  what it shows and asks again on its next poll). The data route keeps no
+  memo: keyed by version, a made-up version walks past it, and keyed by
+  match, it could hand a new version the answer from before the result that
+  moved it. The page reads `/api/sync` every 30
   seconds, asks for data only when the version moves, and asks for nothing
   while OBS hides the source. Never add a per-poll database read, a cookie, or
   anything that differs by viewer to either route.

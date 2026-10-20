@@ -166,6 +166,26 @@ describe("a removed game stays removed", () => {
     expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(1);
   });
 
+  // Not a removal, but the same toast: a feed game whose details OpenDota
+  // didn't return holds every feed import (discovery fails closed), and
+  // "imported 0 of 2" alone read as "nothing there to import".
+  it("manual Sync league games names a feed game whose details failed, and imports nothing past it", async () => {
+    const { season, match, game } = await setupNight();
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { dotaLeagueId: "44002" },
+    });
+    mockLeague.mockResolvedValue([8830002, 8830001]);
+    mockMatch.mockImplementation(async (id) => (id === "8830002" ? game(8830002) : null));
+
+    const res = await syncLeagueAction(empty, fd({}));
+    expect(res?.message).toBe(
+      "League sync · imported 0 of 2 league games · OpenDota didn't return details for game 8830001, " +
+        "so nothing from the league feed imports until it clears. It is listed under Saved import progress",
+    );
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+  });
+
   it("manual Sync league games skips a removed game and says how to bring it back", async () => {
     const { season, match, game } = await setupNight();
     await prisma.season.update({

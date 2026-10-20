@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { projectPlayoffField } from "./playoff-field";
+import { standingsSections } from "./season-groups";
 import {
   bestGameOfWeek,
   weekProgress,
   weekWrapPath,
   weekWrapTable,
+  weekWrapTables,
 } from "./week-wrap";
 
 type M = Parameters<typeof weekWrapTable>[1][number];
@@ -62,6 +65,100 @@ describe("weekWrapTable", () => {
     const rows = weekWrapTable(TEAMS, [series(1, "a", "b", 2, 0)], 1);
     expect(rows.every((r) => r.movement === null)).toBe(true);
     expect(rows[0]).toMatchObject({ teamId: "a", wins: 1, points: 3, rank: 1 });
+  });
+});
+
+describe("weekWrapTables", () => {
+  // Ten teams in two groups of five, as a group season plays them.
+  const grouped = [
+    ...["a1", "a2", "a3", "a4", "a5"].map((id) => ({ id, groupKey: "A" })),
+    ...["b1", "b2", "b3", "b4", "b5"].map((id) => ({ id, groupKey: "B" })),
+  ];
+  const tablesAfter = (
+    teams: { id: string; groupKey: string | null }[],
+    matches: M[],
+    week: number,
+  ) => weekWrapTables(standingsSections(projectPlayoffField(teams, matches)), matches, week);
+  const placesOf = (rows: ReturnType<typeof weekWrapTable>) =>
+    rows.map((r) => [r.teamId, r.rank, r.points, r.movement]);
+
+  it("ranks and moves a group season's teams inside their own group", () => {
+    const matches = [
+      // Week 1. Going into week 2, A: a1, a3, a5, a4, a2; B: b2, b3, b5,
+      // b1, b4 (b2/b3 and b1/b4 level, by id).
+      series(1, "a1", "a2", 2, 0),
+      series(1, "a3", "a4", 2, 1),
+      series(1, "b1", "b2", 0, 2),
+      series(1, "b3", "b4", 2, 0),
+      // Week 2.
+      series(2, "a5", "a1", 2, 0),
+      series(2, "a2", "a3", 2, 0),
+      series(2, "b5", "b2", 2, 1),
+      series(2, "b4", "b1", 2, 0),
+    ];
+    const tables = tablesAfter(grouped, matches, 2);
+    expect(tables.map((t) => [t.key, t.title])).toEqual([
+      ["A", "Group A"],
+      ["B", "Group B"],
+    ]);
+    // a5 leads A on game difference; a1 and a2 are level and a1 won their
+    // meeting.
+    expect(placesOf(tables[0].rows)).toEqual([
+      ["a5", 1, 3, 2],
+      ["a1", 2, 3, -1],
+      ["a2", 3, 3, 2],
+      ["a3", 4, 3, -2],
+      ["a4", 5, 0, -1],
+    ]);
+    // B's leader is first in Group B, never sixth of one table of ten.
+    expect(placesOf(tables[1].rows)).toEqual([
+      ["b3", 1, 3, 1],
+      ["b5", 2, 3, 1],
+      ["b2", 3, 3, -2],
+      ["b4", 4, 3, 1],
+      ["b1", 5, 0, -1],
+    ]);
+  });
+
+  it("waits for a group's own first results before it draws arrows", () => {
+    // Group B's week 1 was postponed: going into week 2 its table has no
+    // results, so arrows against it would be alphabetical noise. Group A's
+    // week 1 was played, so A's arrows are real.
+    const matches = [
+      series(1, "a1", "a2", 2, 0),
+      series(1, "a3", "a4", 2, 1),
+      series(1, "b1", "b2", 0, 0, "SCHEDULED"),
+      series(1, "b3", "b4", 0, 0, "SCHEDULED"),
+      series(2, "a5", "a1", 2, 0),
+      series(2, "b5", "b2", 2, 1),
+    ];
+    const [a, b] = tablesAfter(grouped, matches, 2);
+    expect(a.rows.every((r) => r.movement !== null)).toBe(true);
+    expect(b.rows.every((r) => r.movement === null)).toBe(true);
+    expect(b.rows[0]).toMatchObject({ teamId: "b5", rank: 1, points: 3 });
+  });
+
+  it("is the one league table, unchanged, in a one-table season", () => {
+    const matches = [
+      series(1, "a", "b", 2, 0),
+      series(1, "c", "d", 1, 1),
+      series(2, "d", "a", 2, 0),
+      series(2, "b", "c", 2, 0),
+    ];
+    const tables = tablesAfter(
+      TEAMS.map((id) => ({ id, groupKey: null })),
+      matches,
+      2,
+    );
+    expect(tables).toEqual([
+      { key: null, title: null, rows: weekWrapTable(TEAMS, matches, 2) },
+    ]);
+    expect(placesOf(tables[0].rows)).toEqual([
+      ["d", 1, 4, 2],
+      ["a", 2, 3, -1],
+      ["b", 3, 3, 1],
+      ["c", 4, 1, -2],
+    ]);
   });
 });
 

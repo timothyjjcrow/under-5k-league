@@ -14,9 +14,14 @@ async function main() {
   // Rebuild this test's baseline every time so neither that handoff nor a
   // previous tiebreaker test can supply its teams, settings or results.
   // Keep the exact dedicated-database guard above the destructive reseed.
+  // --all ties eight teams for all eight places of a ten-team table (a
+  // one-table season generated before groups; a table of four to nine now
+  // sends four): the other two lose to everyone above them.
+  const all = process.argv.includes("--all");
+  const size = all ? 10 : 6;
   execFileSync(process.execPath, ["--import", "tsx", "e2e-postseason/seed.ts"], {
     cwd: process.cwd(),
-    env: { ...process.env, FIXTURE_MODE: "playoffs", FIXTURE_TEAMS: "8" },
+    env: { ...process.env, FIXTURE_MODE: "playoffs", FIXTURE_TEAMS: all ? "10" : "8" },
     stdio: "pipe",
   });
   const season = await prisma.season.findFirstOrThrow({
@@ -25,10 +30,10 @@ async function main() {
   const teams = await prisma.team.findMany({
     where: { seasonId: season.id },
     orderBy: { draftOrder: "asc" },
-    take: process.argv.includes("--all") ? 8 : 6,
+    take: size,
   });
-  if (teams.length !== (process.argv.includes("--all") ? 8 : 6))
-    throw new Error("The tiebreaker browser fixture requires six teams.");
+  if (teams.length !== size)
+    throw new Error(`The tiebreaker browser fixture requires ${size} teams.`);
   const ids = teams.map((team) => team.id);
   const threeTeamTie = process.argv.includes("--three");
   const rank = new Map(ids.map((id, index) => [id, index]));
@@ -36,9 +41,10 @@ async function main() {
   const rounds = roundRobin(ids);
   await prisma.$transaction(async (tx) => {
     await tx.match.deleteMany({ where: { seasonId: season.id } });
+    // One table: the seeder plays ten teams in groups.
     await tx.team.updateMany({
       where: { seasonId: season.id },
-      data: { withdrawn: true },
+      data: { withdrawn: true, groupKey: null },
     });
     await tx.team.updateMany({
       where: { id: { in: ids } },
@@ -59,7 +65,7 @@ async function main() {
         const awayRank = rank.get(pairing.away)!;
         // Fourth and fifth beat sixth, lose to the top three, and draw each
         // other: equal points, game differential, wins and head-to-head.
-        const tied = process.argv.includes("--all") || (threeTeamTie
+        const tied = all ? homeRank <= 7 && awayRank <= 7 : (threeTeamTie
           ? [homeRank, awayRank].every((rank) => rank >= 2 && rank <= 4)
           : [homeRank, awayRank].sort().join(",") === "3,4");
         const homeWins = homeRank < awayRank;

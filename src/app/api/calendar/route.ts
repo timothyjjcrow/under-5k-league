@@ -4,11 +4,29 @@ import { getActiveSeason } from "@/lib/season";
 import { buildCalendar } from "@/lib/ics";
 import { MATCH_PHASE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { limitPublicGet } from "@/lib/public-get-limit";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { seriesEstimateMinutes } from "@/lib/series-lengths";
+import { createShortLivedMemo } from "@/lib/short-lived-memo";
 import { resolveSiteUrl } from "@/lib/site-url";
 
 export const dynamic = "force-dynamic";
+
+/** A built feed: the calendar file and the name its filename is made from. */
+type CalendarFeed = { cal: string; filenameBase: string };
+
+// Each feed as built, for 30 seconds (what Vercel's CDN kept it for before
+// the move to the box), keyed by the one parameter it is built from: the
+// team filter. The feed reads no cookie, session or header, so one copy is
+// right for every caller, and a calendar provider fetching it for many
+// subscribers, or a client looping it, costs one build per feed per 30
+// seconds. A team that doesn't exist (null) is never kept, so made-up ids
+// can't fill it; the real ones are bounded by the league's teams.
+const feeds = createShortLivedMemo<CalendarFeed | null>({
+  ttlMs: 30_000,
+  maxEntries: 200,
+  keep: (feed) => feed !== null,
+});
 
 function slugify(value: string): string {
   return value
@@ -34,6 +52,9 @@ function safeCalendarFilename(value: string): string {
  * past team's link keeps syncing its finished fixtures instead of failing.
  */
 export async function GET(req: NextRequest) {
+  const limited = limitPublicGet(req, "calendar", Date.now());
+  if (limited) return limited;
+
   const requestedTeamId = req.nextUrl.searchParams.get("team");
   if (requestedTeamId !== null && requestedTeamId.length > 128) {
     return new NextResponse("Team filter is too long", {
@@ -43,27 +64,39 @@ export async function GET(req: NextRequest) {
   }
 
   const teamId = requestedTeamId?.trim() || null;
+  // An explicit filter must name a real team. Silently returning an empty,
+  // generically named feed makes a mistyped link look valid forever.
+  if (requestedTeamId !== null && !teamId) return teamNotFound();
+  const key = teamId === null ? "league" : `team:${teamId}`;
+  const feed = await feeds.get(key, Date.now(), () => buildFeed(teamId));
+  if (!feed) return teamNotFound();
+  return calendarResponse(feed.cal, feed.filenameBase);
+}
+
+function teamNotFound() {
+  return new NextResponse("Team not found", {
+    status: 404,
+    headers: { "cache-control": "no-store" },
+  });
+}
+
+/**
+ * The league's feed (`teamId` null) or one team's, or null when no team has
+ * that id. Built from `teamId` alone: the memo above keys on it.
+ */
+async function buildFeed(teamId: string | null): Promise<CalendarFeed | null> {
   let selectedTeam: { id: string; name: string } | null = null;
   let season: { id: string; name: string } | null;
-  if (requestedTeamId !== null) {
-    const team = teamId
-      ? await prisma.team.findUnique({
-          where: { id: teamId },
-          select: {
-            id: true,
-            name: true,
-            season: { select: { id: true, name: true } },
-          },
-        })
-      : null;
-    // An explicit filter must name a real team. Silently returning an empty,
-    // generically named feed makes a mistyped link look valid forever.
-    if (!team) {
-      return new NextResponse("Team not found", {
-        status: 404,
-        headers: { "cache-control": "no-store" },
-      });
-    }
+  if (teamId !== null) {
+    const team = await prisma.team.findUnique({
+      where: { id: teamId },
+      select: {
+        id: true,
+        name: true,
+        season: { select: { id: true, name: true } },
+      },
+    });
+    if (!team) return null;
     selectedTeam = { id: team.id, name: team.name };
     season = team.season;
   } else {
@@ -73,10 +106,10 @@ export async function GET(req: NextRequest) {
   if (!season) {
     // Between seasons the league feed is empty, not broken: a subscribed
     // calendar keeps syncing and fills again when the next season starts.
-    return calendarResponse(
-      buildCalendar(`${LEAGUE_CONFIG.name} schedule`, []),
-      "league",
-    );
+    return {
+      cal: buildCalendar(`${LEAGUE_CONFIG.name} schedule`, []),
+      filenameBase: "league",
+    };
   }
 
   const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
@@ -132,7 +165,7 @@ export async function GET(req: NextRequest) {
     })),
   );
 
-  return calendarResponse(cal, selectedTeam?.name ?? season.name);
+  return { cal, filenameBase: selectedTeam?.name ?? season.name };
 }
 
 function calendarResponse(cal: string, filenameBase: string) {
