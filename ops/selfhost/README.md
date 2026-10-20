@@ -258,11 +258,12 @@ output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
-<a id="kit-2026-10-19"></a>**The first install after 2026-10-19, once,** closes a root escalation from
-the build user (step 1), takes the build user's code away from `ggd2l-ops`
-(step 5), moves Caddy's admin API to its socket (step 3), moves the package
-window to 08:00 (step 7) and adds the bot's state to the config archive
-(step 8). Its agent also runs the production validation in `envcheck` (step
+<a id="kit-2026-10-19"></a>**The first install after 2026-10-19, once:** the install itself (step 2)
+closes a root escalation from the build user and takes the build user's code
+away from `ggd2l-ops`; step 1 checks that nothing was exploited before it and
+steps 4-5 check the result. The rest moves Caddy's admin API to its socket
+(step 3), moves the package window to 08:00 (step 7) and adds the bot's
+state to the config archive (step 8). Its agent also runs the production validation in `envcheck` (step
 6) and refuses a second `rollback` (Rollback below). Do it all in one
 sitting between 07:20 and 08:10 UTC, with no release, match night, inhouse
 night or draft on. Each bound has a reason: step 3 restarts Caddy (both
@@ -287,10 +288,19 @@ the admin user on the box:
      ! -path '/var/lib/ggd2l-ops' ! -path '/var/lib/ggd2l-ops/*' ! -path '/var/lib/ggd2l-alerts' \
      ! -path '/var/lib/ggd2l-alerts/*' ! -path '/etc/ggd2l/rclone.conf' ! -path '/tmp/*' ! -path '/var/tmp/*' -print
    sudo stat -c '%F %U:%G %a %n' /var/cache/ggd2l-build/npm /var/backups/ggd2l/{us,eu}/{local,offsite}
+   sudo find /srv/ggd2l -maxdepth 3 -type l -printf '%p -> %l\n'
+   sudo find /srv/ggd2l/{us,eu}/releases -mindepth 1 -maxdepth 1 ! -user root -print
    ```
 
-   The `find` prints nothing, and `stat` says `directory`, owned by
-   `ggd2l-build` or `ggd2l-ops`, for all five. Anything else (a symbolic link
+   The first `find` prints nothing, and `stat` says `directory`, owned by
+   `ggd2l-build` or `ggd2l-ops`, for all five. The folders under `/srv/ggd2l`
+   were the build user's to write until now, so a link planted there could
+   also have re-owned a release: the link `find` lists only
+   `/srv/ggd2l/{us,eu}/slots/{a,b}`, `/srv/ggd2l/tools/current` and
+   `/srv/ggd2l/bot/current`, each pointing at a release, a tools clone or a
+   bot release under `/srv/ggd2l`, and the last `find` lists nothing, or only
+   releases whose build failed (the build log under `/var/log/ggd2l/builds`
+   says so); a live or warm release listed there is the incident below. Anything else (a symbolic link
    there, or something of root's, such as `/usr/local/lib/ggd2l`, now owned
    by one of those users) means root may already have run that user's code:
    stop, install nothing, leave the box as it is, and handle it as an
@@ -349,7 +359,8 @@ the admin user on the box:
    key, the live file already fails the production validation: fix it
    before anything restarts that league (Rules above), and don't wait for
    the reboot. This comes before step 7, whose package run can restart a
-   live slot (needrestart).
+   live slot (needrestart). If the fix runs past 08:30, leave step 7 for
+   another day's 07:10-08:30 window: the stock 06:00 timer stays until then.
 7. **Move the package window** on the box that predates `provision-base.sh`'s
    drop-in. Do it between 07:10 and 08:30 UTC. systemd counts the next run
    from the last one (today's stock run, 06:00-07:00): before 08:00 the first

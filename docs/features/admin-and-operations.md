@@ -451,8 +451,9 @@ live since the cutover on 2026-10-17). What a code change must respect there:
   install and build cost on one vCPU, and a new background request's
   database work.
 - **Root never works through a link a service user could have left.** The
-  build user runs third-party install scripts and `ggd2l-ops` runs the
-  build user's tools clone, so either can leave a link wherever it writes,
+  build user runs third-party install scripts (and until 2026-10-19
+  `ggd2l-ops` ran the build user's tools clone), so a link can sit wherever
+  they write,
   and GNU `install -d`, `chown` and `chmod` change a link's target (until
   2026-10-19 that let a build re-own the agent's own code). In
   `ops/selfhost/`:

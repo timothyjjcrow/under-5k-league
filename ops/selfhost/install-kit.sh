@@ -300,7 +300,7 @@ ensure_dir 0755 ggd2l-build:ggd2l-build /srv/ggd2l/repo.git
 # as root and only then hands it over (makeBuildDir), so the build user needs
 # no write access to these parents: it can neither plant a link at a name the
 # agent is about to use nor swap its own folder for one. Tools and bot code
-# are readable by all (backups, drills and the bot run from them); a league's
+# are readable by all (drills and the bot run from them); a league's
 # releases are traverse-only for others, which is all its league user and the
 # build user need to reach a release.
 ensure_dir 0755 root:root /srv/ggd2l/tools
