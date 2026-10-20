@@ -254,6 +254,14 @@ In the Captains & draft card on `/admin` and inside the room
   `docs/features/admin-and-operations.md`).
 - **Responses are sequence-ordered** (`issueSequence` / `acceptSequence`), so
   a slow tick can't clobber a fresher bid.
+- **A cleaned-up poll loop aborts its tick in flight and never applies a
+  reply** (`releaseInFlight`). The poll effect re-runs on every `pollKick`
+  (a bid, a clock at zero, Retry), a season change and React's development
+  double mount, and it used to leave its tick running beside the next
+  loop's first one. Request-start ordering assumes one tick in flight: of
+  two at once the server may read the later-started one first, and the
+  room would keep the older lot. Same rule as the inhouse room
+  ([inhouse](inhouse.md)); `room-source-guards.test.ts` keeps the shape.
 - **Refresh the layout's render once per phase move.** The header's status
   chip and the phase nav come from the root layout, which a poll never
   repeats: a captain who parked on `/draft` before Start read "Signups open"

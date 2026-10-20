@@ -387,7 +387,13 @@ describe("live rooms delegate their poll policy", () => {
     );
     expect(src).toMatch(/const onOnline = \(\) => \{[\s\S]*?releaseHold\(\);\s*tick\(\);/);
     // A released request is not a failure.
-    expect(src).toMatch(/\} else if \(hold\?\.released\) \{\s*\} else \{\s*markFailure\(\);/);
+    expect(src).toMatch(/\} else if \(request\.released\) \{\s*\} else \{\s*markFailure\(\);/);
+    // Only a held request is released by an action or a connectivity change
+    // (an unheld one answers at once); the cleanup releases either
+    // ("live rooms release their poll when the loop is cleaned up").
+    expect(src).toMatch(
+      /const releaseHold = \(\) => \{\s*if \(!current\?\.held\) return;\s*current\.released = true;\s*current\.controller\.abort\(\);\s*\};/,
+    );
     // Actions count themselves in and out around their fetch.
     expect(src).toMatch(/actionsInFlightRef\.current \+= 1;\s*const \{ seq, next: seqNext \} = issueSequence/);
     expect(src).toMatch(/\} finally \{\s*actionsInFlightRef\.current -= 1;/);
@@ -485,6 +491,55 @@ describe("live rooms delegate their poll policy", () => {
     expect(ms).toBe(2000);
     expect(ms).toBeLessThanOrEqual((DEFAULTS.BID_TIMER_SECONDS * 1000) / 10);
   });
+});
+
+describe("live rooms release their poll when the loop is cleaned up", () => {
+  // Request-start ordering (room-sequence) assumes one poll in flight per
+  // loop: of two at once, the server may read the later-started one first,
+  // and the gate would then keep the older room. A cleaned-up loop (an
+  // unmount, a dependency change such as the draft room's pollKick, React's
+  // development double mount) used to leave its unheld request running, so
+  // every development load sent two, and the zz4d spec saw an accept count of
+  // 1, then 0. zz4d's one-poll-at-a-time check catches it for the inhouse
+  // room in the browser; these keep the shape in both rooms.
+  const POLL_ENDPOINT: Record<string, string> = {
+    "draft-room.tsx": "/api/draft/tick",
+    "inhouse-room.tsx": "/api/inhouse",
+  };
+  for (const room of ROOMS) {
+    it(`${room.name}: the cleanup aborts the poll in flight, held or not`, () => {
+      const src = roomText(room);
+      expect(src).toMatch(
+        /const releaseInFlight = \(\) => \{\s*if \(!current\) return;\s*current\.released = true;\s*current\.controller\.abort\(\);\s*\};/,
+      );
+      // The poll effect's cleanup (the one that ends the loop) calls it.
+      expect(src).toMatch(
+        /return \(\) => \{\s*alive = false;[^}]*?releaseInFlight\(\);\s*\};/,
+      );
+      // And the poll's signal is that controller's, so the abort reaches it.
+      expect(src).toMatch(/signal: withDeadline\(\s*(request\.)?controller,/);
+      expect(src).toMatch(/current = request;/);
+    });
+
+    it(`${room.name}: a cleaned-up loop never applies a reply`, () => {
+      const src = roomText(room);
+      const poll = src.indexOf(`await fetch("${POLL_ENDPOINT[room.name]}"`);
+      expect(poll).toBeGreaterThan(-1);
+      const applyAt = src.indexOf("apply(next, seq)", poll);
+      expect(applyAt).toBeGreaterThan(poll);
+      // Once when the response arrives, once when its body has been read.
+      const between = src.slice(poll, applyAt);
+      expect([...between.matchAll(/if \(!alive\) return;/g)]).toHaveLength(2);
+    });
+
+    it(`${room.name}: a released poll is not a failure`, () => {
+      const src = roomText(room);
+      expect(src).toMatch(
+        /\} else if \(request\.released\) \{\s*\} else \{\s*(setInitialError\(true\);\s*)?markFailure\(\);/,
+      );
+      expect(src).toMatch(/if \(current === request\) current = null;/);
+    });
+  }
 });
 
 describe("live rooms delegate their payload ordering", () => {

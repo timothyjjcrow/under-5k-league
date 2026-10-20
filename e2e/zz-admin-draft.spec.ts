@@ -1,7 +1,49 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 
 // Runs last (zz-*) because it transitions the seeded season into DRAFT, which
 // would otherwise break the smoke tests that assume the SIGNUPS phase.
+
+/**
+ * Every /api/draft/tick this page's room received: when the request left and
+ * when its response finished (browser wall-clock ms).
+ */
+function recordTicks(p: Page): { start: number; end: number }[] {
+  const ticks: { start: number; end: number }[] = [];
+  p.on("response", async (res) => {
+    const req = res.request();
+    if (req.method() !== "POST" || new URL(res.url()).pathname !== "/api/draft/tick") return;
+    try {
+      await res.body();
+      const timing = req.timing();
+      ticks.push({ start: timing.startTime, end: timing.startTime + timing.responseEnd });
+    } catch {
+      // Released mid-response, or the page navigated away: nobody read it.
+    }
+  });
+  return ticks;
+}
+
+/**
+ * The room never has two ticks in flight: each leaves after the one before it
+ * finished. Of two at once the server may read the later-started one first,
+ * and request-start ordering would then keep the older lot. The poll effect
+ * re-runs on every bid (pollKick) and twice on each load in development, and
+ * a cleaned-up loop used to leave its tick running. (1ms of slack for the
+ * timings' float rounding; two that overlap do so by a whole round trip.)
+ */
+function expectOneTickAtATime(ticks: { start: number; end: number }[], name: string) {
+  const sorted = [...ticks].sort((a, b) => a.start - b.start);
+  expect(sorted.length, `${name} polled the draft room`).toBeGreaterThan(1);
+  for (let i = 1; i < sorted.length; i++) {
+    const [prev, tick] = [sorted[i - 1], sorted[i]];
+    expect(
+      tick.start,
+      `${name}: a tick left at ${new Date(tick.start).toISOString()} while the one ` +
+        `before it (${new Date(prev.start).toISOString()} to ` +
+        `${new Date(prev.end).toISOString()}) was still in flight`,
+    ).toBeGreaterThanOrEqual(prev.end - 1);
+  }
+}
 
 test("admin runs draft night: captains nominate, bid, and get outbid in the browser", async ({
   page,
@@ -14,6 +56,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // auction below can be driven from their own browser sessions.
   const capOne = await browser.newContext();
   const capOnePage = await capOne.newPage();
+  const capOneTicks = recordTicks(capOnePage);
   await capOnePage.goto(
     "/api/auth/dev?name=Cap+One&steamId=76561190000003001&redirect=/me",
   );
@@ -25,6 +68,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
 
   const capTwo = await browser.newContext();
   const capTwoPage = await capTwo.newPage();
+  const capTwoTicks = recordTicks(capTwoPage);
   await capTwoPage.goto(
     "/api/auth/dev?name=Cap+Two&steamId=76561190000003002&redirect=/me",
   );
@@ -271,6 +315,11 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // …and takes the high bid back. The lot's bid trail is on show for everyone.
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
   await expect(capOnePage.getByText("Bid trail:")).toBeVisible();
+
+  // Through the park, the start, the nomination and three bids: one tick in
+  // flight at a time on each captain's room.
+  expectOneTickAtATime(capOneTicks, "Cap One");
+  expectOneTickAtATime(capTwoTicks, "Cap Two");
 
   await capOne.close();
   await capTwo.close();
