@@ -6,7 +6,11 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import { trackPageErrors } from "../e2e-mid/helpers";
+import {
+  expectOneRoomPollAtATime,
+  recordRoomPolls,
+  trackPageErrors,
+} from "../e2e-mid/helpers";
 
 // The room snapshot (inhouse-room-cache.ts) seen from the browser: the server
 // answers room polls from a per-instance copy of the room while the room
@@ -20,7 +24,13 @@ import { trackPageErrors } from "../e2e-mid/helpers";
 // - the other captain's first poll after the pick shows it;
 // - the ready check's accepted count never goes down in any tab;
 // - after an admin cancel, a requeued player's own tab shows them present on
-//   its next poll.
+//   its next poll;
+// - a tab never has two polls in flight: each leaves after the one before it
+//   landed. Two at once can be read by the server in either order, and
+//   request-start ordering would then keep the older room. React's
+//   development double mount ran the room's poll effect twice and left the
+//   first mount's request running, so every load sent two (the 2026-10-20
+//   failure: an accepted count of 1, then 0).
 //
 // Runs after zz4c (which leaves no live game and an empty queue) and cleans
 // up after itself for zz5.
@@ -65,6 +75,7 @@ async function act(ctx: APIRequestContext, body: Json): Promise<{ ok: boolean; j
 /** Every room reply this tab receives, and every tab title it shows. */
 async function watchedTab(browser: Browser, name: string, steamId: string) {
   const context = await browser.newContext({ baseURL: BASE });
+  await recordRoomPolls(context, "/api/inhouse", "state");
   // The tab title, sampled in the page (a title that flips back and forth
   // between two polls is still caught at this rate).
   await context.addInitScript(() => {
@@ -143,6 +154,15 @@ async function titlesAfter(page: Page, t: number): Promise<string[]> {
   return all.filter(([at]) => at > t).map(([, title]) => title);
 }
 
+// The specs after this one need an empty room: no live game and nobody
+// queued. The test sets this as soon as it has players; it runs even when a
+// check fails, so one failure here doesn't fail every zz4e spec behind it.
+let emptyTheRoom: (() => Promise<void>) | null = null;
+test.afterEach(async () => {
+  await emptyTheRoom?.();
+  emptyTheRoom = null;
+});
+
 test("the room never goes backwards: picks, titles, accepts and a requeue", async ({ browser }) => {
   test.setTimeout(300_000);
 
@@ -152,11 +172,22 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   const capB = await watchedTab(browser, "SN Captain B", "76561190000006001");
   const watcher = await watchedTab(browser, "SN Watcher", "76561190000006002");
   const tabs = [capA, capB, watcher];
+  const tabNames = ["capA", "capB", "watcher"];
   const others: APIRequestContext[] = [];
   for (let i = 0; i < 8; i++) {
     others.push(await apiPlayer(`SN Player ${i}`, `7656119000000601${i}`));
   }
   const admin = await apiPlayer("SN Admin", "76561190000006099", true);
+  let liveGame: string | null = null;
+  emptyTheRoom = async () => {
+    // A refusal (the game already over, a player not queued) is fine here.
+    if (liveGame) await act(admin, { action: "cancel", lobbyId: liveGame }).catch(() => null);
+    for (const ctx of [...others, capA.request, capB.request, watcher.request]) {
+      await act(ctx, { action: "leave" }).catch(() => null);
+    }
+    for (const ctx of [...others, admin]) await ctx.dispose();
+    for (const tab of tabs) await tab.context.close();
+  };
 
   for (const [i, ctx] of others.entries()) {
     expect((await act(ctx, { action: "join", mmr: 4000 - i * 50 })).ok).toBe(true);
@@ -166,16 +197,24 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   // The ten form a game; the watcher queues for the next one.
   const formed = await act(capA.request, { action: "state" });
   const lobbyId = (formed.json.lobby as LobbyView).id;
+  liveGame = lobbyId;
   expect((formed.json.lobby as LobbyView).status).toBe("READY_CHECK");
   expect((await act(watcher.request, { action: "join", mmr: 3000 })).ok).toBe(true);
   // The tabs joined through the API, so each still holds the empty queue it
-  // loaded (a spectator's slow rate): load the room as it is now.
+  // loaded (a spectator's slow rate): load the room as it is now. Only a
+  // reply the reloaded page asked for counts (the watcher already saw the
+  // check before its reload, and the accepts must not race its new page).
   for (const tab of tabs) {
+    const reloadedAt = Date.now();
     await tab.page.reload();
     await expect
-      .poll(() => tab.replies.some((r) => gameIn(r.state, lobbyId)?.status === "READY_CHECK"), {
-        timeout: 15_000,
-      })
+      .poll(
+        () =>
+          tab.replies.some(
+            (r) => r.start > reloadedAt && gameIn(r.state, lobbyId)?.status === "READY_CHECK",
+          ),
+        { timeout: 15_000 },
+      )
       .toBe(true);
   }
 
@@ -208,6 +247,10 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
         counts[i - 1],
       );
     }
+  }
+  // Since each tab's reload (its double mount included): one poll in flight.
+  for (const [i, tab] of tabs.entries()) {
+    await expectOneRoomPollAtATime(tab.page, tabNames[i]);
   }
 
   // ---- the captain vote: everyone backs the two highest MMRs --------------
@@ -280,17 +323,17 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   // ---- an admin cancel: a requeued player is present on their next poll ----
   const cancelled = await act(admin, { action: "cancel", lobbyId });
   expect(cancelled.ok).toBe(true);
+  liveGame = null;
   const cancelledAt = Date.now();
   await pollsEach(admin, [capA], cancelledAt, 1);
   const back = pollsAfter(capA, cancelledAt)[0].state;
   expect(back.me.inQueue).toBe(true);
   expect(back.queue.find((q) => q.userId === back.me.userId)?.away).toBe(false);
-
-  // Clean up the queue for the specs after this one.
-  for (const ctx of [...others, capA.request, capB.request, watcher.request]) {
-    await act(ctx, { action: "leave" });
+  // Through the vote, every pick (each releases a held poll) and the cancel.
+  for (const [i, tab] of tabs.entries()) {
+    await expectOneRoomPollAtATime(tab.page, tabNames[i]);
   }
+
   for (const tab of tabs) tab.errors();
-  for (const ctx of [...others, admin]) await ctx.dispose();
-  for (const tab of tabs) await tab.context.close();
+  // afterEach empties the room for the specs after this one.
 });

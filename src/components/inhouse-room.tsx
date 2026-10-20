@@ -38,6 +38,7 @@ import {
   inhousePollDelay,
   inhouseRefocusResync,
   inhouseUnheldStreak,
+  withDeadline,
 } from "@/lib/room-poll";
 import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
 import { RoomStatusLine } from "@/components/room-status-line";
@@ -78,21 +79,6 @@ import { AdminQueueRemoval } from "@/components/inhouse/admin-queue-removal";
  */
 function clockLobby(s: InhouseState | null) {
   return s ? pollingLobby(s.lobby, s.otherLobbies, s.now) : null;
-}
-
-/**
- * `controller`'s signal, which also aborts at `timeoutMs`
- * (AbortSignal.timeout): the poll's deadline, plus a release the room can
- * pull. AbortSignal.any would do it, but older Safari lacks it.
- */
-function withDeadline(controller: AbortController, timeoutMs: number) {
-  const deadline = AbortSignal.timeout(timeoutMs);
-  deadline.addEventListener(
-    "abort",
-    () => controller.abort(deadline.reason),
-    { once: true },
-  );
-  return controller.signal;
 }
 
 export function InhouseRoom({
@@ -306,10 +292,14 @@ export function InhouseRoom({
     // had already moved on (inhouseUnheldStreak); it lengthens the gap
     // between requests while a version never stops moving.
     let unheldStreak = 0;
-    // The held request in flight, if any, so an action or a connectivity
-    // change can release it: its reply would be stale, or come too late.
-    let currentHold: { controller: AbortController; released: boolean } | null =
-      null;
+    // The request in flight, if any. An action or a connectivity change
+    // releases it only when it is held (its reply would be stale, or come too
+    // late); the loop's cleanup releases it either way (releaseInFlight).
+    let current: {
+      controller: AbortController;
+      held: boolean;
+      released: boolean;
+    } | null = null;
 
     const markFailure = () => {
       consecutiveFailures += 1;
@@ -332,9 +322,20 @@ export function InhouseRoom({
     };
 
     const releaseHold = () => {
-      if (!currentHold) return;
-      currentHold.released = true;
-      currentHold.controller.abort();
+      if (!current?.held) return;
+      current.released = true;
+      current.controller.abort();
+    };
+
+    // The loop is being cleaned up (an unmount, or React's development double
+    // mount, which runs this effect twice): nobody will read its request, held
+    // or not. Left running, an unheld one lands beside the next loop's first
+    // request; the server can read the two in either order, so request-start
+    // ordering could keep the older room (zz4d: an accept count of 1, then 0).
+    const releaseInFlight = () => {
+      if (!current) return;
+      current.released = true;
+      current.controller.abort();
     };
 
     // Something is waiting on an answer now, so the next request must not be
@@ -397,8 +398,8 @@ export function InhouseRoom({
       const pollConnectivityEpoch = connectivityEpochRef.current;
       const startedAt = Date.now();
       const controller = new AbortController();
-      const hold = longPoll ? { controller, released: false } : null;
-      currentHold = hold;
+      const request = { controller, held: longPoll !== null, released: false };
+      current = request;
       let next: InhouseState | null = null;
       let rateLimited = false;
       let supersededByConnectivityChange = false;
@@ -419,12 +420,15 @@ export function InhouseRoom({
           // See ROOM_POLL_TIMEOUT_MS — the draft room's loop shares it, and
           // both freeze the same way without it. A held request gets its
           // hold on top (longPoll.timeoutMs); the controller also lets an
-          // action or a connectivity change release it.
+          // action, a connectivity change or the loop's cleanup release it.
           signal: withDeadline(
             controller,
             longPoll ? longPoll.timeoutMs : ROOM_POLL_TIMEOUT_MS,
           ),
         });
+        // Cleaned up while the reply was on its way: a newer loop owns the
+        // room, and this reply must never be applied beside its own.
+        if (!alive) return;
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
         } else if (res.ok) {
@@ -432,6 +436,7 @@ export function InhouseRoom({
             roomVersion?: unknown;
             held?: unknown;
           };
+          if (!alive) return;
           if (pollConnectivityEpoch !== connectivityEpochRef.current) {
             supersededByConnectivityChange = true;
           } else {
@@ -472,15 +477,16 @@ export function InhouseRoom({
       } catch {
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
-        } else if (hold?.released) {
-          // Released on purpose (an action landed, or the room unmounted):
-          // not a failure. The rerun below polls after the action.
+        } else if (request.released) {
+          // Released on purpose (an action landed, a connectivity change, or
+          // the loop was cleaned up): not a failure. The rerun below polls
+          // after the action.
         } else {
           markFailure(); // transient blip (or the abort above); next poll retries
         }
       } finally {
         inFlight = false;
-        if (currentHold === hold) currentHold = null;
+        if (current === request) current = null;
       }
       if (supersededByConnectivityChange) {
         resyncPending = true;
@@ -591,8 +597,9 @@ export function InhouseRoom({
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
-      // The server would hold a request nobody reads for up to its hold.
-      releaseHold();
+      // Held or not, nobody reads this loop's request any more (the server
+      // would hold a held one for up to its hold).
+      releaseInFlight();
     };
   }, [apply, pollOk, pollFail, pollMs]);
 

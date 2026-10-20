@@ -8,6 +8,7 @@ import {
   inhousePollDelay,
   inhouseRefocusResync,
   inhouseUnheldStreak,
+  withDeadline,
 } from "./room-poll";
 import {
   DEFAULTS,
@@ -649,6 +650,27 @@ describe("inhouseRefocusResync", () => {
     expect(ROOM_POLL_TIMEOUT_MS).toBeLessThan(
       INHOUSE.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
     );
+  });
+});
+
+describe("withDeadline", () => {
+  it("hands back the controller's own signal, so the room can release it", () => {
+    const controller = new AbortController();
+    const signal = withDeadline(controller, 60_000);
+    expect(signal).toBe(controller.signal);
+    expect(signal.aborted).toBe(false);
+    controller.abort();
+    expect(signal.aborted).toBe(true);
+  });
+
+  it("aborts at the deadline, with the timeout as its reason", async () => {
+    const controller = new AbortController();
+    const signal = withDeadline(controller, 20);
+    await new Promise<void>((resolve) =>
+      signal.addEventListener("abort", () => resolve(), { once: true }),
+    );
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as Error).name).toBe("TimeoutError");
   });
 });
 

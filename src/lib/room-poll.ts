@@ -411,6 +411,25 @@ export function inhouseRefocusResync(hiddenForMs: number | null): boolean {
 }
 
 /**
+ * `controller`'s signal, which also aborts at `timeoutMs`
+ * (AbortSignal.timeout): a room poll's deadline, plus a release the room can
+ * pull (an action, a connectivity change, the loop's cleanup). Both rooms
+ * poll through it. AbortSignal.any would do it, but older Safari lacks it.
+ */
+export function withDeadline(
+  controller: AbortController,
+  timeoutMs: number,
+): AbortSignal {
+  const deadline = AbortSignal.timeout(timeoutMs);
+  deadline.addEventListener(
+    "abort",
+    () => controller.abort(deadline.reason),
+    { once: true },
+  );
+  return controller.signal;
+}
+
+/**
  * Whether a draft-room tab polls the moment a clock it shows reaches zero.
  * Only a signed-in poll can settle the lot (the tick route runs the resolvers
  * for those alone), and only a captain or an admin has controls waiting on
