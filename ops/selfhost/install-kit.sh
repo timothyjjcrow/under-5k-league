@@ -179,10 +179,35 @@ ensure_user() { # <name> <home>
     note "created user $1"
   fi
 }
-ensure_dir() { # <mode> <owner:group> <path>
+# ensure_dir <mode> <owner:group> <path>: a folder whose parent only root can
+# change, so nobody else could have put anything at <path>. GNU chown and
+# chmod follow a link they are given (re-owning or re-moding its target), so a
+# link or file at <path> is refused, and the chown is -h besides. A folder
+# inside one a service user owns goes through ensure_user_dir instead.
+ensure_dir() {
+  local parent
+  parent="$(dirname "$3")"
+  [[ -z "$(find "$parent" -maxdepth 0 \( \( ! -uid 0 ! -uid "$(id -u)" \) -o -perm -002 \) -print)" ]] \
+    || die "${parent} is not root's, or anyone can write it: refusing to change ${3} as root"
+  if [[ -L "$3" ]] || { [[ -e "$3" ]] && [[ ! -d "$3" ]]; }; then
+    die "${3} is a link or not a folder: refusing to change it as root"
+  fi
   mkdir -p "$3"
-  chown "$2" "$3"
+  chown -h "$2" "$3"
   chmod "$1" "$3"
+}
+# ensure_user_dir <user> <mode> <path>: a folder inside one <user> owns (the
+# build user's npm cache, the backup folders ggd2l-ops writes), made and set by
+# <user> itself, so root runs nothing on a path that user could have swapped
+# for a link. Nothing of ours leaves a link or file there: one is refused, as
+# a sign the user's code was not what it should be (ops/selfhost/README.md,
+# Kit changes).
+ensure_user_dir() {
+  if [[ -L "$3" ]] || { [[ -e "$3" ]] && [[ ! -d "$3" ]]; }; then
+    die "${3} is a link or not a folder; ${1} may have been misused, look before removing it"
+  fi
+  runuser -u "$1" -- mkdir -p "$3"
+  runuser -u "$1" -- chmod "$2" "$3"
 }
 # active_units: the league slots and the bot that are running now.
 active_units() {
@@ -202,19 +227,21 @@ ensure_user cloudflared /nonexistent
 
 log "Directories (§1.2)"
 ensure_dir 0750 ggd2l-build:ggd2l-build /var/cache/ggd2l-build
-ensure_dir 0750 ggd2l-build:ggd2l-build /var/cache/ggd2l-build/npm
+ensure_user_dir ggd2l-build 0750 /var/cache/ggd2l-build/npm
 ensure_dir 0750 ggd2l-ops:ggd2l-ops /var/lib/ggd2l-ops
 ensure_dir 0700 ggd2l-bot:ggd2l-bot /var/lib/ggd2l-bot
 ensure_dir 0755 root:root /srv/ggd2l
 ensure_dir 0755 ggd2l-build:ggd2l-build /srv/ggd2l/repo.git
-# Where the build user clones and installs: sticky and group-writable for it,
-# so it can create its own directory but cannot rename or delete one the agent
-# has locked to root. Tools and bot code are readable by all (backups, drills
-# and the bot run from them); a league's releases are traverse-only for
-# others, which is all its league user needs to reach the slot.
-ensure_dir 1775 root:ggd2l-build /srv/ggd2l/tools
+# Where the build user clones and installs. The agent makes each folder here
+# as root and only then hands it over (makeBuildDir), so the build user needs
+# no write access to these parents: it can neither plant a link at a name the
+# agent is about to use nor swap its own folder for one. Tools and bot code
+# are readable by all (backups, drills and the bot run from them); a league's
+# releases are traverse-only for others, which is all its league user and the
+# build user need to reach a release.
+ensure_dir 0755 root:root /srv/ggd2l/tools
 ensure_dir 0755 root:root /srv/ggd2l/bot
-ensure_dir 1775 root:ggd2l-build /srv/ggd2l/bot/releases
+ensure_dir 0755 root:root /srv/ggd2l/bot/releases
 ensure_dir 0755 root:root /srv/ggd2l/www
 ensure_dir 0755 root:root /var/lib/ggd2l
 ensure_dir 0750 "root:${ADMIN_USER}" /var/log/ggd2l
@@ -233,15 +260,15 @@ ensure_dir 0750 root:cloudflared /etc/cloudflared
 ensure_dir 0750 root:caddy /etc/caddy/ggd2l
 for lg in $LEAGUES; do
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}"
-  ensure_dir 1771 root:ggd2l-build "/srv/ggd2l/${lg}/releases"
+  ensure_dir 0751 root:root "/srv/ggd2l/${lg}/releases"
   ensure_dir 0750 "root:ggd2l-${lg}" "/srv/ggd2l/${lg}/slots"
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}/static"
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}/static/_next"
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}/static/_next/static"
   ensure_dir 0755 root:root "/var/lib/ggd2l/${lg}"
   ensure_dir 0700 ggd2l-ops:ggd2l-ops "/var/backups/ggd2l/${lg}"
-  ensure_dir 0700 ggd2l-ops:ggd2l-ops "/var/backups/ggd2l/${lg}/local"
-  ensure_dir 0700 ggd2l-ops:ggd2l-ops "/var/backups/ggd2l/${lg}/offsite"
+  ensure_user_dir ggd2l-ops 0700 "/var/backups/ggd2l/${lg}/local"
+  ensure_user_dir ggd2l-ops 0700 "/var/backups/ggd2l/${lg}/offsite"
   ensure_dir 0700 root:root "/var/backups/ggd2l/cutover/${lg}"
 done
 

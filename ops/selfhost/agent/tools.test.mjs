@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readlinkSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readlinkSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { caddyConfigSha256, renderMode } from "./caddy-modes.mjs";
@@ -278,4 +278,82 @@ test("status counts the maintenance page's 503s apart from real 5xx", async () =
   const result = await status(box.ctx, { meminfo: path.join(box.root, "missing") });
   assert.equal(result.serverErrors24h, 1);
   assert.equal(result.maintenance503s24h, 2);
+});
+
+// 2026-10-19: prepare and bot-deploy made the clone's folder with
+// `install -d -o ggd2l-build` right after removing it, as root, in a parent
+// the build user could write, so a link planted in between had its target
+// re-owned. Root now removes with GNU rm, makes the folder with a plain mkdir
+// (refusing anything at the name), sets its mode, and only then hands it over.
+const commandLines = (box) => box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
+
+for (const [verb, dirOf, run] of [
+  ["prepare", (box) => box.layout.toolsDir(SHA), (box) => prepareTools(box.ctx, SHA)],
+  ["bot-deploy", (box) => path.join(box.layout.botReleases, SHA.slice(0, 12)), (box) => botDeploy(box.ctx, SHA)],
+]) {
+  test(`${verb} removes a half-made folder with GNU rm, then makes it itself before handing it over`, async () => {
+    const box = gitBox();
+    const dir = dirOf(box);
+    mkdirSync(path.join(dir, "half"), { recursive: true });
+    await run(box);
+    const lines = commandLines(box);
+    const removed = lines.indexOf(`rm -rf --one-file-system -- ${dir}`);
+    const moded = lines.indexOf(`chmod 0755 ${dir}`);
+    const handed = lines.indexOf(`chown -h ggd2l-build:ggd2l-build ${dir}`);
+    const filled = lines.findIndex((line) => line.includes(" clone ") || line.includes(" archive "));
+    assert.ok(removed >= 0 && removed < moded && moded < handed && handed < filled, lines.join("\n"));
+    assert.ok(!lines.some((line) => line.startsWith("install ") && line.endsWith(` ${dir}`)), "never install -d on the folder");
+    assert.ok(!existsSync(path.join(dir, "half")));
+  });
+
+  test(`${verb} refuses a link planted at the folder's name between the rm and the mkdir`, async () => {
+    for (const target of ["lib", "nowhere"]) {
+      const box = gitBox();
+      const dir = dirOf(box);
+      const to = target === "lib" ? box.layout.lib : path.join(box.root, "nowhere");
+      let planted = -1;
+      box.on((command, args) => {
+        if (!(command === "/usr/bin/rm" && args.at(-1) === dir)) return undefined;
+        rmSync(dir, { recursive: true, force: true });
+        mkdirSync(path.dirname(dir), { recursive: true });
+        symlinkSync(to, dir);
+        planted = box.calls.length;
+        return { code: 0 };
+      });
+      await assert.rejects(run(box), { code: "unsafe_path" }, target);
+      assert.ok(planted > 0, `${target}: planted after the rm`);
+      assert.ok(!box.calls.slice(planted).some((call) => call.args.includes(dir)), `${target}: nothing runs on the link`);
+      assert.ok(!box.calls.some((call) => call.args.includes("clone") || call.args.includes("archive")), `${target}: nothing cloned`);
+      assert.ok(lstatSync(dir).isSymbolicLink(), `${target}: the link is left as found`);
+    }
+  });
+}
+
+test("bot-deploy never locks down, or links current to, a folder swapped for a link", async () => {
+  const box = gitBox();
+  const dir = path.join(box.layout.botReleases, SHA.slice(0, 12));
+  box.on((command, args) => {
+    if (!(command.endsWith("/chown") && args.join(" ") === `-R -P -h root:ggd2l-bot ${dir}`)) return undefined;
+    renameSync(dir, `${dir}.aside`);
+    symlinkSync(box.layout.lib, dir);
+    return { code: 0 };
+  });
+  await assert.rejects(botDeploy(box.ctx, SHA), { code: "unsafe_path" });
+  const lines = commandLines(box);
+  assert.ok(!lines.some((line) => line.startsWith("chmod ") && line.endsWith(` ${dir}`) && line !== `chmod 0755 ${dir}`), "no chmod through the link");
+  assert.ok(!existsSync(box.layout.botCurrent));
+});
+
+test("attest refuses a link at the build user's npm cache before any unit runs", async () => {
+  const box = gitBox();
+  box.writeEnv("us");
+  await prepareTools(box.ctx, SHA);
+  mkdirSync(box.layout.buildHome, { recursive: true });
+  rmSync(box.layout.npmCache, { recursive: true, force: true });
+  symlinkSync(box.layout.lib, box.layout.npmCache);
+  const before = box.calls.length;
+  await assert.rejects(attest(box.ctx, "us", SHA), { code: "unsafe_path" });
+  const after = box.calls.slice(before);
+  assert.ok(!after.some((call) => call.command.endsWith("/systemd-run")), "no unit ran");
+  assert.ok(!after.some((call) => call.args.includes(box.layout.npmCache)), "nothing ran on the cache");
 });

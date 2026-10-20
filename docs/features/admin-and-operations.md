@@ -411,6 +411,25 @@ respect there:
   255 can repeat from the unit's first second. Count a new dependency's
   install and build cost on one vCPU, and a new background request's
   database work.
+- **Root never works through a link a service user could have left.** The
+  build user runs third-party install scripts and `ggd2l-ops` runs the
+  build user's tools clone, so either can leave a link wherever it writes,
+  and GNU `install -d`, `chown` and `chmod` change a link's target (until
+  2026-10-19 that let a build re-own the agent's own code). In
+  `ops/selfhost/`:
+  - Root changes only folders in a parent no service user can write.
+  - A folder the build user fills is made by `makeBuildDir`: root's
+    `mkdir`, then the mode, then `chown -h`.
+  - A tree comes back through `takeBackTree` before root reads, chmods or
+    writes through it.
+  - Such trees are deleted with `removeTree` (GNU `rm`). Node 22's
+    `rmSync` follows a folder swapped for a link mid-walk.
+  - Records go through `writeFileAtomic`.
+  - A folder inside a service user's own folder is that user's to make
+    (`buildUserEnv`'s npm cache, `ensure_user_dir`).
+
+  `install-kit.test.mjs` fails an `ensure_dir` whose parent a service user
+  can write.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.

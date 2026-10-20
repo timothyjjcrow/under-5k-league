@@ -53,6 +53,7 @@ export const BIN = Object.freeze({
   node: "/usr/bin/node",
   npm: "/usr/bin/npm",
   psql: "/usr/bin/psql",
+  rm: "/usr/bin/rm",
   rsync: "/usr/bin/rsync",
   runuser: "/usr/sbin/runuser",
   systemctl: "/usr/bin/systemctl",
@@ -145,6 +146,7 @@ export const ERRORS = Object.freeze({
   artifact_missing: "the built release lacks a required file",
   lockdown_failed: "locking down the release failed",
   link_escapes: "a symlink in the release points outside it",
+  unsafe_path: "refused a link or unexpected file where the agent works as root",
   publish_failed: "publishing static files failed",
   release_missing: "no such release on the box",
   release_not_built: "the release did not finish building",
@@ -180,6 +182,7 @@ export const ERRORS = Object.freeze({
   backup_failed: "the backup unit failed",
   drill_failed: "the restore drill failed",
   bot_deploy_failed: "deploying the lobby bot failed",
+  prune_failed: "removing an old release or tools clone failed",
   internal: "the agent hit an unexpected error",
 });
 

@@ -3,7 +3,7 @@
 // as data. Reading an env file registers its secret values with the runner,
 // which then refuses any command line that contains one.
 import { createHash } from "node:crypto";
-import { closeSync, mkdirSync, openSync, readFileSync, renameSync, statfsSync, writeFileSync, writeSync } from "node:fs";
+import { closeSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statfsSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 import { checkLeagueEnv, parseEnvFile } from "./env-contract.mjs";
 import { AgentError, BIN, createLayout } from "./layout.mjs";
@@ -32,10 +32,21 @@ export function readJson(file) {
   }
 }
 
-export function writeJsonAtomic(file, value, mode = 0o644) {
+/**
+ * Write a whole file, then rename it into place. The temporary name is
+ * removed first (a link there goes, never its target) and then created
+ * exclusively, so root never writes through a link the build user left at
+ * that name in a folder it once owned (a release's release.json).
+ */
+export function writeFileAtomic(file, text, mode = 0o644) {
   const temporary = `${file}.${process.pid}.tmp`;
-  writeFileSync(temporary, `${JSON.stringify(value, null, 2)}\n`, { mode });
+  rmSync(temporary, { force: true });
+  writeFileSync(temporary, text, { mode, flag: "wx" });
   renameSync(temporary, file);
+}
+
+export function writeJsonAtomic(file, value, mode = 0o644) {
+  writeFileAtomic(file, `${JSON.stringify(value, null, 2)}\n`, mode);
 }
 
 /**

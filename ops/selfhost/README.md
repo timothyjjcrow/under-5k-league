@@ -99,6 +99,22 @@ heartbeat), `ggd2l-bot`.
   them for the league user and the unit's `ReadWritePaths=` names them; the
   rest of the release is read-only. CI's boot step fails a build that writes
   anywhere else.
+- **Root never works through a link a service user could have left.** GNU
+  `install -d`, `chown` and `chmod`, given a link, change its target. The
+  build user runs third-party install scripts, and `ggd2l-ops` runs the
+  build user's tools clone every hour, so either can leave a link anywhere
+  it can write. So the agent and `install-kit.sh` change, as root, only
+  folders in a parent no service user can write. The agent makes each
+  folder the build user clones or unpacks into itself, with a plain `mkdir`
+  in a root-only parent (`tools/`, `bot/releases/`, `<lg>/releases/`), and
+  hands it over with `chown -h`. It takes a tree back
+  (`chown -R -P -h`, then requires a real, root-owned folder) before it
+  reads, chmods or writes through it. It deletes such trees with GNU `rm`,
+  never Node's `rmSync`. A folder inside a service user's own folder (the
+  npm cache, the backups' `local/` and `offsite/`) is made by that user. A
+  link or file where one of these folders goes stops the agent
+  (`unsafe_path`) or the install: treat that as an incident (see Kit
+  changes).
 - Each slot process holds one Prisma pool of `connection_limit=8`
   (`provision-league-db.sh`), so four processes in a release overlap use 32 of
   PostgreSQL's 47 usable connections. A release built before 2026-10-17's fix
@@ -195,6 +211,36 @@ it again. The first install after 2026-10-18 brings the production
 output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
+
+**The first install after 2026-10-19** closes a root escalation from the
+build user. Until then the agent ran `install -d -o ggd2l-build` as root on
+the npm cache inside the build user's own home, and on clone folders in
+parents the build user could write. `install-kit.sh` did the same on the
+backups' `local/` and `offsite/` inside `ggd2l-ops`'s folder. A link left
+there would have handed its target (the agent's own code, say) to that
+user. Before installing, check that nothing was handed over, as the admin
+user (`-xdev` stays on `/`, the box's only filesystem):
+
+```bash
+sudo find / -xdev \( -user ggd2l-build -o -user ggd2l-ops \) ! -path '/srv/ggd2l/*' \
+  ! -path '/var/cache/ggd2l-build' ! -path '/var/cache/ggd2l-build/*' ! -path '/var/backups/ggd2l/*' \
+  ! -path '/var/lib/ggd2l-ops' ! -path '/var/lib/ggd2l-ops/*' ! -path '/var/lib/ggd2l-alerts' \
+  ! -path '/var/lib/ggd2l-alerts/*' ! -path '/etc/ggd2l/rclone.conf' ! -path '/tmp/*' ! -path '/var/tmp/*' -print
+sudo stat -c '%F %U:%G %a %n' /var/cache/ggd2l-build/npm /var/backups/ggd2l/{us,eu}/{local,offsite}
+```
+
+The `find` prints nothing, and `stat` says `directory`, owned by
+`ggd2l-build` or `ggd2l-ops`, for all five. Anything else (a symbolic link
+there, or something of root's, such as `/usr/local/lib/ggd2l`, now owned by
+one of those users) means root may already have run that user's code: stop,
+install nothing, leave the box as it is, and handle it as an incident
+(PRODUCTION-OPERATIONS). Otherwise install as above, record both outputs in
+the install's evidence, then check the new modes:
+`stat -c '%a %U:%G %n' /srv/ggd2l/tools /srv/ggd2l/bot/releases /srv/ggd2l/{us,eu}/releases`
+prints `755`, `755`, `751` and `751`, each `root:root`. The next release's
+`agent build` is the first run of the new folder handling. An
+`unsafe_path` refusal from the agent, or an install that stops at "is a
+link or not a folder", is the same incident as `find` printing something.
 
 ## Rollback
 

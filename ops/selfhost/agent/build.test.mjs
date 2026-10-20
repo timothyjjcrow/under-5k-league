@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { test } from "node:test";
 import { AUTOLOADED_DOTENV_RE, BUILD_NODE_OPTIONS, ENV_GATE_LINE, REQUIRED_ARTIFACTS, SCHEMA_GATE_LINE, buildRelease } from "./build.mjs";
@@ -137,7 +137,14 @@ test("build installs with dev dependencies and NODE_ENV unset, then builds with 
   assert.equal(readFileSync(path.join(dir, ".release.env"), "utf8"), `LEAGUE_RELEASE_SHA=${SHA}\n`);
 
   const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
-  assert.ok(commands.includes(`chmod 0700 ${dir}`), "nobody else reads the tree while the build writes the action key");
+  // Root makes the folder, sets its mode while it is still root's, and only
+  // then hands it to the build user, never through `install -d`.
+  const moded = commands.indexOf(`chmod 0700 ${dir}`);
+  const handed = commands.indexOf(`chown -h ggd2l-build:ggd2l-build ${dir}`);
+  const cloned = commands.findIndex((line) => line.includes(" clone "));
+  assert.ok(moded >= 0, "nobody else reads the tree while the build writes the action key");
+  assert.ok(moded < handed && handed < cloned, "mode, then owner, then the clone");
+  assert.ok(!commands.some((line) => line.startsWith("install ") && line.endsWith(` ${dir}`)));
   assert.ok(commands.includes(`chown -R -P -h root:ggd2l-us ${dir}`));
   assert.ok(commands.includes(`chmod -R g+rX,g-w,o-rwx ${dir}`));
   // The league user owns exactly the folders `next start` writes, each made
@@ -169,10 +176,20 @@ test("the build log has every env value of 8 or more characters redacted", async
 });
 
 test("a build without both gate lines fails and is recorded FAILED", async () => {
-  const { box, dir } = buildBox({ buildLines: [ENV_GATE_LINE, "Production schema attestation skipped for VERCEL_ENV=(unset)."] });
+  let recordDuringBuild = null;
+  const plant = (dir) => {
+    recordDuringBuild = existsSync(path.join(dir, "release.json"));
+  };
+  const { box, dir } = buildBox({ buildLines: [ENV_GATE_LINE, "Production schema attestation skipped for VERCEL_ENV=(unset)."], plant });
   await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "gate_line_missing" });
   assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).state, "FAILED");
   assert.ok(!box.calls.some((call) => call.command.endsWith("/rsync")), "nothing published");
+  // Root writes no record into the folder while the build user owns it, and
+  // takes the folder back before it writes the FAILED one.
+  assert.equal(recordDuringBuild, false);
+  const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
+  assert.ok(commands.includes(`chown -R -P -h root:root ${dir}`));
+  assert.ok(commands.includes(`chmod go-w ${dir}`));
 });
 
 test("a build missing a linux artifact fails", async () => {
@@ -307,4 +324,113 @@ test("a link or file the build left where a league-writable folder goes is never
     assert.ok(!commands.some((line) => line.startsWith("rsync ")), "nothing is published");
     assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).state, "FAILED");
   }
+});
+
+// 2026-10-19: the build user owns its home, so any build's install script
+// could leave a link where the npm cache goes, and `install -d -o ...` run as
+// root on that link re-owned its target (the agent's own code) to the build
+// user. Root makes only the home, in root's /var/cache; the build user makes
+// the cache, and a link or file there stops the agent before root goes near it.
+test("root makes the build user's home, and the build user its own npm cache", async () => {
+  const { box } = buildBox();
+  await buildRelease(box.ctx, "us", SHA);
+  const lines = box.argv().map((argv) => argv.join(" "));
+  assert.ok(lines.includes(`/usr/bin/install -d -o ggd2l-build -g ggd2l-build -m 0750 ${box.layout.buildHome}`));
+  assert.ok(lines.includes(`/usr/sbin/runuser -u ggd2l-build -- /usr/bin/install -d -m 0750 ${box.layout.npmCache}`));
+  const asRoot = box.calls.filter((call) => !call.command.endsWith("/runuser") && !call.command.endsWith("/systemd-run"));
+  assert.ok(!asRoot.some((call) => call.args.includes(box.layout.npmCache)), "root never names the npm cache");
+});
+
+test("a link or file a build leaves at the npm cache stops the next step before root goes near it", async () => {
+  const cases = [
+    ["a link planted by npm ci's install scripts", (box) => symlinkSync(box.layout.lib, box.layout.npmCache)],
+    ["a dangling link", (box) => symlinkSync(path.join(box.root, "nowhere"), box.layout.npmCache)],
+    ["a file", (box) => writeFileSync(box.layout.npmCache, "x")],
+  ];
+  for (const [name, plant] of cases) {
+    const { box } = buildBox();
+    let planted = -1;
+    box.on((command, args) => {
+      if (!(command.endsWith("/systemd-run") && args.includes("ci"))) return undefined;
+      mkdirSync(box.layout.buildHome, { recursive: true });
+      rmSync(box.layout.npmCache, { recursive: true, force: true });
+      plant(box);
+      planted = box.calls.length;
+      return { code: 0 };
+    });
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "unsafe_path" }, name);
+    assert.ok(planted > 0, `${name}: planted during npm ci`);
+    const after = box.calls.slice(planted);
+    assert.ok(!after.some((call) => call.args.includes(box.layout.npmCache)), `${name}: nothing runs on the cache`);
+    assert.ok(!after.some((call) => call.args.includes(box.layout.lib)), `${name}: nothing names the link's target`);
+    assert.ok(!after.some((call) => call.args.includes("scripts/vercel-build.mjs")), `${name}: the build never ran`);
+  }
+});
+
+test("a link already at the npm cache stops a build before any unit runs", async () => {
+  const { box } = buildBox();
+  mkdirSync(box.layout.buildHome, { recursive: true });
+  symlinkSync(box.layout.lib, box.layout.npmCache);
+  await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "unsafe_path" });
+  assert.ok(!box.calls.some((call) => call.command.endsWith("/systemd-run")));
+  assert.ok(!box.calls.some((call) => call.args.includes(box.layout.npmCache)));
+});
+
+// Root makes each release folder with a plain mkdir, so a link at the name is
+// refused, never followed by a chown, chmod or record write.
+test("a link already at the release folder's name is refused and never followed", async () => {
+  for (const target of ["lib", "nowhere"]) {
+    const { box, dir } = buildBox();
+    const to = target === "lib" ? box.layout.lib : path.join(box.root, "nowhere");
+    symlinkSync(to, dir);
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "unsafe_path" }, target);
+    assert.ok(!box.calls.some((call) => call.args.includes(dir)), `${target}: no command names the folder`);
+    assert.ok(!existsSync(path.join(box.layout.lib, "release.json")), `${target}: no record written through the link`);
+    assert.ok(lstatSync(dir).isSymbolicLink(), `${target}: the link is left as found`);
+  }
+});
+
+test("a release folder swapped for a link before the lockdown is never read, chmodded or written through", async () => {
+  const { box, dir } = buildBox();
+  box.on((command, args) => {
+    if (!(command.endsWith("/chown") && args.join(" ") === `-R -P -h root:ggd2l-us ${dir}`)) return undefined;
+    // The folder renamed aside and a link left in its place, just before the chown.
+    renameSync(dir, `${dir}.aside`);
+    symlinkSync(box.layout.lib, dir);
+    return { code: 0 };
+  });
+  await assert.rejects(buildRelease(box.ctx, "us", SHA), { code: "unsafe_path" });
+  const commands = box.calls.map((call) => [path.basename(call.command), ...call.args].join(" "));
+  assert.ok(!commands.some((line) => line.startsWith("chmod ") && line.endsWith(` ${dir}`) && line !== `chmod 0700 ${dir}`), "no chmod through the link");
+  assert.ok(!commands.some((line) => line.startsWith("install -d -o ggd2l-us ")), "no folder is made the league user's");
+  assert.ok(!commands.some((line) => line.startsWith("rsync ")), "nothing is published");
+  for (const name of ["release.json", ".release.env"])
+    assert.ok(!existsSync(path.join(box.layout.lib, name)), `no ${name} written through the link`);
+});
+
+test("a link the build left at a record's name or temporary name is never written through", async () => {
+  const tmp = (dir, name) => path.join(dir, `${name}.${process.pid}.tmp`);
+  // Pointing outside the release: a gate failure, or the link check itself,
+  // ends in a FAILED record written beside it.
+  for (const [buildLines, code] of [[[ENV_GATE_LINE], "gate_line_missing"], [undefined, "link_escapes"]]) {
+    let outside = null;
+    const { box, dir } = buildBox({ buildLines, plant: (at) => symlinkSync(outside, tmp(at, "release.json")) });
+    outside = path.join(box.root, "etc/ggd2l/outside");
+    writeFileSync(outside, "keep me\n");
+    await assert.rejects(buildRelease(box.ctx, "us", SHA), { code }, code);
+    assert.equal(readFileSync(outside, "utf8"), "keep me\n", code);
+    assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).state, "FAILED", code);
+    assert.ok(!existsSync(tmp(dir, "release.json")), code);
+  }
+  // Pointing inside, a link passes the link check, so the writes must not follow it either.
+  const plant = (dir) => {
+    for (const link of [tmp(dir, "release.json"), path.join(dir, ".release.env"), tmp(dir, ".release.env")])
+      symlinkSync("package.json", link);
+  };
+  const { box, dir } = buildBox({ plant });
+  await buildRelease(box.ctx, "us", SHA);
+  assert.equal(readFileSync(path.join(dir, "package.json"), "utf8"), "{}");
+  assert.equal(JSON.parse(readFileSync(path.join(dir, "release.json"), "utf8")).state, "BUILT");
+  assert.equal(readFileSync(path.join(dir, ".release.env"), "utf8"), `LEAGUE_RELEASE_SHA=${SHA}\n`);
+  for (const name of ["release.json", ".release.env"]) assert.ok(lstatSync(path.join(dir, name)).isFile(), name);
 });

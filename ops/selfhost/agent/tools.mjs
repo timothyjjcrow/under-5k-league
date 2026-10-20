@@ -9,11 +9,11 @@
 // JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { buildUserEnv, cloneAt, fetchMain, lockDownTree, requireOnMain } from "./build.mjs";
+import { buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
-import { asUser, must, systemdRunArgs } from "./runner.mjs";
+import { asUser, must, removeTree, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
 
@@ -70,8 +70,9 @@ export async function prepareTools(ctx, commit) {
   const dir = ctx.layout.toolsDir(commit);
   if (!(await toolsReady(ctx, commit))) {
     // A half-made clone (a crash inside npm ci) is rebuilt from nothing.
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(ctx.runner, dir, "clone_failed");
     mkdirSync(ctx.layout.tools, { recursive: true });
+    await makeBuildDir(ctx, dir, "0755", "clone_failed");
     await cloneAt(ctx, dir, commit);
     await npmCi(ctx, dir, ["--include=dev"], "install_failed");
   }
@@ -319,16 +320,17 @@ export async function botDeploy(ctx, commit) {
   const dir = path.join(layout.botReleases, short);
   const botDir = path.join(dir, "ops/dota-lobby-bot");
   if (!existsSync(path.join(botDir, "node_modules/.package-lock.json"))) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(runner, dir, "bot_deploy_failed");
     mkdirSync(layout.botReleases, { recursive: true });
-    await must(runner, "bot_deploy_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0755", dir]);
+    await makeBuildDir(ctx, dir, "0755", "bot_deploy_failed");
     const archive = path.join(dir, ".source.tar");
+    // The folder is the build user's until the lockdown, so it removes the archive too.
     for (const [command, args] of [
       asUser(USERS.build, BIN.git, ["-c", "safe.directory=*", "-C", layout.repo, "archive", "--format=tar", `--output=${archive}`, commit, "ops/dota-lobby-bot"]),
       asUser(USERS.build, BIN.tar, ["-x", "-f", archive, "-C", dir]),
+      asUser(USERS.build, BIN.rm, ["-f", "--", archive]),
     ])
       await must(runner, "bot_deploy_failed", command, args);
-    rmSync(archive, { force: true });
     await npmCi(ctx, botDir, ["--omit=dev"], "bot_deploy_failed");
     await lockDownTree(runner, dir, USERS.bot, "bot_deploy_failed");
   }
