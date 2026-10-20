@@ -3,10 +3,18 @@
 // state for UI verification. Every other target is refused.
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
 // FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
+// The playoff modes default to ten teams, which the season format plays as
+// two groups of five (season-format.ts) with an eight-team crossover bracket.
 import { prisma } from "@/lib/prisma";
 import { SEASON_STATUS } from "@/lib/constants";
 import { assertExpectedFixtureDatabase } from "@/lib/fixture-database";
 import { matchNightForWeek } from "@/lib/schedule";
+import {
+  SEASON_GROUP_KEYS,
+  drawGroups,
+  regularSeasonFixtures,
+  seasonFormat,
+} from "@/lib/season-format";
 import {
   createPlayoffBracket,
   advancePlayoffBracket,
@@ -30,7 +38,11 @@ const NAMES = [
   "The Couriers of Catastrophe With Very Long Name",
   "Smoke Gank City",
   "Feed & Seed",
+  "Aegis Hoarders",
+  "Ancient Defenders",
 ];
+/** The playoff modes' league: two groups of five (season-format.ts). */
+const PLAYOFF_FIXTURE_TEAMS = 10;
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
@@ -55,15 +67,46 @@ async function main() {
   const teams = [];
   const teamCount =
     Number(process.env.FIXTURE_TEAMS) ||
-    (process.env.FIXTURE_MODE === "regular" ? 6 : NAMES.length);
+    (process.env.FIXTURE_MODE === "regular" ? 6 : PLAYOFF_FIXTURE_TEAMS);
   for (let i = 0; i < teamCount; i++)
     teams.push(await makeTeam(season.id, NAMES[i], i));
   const strength = new Map(teams.map((t, i) => [t.id, i]));
+  const strengthOf = (teamId: string) => strength.get(teamId)!;
 
   // FIXTURE_MODE=regular: 6 teams, last week left open — shows
   // clinched/eliminated marks. Default: 8 teams, mid-playoffs bracket.
   const regularMode = process.env.FIXTURE_MODE === "regular";
-  const matches = await generateRegularSchedule(season.id);
+  // The format the site would pick: from ten teams, two groups drawn by
+  // strength (team 0 strongest) and a round robin in each.
+  const format = seasonFormat(teams.length);
+  if (format?.kind === "GROUPS") {
+    const groups = drawGroups(
+      teams.map((team, i) => ({ id: team.id, averageMmr: 10_000 - i })),
+    );
+    for (const [index, key] of SEASON_GROUP_KEYS.entries()) {
+      await prisma.team.updateMany({
+        where: { id: { in: groups[index] } },
+        data: { groupKey: key },
+      });
+    }
+    await prisma.match.createMany({
+      data: regularSeasonFixtures(
+        groups.map((ids) => [...ids].sort((a, b) => strengthOf(a) - strengthOf(b))),
+        false,
+      ).map((fixture) => ({
+        seasonId: season.id,
+        week: fixture.week,
+        phase: "REGULAR",
+        homeTeamId: fixture.home,
+        awayTeamId: fixture.away,
+        bestOf: season.regularBestOf,
+      })),
+    });
+  }
+  const matches =
+    format?.kind === "GROUPS"
+      ? await prisma.match.findMany({ where: { seasonId: season.id }, orderBy: { week: "asc" } })
+      : await generateRegularSchedule(season.id);
   // Give every regular match its league-night time (playoff rounds get theirs
   // from the bracket services) — the calendar feed and match times are part
   // of what fixtures exist to verify.

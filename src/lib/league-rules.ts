@@ -32,9 +32,17 @@ import {
   FIXTURE_CONFLICT_WINDOW_MS,
   RESCHEDULE_MAX_AHEAD_MS,
   RESCHEDULE_PAST_GRACE_MS,
-  pickBracketSize,
   playoffFirstRound,
 } from "./schedule";
+import {
+  SEASON_GROUP_KEYS,
+  describeSeasonFormat,
+  formatSteps,
+  playoffBracketSize,
+  playoffSteps,
+  seasonFormat,
+  seasonLengthPhrase,
+} from "./season-format";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 import { MATCH_NIGHT_POLL_LABEL } from "./season-copy";
 import {
@@ -75,6 +83,11 @@ export type LeagueRulesInput = {
   matchNightPoll?: boolean;
   /** The active season's teams that haven't withdrawn; null when unknown. */
   teamCount: number | null;
+  /**
+   * Every team in the active season, withdrawn ones included: the count the
+   * site picked the format from (season-format.ts). Omitted, `teamCount`.
+   */
+  formatTeamCount?: number | null;
   /** The deployment's identity. Tests pass `createLeagueConfig({...})`. */
   config?: Pick<typeof LEAGUE_CONFIG, "name" | "gameServerRegion">;
 };
@@ -151,32 +164,13 @@ function seriesPoints(): { win: number; draw: number; loss: number } {
 }
 
 /**
- * `pickBracketSize` as steps: "2–3 teams send 2, 4–7 send 4, …". Read from
- * the function over every team count up to `maxTeams`, so a new sizing rule
- * changes this line too.
+ * Round one's pairings for a bracket of `bracketSize`, from
+ * `playoffFirstRound` over seed numbers (or, crossing two groups, over their
+ * seed names A1, B1, A2…). Says the higher seed hosts only while every pairing
+ * puts it at home, and describes the general pattern only while every pairing
+ * is top-against-bottom.
  */
-function bracketSteps(maxTeams = 31): string {
-  const steps: { size: number; from: number; to: number }[] = [];
-  for (let teams = 2; teams <= maxTeams; teams += 1) {
-    const size = pickBracketSize(teams);
-    const last = steps[steps.length - 1];
-    if (last && last.size === size) last.to = teams;
-    else steps.push({ size, from: teams, to: teams });
-  }
-  return steps
-    .map(
-      (step, index) =>
-        `${step.from}–${step.to}${index === 0 ? " teams" : ""} send ${step.size}`,
-    )
-    .join(", ");
-}
-
-/**
- * Round one's pairings, from `playoffFirstRound` over seed numbers. Says the
- * higher seed hosts only while every pairing puts it at home, and describes
- * the general pattern only while every pairing is top-against-bottom.
- */
-function firstRoundRule(bracketSize: number | null): string | null {
+function firstRoundRule(bracketSize: number | null, groups = false): string | null {
   const size = bracketSize ?? 8;
   const seeds = Array.from({ length: size }, (_, i) => String(i + 1));
   const pairings = playoffFirstRound(seeds, size).map((pair) => ({
@@ -185,6 +179,13 @@ function firstRoundRule(bracketSize: number | null): string | null {
   }));
   const higherHosts = pairings.every((pair) => pair.home < pair.away);
   const hosts = higherHosts ? "; the higher seed hosts" : "";
+  if (groups && bracketSize && bracketSize >= 4) {
+    // Seeds alternate between the groups place by place (seedGroups).
+    const name = (seed: number) =>
+      `${SEASON_GROUP_KEYS[(seed - 1) % 2]}${Math.floor((seed - 1) / 2) + 1}`;
+    const listed = pairings.map((pair) => `${name(pair.home)} v ${name(pair.away)}`);
+    return `Round one crosses the groups: ${listed.join(", ")}, so the two group winners can only meet in the final${hosts}.`;
+  }
   if (bracketSize === 2) {
     return `The top two play the grand final${higherHosts ? ", and seed 1 hosts" : ""}.`;
   }
@@ -198,6 +199,28 @@ function firstRoundRule(bracketSize: number | null): string | null {
   return mirrored
     ? `Round one pairs the top seed with the lowest, the second with the second lowest, and so on${hosts}.`
     : null;
+}
+
+/**
+ * The season's structure: what the team count makes it (season-format.ts),
+ * how groups are drawn, and the reserved tiebreaker week. `teamCount` is the
+ * active season's whole field, withdrawn teams included.
+ */
+function formatSection(teamCount: number | null): RuleSection {
+  const format = teamCount !== null ? seasonFormat(teamCount) : null;
+  const rules = [
+    `The number of teams sets the season's format before it starts, so nobody designs a season by hand: ${formatSteps()}.`,
+    "Groups are drawn when the schedule is made: teams are ranked by their roster's average signup MMR and dealt A, B, B, A, A, B… so both groups get the same spread. An admin can swap one team from each group before the first result.",
+    "In a group season each group's table counts only its own matches, and ties are played off inside the group.",
+    "The week after the regular season is kept for tiebreakers, so the playoff dates are set the day the schedule is made. If no tie needs it, that week is off.",
+  ];
+  if (format && teamCount !== null) {
+    const described = describeSeasonFormat(format);
+    rules.push(
+      `This season has ${plural(teamCount, "team")}: ${described.charAt(0).toLowerCase()}${described.slice(1)} That's ${seasonLengthPhrase(format)}.`,
+    );
+  }
+  return { id: "format", title: "Season format", rules };
 }
 
 function basisLine(
@@ -249,22 +272,31 @@ function standingsSection(s: CarriedSeasonSettings): RuleSection {
   };
 }
 
-function playoffsSection(teamCount: number | null): RuleSection {
+function playoffsSection(
+  teamCount: number | null,
+  formatTeamCount: number | null,
+): RuleSection {
+  const format = formatTeamCount !== null ? seasonFormat(formatTeamCount) : null;
+  const groups = format?.kind === "GROUPS";
   const size =
-    teamCount !== null && teamCount >= 2 ? pickBracketSize(teamCount) : null;
+    teamCount !== null && teamCount >= 2 && format
+      ? playoffBracketSize(format.kind, format.teamCount, teamCount)
+      : null;
   const rules = [
-    `The playoffs are a single-elimination bracket of the top teams, as big as the teams that haven't withdrawn allow: ${bracketSteps()}.`,
+    `The playoffs are a single-elimination bracket: ${playoffSteps()}. Withdrawals shrink the bracket to what the teams left can fill, and a group short of teams hands its spot to the other group's next team.`,
   ];
   if (size !== null && teamCount !== null) {
     rules.push(
-      `This season has ${plural(teamCount, "team")} in it, so the top ${size} make the playoffs.`,
+      groups && size === 8
+        ? `This season plays two groups, so the top ${format!.qualifiersPerGroup} of each group make the playoffs.`
+        : `This season has ${plural(teamCount, "team")} in it, so the top ${size} make the playoffs.`,
     );
   }
-  const firstRound = firstRoundRule(size);
+  const firstRound = firstRoundRule(size, groups);
   if (firstRound) rules.push(firstRound);
   rules.push(
     "Winners stay on their side of the bracket: there is no reseeding.",
-    "Round one is played on the match night after the regular season and any tiebreakers, and each later round on the next match night once the round before it is done.",
+    "Round one is played on the match night after the tiebreaker week, and each later round on the next match night once the round before it is done.",
   );
   return { id: "playoffs", title: "Playoffs", rules };
 }
@@ -329,7 +361,7 @@ function matchNightSection(
       `Captains move a match with a ready check: either captain offers up to ${MAX_RESCHEDULE_OPTIONS} times on the match page, everyone playing answers each one, and the match moves itself once both captains and a full lineup on each side can make a time. Either captain can lock in a time the other captain said yes to without waiting for everyone.`,
       "After a ready check, each player's answer to the new time becomes their check-in. Admins can also move a match or a whole week; that clears its check-ins, so everyone answers again.",
       `A proposed time can't be more than ${span(RESCHEDULE_PAST_GRACE_MS)} in the past, more than ${span(RESCHEDULE_MAX_AHEAD_MS)} ahead, or ${clash}.`,
-      "A regular-season match has to be played before the playoffs start.",
+      "A regular-season match has to be played before the tiebreaker week, the week ahead of the playoffs.",
       "A series that has started can't be moved.",
     ],
   };
@@ -419,8 +451,11 @@ export function leagueRules({
   matchNight,
   matchNightPoll = false,
   teamCount,
+  formatTeamCount,
   config = LEAGUE_CONFIG,
 }: LeagueRulesInput): LeagueRules {
+  const activeTeams = season?.isActive ? teamCount : null;
+  const activeField = season?.isActive ? (formatTeamCount ?? teamCount) : null;
   const settings: CarriedSeasonSettings = season ?? carriedSeasonSettings(null);
   // The ticket is the ACTIVE season's (How it works asks the same question);
   // between seasons the next season's ticket isn't known yet.
@@ -429,9 +464,10 @@ export function leagueRules({
     basis: basisLine(season, config.name),
     defaults: season === null,
     sections: [
+      formatSection(activeField),
       seriesSection(settings),
       standingsSection(settings),
-      playoffsSection(season?.isActive ? teamCount : null),
+      playoffsSection(activeTeams, activeField),
       forfeitsSection(settings),
       rostersSection(settings),
       matchNightSection(matchNight, matchNightPoll),

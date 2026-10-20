@@ -221,7 +221,8 @@ const EQUIVALENT = new Set([
   "src/app/actions/admin-captains-draft.ts::randomizeDraftOrder::draftOrder#1",
   "src/app/actions/admin-captains-draft.ts::startDraft::captainId+draftOrder#1",
   "src/app/actions/admin-captains-draft.ts::startDraft::isActive+status#1",
-  "src/app/actions/admin-schedule-results.ts::generateSchedule::isActive#1",
+  // generateSchedule and swapGroupTeams share this anchor (2026-10-19).
+  "src/app/actions/admin-schedule-results.ts::replaceRegularSchedule::isActive#1",
   "src/app/actions/admin-schedule-results.ts::reopenMatch::championTeamId+isActive+status#1",
   "src/app/actions/admin-schedule-results.ts::setWeekNight::isActive#1",
   "src/app/actions/admin-schedule-results.ts::setMatchTime::scheduledAt+status#1",

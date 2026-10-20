@@ -493,6 +493,195 @@ describe("regular season card", () => {
       "## Regular season done",
     );
   });
+
+  it("prints the league's one table under Standings, as it always has", () => {
+    expect(texts(container(season).components)).toContain(
+      [
+        "**Standings**",
+        "```",
+        " # Team                  Pts",
+        " 1 Bad Boys of Dota        9",
+        "```",
+      ].join("\n"),
+    );
+  });
+});
+
+describe("group season standings", () => {
+  const group = (title: string, rows: [string, number][], playoffSpots: number | null) => ({
+    title,
+    rows: rows.map(([team, points], i) => ({ pos: i + 1, team, points })),
+    playoffSpots,
+  });
+  // Ten teams: two groups of five, the top four of each into the bracket.
+  const groupA = group(
+    "Group A",
+    [
+      ["Bad Boys of Dota", 9],
+      ["Bleeding Hearts", 7],
+      ["Sisters of the Veil", 4],
+      ["Vegan Squadron", 3],
+      ["Radiant Rejects", 0],
+    ],
+    4,
+  );
+  const groupB = group(
+    "Group B",
+    [
+      ["Mid or Feed", 9],
+      ["Tango Thieves", 6],
+      ["Roshan Rush", 4],
+      ["Smoke Gankers", 3],
+      ["Courier Snipers", 1],
+    ],
+    4,
+  );
+  const grouped = (groups = [groupA, groupB]) =>
+    snap({
+      phase: "REGULAR_SEASON",
+      matchNight: { kind: "set", label: "Sundays at 6 PM PT" },
+      week: {
+        label: "Week 4 of 5",
+        matchNightAtMs: T0,
+        fixtures: [fixture({ home: "Bad Boys of Dota", away: "Vegan Squadron" })],
+        byes: [],
+      },
+      table: { kind: "GROUPS", groups },
+    });
+
+  it("draws one block per group, each with its own places and playoff line", () => {
+    const standings = texts(container(grouped()).components).find((t) =>
+      t.startsWith("**Group A**"),
+    );
+    expect(standings).toBe(
+      [
+        "**Group A**",
+        "```",
+        " # Team                  Pts",
+        " 1 Bad Boys of Dota        9",
+        " 2 Bleeding Hearts         7",
+        " 3 Sisters of the Veil     4",
+        " 4 Vegan Squadron          3",
+        "   ── playoff line ─────────",
+        " 5 Radiant Rejects         0",
+        "```",
+        "**Group B**",
+        "```",
+        " # Team                  Pts",
+        " 1 Mid or Feed             9",
+        " 2 Tango Thieves           6",
+        " 3 Roshan Rush             4",
+        " 4 Smoke Gankers           3",
+        "   ── playoff line ─────────",
+        " 5 Courier Snipers         1",
+        "```",
+      ].join("\n"),
+    );
+    // Every row of both blocks is one phone-safe width.
+    const rows = standings!
+      .split("\n")
+      .filter((line) => !line.startsWith("**") && line !== "```");
+    expect(new Set(rows.map((line) => Array.from(line).length))).toEqual(new Set([28]));
+    // The groups replace the one table: the heading is the group's name.
+    expect(all(grouped())).not.toContain("**Standings**");
+    // After the week, before the honors, as the one table sits.
+    const text = all(grouped());
+    expect(text.indexOf("**Group A**")).toBeGreaterThan(text.indexOf("**This week**"));
+    expect(text.indexOf("**Group B**")).toBeGreaterThan(text.indexOf("**Group A**"));
+  });
+
+  it("draws each group's line under its own qualifiers", () => {
+    // A group short of teams (withdrawals) hands its spare place to the
+    // other: five go through from A, so A's whole table is above the line
+    // and no line is drawn; B sends three.
+    const text = all(
+      grouped([
+        { ...groupA, playoffSpots: 5 },
+        { ...groupB, playoffSpots: 3 },
+      ]),
+    );
+    const [a, b] = text.split("**Group B**");
+    expect(a).not.toContain("playoff line");
+    expect(b).toContain(" 3 Roshan Rush             4\n   ── playoff line ─────────\n 4 Smoke Gankers");
+    // Unknown cut: no line in either group.
+    expect(
+      all(
+        grouped([
+          { ...groupA, playoffSpots: null },
+          { ...groupB, playoffSpots: null },
+        ]),
+      ),
+    ).not.toContain("playoff line");
+  });
+
+  it("keeps a backtick in a team name from closing a group's block", () => {
+    const standings = texts(
+      container(
+        grouped([group("Group A", [["```oops```", 0]], 4), groupB]),
+      ).components,
+    ).find((t) => t.startsWith("**Group A**"));
+    expect(standings!.match(/```/g)).toHaveLength(4);
+  });
+
+  it("skips an empty group, and the whole block when every group is empty", () => {
+    const one = all(grouped([groupA, group("Group B", [], 4)]));
+    expect(one).toContain("**Group A**");
+    expect(one).not.toContain("**Group B**");
+    const none = all(grouped([group("Group A", [], 4), group("Group B", [], 4)]));
+    expect(none).not.toContain("**Group");
+    expect(none).not.toContain("```");
+  });
+
+  it("costs no more components than one table", () => {
+    const groups = renderLeagueStatus(grouped()).payload.components;
+    const oneTable = renderLeagueStatus(
+      snap({
+        ...grouped(),
+        table: { rows: [...groupA.rows, ...groupB.rows], playoffSpots: 8 },
+      }),
+    ).payload.components;
+    expect(countComponents(groups)).toBe(countComponents(oneTable));
+  });
+
+  it("stays inside 40 components and 4,000 characters with two full groups on the busiest week", () => {
+    const busy: StatusFixture[] = Array.from({ length: 12 }, (_, i) =>
+      fixture({
+        home: `Home team number ${i} with a long name`,
+        away: `Away team number ${i} with a long name`,
+        moved: true,
+        standins: Array.from({ length: 5 }, (_, j) => ({
+          standin: `Standin player ${i}-${j} with a long persona`,
+          replaced: `Rostered player ${i}-${j} with a long persona`,
+          team: `Home team number ${i} with a long name`,
+        })),
+        reschedule: { proposer: "Home", waitingOn: "Away", options: 3 },
+      }),
+    );
+    const big = (title: string) =>
+      group(
+        title,
+        Array.from({ length: 14 }, (_, i): [string, number] => [`${title} team ${i} long`, 30 - i]),
+        4,
+      );
+    const { payload } = renderLeagueStatus(
+      snap({
+        phase: "REGULAR_SEASON",
+        week: { label: "Week 9 of 9", matchNightAtMs: T0, fixtures: busy, byes: ["Bye team"] },
+        table: { kind: "GROUPS", groups: [big("Group A"), big("Group B")] },
+        inhouseNight: {
+          startsAtMs: T0,
+          state: "UPCOMING",
+          note: "x".repeat(200),
+          inviteUrl: `${SITE}/inhouse?imin=1`,
+          joinUrl: `${SITE}/inhouse?join=1`,
+        },
+      }),
+    );
+    expect(countComponents(payload.components)).toBeLessThanOrEqual(STATUS_MAX_COMPONENTS);
+    expect(totalText(payload.components)).toBeLessThanOrEqual(STATUS_MAX_TEXT);
+    // Each group's block keeps the row cap on its own.
+    expect(texts(payload.components).join("\n")).toContain("   + 2 more");
+  });
 });
 
 describe("playoffs card", () => {

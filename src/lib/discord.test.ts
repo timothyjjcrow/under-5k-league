@@ -278,6 +278,24 @@ describe("discord message formatters", () => {
     expect(msg).toContain("/schedule>");
   });
 
+  it("lists a group season's groups and the playoff dates, names escaped", () => {
+    const msg = regularSeasonStartedMessage("S2", {
+      week: 1,
+      fixtures: [{ home: "A*1", away: "A2", whenMs: Date.UTC(2026, 10, 7, 22) }],
+      byes: [],
+      format: "Two groups of 5: the top 4 of each group make the playoffs.",
+      groups: [
+        { key: "A", teams: ["A*1", "A2"] },
+        { key: "B", teams: ["B1", "B2"] },
+      ],
+      tiebreakerMs: Date.UTC(2026, 11, 12, 22),
+      playoffsMs: Date.UTC(2026, 11, 19, 22),
+    });
+    expect(msg).toContain("regular season is live.** Two groups of 5: the top 4 of each group make the playoffs.");
+    expect(msg).toContain("\n**Group A:** A\\*1, A2\n**Group B:** B1, B2\nWeek 1:");
+    expect(msg).toContain(`Playoffs from <t:${Date.UTC(2026, 11, 19, 22) / 1000}:D>; the week before (<t:${Date.UTC(2026, 11, 12, 22) / 1000}:D>) is kept for tiebreakers.`);
+  });
+
   it("caps a long opening week and says how many more are on the schedule", () => {
     const fixtures = Array.from({ length: 15 }, (_, i) => ({
       home: `H${i}`,

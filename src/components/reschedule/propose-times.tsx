@@ -82,7 +82,7 @@ export function ProposeTimes({
       return;
     }
     if (maxTs != null && ts > maxTs) {
-      pushToast("error", "That's after the playoffs start — pick an earlier time.");
+      pushToast("error", "That's after the regular season ends — pick an earlier time.");
       return;
     }
     if (kickoffMs === ts) {
@@ -256,7 +256,7 @@ export function ProposeTimes({
           <>
             Times must be before{" "}
             <LocalTime ts={deadline.ts} variant="full" initial={deadline.label} />{" "}
-            (the playoffs) and not within {clashHours} hours of another match
+            (the tiebreaker week, ahead of the playoffs) and not within {clashHours} hours of another match
             or scrim for either team.
           </>
         ) : (

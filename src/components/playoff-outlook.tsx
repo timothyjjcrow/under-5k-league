@@ -135,11 +135,16 @@ export function playoffPathLines(
   return lines;
 }
 
-/** "Playoff order: #2." or "Possible playoff order: #1–#3." */
-function playoffOrderLine(outlook: ScenarioOutlook): string {
+/**
+ * "Playoff order: #2." or "Possible playoff order: #1–#3." In a group-stage
+ * season the ranks are places in the team's group, named like its seeds:
+ * "Playoff order: A2." or "Possible playoff order: A1–A3."
+ */
+function playoffOrderLine(outlook: ScenarioOutlook, groupKey?: string): string {
+  const place = (rank: number) => (groupKey ? `${groupKey}${rank}` : `#${rank}`);
   return outlook.bestRank === outlook.worstRank
-    ? `Playoff order: #${outlook.bestRank}.`
-    : `Possible playoff order: #${outlook.bestRank}–#${outlook.worstRank}.`;
+    ? `Playoff order: ${place(outlook.bestRank)}.`
+    : `Possible playoff order: ${place(outlook.bestRank)}–${place(outlook.worstRank)}.`;
 }
 
 function mayNeedQualificationTiebreaker(scenario: TeamScenario): boolean {
@@ -254,7 +259,7 @@ export function PlayoffOutlook({
               </ul>
             ) : null}
             {outlook ? (
-              <p className="text-muted">{playoffOrderLine(outlook)}</p>
+              <p className="text-muted">{playoffOrderLine(outlook, scenario.groupKey)}</p>
             ) : null}
             {mayNeedQualificationTiebreaker(scenario) ? (
               <p className="text-[11px] text-muted">{TIEBREAKER_FORMAT_NOTE}</p>
@@ -318,7 +323,7 @@ export function PlayoffOutlookFootnote({
             {withOutlook.map((scenario) => (
               <li key={scenario.teamId}>
                 <strong className="text-fg">{name(scenario.teamId)}:</strong>{" "}
-                {outlookSummary(scenario.outlook!)} {playoffOrderLine(scenario.outlook!)}
+                {outlookSummary(scenario.outlook!)} {playoffOrderLine(scenario.outlook!, scenario.groupKey)}
               </li>
             ))}
           </ul>

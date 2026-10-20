@@ -126,7 +126,7 @@ describe("mid-season ties", () => {
     winnerTeamId: status !== "COMPLETED" || homeScore === awayScore
       ? null : homeScore > awayScore ? homeTeamId : awayTeamId,
   });
-  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, groupKey: null }));
   const teamName = new Map(teams.map((team) => [team.id, team.id]));
   const render = (matches: MatchLike[]) => {
     const field = projectPlayoffField(teams, matches);
@@ -292,10 +292,12 @@ describe("one standings table", () => {
 
     // A finished or archived season's last run is history, not news.
     it("is passed only by live tables, under standingsStreaksShown", () => {
+      // Pages render the table through <SeasonStandings> (one table per
+      // group in a group season), which passes their props straight on.
       const tables = filesContaining(
         sourceFiles("src/**/*.tsx", 150),
-        "<StandingsTable",
-      );
+        /<(?:StandingsTable|SeasonStandings)\b/,
+      ).filter((file) => !file.path.endsWith("src/components/season-standings.tsx"));
       expect(tables.length).toBeGreaterThanOrEqual(4);
       const live = tables.filter((f) => f.text.includes("streakByTeam="));
       expect(live.length).toBeGreaterThanOrEqual(2);

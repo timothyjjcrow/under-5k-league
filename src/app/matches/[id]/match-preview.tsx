@@ -63,7 +63,7 @@ export async function MatchPreview({
     // The tale of the tape's table place and the opponents on each road.
     prisma.team.findMany({
       where: { seasonId: match.seasonId },
-      select: { id: true, name: true, logoUrl: true, withdrawn: true },
+      select: { id: true, name: true, logoUrl: true, withdrawn: true, groupKey: true },
     }),
     viewer
       ? prisma.matchAvailability.findMany({

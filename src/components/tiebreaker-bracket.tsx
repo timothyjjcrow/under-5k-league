@@ -173,7 +173,7 @@ export function TiebreakerBracket({ bracket, teams, postseasonStarted, admin = f
               <span className="font-display text-lg text-muted">{place.place === 1 ? "1st" : place.place === 2 ? "2nd" : place.place === 3 ? "3rd" : `${place.place}th`}</span>
               <div className="min-w-0">
                 <p className="break-words text-xs font-medium">{place.name ?? "To be decided"}</p>
-                <p className={cn("mt-0.5 text-xs", place.qualifies ? "text-success" : "text-muted")}>{place.qualifies ? `Playoff seed ${place.seed}` : "Out of playoffs"}</p>
+                <p className={cn("mt-0.5 text-xs", place.qualifies ? "text-success" : "text-muted")}>{place.qualifies ? `Playoff seed ${place.seedLabel}` : "Out of playoffs"}</p>
               </div>
             </li>
           ))}
@@ -228,7 +228,7 @@ function SingleEliminationBracket({ bracket, teams, admin }: {
         </details>
         {bracket.status === "resolved" ? <ol data-testid="tiebreaker-placements" className="grid gap-2 sm:grid-cols-2">
           {bracket.placements.map((place) => <li key={place.place} className="rounded-lg border border-line-soft p-3 text-sm">
-            {place.name} <span className="text-xs text-muted">· {place.qualifies ? `Playoff seed ${place.seed}` : "Out of playoffs"}</span>
+            {place.name} <span className="text-xs text-muted">· {place.qualifies ? `Playoff seed ${place.seedLabel}` : "Out of playoffs"}</span>
           </li>)}
         </ol> : null}
       </>}

@@ -7,6 +7,8 @@ export type TiebreakerBracketTeam = {
   id: string;
   name: string;
   logoUrl?: string | null;
+  /** The team's group in a group-stage season, null for one table. */
+  groupKey: string | null;
 };
 
 export type TiebreakerBracketFixture = MatchLike & {
@@ -43,8 +45,13 @@ export type TiebreakerBracketMatchView = {
 
 export type TiebreakerPlacementView = {
   place: number;
-  /** Overall eligible standing; may fall below the playoff cut. */
+  /**
+   * Eligible standing in the team's table (its group's, in a group season);
+   * may fall below the playoff cut.
+   */
   seed: number;
+  /** How the place is named: "3", or "A3" in a group season. */
+  seedLabel: string;
   qualifies: boolean;
   teamId: string | null;
   name: string | null;
@@ -148,9 +155,10 @@ export function buildTiebreakerBrackets({
     const group = stages[0];
     const rows = projection.eligibleStandings.filter((row) => group.teamIds.includes(row.teamId));
     const placements: TiebreakerPlacementView[] = rows.map((row, index) => {
-      const seed = projection.eligibleTeamIds.indexOf(row.teamId) + 1;
+      const { seed, cut, key: groupKey } = eligiblePlace(projection, row.teamId);
       const teamId = row.tiebreakerResolved && !row.idDecided ? row.teamId : null;
-      return { place: index + 1, seed, qualifies: seed <= projection.bracketSize,
+      return { place: index + 1, seed, seedLabel: `${groupKey ?? ""}${seed}`,
+        qualifies: seed <= cut,
         teamId, name: teamId ? names.get(teamId)?.name ?? "Unknown team" : null };
     });
     let byeTeamId: string | null = null;
@@ -230,6 +238,25 @@ export function buildTiebreakerBrackets({
 }
 
 /**
+ * A team's place among its table's eligible teams and that table's cut: its
+ * group's, in a group-stage season, where each group plays off its own ties.
+ */
+function eligiblePlace(
+  projection: Pick<PlayoffFieldProjection, "groups" | "eligibleTeamIds" | "bracketSize">,
+  teamId: string,
+): { seed: number; cut: number; key: string | null } {
+  for (const group of projection.groups ?? []) {
+    const index = group.eligibleStandings.findIndex((row) => row.teamId === teamId);
+    if (index >= 0) return { seed: index + 1, cut: group.qualifiers, key: group.key };
+  }
+  return {
+    seed: projection.eligibleTeamIds.indexOf(teamId) + 1,
+    cut: projection.bracketSize,
+    key: null,
+  };
+}
+
+/**
  * One line for a finished tiebreaker, shown on the folded Schedule section
  * once the playoffs have started: who took which seed, and who went out.
  * Null while any bracket is unfinished or no final order is known.
@@ -245,12 +272,14 @@ export function tiebreakerResultLine(groups: TiebreakerBracketView[]): string | 
     }
   }
   if (finish.size === 0) return null;
-  const places = [...finish.values()].sort((a, b) => a.seed - b.seed);
+  const places = [...finish.values()].sort(
+    (a, b) => a.seed - b.seed || a.seedLabel.localeCompare(b.seedLabel),
+  );
   const seeded = places.filter((place) => place.qualifies);
   const out = places.filter((place) => !place.qualifies);
   const parts: string[] = [];
   if (seeded.length > 0)
-    parts.push(seeded.map((place) => `${place.name} took seed ${place.seed}`).join(", "));
+    parts.push(seeded.map((place) => `${place.name} took seed ${place.seedLabel}`).join(", "));
   if (out.length > 0) {
     parts.push(`${out.length > 2 ? `${out.length} teams`
       : out.map((place) => place.name).join(" and ")} missed the playoffs`);

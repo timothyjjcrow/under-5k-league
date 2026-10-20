@@ -95,8 +95,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   active season. Only the current tiebreaker format is described
   (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
 - **Every sentence is derived or left out.** Points come from probing
-  `computeStandings`, bracket sizes from `pickBracketSize`, round one from
-  `playoffFirstRound`, the withdrawal forfeit score from
+  `computeStandings`, the season format and who makes the playoffs from
+  `seasonFormat` (`formatSteps`, `playoffSteps`, `describeSeasonFormat`), the
+  bracket size from `playoffBracketSize`, round one from
+  `playoffFirstRound` (crossed between groups in a group season), the withdrawal forfeit score from
   `withdrawalForfeitScore` (which the withdraw action uses too), the import
   window from `league-result-window.ts`, the reschedule limits from
   `schedule.ts`, the standin clash and MMR gap from the standin constants and
@@ -675,6 +677,17 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## Schedule (`/schedule`)
 
+- **A group season shows one table per group** (`<SeasonStandings>` over
+  `standingsSections`, `src/components/season-standings.tsx`): each titled,
+  named "Group A standings" for screen readers, with the group's own cut
+  line, places, seed names and movement. Home, the archive and the COMPLETE
+  view use the same wrapper, and the head-to-head grid splits by group. A
+  one-table season renders exactly the one table it always did.
+- **The season plan folds to one line** (`SeasonPlanFold`,
+  `src/components/season-plan.tsx`): "Season plan · Two groups of 6 ·
+  playoffs from Sat, Dec 19", opening to every step (`seasonPlan`), dates on
+  the viewer's clock. /schedule shows it in DRAFT (with fixtures) and the
+  regular season, Home above the standings in the regular season.
 - **The regular season is two columns from `xl`:** the weeks, and a 30rem
   rail with the standings and the analysis folds. The rail stretches to the
   weeks' height and its inner block is `xl:sticky xl:top-20` with a

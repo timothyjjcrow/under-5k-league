@@ -63,7 +63,7 @@ export async function loadStreamOverlay(
   const [teams, seasonMatches, roster, seasonGames] = await Promise.all([
     prisma.team.findMany({
       where: { seasonId: match.seasonId },
-      select: { id: true, name: true, withdrawn: true, createdAt: true },
+      select: { id: true, name: true, withdrawn: true, groupKey: true, createdAt: true },
     }),
     prisma.match.findMany({
       where: { seasonId: match.seasonId },

@@ -24,7 +24,7 @@ import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
 import { heroById, parseHeroList } from "@/lib/heroes";
-import { projectPlayoffField } from "@/lib/playoff-field";
+import { projectPlayoffField, tablePlaceOf } from "@/lib/playoff-field";
 import { profileWantsCaptain } from "@/lib/player-directory-lifecycle";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
@@ -391,16 +391,16 @@ export default async function PlayerProfilePage({
 
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
-  const standings =
+  const field =
     team && seasonTeams.length
-      ? projectPlayoffField(seasonTeams, seasonMatches).standings
-      : [];
+      ? projectPlayoffField(seasonTeams, seasonMatches)
+      : null;
   const teamRow = team
-    ? standings.find((s) => s.teamId === team.id)
+    ? field?.standings.find((s) => s.teamId === team.id)
     : undefined;
-  const teamRank = team
-    ? standings.findIndex((s) => s.teamId === team.id) + 1
-    : 0;
+  // Its place in its own table: within its group in a group season, where
+  // an index of the whole standings is no place at all.
+  const teamPlace = team && field ? tablePlaceOf(field, team.id) : null;
   // Once the season has a bracket, the regular-season rank stops saying where
   // the team stands: the tile shows their playoff run instead.
   const playoffRun =
@@ -577,7 +577,16 @@ export default async function PlayerProfilePage({
             seasonSummary={seasonSummary}
             careerSummary={careerSummary}
             streakLabel={streakLabel}
-            team={team ? { rank: teamRank, row: teamRow, playoffTile } : null}
+            team={
+              team
+                ? {
+                    rank: teamPlace?.place ?? 0,
+                    groupKey: teamPlace?.groupKey ?? null,
+                    row: teamRow,
+                    playoffTile,
+                  }
+                : null
+            }
             featured={featured}
             inhouseUserId={sections.inhouseInOverview ? user.id : null}
           />

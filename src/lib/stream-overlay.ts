@@ -26,8 +26,8 @@ import { parsePubStats } from "./pub-stats";
 import { rankMedalName, rankMedalTier, rankStars } from "./rank";
 import { roleLabels } from "./roles";
 import { groupPlayoffRounds, matchRoundLabel } from "./schedule";
+import { bracketSeedLabels, placeInTable, placeOfLabel } from "./season-groups";
 import type { MatchLike } from "./standings";
-import { ordinalPlace } from "./tale-of-the-tape";
 import { crestInk, hashHue, seasonTeamHues } from "./team-hues";
 import {
   compareSeriesOrder,
@@ -64,7 +64,11 @@ export type OverlayTeam = {
   ink: string;
   /** "5W 1D 2L": the regular-season record once a series is final. */
   record: string | null;
-  /** "1st of 6" in the regular season, "Seed 2" in the knockouts. */
+  /**
+   * "1st of 6" in the regular season, "Seed 2" in the knockouts; in a group
+   * season the place is the group's ("1st of 5 in Group A") and the seed is
+   * named like the bracket's ("Seed A1").
+   */
   standing: string | null;
   /** The last five series, newest first. */
   form: FormResult[];
@@ -151,6 +155,8 @@ export type OverlaySeasonTeam = {
   id: string;
   name: string;
   withdrawn: boolean;
+  /** "A", "B" in a group season (places and seeds are the group's), else null. */
+  groupKey: string | null;
   /** Creation time in epoch ms: the order crest hues are handed out in. */
   createdAtMs: number;
 };
@@ -430,8 +436,11 @@ export function buildStreamOverlay(input: StreamOverlayInput): StreamOverlayPayl
   const regularPlayed = input.seasonMatches.some(
     (m) => m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
   );
-  const table = projectPlayoffField([...input.teams], [...input.seasonMatches]).standings;
-  const seeds = postseason ? seedsFromFirstRound(playoffMatches) : new Map<string, number>();
+  const field = projectPlayoffField([...input.teams], [...input.seasonMatches]);
+  // The bracket's names for its seeds: "A1", "B4" in a group season.
+  const seeds = postseason
+    ? bracketSeedLabels(seedsFromFirstRound(playoffMatches), input.teams)
+    : new Map<string, string>();
 
   const team = (
     teamId: string,
@@ -439,8 +448,9 @@ export function buildStreamOverlay(input: StreamOverlayInput): StreamOverlayPayl
     logoUrl: string | null,
   ): OverlayTeam => {
     const hue = hues.get(teamId) ?? hashHue(teamId);
-    const place = table.findIndex((row) => row.teamId === teamId);
-    const row = place >= 0 ? table[place] : null;
+    const row = field.standings.find((r) => r.teamId === teamId) ?? null;
+    // Its place in its own table: its group's in a group season.
+    const place = placeInTable(field, teamId);
     const seed = seeds.get(teamId);
     return {
       id: teamId,
@@ -454,8 +464,8 @@ export function buildStreamOverlay(input: StreamOverlayInput): StreamOverlayPayl
         ? seed
           ? `Seed ${seed}`
           : null
-        : regularPlayed && row
-          ? `${ordinalPlace(place + 1)} of ${table.length}`
+        : regularPlayed && place
+          ? placeOfLabel(place)
           : null,
       form: recentForm(
         teamId,

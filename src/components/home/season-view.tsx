@@ -9,7 +9,19 @@ import {
   playoffStatusLine,
 } from "@/components/playoff-outlook";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
-import { StandingsTable } from "@/components/standings-table-server";
+import { SeasonStandings } from "@/components/season-standings";
+import { SeasonPlanFold } from "@/components/season-plan";
+import {
+  describeSeasonFormat,
+  formatName,
+  seasonFormat,
+  seasonPlan,
+} from "@/lib/season-format";
+import {
+  bracketSeedLabels,
+  standingsSections,
+  tableMovement,
+} from "@/lib/season-groups";
 import { SteamSignInNote } from "@/components/steam-sign-in";
 import { TiebreakerNotice } from "@/components/tiebreaker-notice";
 import {
@@ -62,7 +74,6 @@ import {
   playoffOutlookShown,
   seasonScenarioReport,
 } from "@/lib/stakes";
-import { standingsMovement } from "@/lib/standings";
 import { standingsForm, standingsStreaksShown } from "@/lib/team-matches";
 import { biggestUpset, seriesUpset, upsetContext } from "@/lib/upsets";
 import { cn } from "@/lib/utils";
@@ -303,6 +314,18 @@ export async function SeasonView({
 }) {
   const { season, teams } = snapshot;
   const playoffField = projectPlayoffField(teams, matches);
+  // The season's calendar while the regular season runs (season-format.ts).
+  const planFormat = seasonFormat(teams.length);
+  const lastRegularWeek = matches
+    .filter((m) => m.phase === "REGULAR")
+    .reduce((max, m) => Math.max(max, m.week), 0);
+  const seasonPlanView =
+    planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
+      ? {
+          format: planFormat,
+          plan: seasonPlan(planFormat, season.firstMatchNight, lastRegularWeek),
+        }
+      : null;
   const standings = playoffField.standings;
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
@@ -319,6 +342,8 @@ export async function SeasonView({
   const upsets = upsetContext(
     teams.map((t) => t.id),
     matches,
+    // A group bracket judges seeds by place in the group (A1 v B1 is level).
+    teams,
   );
   const weekUpset = biggestUpset(matches, upsets);
 
@@ -365,14 +390,18 @@ export async function SeasonView({
   const playoffMatches = matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
+  // Seeds come from the frozen first-round pairings, not live standings —
+  // a corrected regular result must not relabel (or blank) bracket seeds.
+  const bracketSeeds = seedsFromFirstRound(playoffMatches);
+  const bracketSeedNames = bracketSeedLabels(bracketSeeds, teams);
   const bracketRoundsView = buildBracketRounds(
     playoffMatches,
     teamName,
-    // Seeds come from the frozen first-round pairings, not live standings —
-    // a corrected regular result must not relabel (or blank) bracket seeds.
-    seedsFromFirstRound(playoffMatches),
+    bracketSeeds,
     (d) => fmtWhen(d) ?? "",
     teamLogoUrl,
+    undefined,
+    bracketSeedNames,
   );
   const showBracket =
     season.status === "PLAYOFFS" && bracketRoundsView.length > 0;
@@ -567,7 +596,7 @@ export async function SeasonView({
       <PlayoffTeamCard
         team={myTeam}
         status={myPlayoffStatus}
-        seed={seedsFromFirstRound(playoffMatches).get(myTeam.id) ?? null}
+        seed={bracketSeedNames.get(myTeam.id) ?? null}
         teamName={teamName}
       />
     ) : null;
@@ -676,7 +705,14 @@ export async function SeasonView({
         /* THE DASHBOARD BAND: the table, full width. The viewer's stakes
            card used to sit beside it, but it is a third of the table's height,
            which left a hole under it; it lives in the band below now. */
-        <div className="min-w-0">
+        <div className="min-w-0 space-y-3">
+          {seasonPlanView ? (
+            <SeasonPlanFold
+              plan={seasonPlanView.plan}
+              formatLine={formatName(seasonPlanView.format)}
+              description={describeSeasonFormat(seasonPlanView.format)}
+            />
+          ) : null}
           <Card>
             <CardHeader
               headingLevel={2}
@@ -691,7 +727,8 @@ export async function SeasonView({
               }
             />
             <CardBody className="p-0">
-              <StandingsTable
+              <SeasonStandings
+                groups={playoffField.groups ? standingsSections(playoffField) : null}
                 standings={standings}
                 totalTeams={standings.length}
                 eligibleTeams={playoffField.eligibleTeamIds.length}
@@ -711,10 +748,7 @@ export async function SeasonView({
                 clinch={clinchFromReport(report)}
                 playoffScenarios={report?.forecast?.basis === "final" ? report.teams : undefined}
                 viewerTeamId={myTeam?.id}
-                movement={standingsMovement(
-                  teams.map((t) => t.id),
-                  matches,
-                )}
+                movement={tableMovement(standingsSections(playoffField), matches)}
               />
             </CardBody>
           </Card>
@@ -1021,13 +1055,16 @@ function PlayoffTeamCard({
 }: {
   team: { id: string; name: string };
   status: TeamPlayoffStatus;
-  seed: number | null;
+  /** "3", or "A2" in a group-stage season (`bracketSeedLabels`). */
+  seed: string | null;
   teamName: Map<string, string>;
 }) {
   const line = (
     <>
       {seed != null ? (
-        <p className="text-xs uppercase text-muted">Seed #{seed}</p>
+        <p className="text-xs uppercase text-muted">
+          Seed {/^\d+$/.test(seed) ? `#${seed}` : seed}
+        </p>
       ) : null}
       <PlayoffStatusLine
         status={status}

@@ -38,6 +38,11 @@ export type StandingsRowView = {
   withdrawn: boolean;
   /** One-based playoff seed, or null when below the cut / ineligible. */
   playoffSeed: number | null;
+  /**
+   * How the seed is named when it isn't its number: "A2" in a group table,
+   * where `playoffSeed` counts the group's places. Unset prints the number.
+   */
+  playoffSeedLabel?: string;
   /** Series won in a row up to the latest result (`seriesWinStreak`); left
    *  out where the table isn't live (`standingsStreaksShown`). */
   streak?: number;
@@ -53,8 +58,11 @@ export function StandingsTableView({
   viewerTeamId,
   totalTeams,
   eligibleTeams,
+  label = "League standings",
 }: {
   rows: StandingsRowView[];
+  /** The table's accessible name: "Group A standings" in a group season. */
+  label?: string;
   /** How many top teams make playoffs — draws a "playoff cut" line when set. */
   playoffCut?: number;
   /** The signed-in viewer's team — its row gets a subtle highlight. */
@@ -101,7 +109,7 @@ export function StandingsTableView({
     // a phone. From 32rem the desktop column widths and one-line rows; Last 5
     // from 36rem.
     <div className="@container">
-      <table aria-label="League standings" className="w-full table-fixed text-sm">
+      <table aria-label={label} className="w-full table-fixed text-sm">
         <caption className="caption-bottom border-t border-line-soft px-4 py-3 text-left text-xs leading-relaxed text-muted @lg:px-5">
           {STANDINGS_RULES}
         </caption>
@@ -191,7 +199,7 @@ export function StandingsTableView({
                         {row.tiebreakerPending
                           ? ", playoff qualification or seeding pending a tiebreaker match"
                           : row.playoffSeed != null
-                            ? `, current playoff seed ${row.playoffSeed}`
+                            ? `, current playoff seed ${row.playoffSeedLabel ?? row.playoffSeed}`
                             : row.withdrawn
                               ? ", withdrawn and excluded from playoff seeding"
                               : ", outside the current playoff field"}
@@ -416,7 +424,7 @@ function playoffStatus(row: StandingsRowView, playoffCut?: number) {
       <span title="Playoff place secured" className="text-success">
         <span aria-hidden>✓ </span>Qualified
         {row.playoffSeed != null && row.playoffSeed !== row.rank ? (
-          <> · seed {row.playoffSeed}</>
+          <> · seed {row.playoffSeedLabel ?? row.playoffSeed}</>
         ) : null}
       </span>
     );
@@ -434,10 +442,10 @@ function playoffStatus(row: StandingsRowView, playoffCut?: number) {
   if (playoffCut != null && row.playoffSeed != null) {
     return (
       <span
-        title={`Currently in a playoff place as seed ${row.playoffSeed}`}
+        title={`Currently in a playoff place as seed ${row.playoffSeedLabel ?? row.playoffSeed}`}
         className="text-muted"
       >
-        Seed {row.playoffSeed}
+        Seed {row.playoffSeedLabel ?? row.playoffSeed}
       </span>
     );
   }

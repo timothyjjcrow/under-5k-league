@@ -303,6 +303,50 @@ describe("seriesUpset in the playoffs", () => {
     ];
     expect(seriesUpset(tabled[6], upsetContext(TEAMS, tabled))).toBeNull();
   });
+
+  describe("in a group season", () => {
+    // Groups A (a, c, e) and B (b, d, f). The four seeds alternate the
+    // groups: a A1 (1), b B1 (2), c A2 (3), d B2 (4); R0M0 a v d, R0M1 b v c.
+    const grouped = TEAMS.map((id) => ({
+      id,
+      groupKey: ["a", "c", "e"].includes(id) ? "A" : "B",
+    }));
+
+    it("judges places, naming the seeds as the bracket does", () => {
+      const semis = [
+        series(6, "a", "d", 0, 2, { phase: "PLAYOFF", bracketSlot: "R0M0" }),
+        series(6, "b", "c", 1, 2, { phase: "PLAYOFF", bracketSlot: "R0M1" }),
+      ];
+      const context = upsetContext(TEAMS, semis, grouped);
+      const second = seriesUpset(semis[0], context);
+      expect(second).toMatchObject({
+        kind: "seed",
+        winnerId: "d",
+        gap: 1,
+        winner: 4,
+        loser: 1,
+        winnerSeed: "B2",
+        loserSeed: "A1",
+      });
+      expect(upsetDetail(second!)).toBe("seed B2 over seed A1");
+      expect(upsetDetail(seriesUpset(semis[1], context)!)).toBe("seed A2 over seed B1");
+      // Without the groups the same bracket reads as one table's seeds.
+      expect(upsetDetail(seriesUpset(semis[0], upsetContext(TEAMS, semis))!)).toBe(
+        "seed 4 over seed 1",
+      );
+    });
+
+    it("never calls two group winners meeting an upset", () => {
+      const matches = [
+        series(6, "a", "d", 2, 0, { phase: "PLAYOFF", bracketSlot: "R0M0" }),
+        series(6, "b", "c", 2, 0, { phase: "PLAYOFF", bracketSlot: "R0M1" }),
+        series(7, "a", "b", 0, 2, { phase: "FINAL", bracketSlot: "R1M0" }),
+      ];
+      // B1 over A1: seed 2 over seed 1 by number, but both won their group.
+      expect(seriesUpset(matches[2], upsetContext(TEAMS, matches, grouped))).toBeNull();
+      expect(seriesUpset(matches[2], upsetContext(TEAMS, matches))).toMatchObject({ gap: 1 });
+    });
+  });
 });
 
 describe("biggestUpset", () => {

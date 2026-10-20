@@ -19,7 +19,6 @@ import {
   DOTA_MATCH_KIND,
 } from "@/lib/constants";
 import {
-  roundRobin,
   matchNightForWeek,
   shiftMatchNight,
   slotRound,
@@ -55,6 +54,16 @@ import { parseMatchId } from "@/lib/dota";
 import { bool, clampInt, localDate, str } from "@/lib/form";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import {
+  SEASON_GROUP_KEYS,
+  drawGroups,
+  formatName,
+  regularSeasonFixtures,
+  rosterAverageMmr,
+  seasonFormat,
+  seasonPlan,
+  type SeasonFormat,
+} from "@/lib/season-format";
+import {
   playoffsStartedMessage,
   playoffsReturnedToRegularMessage,
   standinRemovedMessage,
@@ -88,6 +97,7 @@ import {
 } from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { bracketSeedLabels } from "@/lib/season-groups";
 import {
   adminOrError,
   ActiveSeasonChangedError,
@@ -140,7 +150,7 @@ function seasonCompleteError(championTeamId: string | null): string {
     : "The season is marked Complete, so playoff results no longer advance the bracket. Move it back to Playoffs (phase control above), then record this result — no bracket rebuild needed.";
 }
 
-/** Generate a round-robin regular-season schedule from the drafted teams. */
+/** Generate the regular-season schedule from the drafted teams. */
 export async function generateSchedule(
   _prev: ActionResult,
   formData: FormData,
@@ -178,13 +188,72 @@ export async function generateSchedule(
     };
   }
 
-  // The lib has supported a mirrored second leg since the beginning — this
-  // flag was just never wired to a form, locking a 4-6 team league to a 3-5
-  // week season with no in-app way to lengthen it. Mirrored = every pairing
-  // plays twice with home/away swapped, weeks N..2N-ish, and crossTable /
-  // SeasonGrid already render multiple meetings per pair.
-  const doubleRound = bool(formData, "doubleRound");
+  // The format is the team count's (season-format.ts): nobody picks one
+  // table or groups, or a double round robin, here. A regenerate keeps the
+  // groups it finds (a swap survives a new first night) unless the admin
+  // asks for a fresh draw.
+  return replaceRegularSchedule({
+    expectedActiveSeasonId,
+    firstNight,
+    groups: bool(formData, "redrawGroups") ? { kind: "DRAW" } : { kind: "AUTO" },
+  });
+}
 
+/**
+ * Swap one team from each group and regenerate the schedule around the new
+ * groups, from the season's own week-1 night. For an admin who knows the
+ * MMR draw put two strong rosters together. Open only while generating
+ * is: before any result.
+ */
+export async function swapGroupTeams(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
+  const teamA = str(formData, "teamA").trim();
+  const teamB = str(formData, "teamB").trim();
+  if (!expectedActiveSeasonId) {
+    return { error: "This form is stale — reload before swapping teams." };
+  }
+  if (!teamA || !teamB) {
+    return { error: "Pick one team from each group to swap." };
+  }
+  return replaceRegularSchedule({
+    expectedActiveSeasonId,
+    firstNight: null,
+    groups: { kind: "SWAP", teamA, teamB },
+  });
+}
+
+class GroupSwapError extends Error {}
+
+class FirstNightPassedError extends Error {
+  constructor(readonly firstNight: Date | null) {
+    super("The season's first match night is missing or past");
+  }
+}
+
+type GroupPlan =
+  | { kind: "AUTO" }
+  | { kind: "DRAW" }
+  | { kind: "SWAP"; teamA: string; teamB: string };
+
+/**
+ * Replace the season's regular-season fixtures with the team count's format
+ * (`seasonFormat`): one table, or two groups. The groups are the ones the
+ * teams already carry when they still fit the format (`AUTO`), else a fresh
+ * draw by roster MMR (`AUTO` with none that fit, or `DRAW`), or the current
+ * groups with two teams swapped (`SWAP`). `firstNight` null keeps the
+ * season's own week-1 night (a swap).
+ */
+async function replaceRegularSchedule(input: {
+  expectedActiveSeasonId: string;
+  firstNight: Date | null;
+  groups: GroupPlan;
+}): Promise<ActionResult> {
+  const { expectedActiveSeasonId, groups: groupPlan } = input;
   // Every authoritative input is read in the same Serializable transaction as
   // the replacement. A stale tab must not build rows from the old season's
   // teams or series length and then write them into whichever season happens
@@ -192,7 +261,11 @@ export async function generateSchedule(
   await raceHook("admin.generateSchedule.beforeTx");
   let outcome: {
     seasonId: string;
+    firstNight: Date;
+    format: SeasonFormat;
     teams: { id: string; name: string }[];
+    groups: { key: string; teamIds: string[] }[];
+    groupsFrom: "DRAWN" | "KEPT" | "SWAPPED" | null;
     rows: number;
     weeks: number;
     cleared: {
@@ -236,6 +309,7 @@ export async function generateSchedule(
               isActive: true,
               status: true,
               regularBestOf: true,
+              firstMatchNight: true,
             },
           }),
           tx.draft.findUnique({
@@ -245,7 +319,7 @@ export async function generateSchedule(
           tx.team.findMany({
             where: { seasonId: expectedActiveSeasonId },
             orderBy: { draftOrder: "asc" },
-            select: { id: true, name: true, withdrawn: true },
+            select: { id: true, name: true, withdrawn: true, groupKey: true },
           }),
           tx.match.count({
             where: {
@@ -272,23 +346,70 @@ export async function generateSchedule(
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
         }
-        if (teams.length < 2) throw new ScheduleNeedsTeamsError();
+        const format = seasonFormat(teams.length);
+        if (!format) throw new ScheduleNeedsTeamsError();
+        const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
+        if (!firstNight || firstNight.getTime() < Date.now()) {
+          throw new FirstNightPassedError(firstNight);
+        }
 
-        const rounds = roundRobin(
-          teams.map((team) => team.id),
-          doubleRound,
+        // One group for a table; for groups, the MMR draw or the current
+        // groups with the swap applied. Each group plays in draft order, the
+        // order a table always used (it fixes home and away and the byes).
+        const draftRank = new Map(teams.map((team, index) => [team.id, index]));
+        let groups: string[][];
+        let groupsFrom: "DRAWN" | "KEPT" | "SWAPPED" | null = null;
+        const kept =
+          format.kind === "GROUPS" && groupPlan.kind === "AUTO"
+            ? currentGroups(teams, format)
+            : null;
+        if (format.kind === "TABLE") {
+          if (groupPlan.kind === "SWAP") throw new GroupSwapError();
+          groups = [teams.map((team) => team.id)];
+        } else if (kept) {
+          groups = kept;
+          groupsFrom = "KEPT";
+        } else if (groupPlan.kind !== "SWAP") {
+          groupsFrom = "DRAWN";
+          const [members, registrations] = await Promise.all([
+            tx.teamMember.findMany({
+              where: { seasonId: expectedActiveSeasonId },
+              select: { teamId: true, userId: true },
+            }),
+            tx.registration.findMany({
+              where: { seasonId: expectedActiveSeasonId },
+              select: { userId: true, mmr: true },
+            }),
+          ]);
+          const mmrOf = new Map(registrations.map((r) => [r.userId, r.mmr]));
+          groups = drawGroups(
+            teams.map((team) => ({
+              id: team.id,
+              averageMmr: rosterAverageMmr(
+                members
+                  .filter((member) => member.teamId === team.id)
+                  .map((member) => mmrOf.get(member.userId) ?? 0),
+              ),
+            })),
+          );
+        } else {
+          groups = swappedGroups(teams, format, groupPlan);
+          groupsFrom = "SWAPPED";
+        }
+        groups = groups.map((ids) =>
+          [...ids].sort((a, b) => draftRank.get(a)! - draftRank.get(b)!),
         );
-        const rows = rounds.flatMap((round, i) =>
-          round.map((pairing) => ({
-            seasonId: currentSeason.id,
-            week: i + 1,
-            phase: MATCH_PHASE.REGULAR,
-            homeTeamId: pairing.home,
-            awayTeamId: pairing.away,
-            bestOf: currentSeason.regularBestOf,
-            scheduledAt: matchNightForWeek(firstNight, i + 1),
-          })),
-        );
+        const groupKeys = format.kind === "GROUPS" ? SEASON_GROUP_KEYS : [];
+        const fixtures = regularSeasonFixtures(groups, format.doubleRound);
+        const rows = fixtures.map((fixture) => ({
+          seasonId: currentSeason.id,
+          week: fixture.week,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId: fixture.home,
+          awayTeamId: fixture.away,
+          bestOf: currentSeason.regularBestOf,
+          scheduledAt: matchNightForWeek(firstNight, fixture.week),
+        }));
 
         // A generated schedule is just as authoritative as a manual retime.
         // Check every fixture before replacing the old schedule so an
@@ -376,6 +497,20 @@ export async function generateSchedule(
           },
         });
         await tx.match.createMany({ data: rows });
+        // Every team's group, in the same transaction as its fixtures: a
+        // one-table season clears them, so no page reads a stale draw.
+        if (groupKeys.length === 0) {
+          await tx.team.updateMany({
+            where: { seasonId: expectedActiveSeasonId },
+            data: { groupKey: null },
+          });
+        }
+        for (const [index, key] of groupKeys.entries()) {
+          await tx.team.updateMany({
+            where: { seasonId: expectedActiveSeasonId, id: { in: groups[index] } },
+            data: { groupKey: key },
+          });
+        }
         const anchored = await tx.season.updateMany({
           where: { id: expectedActiveSeasonId, isActive: true },
           data: { firstMatchNight: firstNight },
@@ -391,9 +526,13 @@ export async function generateSchedule(
         });
         return {
           seasonId: currentSeason.id,
+          firstNight,
+          format,
           teams: teams.map(({ id, name }) => ({ id, name })),
+          groups: groupKeys.map((key, index) => ({ key, teamIds: groups[index] })),
+          groupsFrom,
           rows: rows.length,
-          weeks: rounds.length,
+          weeks: Math.max(0, ...rows.map((row) => row.week)),
           cleared,
           standDowns,
         };
@@ -427,6 +566,19 @@ export async function generateSchedule(
     if (e instanceof ScheduleNeedsTeamsError) {
       return { error: "Need at least 2 active teams" };
     }
+    if (e instanceof FirstNightPassedError) {
+      return {
+        error: e.firstNight
+          ? `Week 1 (${formatLeagueTime(e.firstNight)}) has already passed, so the schedule can't be rebuilt from it. Generate the schedule again with a future first match night.`
+          : "Generate the schedule first: there is no week-1 night to rebuild it from.",
+      };
+    }
+    if (e instanceof GroupSwapError) {
+      return {
+        error:
+          "Those two teams aren't in different groups any more — reload to see the current groups, then pick one team from each.",
+      };
+    }
     if (e instanceof ScrimScheduleConflictError) {
       return {
         error: `A generated kickoff falls within four hours of ${e.scrim}. ${e.fix}, then generate the schedule again.`,
@@ -458,10 +610,21 @@ export async function generateSchedule(
       mentionsOf([a.discordId]),
     );
   }
+  const groupsLine = outcome.groups
+    .map(
+      (group) =>
+        `Group ${group.key}: ${group.teamIds
+          .map((id) => scheduleTeamNames.get(id) ?? "a team")
+          .join(", ")}`,
+    )
+    .join("; ");
   await logAdminAction({
-    action: "generateSchedule",
+    action: groupPlan.kind === "SWAP" ? "swapGroupTeams" : "generateSchedule",
     summary:
-      `Generated ${outcome.rows} regular-season fixture(s)` +
+      (groupPlan.kind === "SWAP"
+        ? `Swapped ${scheduleTeamNames.get(groupPlan.teamA) ?? "a team"} and ${scheduleTeamNames.get(groupPlan.teamB) ?? "a team"} between the groups and regenerated ${outcome.rows} regular-season fixture(s)`
+        : `Generated ${outcome.rows} regular-season fixture(s)`) +
+      ` (${formatName(outcome.format).toLowerCase()}${groupsLine ? ` · ${groupsLine}` : ""})` +
       (outcome.cleared.rsvps ||
       outcome.cleared.picks ||
       outcome.cleared.covers ||
@@ -483,15 +646,76 @@ export async function generateSchedule(
       ? `${outcome.cleared.proposals} open reschedule(s)`
       : null,
   ].filter(Boolean);
+  const plan = seasonPlan(outcome.format, outcome.firstNight, outcome.weeks);
+  const tiebreakerNight = plan.find((step) => step.kind === "TIEBREAKER")?.from;
+  const playoffNight = plan.find((step) => step.kind === "PLAYOFF")?.from;
+  const groupsFrom =
+    outcome.groupsFrom === "DRAWN"
+      ? ", drawn by roster MMR"
+      : outcome.groupsFrom === "KEPT"
+        ? ", the groups kept as they were"
+        : "";
   return {
-    message: `Schedule generated · ${outcome.rows} matches over ${outcome.weeks} week(s)${
-      doubleRound ? " (double round robin)" : ""
-    } · week 1: ${formatLeagueTime(firstNight)}, then weekly${
+    message: `${groupPlan.kind === "SWAP" ? "Groups swapped and schedule regenerated" : "Schedule generated"} · ${formatName(outcome.format)}${groupsFrom}${
+      groupsLine ? ` (${groupsLine})` : ""
+    } · ${outcome.rows} matches over ${outcome.weeks} week(s) · week 1: ${formatLeagueTime(outcome.firstNight)}, then weekly${
+      tiebreakerNight && playoffNight
+        ? ` · tiebreaker week ${formatLeagueTime(tiebreakerNight)} (only if a tie needs it), playoffs from ${formatLeagueTime(playoffNight)}`
+        : ""
+    }${
       collateral.length
         ? ` · the old fixtures were replaced, clearing ${collateral.join(", ")}`
         : ""
     }`,
   };
+}
+
+/**
+ * The groups the teams carry, in `SEASON_GROUP_KEYS` order, or null unless
+ * every team has one and the sizes are the format's (a team count that
+ * changed since the last draw needs a new one).
+ */
+function currentGroups(
+  teams: { id: string; groupKey: string | null }[],
+  format: SeasonFormat,
+): string[][] | null {
+  const groups = SEASON_GROUP_KEYS.slice(0, format.groupSizes.length).map((key) =>
+    teams.filter((team) => team.groupKey === key).map((team) => team.id),
+  );
+  const sizes = groups.map((ids) => ids.length).sort((a, b) => b - a);
+  const placed = groups.reduce((sum, ids) => sum + ids.length, 0);
+  return placed === teams.length && sizes.join() === format.groupSizes.join()
+    ? groups
+    : null;
+}
+
+/**
+ * The current groups with `teamA` and `teamB` traded. Refuses unless the
+ * season is grouped the way its team count says and the two teams sit in
+ * different groups (a stale form, or a team count that changed since).
+ */
+function swappedGroups(
+  teams: { id: string; groupKey: string | null }[],
+  format: SeasonFormat,
+  swap: { teamA: string; teamB: string },
+): string[][] {
+  const groups = currentGroups(teams, format);
+  if (!groups) throw new GroupSwapError();
+  const groupOf = (teamId: string) => groups.findIndex((ids) => ids.includes(teamId));
+  const a = groupOf(swap.teamA);
+  const b = groupOf(swap.teamB);
+  if (a < 0 || b < 0 || a === b) {
+    throw new GroupSwapError();
+  }
+  return groups.map((ids, index) =>
+    ids.map((id) =>
+      index === a && id === swap.teamA
+        ? swap.teamB
+        : index === b && id === swap.teamB
+          ? swap.teamA
+          : id,
+    ),
+  );
 }
 
 /** Seed and start the single-elimination playoff bracket from the standings. */
@@ -596,8 +820,8 @@ export async function startPlayoffs(
     );
   }
   // Seeds come from the frozen first-round pairings, the same source the
-  // bracket on the site labels them from.
-  const seeds = seedsFromFirstRound(bracket);
+  // bracket on the site labels them from ("A1" in a group season).
+  const seeds = bracketSeedLabels(seedsFromFirstRound(bracket), teams);
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,
