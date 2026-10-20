@@ -6,7 +6,11 @@ import {
   type Browser,
   type Page,
 } from "@playwright/test";
-import { trackPageErrors } from "../e2e-mid/helpers";
+import {
+  expectOneRoomPollAtATime,
+  recordRoomPolls,
+  trackPageErrors,
+} from "../e2e-mid/helpers";
 
 // The room snapshot (inhouse-room-cache.ts) seen from the browser: the server
 // answers room polls from a per-instance copy of the room while the room
@@ -50,11 +54,8 @@ type StateView = {
   me: { userId: string | null; inQueue: boolean; isOnClock: boolean };
 };
 
-/**
- * One /api/inhouse reply a tab received: when its request started and when
- * its response finished (browser wall-clock ms).
- */
-type Reply = { start: number; end: number; action: string; body: Json; state: StateView };
+/** One /api/inhouse reply a tab received, by when its request started. */
+type Reply = { start: number; action: string; body: Json; state: StateView };
 
 /** Dev-login a fresh user and return an authed API context. */
 async function apiPlayer(name: string, steamId: string, admin = false): Promise<APIRequestContext> {
@@ -74,6 +75,7 @@ async function act(ctx: APIRequestContext, body: Json): Promise<{ ok: boolean; j
 /** Every room reply this tab receives, and every tab title it shows. */
 async function watchedTab(browser: Browser, name: string, steamId: string) {
   const context = await browser.newContext({ baseURL: BASE });
+  await recordRoomPolls(context, "/api/inhouse", "state");
   // The tab title, sampled in the page (a title that flips back and forth
   // between two polls is still caught at this rate).
   await context.addInitScript(() => {
@@ -102,15 +104,7 @@ async function watchedTab(browser: Browser, name: string, steamId: string) {
     try {
       if (!res.ok()) return;
       const state = (await res.json()) as StateView;
-      // responseEnd (relative to startTime) is known once the body is read.
-      const timing = req.timing();
-      replies.push({
-        start: timing.startTime,
-        end: timing.startTime + timing.responseEnd,
-        action: String(body.action ?? ""),
-        body,
-        state,
-      });
+      replies.push({ start: req.timing().startTime, action: String(body.action ?? ""), body, state });
     } catch {
       // The page navigated away mid-response.
     }
@@ -128,27 +122,6 @@ const gameIn = (s: StateView, id: string) =>
 /** Polls (not actions) this tab started after `t`. */
 const pollsAfter = (tab: Tab, t: number) =>
   tab.replies.filter((r) => r.action === "state" && r.start > t);
-
-/**
- * Each of this tab's polls left after the one before it finished: never two
- * in flight at once. (1ms of slack for the timings' float rounding; two that
- * overlap do so by a whole round trip.)
- */
-function expectOnePollAtATime(tab: Tab, name: string) {
-  const polls = tab.replies
-    .filter((r) => r.action === "state")
-    .sort((a, b) => a.start - b.start);
-  expect(polls.length).toBeGreaterThan(1);
-  for (let i = 1; i < polls.length; i++) {
-    const [prev, poll] = [polls[i - 1], polls[i]];
-    expect(
-      poll.start,
-      `${name}: a poll left at ${new Date(poll.start).toISOString()} while the one ` +
-        `before it (${new Date(prev.start).toISOString()} to ` +
-        `${new Date(prev.end).toISOString()}) was still in flight`,
-    ).toBeGreaterThanOrEqual(prev.end - 1);
-  }
-}
 
 /**
  * Publish a new room version with nothing changed (the fixture fence
@@ -181,6 +154,15 @@ async function titlesAfter(page: Page, t: number): Promise<string[]> {
   return all.filter(([at]) => at > t).map(([, title]) => title);
 }
 
+// The specs after this one need an empty room: no live game and nobody
+// queued. The test sets this as soon as it has players; it runs even when a
+// check fails, so one failure here doesn't fail every zz4e spec behind it.
+let emptyTheRoom: (() => Promise<void>) | null = null;
+test.afterEach(async () => {
+  await emptyTheRoom?.();
+  emptyTheRoom = null;
+});
+
 test("the room never goes backwards: picks, titles, accepts and a requeue", async ({ browser }) => {
   test.setTimeout(300_000);
 
@@ -190,11 +172,22 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   const capB = await watchedTab(browser, "SN Captain B", "76561190000006001");
   const watcher = await watchedTab(browser, "SN Watcher", "76561190000006002");
   const tabs = [capA, capB, watcher];
+  const tabNames = ["capA", "capB", "watcher"];
   const others: APIRequestContext[] = [];
   for (let i = 0; i < 8; i++) {
     others.push(await apiPlayer(`SN Player ${i}`, `7656119000000601${i}`));
   }
   const admin = await apiPlayer("SN Admin", "76561190000006099", true);
+  let liveGame: string | null = null;
+  emptyTheRoom = async () => {
+    // A refusal (the game already over, a player not queued) is fine here.
+    if (liveGame) await act(admin, { action: "cancel", lobbyId: liveGame }).catch(() => null);
+    for (const ctx of [...others, capA.request, capB.request, watcher.request]) {
+      await act(ctx, { action: "leave" }).catch(() => null);
+    }
+    for (const ctx of [...others, admin]) await ctx.dispose();
+    for (const tab of tabs) await tab.context.close();
+  };
 
   for (const [i, ctx] of others.entries()) {
     expect((await act(ctx, { action: "join", mmr: 4000 - i * 50 })).ok).toBe(true);
@@ -204,6 +197,7 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   // The ten form a game; the watcher queues for the next one.
   const formed = await act(capA.request, { action: "state" });
   const lobbyId = (formed.json.lobby as LobbyView).id;
+  liveGame = lobbyId;
   expect((formed.json.lobby as LobbyView).status).toBe("READY_CHECK");
   expect((await act(watcher.request, { action: "join", mmr: 3000 })).ok).toBe(true);
   // The tabs joined through the API, so each still holds the empty queue it
@@ -254,9 +248,9 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
       );
     }
   }
-  // Every load so far included: one poll in flight per tab.
+  // Since each tab's reload (its double mount included): one poll in flight.
   for (const [i, tab] of tabs.entries()) {
-    expectOnePollAtATime(tab, ["capA", "capB", "watcher"][i]);
+    await expectOneRoomPollAtATime(tab.page, tabNames[i]);
   }
 
   // ---- the captain vote: everyone backs the two highest MMRs --------------
@@ -329,6 +323,7 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   // ---- an admin cancel: a requeued player is present on their next poll ----
   const cancelled = await act(admin, { action: "cancel", lobbyId });
   expect(cancelled.ok).toBe(true);
+  liveGame = null;
   const cancelledAt = Date.now();
   await pollsEach(admin, [capA], cancelledAt, 1);
   const back = pollsAfter(capA, cancelledAt)[0].state;
@@ -336,14 +331,9 @@ test("the room never goes backwards: picks, titles, accepts and a requeue", asyn
   expect(back.queue.find((q) => q.userId === back.me.userId)?.away).toBe(false);
   // Through the vote, every pick (each releases a held poll) and the cancel.
   for (const [i, tab] of tabs.entries()) {
-    expectOnePollAtATime(tab, ["capA", "capB", "watcher"][i]);
+    await expectOneRoomPollAtATime(tab.page, tabNames[i]);
   }
 
-  // Clean up the queue for the specs after this one.
-  for (const ctx of [...others, capA.request, capB.request, watcher.request]) {
-    await act(ctx, { action: "leave" });
-  }
   for (const tab of tabs) tab.errors();
-  for (const ctx of [...others, admin]) await ctx.dispose();
-  for (const tab of tabs) await tab.context.close();
+  // afterEach empties the room for the specs after this one.
 });

@@ -261,7 +261,9 @@ In the Captains & draft card on `/admin` and inside the room
   loop's first one. Request-start ordering assumes one tick in flight: of
   two at once the server may read the later-started one first, and the
   room would keep the older lot. Same rule as the inhouse room
-  ([inhouse](inhouse.md)); `room-source-guards.test.ts` keeps the shape.
+  ([inhouse](inhouse.md)); `room-source-guards.test.ts` keeps the shape,
+  and `e2e/zz-admin-draft.spec.ts` checks each captain's room has one tick
+  in flight at a time (`recordRoomPolls`, on the page's own clock).
 - **Refresh the layout's render once per phase move.** The header's status
   chip and the phase nav come from the root layout, which a poll never
   repeats: a captain who parked on `/draft` before Start read "Signups open"
