@@ -42,6 +42,7 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 |---|---|
 | Release agent | `/usr/local/sbin/ggd2l-agent` (runs `/usr/local/lib/ggd2l/ggd2l-agent.mjs`) |
 | Agent modules, env contract, renderers | `/usr/local/lib/ggd2l/` |
+| The hourly backup's repo scripts (kit copies) | `/usr/local/lib/ggd2l/app/{scripts,src/lib}/` |
 | SQL (parity, grants, scrub, identity) | `/usr/local/lib/ggd2l/sql/<name>.sql` |
 | Shell helpers | `/usr/local/lib/ggd2l/{provision-league-db,backup-league,drill-league,heartbeat,config-archive}.sh`, `discord-alert.mjs` |
 | Alert state (Discord) | `/var/lib/ggd2l-alerts/` (one JSON file per alert, `ggd2l-ops`) |
@@ -52,6 +53,7 @@ upgrades with a reboot window at 09:00 UTC, journald capped at 500 MB.
 | Caddy mode files | `/etc/caddy/ggd2l/{us,eu}-mode.caddy`, `/etc/caddy/ggd2l/allow.caddy` |
 | Tunnel | `/etc/cloudflared/config.yml`, `/etc/cloudflared/<uuid>.json` |
 | Backups | `/var/backups/ggd2l/<lg>/{local,offsite,state}/`, `/var/backups/ggd2l/config/` |
+| The drill's dump (handed over by the backup) and its own folder | `/var/backups/ggd2l/<lg>/drill/` (group `ggd2l-drill`), `/var/lib/ggd2l-drill/<lg>/` (`last-drill.json`) |
 | Cutover dumps | `/var/backups/ggd2l/cutover/<lg>/` (root, 0700) |
 | Logs | journald; Caddy JSON access logs in `/var/log/caddy/{us,eu,apex}.access.json` |
 
@@ -72,8 +74,9 @@ blink). `systemctl show` reports the unit's value at once, so check the live
 process: `cat /proc/$(systemctl show -p MainPID --value caddy)/oom_score_adj`.
 
 Linux users: `ggd2l` (admin, sudo), `ggd2l-build` (builds; holds no secret),
-`ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, drills,
-heartbeat), `ggd2l-bot`.
+`ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, heartbeat,
+alerts; holds the R2 key), `ggd2l-drill` (restore drills; reads only the dump
+the backup hands it), `ggd2l-bot`.
 
 ## Rules that are different on the box
 
@@ -99,6 +102,33 @@ heartbeat), `ggd2l-bot`.
   them for the league user and the unit's `ReadWritePaths=` names them; the
   rest of the release is read-only. CI's boot step fails a build that writes
   anywhere else.
+- **Root never works through a link a service user could have left.** GNU
+  `install -d`, `chown` and `chmod`, given a link, change its target. The
+  build user runs third-party install scripts, so it can leave a link
+  anywhere it can write, and so can any user that runs code it wrote. So
+  the agent and `install-kit.sh` change, as root, only
+  folders in a parent no service user can write. The agent makes each
+  folder the build user clones or unpacks into itself, with a plain `mkdir`
+  in a root-only parent (`tools/`, `bot/releases/`, `<lg>/releases/`), and
+  hands it over with `chown -h`. It takes a tree back
+  (`chown -R -P -h`, then requires a real, root-owned folder) before it
+  reads, chmods or writes through it. It deletes such trees with GNU `rm`,
+  never Node's `rmSync`. A folder inside a service user's own folder (the
+  npm cache, the backups' `local/` and `offsite/`) is made by that user. A
+  link or file where one of these folders goes stops the agent
+  (`unsafe_path`) or the install: treat that as an incident (see Kit
+  changes).
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups, while the tools clone is whatever the build user's `npm ci`
+  wrote. So the hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and what they import
+  (`/usr/local/lib/ggd2l/app/`, from root's clone): a change to those files
+  reaches the box with `install-kit.sh`, not with an app release
+  (`install-kit.test.mjs` keeps the list equal to their imports). The
+  restore drill needs the tools clone (Prisma, the commit's migrations), so
+  it runs as `ggd2l-drill`, which cannot read `rclone.conf` or write the
+  backups, from a private copy of the one dump each backup hands it in
+  `drill/`.
 - Each slot process holds one Prisma pool of `connection_limit=8`
   (`provision-league-db.sh`), so four processes in a release overlap use 32 of
   PostgreSQL's 47 usable connections. A release built before 2026-10-17's fix
@@ -112,8 +142,10 @@ heartbeat), `ggd2l-bot`.
   `serverErrors24h`, the real 5xx, and `maintenance503s24h`, the maintenance
   page's own 503s (a league held in maintenance answers everything with one).
   `lastDrill` is the later of the drill unit's last run (the weekly timer,
-  failures included) and `state/last-drill.json`, which every passing drill
-  writes, so a `drill <lg> <sha>` before a migration counts too.
+  failures included) and `/var/lib/ggd2l-drill/<lg>/last-drill.json`, which
+  every passing drill writes (before 2026-10-19, `state/last-drill.json` in
+  the backups, still read), so a `drill <lg> <sha>` before a migration
+  counts too.
 - **Logs:** `ssh ggd2l-1 sudo journalctl -u ggd2l-us@<slot> -f` for the live
   slot (`status` names it under `leagues.<lg>.live.slot`; a release flips it).
   `sudo -n ggd2l-agent logs us <sinceMs>` is the release gate's evidence, not a
@@ -196,6 +228,50 @@ output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
+**The first install after 2026-10-19** closes a root escalation from the
+build user. Until then the agent ran `install -d -o ggd2l-build` as root on
+the npm cache inside the build user's own home, and on clone folders in
+parents the build user could write. `install-kit.sh` did the same on the
+backups' `local/` and `offsite/` inside `ggd2l-ops`'s folder. A link left
+there would have handed its target (the agent's own code, say) to that
+user. Before installing, check that nothing was handed over, as the admin
+user (`-xdev` stays on `/`, the box's only filesystem):
+
+```bash
+sudo find / -xdev \( -user ggd2l-build -o -user ggd2l-ops \) ! -path '/srv/ggd2l/*' \
+  ! -path '/var/cache/ggd2l-build' ! -path '/var/cache/ggd2l-build/*' ! -path '/var/backups/ggd2l/*' \
+  ! -path '/var/lib/ggd2l-ops' ! -path '/var/lib/ggd2l-ops/*' ! -path '/var/lib/ggd2l-alerts' \
+  ! -path '/var/lib/ggd2l-alerts/*' ! -path '/etc/ggd2l/rclone.conf' ! -path '/tmp/*' ! -path '/var/tmp/*' -print
+sudo stat -c '%F %U:%G %a %n' /var/cache/ggd2l-build/npm /var/backups/ggd2l/{us,eu}/{local,offsite}
+```
+
+The `find` prints nothing, and `stat` says `directory`, owned by
+`ggd2l-build` or `ggd2l-ops`, for all five. Anything else (a symbolic link
+there, or something of root's, such as `/usr/local/lib/ggd2l`, now owned by
+one of those users) means root may already have run that user's code: stop,
+install nothing, leave the box as it is, and handle it as an incident
+(PRODUCTION-OPERATIONS). Otherwise install as above, record both outputs in
+the install's evidence, then check the new modes:
+`stat -c '%a %U:%G %n' /srv/ggd2l/tools /srv/ggd2l/bot/releases /srv/ggd2l/{us,eu}/releases`
+prints `755`, `755`, `751` and `751`, each `root:root`. The next release's
+`agent build` is the first run of the new folder handling. An
+`unsafe_path` refusal from the agent, or an install that stops at "is a
+link or not a folder", is the same incident as `find` printing something.
+
+The same install takes the build user's code away from `ggd2l-ops`. It adds
+the `ggd2l-drill` user and puts `ggd2l-ops` in its group, installs the
+hourly backup's scripts under `/usr/local/lib/ggd2l/app/`, and moves the
+drill onto `ggd2l-drill`. Right after it, run one backup and then one drill
+per league (the commands under Backups: the drill restores the dump that
+backup hands over, so the order matters) and check both say
+`Result=success`. Then check
+`sudo ls -l /var/backups/ggd2l/{us,eu}/drill/`: each holds one dump with its
+`.sha256` and `.metadata.json`, `-rw-r----- ggd2l-ops ggd2l-drill`. A
+backup uploads to R2 before it hands the drill its copy, so even a backup
+that fails `at step drill-handoff` has its offsite copy. If either check
+fails, installing the previous kit SHA the same way puts both back as they
+were.
+
 ## Rollback
 
 - **App:** `ssh ggd2l-1 sudo -n ggd2l-agent rollback us`, then the same for
@@ -239,8 +315,9 @@ config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 **Each hourly backup** (as `ggd2l-ops`, with only `/etc/ggd2l/backup-<lg>.env`:
 the app role's `DIRECT_URL` and `BACKUP_DIR`):
 
-1. `scripts/backup-db.mjs` from `tools/current` writes
-   `local/backup-<stamp>-<pid>.sql` with its `.sha256` and `.metadata.json`.
+1. `scripts/backup-db.mjs` (the kit's copy in `/usr/local/lib/ggd2l/app`)
+   writes `local/backup-<stamp>-<pid>.sql` with its `.sha256` and
+   `.metadata.json`, all private to `ggd2l-ops`.
 2. `scripts/verify-backup.mjs` checks the checksum. No receipt secret is ever
    present, so no receipt reaches the journal; receipts for a season delete are
    minted by hand in a private terminal.
@@ -255,19 +332,24 @@ the app role's `DIRECT_URL` and `BACKUP_DIR`):
    - `ggd2l-backups/<lg>/daily/<date>/` for the first success at or after
      03:00Z each day;
    - `ggd2l-backups/<lg>/monthly/<YYYY-MM>/` for the first daily of each month.
-6. `state/last-backup.json` records the file, both sha256 values and the R2
+6. The dump and both sidecars are copied to `drill/` (0640, group
+   `ggd2l-drill`), replacing the last copy: all the drill can read. A failed
+   copy fails the run (`at step drill-handoff`) after the upload, so the
+   offsite copy is never lost to it, but no record is written.
+7. `state/last-backup.json` records the file, both sha256 values and the R2
    key, with a copy at `/var/backups/ggd2l/<lg>/last-backup.json`;
    `agent backup` and `agent status` report from it. healthchecks gets a ping,
    or `/fail` with the step that failed.
 
-The units run sandboxed (`ProtectSystem=strict`), so the backup and the drill
-write only inside their league folder, their locks included (the drills share
-one lock, a read-only hold on `/var/backups/ggd2l`). After installing or
+The units run sandboxed (`ProtectSystem=strict`), so the backup writes only
+inside its league folder and the drill only inside
+`/var/lib/ggd2l-drill/<lg>`, their locks included (the drills share one lock,
+a read-only hold on `/var/lib/ggd2l-drill`). After installing or
 changing the kit, start each unit once and check it, so a sandbox gap shows up
 now and not at the next hour:
 
 ```bash
-sudo systemctl start ggd2l-backup@us    # first: the drill restores the newest dump
+sudo systemctl start ggd2l-backup@us    # first: it hands the drill the dump it restores
 sudo systemctl start ggd2l-drill@us
 systemctl show -p Result ggd2l-backup@us ggd2l-drill@us   # Result=success for both
 ```
@@ -380,15 +462,19 @@ with `LoadCredential=`, otherwise from `/etc/ggd2l/`, which must then let
 ## Restore
 
 **The weekly drill** (`drill-league.sh`, or `sudo -n ggd2l-agent drill <lg> [sha]`
-before a migration) restores the newest local dump into the scratch database
-`ld2l_restore_test` as `ggd2l_rehearsal` (URL in `/etc/ggd2l/drill.env`), using
+before a migration) runs as `ggd2l-drill`. It copies the dump the newest
+backup handed it (`/var/backups/ggd2l/<lg>/drill/`) into its own folder, as
+`verify-backup.mjs` accepts only private files, and restores that copy into
+the scratch database `ld2l_restore_test` as `ggd2l_rehearsal` (URL in
+`/etc/ggd2l/drill.env`), using
 `scripts/rehearse-backup-restore.mjs` from `tools/current`, or with a SHA from
 `tools/<sha12>` (the agent passes the SHA as the second argument and the
 same folder as `GGD2L_TOOLS_DIR`, which must agree; `tools/current` still
 points at the live commit until `migrate` moves it).
 That verifies the checksum, restores in one transaction, applies the commit's
 migrations and attests the full schema. The scratch database is dropped
-afterwards, pass or fail. The result is in `state/last-drill.json`.
+afterwards, pass or fail, and so is the drill's copy of the dump. The result
+is in `/var/lib/ggd2l-drill/<lg>/last-drill.json`.
 
 **Tim's quarterly decrypt drill** (about 15 min, on the Mac): download one
 `daily/` object with its two `.sha256` files into an empty folder, then:

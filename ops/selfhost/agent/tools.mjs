@@ -9,11 +9,11 @@
 // JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { buildUserEnv, cloneAt, fetchMain, lockDownTree, requireOnMain } from "./build.mjs";
+import { buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
-import { asUser, must, systemdRunArgs } from "./runner.mjs";
+import { asUser, must, removeTree, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
 
@@ -70,8 +70,9 @@ export async function prepareTools(ctx, commit) {
   const dir = ctx.layout.toolsDir(commit);
   if (!(await toolsReady(ctx, commit))) {
     // A half-made clone (a crash inside npm ci) is rebuilt from nothing.
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(ctx.runner, dir, "clone_failed");
     mkdirSync(ctx.layout.tools, { recursive: true });
+    await makeBuildDir(ctx, dir, "0755", "clone_failed");
     await cloneAt(ctx, dir, commit);
     await npmCi(ctx, dir, ["--include=dev"], "install_failed");
   }
@@ -218,15 +219,22 @@ export function readBackupRecord(ctx, lg) {
 /**
  * The record drill-league.sh writes after a passing drill, whether the weekly
  * unit or `drill <lg> <sha>` (systemd-run, outside the unit) ran it:
- * /var/backups/ggd2l/<lg>/state/last-drill.json, {ok, league, dump,
- * dumpSha256, tools, finishedAt}. A failed drill writes none, so this is the
- * last pass. Only a record for this league that says ok and carries a
- * readable finishedAt counts.
+ * /var/lib/ggd2l-drill/<lg>/last-drill.json, {ok, league, dump, dumpSha256,
+ * tools, finishedAt}. A failed drill writes none, so this is the last pass.
+ * Drills before 2026-10-19 ran as ggd2l-ops and wrote
+ * /var/backups/ggd2l/<lg>/state/last-drill.json; of the two, the later
+ * finishedAt answers. Only a record for this league that says ok and carries
+ * a readable finishedAt counts.
  */
 export function readDrillRecord(ctx, lg) {
-  const record = readJson(path.join(ctx.layout.backupDir(lg), "state", "last-drill.json"));
-  if (record?.ok !== true || record.league !== lg || !Number.isFinite(Date.parse(record.finishedAt ?? ""))) return null;
-  return record;
+  let best = null;
+  for (const file of [path.join(ctx.layout.drillState(lg), "last-drill.json"), path.join(ctx.layout.backupDir(lg), "state", "last-drill.json")]) {
+    const record = readJson(file);
+    const finishedAt = Date.parse(record?.finishedAt ?? "");
+    if (record?.ok !== true || record.league !== lg || !Number.isFinite(finishedAt)) continue;
+    if (!best || finishedAt > Date.parse(best.finishedAt)) best = record;
+  }
+  return best;
 }
 
 /**
@@ -270,8 +278,11 @@ export function newestDump(ctx, lg) {
 }
 
 /**
- * `drill <lg> [sha]`: the newest local dump restored into ld2l_restore_test by
- * rehearse-backup-restore.mjs as ggd2l_rehearsal, then dropped. Without a sha
+ * `drill <lg> [sha]`: the newest dump the backup handed to the drill, restored
+ * into ld2l_restore_test by rehearse-backup-restore.mjs as ggd2l_rehearsal,
+ * then dropped. It runs as ggd2l-drill, never ggd2l-ops: the drill runs the
+ * tools clone, which the build user's npm ci wrote, and ggd2l-ops holds the R2
+ * key and the backups. Without a sha
  * this is the weekly drill unit; with one, the same helper runs against that
  * sha's tools clone (design §2.5 step 4), so the new migrations are
  * rehearsed before `migrate` applies them.
@@ -290,7 +301,7 @@ export async function drill(ctx, lg, commit) {
   if (!existsSync(ctx.layout.drillEnv)) throw new AgentError("env_missing");
   const { env } = loadEnvFile(ctx, ctx.layout.drillEnv);
   const unit = systemdRunArgs({
-    user: USERS.ops,
+    user: USERS.drill,
     envFiles: [ctx.layout.drillEnv],
     properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },
@@ -319,16 +330,17 @@ export async function botDeploy(ctx, commit) {
   const dir = path.join(layout.botReleases, short);
   const botDir = path.join(dir, "ops/dota-lobby-bot");
   if (!existsSync(path.join(botDir, "node_modules/.package-lock.json"))) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(runner, dir, "bot_deploy_failed");
     mkdirSync(layout.botReleases, { recursive: true });
-    await must(runner, "bot_deploy_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0755", dir]);
+    await makeBuildDir(ctx, dir, "0755", "bot_deploy_failed");
     const archive = path.join(dir, ".source.tar");
+    // The folder is the build user's until the lockdown, so it removes the archive too.
     for (const [command, args] of [
       asUser(USERS.build, BIN.git, ["-c", "safe.directory=*", "-C", layout.repo, "archive", "--format=tar", `--output=${archive}`, commit, "ops/dota-lobby-bot"]),
       asUser(USERS.build, BIN.tar, ["-x", "-f", archive, "-C", dir]),
+      asUser(USERS.build, BIN.rm, ["-f", "--", archive]),
     ])
       await must(runner, "bot_deploy_failed", command, args);
-    rmSync(archive, { force: true });
     await npmCi(ctx, botDir, ["--omit=dev"], "bot_deploy_failed");
     await lockDownTree(runner, dir, USERS.bot, "bot_deploy_failed");
   }

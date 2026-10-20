@@ -8,8 +8,11 @@
 # database the site runs on) and BACKUP_DIR from /etc/ggd2l/backup-<lg>.env,
 # and never BACKUP_RECEIPT_SECRET.
 #
-#  1. scripts/backup-db.mjs from tools/current writes local/<name>.sql with its
-#     .sha256 and .metadata.json sidecars (all 0600).
+#  1. scripts/backup-db.mjs writes local/<name>.sql with its .sha256 and
+#     .metadata.json sidecars (all 0600). It and verify-backup.mjs run from
+#     the kit's own copies (/usr/local/lib/ggd2l/app, from root's clone), never
+#     a tools clone: the build user's npm ci writes those, and this runs with
+#     the R2 key. A change to these scripts reaches the box with install-kit.
 #  2. scripts/verify-backup.mjs checks the checksum with no receipt secret, so
 #     no receipt can reach the journal.
 #  3. gzip | age -R backup-recipients.txt writes offsite/<name>.gz.age. The box
@@ -23,7 +26,11 @@
 #     fails the unit. Without rclone.conf the copies wait in offsite/
 #     ("offsite-pending"), which passes only within 48 h of the epoch second
 #     written in /etc/ggd2l/offsite-pending, and fails after that.
-#  6. Writes state/last-backup.json and a copy at <lg>/last-backup.json (the
+#  6. Hands the drill its copy (drill/<name>.sql and both sidecars, 0640,
+#     group ggd2l-drill), keeping only the newest. The restore drill runs a
+#     tools clone, so it runs as ggd2l-drill and reads only this; local/ stays
+#     private. A failed handoff fails the run, after the upload.
+#  7. Writes state/last-backup.json and a copy at <lg>/last-backup.json (the
 #     agent's `backup` and `status` report from the record), prints it, and
 #     pings HC_PING_BACKUP_<LG> when configured: success, or /fail with the
 #     fixed name of the failed step.
@@ -34,7 +41,7 @@
 #
 # A file is read from $CREDENTIALS_DIRECTORY when the unit passes it with
 # LoadCredential=, else from /etc/ggd2l. Test hooks, never set on the box:
-# GGD2L_TOOLS_ROOT, GGD2L_BACKUP_ROOT, GGD2L_ETC, GGD2L_NOW.
+# GGD2L_APP_DIR, GGD2L_DRILL_GROUP, GGD2L_BACKUP_ROOT, GGD2L_ETC, GGD2L_NOW.
 set -euo pipefail
 umask 077
 export LC_ALL=C
@@ -44,7 +51,8 @@ usage() { echo "usage: backup-league.sh us|eu" >&2; exit 2; }
 lg="$1"
 case "${lg}" in us) LG_UPPER=US ;; eu) LG_UPPER=EU ;; *) usage ;; esac
 
-TOOLS_DIR="${GGD2L_TOOLS_ROOT:-/srv/ggd2l/tools}/current"
+APP_DIR="${GGD2L_APP_DIR:-/usr/local/lib/ggd2l/app}"
+DRILL_GROUP="${GGD2L_DRILL_GROUP:-ggd2l-drill}"
 BACKUP_ROOT="${GGD2L_BACKUP_ROOT:-/var/backups/ggd2l}"
 ETC_DIR="${GGD2L_ETC:-/etc/ggd2l}"
 OFFSITE_REMOTE="${GGD2L_OFFSITE_REMOTE:-r2:ggd2l-backups}"
@@ -52,12 +60,14 @@ LEAGUE_DIR="${BACKUP_ROOT}/${lg}"
 LOCAL_DIR="${LEAGUE_DIR}/local"
 OFFSITE_DIR="${LEAGUE_DIR}/offsite"
 STATE_DIR="${LEAGUE_DIR}/state"
+DRILL_DIR="${LEAGUE_DIR}/drill"
 PENDING_LIMIT_SECONDS=172800 # 48 h without R2, then the unit fails
 LOCAL_KEEP_MINUTES=2880      # 48 h of plaintext dumps on the box
 OFFSITE_KEEP_MINUTES=20160   # 14 days of uploaded encrypted copies
 
 STEP=config
 TMP_AGE=""
+DRILL_TMP=""
 
 log() { printf 'backup-%s: %s\n' "${lg}" "$*" >&2; }
 fail() { STEP="$1"; shift; log "$*"; exit 1; }
@@ -137,6 +147,7 @@ dump_day() {
 finish() {
   local rc=$?
   if [ -n "${TMP_AGE}" ]; then rm -f -- "${TMP_AGE}"; fi
+  if [ -n "${DRILL_TMP}" ]; then rm -f -- "${DRILL_TMP}"; fi
   if [ "${rc}" -ne 0 ]; then
     log "FAILED at step ${STEP} (exit ${rc})"
     hc_ping "${HC_URL:-}" /fail "backup-${lg} failed: ${STEP}"
@@ -165,7 +176,7 @@ if [ -n "${BACKUP_DIR:-}" ] && [ "${BACKUP_DIR}" != "${LOCAL_DIR}" ]; then
 fi
 export BACKUP_DIR="${LOCAL_DIR}"
 for script in backup-db.mjs verify-backup.mjs; do
-  [ -f "${TOOLS_DIR}/scripts/${script}" ] || fail config "missing ${TOOLS_DIR}/scripts/${script}"
+  [ -f "${APP_DIR}/scripts/${script}" ] || fail config "missing ${APP_DIR}/scripts/${script}"
 done
 RECIPIENTS="$(conf_file backup-recipients.txt)"
 if [ ! -r "${RECIPIENTS}" ] || ! grep -q '^age1' "${RECIPIENTS}"; then
@@ -180,7 +191,7 @@ flock -n 9 || fail lock "another ${lg} backup is running"
 
 # --- 1. dump -----------------------------------------------------------------
 STEP=dump
-dump_out="$(node "${TOOLS_DIR}/scripts/backup-db.mjs")" || fail dump "backup-db.mjs failed"
+dump_out="$(node "${APP_DIR}/scripts/backup-db.mjs")" || fail dump "backup-db.mjs failed"
 printf '%s\n' "${dump_out}" >&2
 sql="$(printf '%s\n' "${dump_out}" | sed -n 's/^Postgres backup written: //p' | tail -n 1)"
 case "${sql}" in
@@ -196,7 +207,7 @@ sql_sha="$(cut -d' ' -f1 < "${sql}.sha256")"
 
 # --- 2. verify ---------------------------------------------------------------
 STEP=verify
-if ! verify_out="$(env -u BACKUP_RECEIPT_SECRET node "${TOOLS_DIR}/scripts/verify-backup.mjs" "${sql}" 2>&1)"; then
+if ! verify_out="$(env -u BACKUP_RECEIPT_SECRET node "${APP_DIR}/scripts/verify-backup.mjs" "${sql}" 2>&1)"; then
   printf '%s\n' "${verify_out}" | grep -v -i 'receipt:' >&2 || true
   fail verify "verify-backup.mjs rejected ${name}"
 fi
@@ -317,7 +328,29 @@ else
   log "offsite-pending: R2 is not configured; ${queued} encrypted copies wait in ${OFFSITE_DIR}"
 fi
 
-# --- 6. report ---------------------------------------------------------------
+# --- 6. hand the drill its copy ----------------------------------------------
+STEP=drill-handoff
+mkdir -p "${DRILL_DIR}"
+chgrp -- "${DRILL_GROUP}" "${DRILL_DIR}" || fail drill-handoff "could not give drill/ to ${DRILL_GROUP}"
+chmod 0750 "${DRILL_DIR}"
+# The sidecars first and the dump last, each renamed into place, so a drill
+# never finds a dump without them.
+for suffix in .metadata.json .sha256 ""; do
+  DRILL_TMP="${DRILL_DIR}/.${name}${suffix}.tmp.$$"
+  cp -- "${sql}${suffix}" "${DRILL_TMP}" || fail drill-handoff "could not copy ${name}${suffix} for the drill"
+  chgrp -- "${DRILL_GROUP}" "${DRILL_TMP}" || fail drill-handoff "could not give ${name}${suffix} to ${DRILL_GROUP}"
+  chmod 0640 "${DRILL_TMP}"
+  mv -f -- "${DRILL_TMP}" "${DRILL_DIR}/${name}${suffix}"
+done
+DRILL_TMP=""
+for f in "${DRILL_DIR}"/backup-* "${DRILL_DIR}"/.backup-*; do
+  [ -e "${f}" ] || continue
+  case "${f##*/}" in "${name}" | "${name}.sha256" | "${name}.metadata.json") continue ;; esac
+  rm -f -- "${f}"
+done
+log "handed ${name} to the drill"
+
+# --- 7. report ---------------------------------------------------------------
 STEP=report
 finished="$(fmt_epoch "$(now_epoch)" %Y-%m-%dT%H:%M:%SZ)"
 if [ -n "${OFFSITE_KEY}" ]; then key_json="\"${OFFSITE_KEY}\""; else key_json=null; fi

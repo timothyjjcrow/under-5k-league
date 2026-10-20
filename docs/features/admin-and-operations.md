@@ -411,6 +411,37 @@ respect there:
   255 can repeat from the unit's first second. Count a new dependency's
   install and build cost on one vCPU, and a new background request's
   database work.
+- **Root never works through a link a service user could have left.** The
+  build user runs third-party install scripts and `ggd2l-ops` runs the
+  build user's tools clone, so either can leave a link wherever it writes,
+  and GNU `install -d`, `chown` and `chmod` change a link's target (until
+  2026-10-19 that let a build re-own the agent's own code). In
+  `ops/selfhost/`:
+  - Root changes only folders in a parent no service user can write.
+  - A folder the build user fills is made by `makeBuildDir`: root's
+    `mkdir`, then the mode, then `chown -h`.
+  - A tree comes back through `takeBackTree` before root reads, chmods or
+    writes through it.
+  - Such trees are deleted with `removeTree` (GNU `rm`). Node 22's
+    `rmSync` follows a folder swapped for a link mid-walk.
+  - Records go through `writeFileAtomic`.
+  - A folder inside a service user's own folder is that user's to make
+    (`buildUserEnv`'s npm cache, `ensure_user_dir`).
+
+  `install-kit.test.mjs` fails an `ensure_dir` whose parent a service user
+  can write.
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups. Code the build user wrote, including whatever a dependency's
+  install script changed in the tools clone, runs only as users without
+  them. The hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and their imports
+  (`/usr/local/lib/ggd2l/app/`). A change to those files therefore reaches
+  the box with `install-kit.sh`, not with an app release, and they must
+  stay free of packages: `install-kit.test.mjs` keeps `BACKUP_APP_FILES`
+  equal to their imports. The restore drill needs the tools clone, so it
+  runs as `ggd2l-drill`, from a private copy of the one dump each backup
+  hands it (`drill/`). `backup-scripts.test.mjs` fails a `ggd2l-ops` unit or
+  agent call that reaches for a tools clone.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.

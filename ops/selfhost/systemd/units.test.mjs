@@ -147,7 +147,7 @@ test("every unit parses, describes itself, and runs an absolute command", () => 
       assert.equal(one(unit, "Service", "PrivateTmp"), "yes", name);
       // Only the config archive runs as root: it reads root-only directories.
       assert.match(one(unit, "Service", "User"),
-        name === "ggd2l-config-archive.service" ? /^root$/ : /^(ggd2l-%j|ggd2l-ops|ggd2l-bot|cloudflared)$/, name);
+        name === "ggd2l-config-archive.service" ? /^root$/ : /^(ggd2l-%j|ggd2l-ops|ggd2l-drill|ggd2l-bot|cloudflared)$/, name);
       assert.ok(one(unit, "Service", "MemoryMax"), name);
     }
   }
@@ -263,13 +263,16 @@ test("restore drills run weekly, US Sunday 10:30Z and Europe 11:30Z (§5.1)", ()
   assert.deepEqual(all(dropIn, "Timer", "OnCalendar"), ["", "Sun *-*-* 11:30:00 UTC"]);
   const unit = units.get("ggd2l-drill@.service");
   assert.equal(one(unit, "Service", "Type"), "oneshot");
-  assert.equal(one(unit, "Service", "User"), "ggd2l-ops");
+  // Never ggd2l-ops: the drill runs a tools clone the build user's npm ci
+  // wrote, and ggd2l-ops holds the R2 key and the backups.
+  assert.equal(one(unit, "Service", "User"), "ggd2l-drill");
   assert.equal(one(unit, "Service", "MemoryMax"), "700M");
   assert.deepEqual(all(unit, "Service", "EnvironmentFile"), ["/etc/ggd2l/drill.env", "-/etc/ggd2l/healthchecks.env"]);
   assert.equal(resolve(one(unit, "Service", "ExecStart"), "ggd2l-drill@us.service"), "/usr/local/lib/ggd2l/drill-league.sh us");
-  // drill-league.sh refuses a league folder it cannot write (state/,
-  // last-drill.json): without this every drill fails at "config".
-  assert.deepEqual(writable(unit), ["/var/backups/ggd2l/%i"]);
+  // drill-league.sh refuses a folder of its own it cannot write (its copy of
+  // the dump, last-drill.json): without this every drill fails at "config".
+  // Nothing of the backups is writable to it.
+  assert.deepEqual(writable(unit), ["/var/lib/ggd2l-drill/%i"]);
   assert.ok(!unit.has("Install"));
 });
 
@@ -290,7 +293,8 @@ test("the configuration archive runs daily as root and writes only its own folde
 
 test("install-kit.sh creates every backup folder a unit is given to write", () => {
   // systemd fails a unit whose ReadWritePaths= names a missing directory.
-  assert.match(installKit, /\n {2}ensure_dir 0700 ggd2l-ops:ggd2l-ops "\/var\/backups\/ggd2l\/\$\{lg\}"\n/);
+  assert.match(installKit, /\n {2}ensure_dir 0710 ggd2l-ops:ggd2l-drill "\/var\/backups\/ggd2l\/\$\{lg\}"\n/);
+  assert.match(installKit, /\n {2}ensure_dir 0700 ggd2l-drill:ggd2l-drill "\/var\/lib\/ggd2l-drill\/\$\{lg\}"\n/);
   assert.match(installKit, /\nensure_dir 0700 root:root \/var\/backups\/ggd2l\/config\n/);
 });
 
@@ -316,8 +320,8 @@ function scriptWrites(text, workDirs) {
   return targets;
 }
 const SCRIPT_WRITES = [
-  ["ggd2l-backup@.service", "backup/backup-league.sh", ["LEAGUE_DIR", "STATE_DIR"]],
-  ["ggd2l-drill@.service", "backup/drill-league.sh", ["LEAGUE_DIR", "STATE_DIR"]],
+  ["ggd2l-backup@.service", "backup/backup-league.sh", ["LEAGUE_DIR", "STATE_DIR", "DRILL_DIR"]],
+  ["ggd2l-drill@.service", "backup/drill-league.sh", ["STATE_DIR"]],
   ["ggd2l-config-archive.service", "backup/config-archive.sh", ["OUT_DIR"]],
 ];
 const haveScripts = SCRIPT_WRITES.every(([, script]) => existsSync(path.join(SELFHOST, script)));

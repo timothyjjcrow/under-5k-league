@@ -14,7 +14,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
-  chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync,
+  chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync,
   symlinkSync, writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -173,4 +173,206 @@ test("install-kit.sh checks the live league env files with its own contract befo
     assert.ok(at > 0, change);
     assert.ok(check < at, `the env check comes before ${change}`);
   }
+});
+
+// 2026-10-19: GNU chown and chmod, given a link, change its target. ensure_dir
+// ran mkdir -p, chown and chmod as root on the build user's npm cache, inside
+// the build user's own home, so a link a build left there handed its target
+// (the agent's code, say) to the build user; the backup folders inside
+// ggd2l-ops's folder were the same. Root now changes only folders whose parent
+// nobody else can write, refuses a link or file there, and leaves a folder in
+// a service user's own folder to that user.
+const KIT = readFileSync(path.join(SELFHOST, "install-kit.sh"), "utf8");
+const KIT_CODE = KIT.replace(/^\s*#.*$/gm, "");
+
+/** Every `ensure_dir` and `ensure_user_dir` call, with ${lg} and ${ADMIN_USER} expanded. */
+function folderCalls() {
+  const calls = [];
+  for (const match of KIT_CODE.matchAll(/^\s*(ensure_dir|ensure_user_dir) (\S+) (\S+) (\S+)$/gm)) {
+    const [, fn, a, b, rawPath] = match;
+    for (const lg of rawPath.includes("${lg}") ? ["us", "eu"] : [null]) {
+      const expand = (value) => value.replace(/"/g, "").replace("${lg}", lg ?? "").replace("${ADMIN_USER}", "ggd2l");
+      calls.push(fn === "ensure_dir"
+        ? { fn, mode: a, owner: expand(b), path: expand(rawPath) }
+        : { fn, user: a, mode: b, path: expand(rawPath) });
+    }
+  }
+  return calls;
+}
+
+test("install-kit.sh changes a folder as root only in a parent no service user can write", () => {
+  const calls = folderCalls();
+  assert.ok(calls.length > 30, `found ${calls.length} folder calls`);
+  const ensured = new Map(calls.filter((call) => call.fn === "ensure_dir").map((call) => [call.path, call]));
+  const writableBy = (call) => {
+    const [user, group] = call.owner.split(":");
+    const digits = call.mode.slice(-3);
+    const others = [];
+    if (user !== "root") others.push(user);
+    if (/[2367]/.test(digits[1]) && group !== "root") others.push(`group ${group}`);
+    if (/[2367]/.test(digits[2])) others.push("everyone");
+    return others;
+  };
+  for (const call of calls.filter((entry) => entry.fn === "ensure_dir")) {
+    const parent = ensured.get(path.posix.dirname(call.path));
+    if (parent) assert.deepEqual(writableBy(parent), [], `${call.path}: its parent ${parent.path} is writable by others; use ensure_user_dir`);
+  }
+  for (const call of calls.filter((entry) => entry.fn === "ensure_user_dir")) {
+    const parent = ensured.get(path.posix.dirname(call.path));
+    assert.ok(parent && parent.owner.split(":")[0] === call.user, `${call.path}: inside a folder ${call.user} owns`);
+  }
+  // The two folders that let a link through before, now made by their own users.
+  for (const [user, folder] of [["ggd2l-build", "/var/cache/ggd2l-build/npm"], ["ggd2l-ops", "/var/backups/ggd2l/us/local"], ["ggd2l-ops", "/var/backups/ggd2l/eu/offsite"]])
+    assert.ok(calls.some((call) => call.fn === "ensure_user_dir" && call.user === user && call.path === folder), folder);
+  // Where the agent makes the build user's folders (makeBuildDir): root's, and nobody else can write them.
+  for (const [folder, mode] of [["/srv/ggd2l/tools", "0755"], ["/srv/ggd2l/bot/releases", "0755"], ["/srv/ggd2l/us/releases", "0751"], ["/srv/ggd2l/eu/releases", "0751"]]) {
+    const call = ensured.get(folder);
+    assert.ok(call, folder);
+    assert.equal(call.owner, "root:root", folder);
+    assert.equal(call.mode, mode, folder);
+  }
+});
+
+/**
+ * install-kit.sh's own die, ensure_dir and ensure_user_dir, run on a scratch
+ * tree with chown, chmod and runuser replaced by loggers (the folder calls
+ * need root on the box), and a fake `id` that may report another user.
+ */
+function folderHarness(t) {
+  const holder = realpathSync(mkdtempSync(path.join(tmpdir(), "ggd2l-kit-dirs-")));
+  t.after(() => rmSync(holder, { recursive: true, force: true }));
+  const bin = path.join(holder, "bin");
+  mkdirSync(bin);
+  const log = path.join(holder, "calls.log");
+  for (const name of ["chown", "chmod", "runuser"])
+    writeFileSync(path.join(bin, name), `#!/bin/sh\necho "${name} $*" >> "${log}"\n`, { mode: 0o755 });
+  writeFileSync(path.join(bin, "id"), '#!/bin/sh\nif [ "$1" = "-u" ]; then echo "$FAKE_UID"; exit 0; fi\nexec /usr/bin/id "$@"\n', { mode: 0o755 });
+  const functions = ["die", "ensure_dir", "ensure_user_dir"].map((name) => {
+    const body = new RegExp(`\\n(${name}\\(\\) \\{[^\\n]*\\}|${name}\\(\\) \\{\\n[\\s\\S]*?\\n\\})\\n`).exec(KIT)?.[1];
+    assert.ok(body, `install-kit.sh defines ${name}`);
+    return body;
+  });
+  const script = path.join(holder, "dirs.sh");
+  writeFileSync(script, `set -euo pipefail\n${functions.join("\n")}\n"$@"\n`);
+  const tree = path.join(holder, "tree");
+  mkdirSync(tree, { mode: 0o755 });
+  const run = (args, { uid = REAL_UID } = {}) => {
+    rmSync(log, { force: true });
+    const result = spawnSync("bash", [script, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, FAKE_UID: String(uid) },
+    });
+    const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : [];
+    return { ...result, calls };
+  };
+  return { holder, tree, run };
+}
+
+test("ensure_dir makes a folder, then changes it with chown -h and chmod", { skip: SKIP }, (t) => {
+  const { tree, run } = folderHarness(t);
+  const folder = path.join(tree, "fresh");
+  const result = run(["ensure_dir", "0750", "ggd2l-build:ggd2l-build", folder]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.calls, [`chown -h ggd2l-build:ggd2l-build ${folder}`, `chmod 0750 ${folder}`]);
+  assert.ok(lstatSync(folder).isDirectory());
+  // An existing folder is changed the same way.
+  assert.equal(run(["ensure_dir", "0750", "ggd2l-build:ggd2l-build", folder]).status, 0);
+});
+
+test("ensure_dir refuses a link or file at the folder's name before any chown or chmod", { skip: SKIP }, (t) => {
+  const { holder, tree, run } = folderHarness(t);
+  const target = path.join(holder, "agent-code");
+  mkdirSync(target);
+  for (const [name, plant] of [
+    ["a link to a folder", (at) => symlinkSync(target, at)],
+    ["a dangling link", (at) => symlinkSync(path.join(holder, "nowhere"), at)],
+    ["a file", (at) => writeFileSync(at, "x")],
+  ]) {
+    const folder = path.join(tree, name.replace(/ /g, "-"));
+    plant(folder);
+    const result = run(["ensure_dir", "0750", "ggd2l-build:ggd2l-build", folder]);
+    assert.equal(result.status, 1, name);
+    assert.match(result.stderr, /is a link or not a folder: refusing to change it as root/, name);
+    assert.deepEqual(result.calls, [], `${name}: no chown or chmod ran`);
+  }
+  assert.deepEqual(readdirSync(target), [], "nothing was made through the link");
+});
+
+test("ensure_dir refuses a folder in a parent another user owns or anyone can write", { skip: SKIP }, (t) => {
+  const { tree, run } = folderHarness(t);
+  // The tree is this user's: as another user, its parent is not "root's".
+  const theirs = run(["ensure_dir", "0750", "root:root", path.join(tree, "x")], { uid: REAL_UID === 4242 ? 4243 : 4242 });
+  assert.equal(theirs.status, 1);
+  assert.match(theirs.stderr, /is not root's, or anyone can write it/);
+  assert.deepEqual(theirs.calls, []);
+  assert.ok(!existsSync(path.join(tree, "x")));
+  for (const mode of [0o777, 0o1777]) {
+    const open = path.join(tree, `open-${mode.toString(8)}`);
+    mkdirSync(open);
+    chmodSync(open, mode);
+    const result = run(["ensure_dir", "0750", "root:root", path.join(open, "x")]);
+    assert.equal(result.status, 1, mode.toString(8));
+    assert.deepEqual(result.calls, []);
+  }
+});
+
+test("ensure_user_dir leaves the folder to its user, and refuses a link or file there", { skip: SKIP }, (t) => {
+  const { holder, tree, run } = folderHarness(t);
+  const folder = path.join(tree, "npm");
+  const made = run(["ensure_user_dir", "ggd2l-build", "0750", folder]);
+  assert.equal(made.status, 0, made.stderr);
+  assert.deepEqual(made.calls, [`runuser -u ggd2l-build -- mkdir -p ${folder}`, `runuser -u ggd2l-build -- chmod 0750 ${folder}`]);
+  const target = path.join(holder, "agent-code");
+  mkdirSync(target);
+  for (const plant of [(at) => symlinkSync(target, at), (at) => writeFileSync(at, "x")]) {
+    rmSync(folder, { recursive: true, force: true });
+    plant(folder);
+    const result = run(["ensure_user_dir", "ggd2l-build", "0750", folder]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /is a link or not a folder; ggd2l-build may have been misused/);
+    assert.deepEqual(result.calls, [], "not even the user's own commands ran");
+  }
+});
+
+// 2026-10-19: ggd2l-ops, which holds the R2 key, ran the hourly backup's
+// scripts from a tools clone the build user's npm ci wrote. install-kit.sh now
+// installs them, and everything they import, from root's own clone. A new
+// import that the list misses would fail every backup on the box.
+test("install-kit.sh installs exactly the files the hourly backup's scripts import, and no package", () => {
+  const listed = /\nBACKUP_APP_FILES="\n([^"]*)"/.exec(KIT)?.[1].split("\n").filter(Boolean);
+  assert.ok(listed, "install-kit.sh lists BACKUP_APP_FILES");
+  const repo = path.resolve(SELFHOST, "../..");
+  const seen = new Set();
+  const walk = (relative) => {
+    if (seen.has(relative)) return;
+    seen.add(relative);
+    const source = readFileSync(path.join(repo, relative), "utf8");
+    for (const match of source.matchAll(/(?:^|\n)\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = match[1] ?? match[2];
+      if (spec.startsWith("node:")) continue;
+      assert.ok(spec.startsWith("."), `${relative} imports the package ${spec}, which the kit does not install`);
+      walk(path.posix.normalize(path.posix.join(path.posix.dirname(relative), spec)));
+    }
+  };
+  for (const script of ["scripts/backup-db.mjs", "scripts/verify-backup.mjs"]) walk(script);
+  assert.deepEqual([...listed].sort(), [...seen].sort());
+  // Installed under app/ with their paths, so their relative imports resolve.
+  assert.match(KIT_CODE, /for f in \$BACKUP_APP_FILES; do install -D -m 0644 "\$\{KIT_ROOT\}\/\$\{f\}" "\$\{STAGE\}\/app\/\$\{f\}"; done/);
+  // The backup runs those copies.
+  const backupScript = readFileSync(path.join(SELFHOST, "backup/backup-league.sh"), "utf8");
+  assert.match(backupScript, /^APP_DIR="\$\{GGD2L_APP_DIR:-\/usr\/local\/lib\/ggd2l\/app\}"$/m);
+});
+
+test("install-kit.sh gives the drill its own user, folders and group, and ggd2l-ops the right to hand it a dump", () => {
+  const calls = folderCalls();
+  const owner = (folder) => calls.find((call) => call.fn === "ensure_dir" && call.path === folder);
+  assert.match(KIT_CODE, /^ensure_user ggd2l-drill \/nonexistent$/m);
+  assert.match(KIT_CODE, /id -nG ggd2l-ops \| tr ' ' '\\n' \| grep -qx ggd2l-drill; then\n\s*usermod -aG ggd2l-drill ggd2l-ops/);
+  for (const lg of ["us", "eu"]) {
+    // The drill's group traverses to drill/, never lists; nobody else gets in.
+    assert.deepEqual(owner(`/var/backups/ggd2l/${lg}`), { fn: "ensure_dir", mode: "0710", owner: "ggd2l-ops:ggd2l-drill", path: `/var/backups/ggd2l/${lg}` });
+    assert.deepEqual(owner(`/var/lib/ggd2l-drill/${lg}`), { fn: "ensure_dir", mode: "0700", owner: "ggd2l-drill:ggd2l-drill", path: `/var/lib/ggd2l-drill/${lg}` });
+  }
+  assert.equal(owner("/var/backups/ggd2l").mode, "0751");
+  assert.equal(owner("/var/lib/ggd2l-drill").owner, "root:root");
 });

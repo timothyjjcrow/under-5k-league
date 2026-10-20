@@ -1,7 +1,8 @@
 // Runs the box's backup, drill, heartbeat and config-archive scripts against
 // fakes of every outside tool (pg_dump, age, rclone, curl, flock, dropdb, df,
 // systemctl). backup-league.sh uses the real scripts/backup-db.mjs and
-// verify-backup.mjs. Works with macOS's bash 3.2 and Linux's bash 5.
+// verify-backup.mjs, installed the way install-kit.sh installs them: only the
+// files it lists, under app/. Works with macOS's bash 3.2 and Linux's bash 5.
 //
 // The last tests tie these scripts to the other kit packages once they share a
 // tree: the agent's real `backup` and `drill` calls (WP-E1) and the units'
@@ -32,6 +33,14 @@ const HC = {
   HC_PING_BOT: "https://hc-ping.com/66666666-bot",
   HC_PING_CONFIG: "https://hc-ping.com/77777777-config",
 };
+// What install-kit.sh copies into /usr/local/lib/ggd2l/app for the hourly backup.
+const BACKUP_APP_FILES = /\nBACKUP_APP_FILES="\n([^"]*)"/.exec(readFileSync(path.join(HERE, "../install-kit.sh"), "utf8"))[1]
+  .split("\n").filter(Boolean);
+// The test's own primary group stands in for ggd2l-drill: a user may give a
+// file it owns to its own group.
+const DRILL_GROUP = spawnSync("id", ["-gn"], { encoding: "utf8" }).stdout.trim();
+const DRILL_GID = process.getgid();
+
 // 2026-10-16 15:17:00Z, the hour the first box backup runs.
 const NOW = Date.UTC(2026, 9, 16, 15, 17) / 1000;
 const RECEIPT_SECRET = "a-receipt-secret-that-must-never-sign-anything-here";
@@ -46,8 +55,9 @@ function sandbox() {
   const bin = path.join(dir, "bin");
   const etc = path.join(dir, "etc");
   const root = path.join(dir, "backups");
+  const drillRoot = path.join(dir, "drill-state");
   const log = path.join(dir, "calls.jsonl");
-  for (const d of [bin, etc, path.join(root, "us"), path.join(root, "eu")]) {
+  for (const d of [bin, etc, path.join(root, "us"), path.join(root, "eu"), path.join(drillRoot, "us"), path.join(drillRoot, "eu")]) {
     mkdirSync(d, { recursive: true });
   }
   const record = `const { appendFileSync, existsSync, fstatSync, readFileSync, writeFileSync, copyFileSync } = require("node:fs");
@@ -138,7 +148,9 @@ process.stdout.write(String(code));
     writeFileSync(path.join(folder, "scripts/rehearse-backup-restore.mjs"), `${record.replace("require(\"node:fs\")", "await import(\"node:fs\")")}
 const { pathToFileURL } = await import("node:url");
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-record({ tool: "rehearse", tools: ${JSON.stringify(name)}, args, cwd: process.cwd(),
+const { statSync } = await import("node:fs");
+const modes = ["", ".sha256", ".metadata.json"].map((suffix) => existsSync(args[0] + suffix) ? statSync(args[0] + suffix).mode & 0o777 : null);
+record({ tool: "rehearse", tools: ${JSON.stringify(name)}, args, cwd: process.cwd(), modes,
   receiptSecret: process.env.BACKUP_RECEIPT_SECRET ?? null, checkpointDisable: process.env.CHECKPOINT_DISABLE ?? null,
   restoreUrlSet: Boolean(process.env.PG_RESTORE_TEST_URL) });
 console.log("Verified backup: " + args[0]);
@@ -151,10 +163,12 @@ console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 1
   // As on the box: tools/current is a symlink to the live commit's clone.
   for (const name of [LIVE_TOOLS, "0123456789ab"]) makeDrillTools(path.join(drillTools, name));
   symlinkSync(LIVE_TOOLS, path.join(drillTools, "current"));
-  // Tools for the backup: the real repository scripts.
-  const backupTools = path.join(dir, "backup-tools");
-  mkdirSync(backupTools);
-  symlinkSync(REPO_ROOT, path.join(backupTools, "current"));
+  // The backup's scripts as the kit installs them: only the listed files.
+  const appDir = path.join(dir, "app");
+  for (const file of BACKUP_APP_FILES) {
+    mkdirSync(path.dirname(path.join(appDir, file)), { recursive: true });
+    copyFileSync(path.join(REPO_ROOT, file), path.join(appDir, file));
+  }
 
   const env = {
     PATH: [bin, path.dirname(process.execPath), "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(path.delimiter),
@@ -167,7 +181,7 @@ console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 1
   const calls = () =>
     existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line)) : [];
   return {
-    dir, etc, root, env, calls, drillTools, makeDrillTools,
+    dir, etc, root, drillRoot, appDir, env, calls, drillTools, makeDrillTools,
     set: (name, content = "") => writeFileSync(path.join(dir, name), content),
     run(script, args, extraEnv = {}) {
       return spawnSync("bash", [path.join(HERE, script), ...args], {
@@ -178,7 +192,8 @@ console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 1
     },
     backup(lg = "us", extraEnv = {}) {
       return this.run("backup-league.sh", [lg], {
-        GGD2L_TOOLS_ROOT: backupTools,
+        GGD2L_APP_DIR: appDir,
+        GGD2L_DRILL_GROUP: DRILL_GROUP,
         DIRECT_URL: APP_URL(lg),
         BACKUP_DIR: path.join(root, lg, "local"),
         BACKUP_RECEIPT_SECRET: RECEIPT_SECRET,
@@ -188,6 +203,7 @@ console.log("Restore rehearsal passed: 17 restored migrations were upgraded to 1
     drill(args = ["us"], extraEnv = {}) {
       return this.run("drill-league.sh", args, {
         GGD2L_TOOLS_ROOT: drillTools,
+        GGD2L_DRILL_ROOT: drillRoot,
         PG_RESTORE_TEST_URL: REHEARSAL_URL,
         BACKUP_RECEIPT_SECRET: RECEIPT_SECRET,
         ...extraEnv,
@@ -451,23 +467,23 @@ test("pruning drops old dumps and uploaded copies, never a copy that has not rea
 test("the drill restores the newest dump with the rehearsal role, then drops the scratch database", () => {
   const box = sandbox();
   try {
-    const local = path.join(box.root, "us/local");
-    mkdirSync(local, { recursive: true });
-    for (const stamp of ["2026-10-16T13-17-00-000-1", "2026-10-16T14-17-00-000-1"]) {
-      const file = path.join(local, `backup-${stamp}.sql`);
-      writeFileSync(file, "x", { mode: 0o600 });
-      writeFileSync(`${file}.sha256`, `${"a".repeat(64)}  backup-${stamp}.sql\n`, { mode: 0o600 });
-    }
+    seedDump(box.root, "us", "a", "2026-10-16T13-17-00-000-1");
+    const newest = seedDump(box.root, "us", "a");
     const result = box.drill(["us"], { HC_PING_DRILL: HC.HC_PING_DRILL });
     assert.equal(result.status, 0, result.stderr);
-    const newest = path.join(local, "backup-2026-10-16T14-17-00-000-1.sql");
     const rehearse = box.calls().find((call) => call.tool === "rehearse");
-    assert.deepEqual(rehearse.args, [newest]);
+    // Its own copy, 0600 like every file verify-backup.mjs accepts, in its own folder.
+    const own = path.join(box.drillRoot, "us");
+    assert.equal(rehearse.args.length, 1);
+    assert.equal(path.basename(rehearse.args[0]), path.basename(newest));
+    assert.equal(path.dirname(path.dirname(rehearse.args[0])), own);
+    assert.deepEqual(rehearse.modes, [0o600, 0o600, 0o600]);
+    assert.deepEqual(readdirSync(own).filter((f) => f.startsWith(".dump")), [], "the copy is gone afterwards");
     assert.equal(rehearse.tools, LIVE_TOOLS, "tools/current is run through its real path");
     assert.equal(rehearse.receiptSecret, null);
     assert.equal(rehearse.checkpointDisable, "1");
     assert.equal(rehearse.restoreUrlSet, true);
-    assert.equal(path.basename(rehearse.cwd), "us");
+    assert.equal(realpathSync(rehearse.cwd), realpathSync(own));
 
     const drops = box.calls().filter((call) => call.tool === "dropdb");
     assert.equal(drops.length, 1);
@@ -479,16 +495,17 @@ test("the drill restores the newest dump with the rehearsal role, then drops the
     const report = JSON.parse(result.stdout.trim().split("\n").pop());
     assert.equal(report.dump, newest);
     assert.equal(report.dumpSha256, "a".repeat(64));
-    assert.ok(existsSync(path.join(box.root, "us/state/last-drill.json")));
+    assert.ok(existsSync(path.join(box.drillRoot, "us/last-drill.json")));
+    assert.equal(existsSync(path.join(box.root, "us/state/last-drill.json")), false, "nothing written in the backups");
     assert.equal(pings(box).at(-1).url, HC.HC_PING_DRILL);
     assert.equal(pings(box).at(-1).body, `ok backup-2026-10-16T14-17-00-000-1.sql sha256=${"a".repeat(64)}`);
-    // Both leagues' drills lock the shared backups folder through a read-only
+    // Both leagues' drills lock the drill's root folder through a read-only
     // descriptor: nothing outside the league folder has to be writable.
-    assert.deepEqual(lockedFile(box), identity(box.root));
+    assert.deepEqual(lockedFile(box), identity(box.drillRoot));
     // Only the tail of the restore's output reaches the journal.
     assert.doesNotMatch(result.stderr, /COPY 5\n/);
     assert.match(result.stderr, /Restore rehearsal passed/);
-    assert.deepEqual(readdirSync(path.join(box.root, "us/state")).filter((f) => f.startsWith(".drill-output")), []);
+    assert.deepEqual(readdirSync(own).filter((f) => f.startsWith(".drill-output")), []);
     assertNoSecretInArgv(box);
   } finally {
     box.cleanup();
@@ -498,11 +515,7 @@ test("the drill restores the newest dump with the rehearsal role, then drops the
 test("a failed drill still drops the scratch database and pings /fail", () => {
   const box = sandbox();
   try {
-    const local = path.join(box.root, "eu/local");
-    mkdirSync(local, { recursive: true });
-    const file = path.join(local, "backup-2026-10-16T14-17-00-000-1.sql");
-    writeFileSync(file, "x", { mode: 0o600 });
-    writeFileSync(`${file}.sha256`, `${"b".repeat(64)}  ${path.basename(file)}\n`, { mode: 0o600 });
+    seedDump(box.root, "eu", "b");
     box.set("rehearse-fail");
     const result = box.drill(["eu", "0123456789ab0123456789ab0123456789ab0123"], { HC_PING_DRILL: HC.HC_PING_DRILL });
     assert.equal(result.status, 1);
@@ -510,7 +523,8 @@ test("a failed drill still drops the scratch database and pings /fail", () => {
     assert.equal(box.calls().filter((call) => call.tool === "dropdb").length, 1);
     assert.equal(pings(box).at(-1).url, `${HC.HC_PING_DRILL}/fail`);
     assert.equal(pings(box).at(-1).body, "drill-eu failed: restore");
-    assert.equal(existsSync(path.join(box.root, "eu/state/last-drill.json")), false);
+    assert.equal(existsSync(path.join(box.drillRoot, "eu/last-drill.json")), false);
+    assert.deepEqual(readdirSync(path.join(box.drillRoot, "eu")), [], "its copy of the dump is gone, pass or fail");
   } finally {
     box.cleanup();
   }
@@ -519,14 +533,15 @@ test("a failed drill still drops the scratch database and pings /fail", () => {
 test("the drill refuses a non-scratch target, a missing dump and a malformed SHA", () => {
   const box = sandbox();
   try {
-    const local = path.join(box.root, "us/local");
-    mkdirSync(local, { recursive: true });
     const noDump = box.drill(["us"]);
     assert.equal(noDump.status, 1);
-    assert.match(noDump.stderr, /no local dump/);
-    const file = path.join(local, "backup-2026-10-16T14-17-00-000-1.sql");
-    writeFileSync(file, "x", { mode: 0o600 });
-    writeFileSync(`${file}.sha256`, `${"c".repeat(64)}  ${path.basename(file)}\n`, { mode: 0o600 });
+    assert.match(noDump.stderr, /no dump handed to the drill/);
+    // A dump in local/ is the backup's own: the drill never reads it.
+    const local = path.join(box.root, "us/local");
+    mkdirSync(local, { recursive: true });
+    writeFileSync(path.join(local, "backup-2026-10-16T14-17-00-000-1.sql"), "x", { mode: 0o600 });
+    assert.match(box.drill(["us"]).stderr, /no dump handed to the drill/);
+    seedDump(box.root, "us", "c");
     for (const url of [
       REHEARSAL_URL.replace("ld2l_restore_test", "ggd2l_us"),
       REHEARSAL_URL.replace("ggd2l_rehearsal", "ggd2l_us_owner"),
@@ -544,13 +559,14 @@ test("the drill refuses a non-scratch target, a missing dump and a malformed SHA
   }
 });
 
-// One newest dump with its sidecar in <root>/<lg>/local.
-function seedDump(root, lg, shaChar = "d") {
-  const local = path.join(root, lg, "local");
-  mkdirSync(local, { recursive: true });
-  const file = path.join(local, "backup-2026-10-16T14-17-00-000-1.sql");
-  writeFileSync(file, "x", { mode: 0o600 });
-  writeFileSync(`${file}.sha256`, `${shaChar.repeat(64)}  ${path.basename(file)}\n`, { mode: 0o600 });
+// A dump with both sidecars as the backup hands it to the drill: <root>/<lg>/drill, 0640.
+function seedDump(root, lg, shaChar = "d", stamp = "2026-10-16T14-17-00-000-1") {
+  const handoff = path.join(root, lg, "drill");
+  mkdirSync(handoff, { recursive: true });
+  const file = path.join(handoff, `backup-${stamp}.sql`);
+  writeFileSync(file, "x", { mode: 0o640 });
+  writeFileSync(`${file}.sha256`, `${shaChar.repeat(64)}  ${path.basename(file)}\n`, { mode: 0o640 });
+  writeFileSync(`${file}.metadata.json`, "{}\n", { mode: 0o640 });
   return file;
 }
 
@@ -619,38 +635,117 @@ test("the drill pings only the one drill check", () => {
 // Root ignores file modes, so the sandbox below would prove nothing as root.
 const RUNNING_AS_ROOT = typeof process.getuid === "function" && process.getuid() === 0;
 
-test("the backup and the drill write only inside their own league folder, as the units' sandboxes allow",
+test("the backup writes only its league folder, and the drill only its own folder, as the units' sandboxes allow",
   { skip: RUNNING_AS_ROOT && "file modes do not bind root" }, () => {
     const box = sandbox();
     const home = path.join(box.dir, "home");
-    // Everything a strict unit mounts read-only: the backups root and the other
-    // league, /etc/ggd2l, the tools clones and the home folder.
-    const readOnly = [box.root, path.join(box.root, "eu"), box.etc, box.drillTools,
-      path.join(box.drillTools, "current"), path.join(box.drillTools, "0123456789ab"), home];
+    const treeOf = (root) => [root, ...readdirSync(root, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory()).flatMap((entry) => treeOf(path.join(root, entry.name)))];
+    const locked = [];
+    const lock = (dirs) => {
+      for (const dir of dirs) chmodSync(dir, 0o555);
+      locked.push(...dirs);
+    };
     try {
       mkdirSync(home);
       writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
-      for (const dir of readOnly) chmodSync(dir, 0o555);
-
+      // A strict backup unit writes only its league folder: never the other
+      // league, /etc/ggd2l, the kit's scripts, the drill's folders or its home.
+      lock([box.root, path.join(box.root, "eu"), box.etc, ...treeOf(box.appDir), ...treeOf(box.drillRoot), home]);
       const backup = box.backup("us", { HOME: home });
       assert.equal(backup.status, 0, backup.stderr);
+
+      // A strict drill unit writes only its own league folder: every backups
+      // folder is read-only to it, its handoff included, and so are the tools.
+      chmodSync(path.join(box.drillRoot, "us"), 0o755);
+      lock([...treeOf(path.join(box.root, "us")), box.drillTools, path.join(box.drillTools, "current"), path.join(box.drillTools, "0123456789ab")]);
       const drill = box.drill(["us"], { HOME: home });
       assert.equal(drill.status, 0, drill.stderr);
-      assert.equal(lastReport(drill).dump, lastReport(backup).file);
+      assert.equal(path.basename(lastReport(drill).dump), path.basename(lastReport(backup).file));
+      assert.equal(lastReport(drill).dumpSha256, lastReport(backup).sha256);
 
-      // A drill unit that cannot write its league folder fails at config and says why.
-      chmodSync(path.join(box.root, "us"), 0o555);
+      // A drill unit that cannot write its own folder fails at config and says why.
+      chmodSync(path.join(box.drillRoot, "us"), 0o555);
       const blocked = box.drill(["us"], { HOME: home, HC_PING_DRILL: HC.HC_PING_DRILL });
       assert.equal(blocked.status, 1);
-      assert.match(blocked.stderr, /the unit needs ReadWritePaths=\/var\/backups\/ggd2l\/us/);
+      assert.match(blocked.stderr, /the unit needs ReadWritePaths=\/var\/lib\/ggd2l-drill\/us/);
       assert.equal(pings(box).at(-1).body, "drill-us failed: config");
     } finally {
-      for (const dir of [...readOnly, path.join(box.root, "us")]) {
+      for (const dir of [...locked, path.join(box.drillRoot, "us")]) {
         if (existsSync(dir)) chmodSync(dir, 0o755);
       }
       box.cleanup();
     }
   });
+
+// 2026-10-19: ggd2l-ops holds the R2 key and the backups, and ran the hourly
+// backup and the drill from a tools clone, which the build user's npm ci
+// writes. The backup now runs the kit's own copies of its scripts; the drill
+// runs as ggd2l-drill and reads only the dump the backup hands it.
+test("the hourly backup runs the kit's copies of its scripts, never a tools clone", () => {
+  const box = sandbox();
+  try {
+    writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
+    const marker = path.join(box.dir, "tools-ran");
+    const poisoned = path.join(box.dir, "poisoned-tools", "current", "scripts");
+    mkdirSync(poisoned, { recursive: true });
+    for (const name of ["backup-db.mjs", "verify-backup.mjs"])
+      writeFileSync(path.join(poisoned, name), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "ran");\n`);
+    const result = box.backup("us", { GGD2L_TOOLS_ROOT: path.join(box.dir, "poisoned-tools") });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(existsSync(marker), false, "a tools clone's script ran as ggd2l-ops");
+    const empty = path.join(box.dir, "empty-app");
+    mkdirSync(empty);
+    const missing = box.backup("us", { GGD2L_APP_DIR: empty });
+    assert.equal(missing.status, 1);
+    assert.match(missing.stderr, /missing .*empty-app\/scripts\/backup-db\.mjs/);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("a backup hands the drill only its newest verified dump, readable by the drill's group and nobody else", () => {
+  const box = sandbox();
+  try {
+    writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
+    const first = lastReport(box.backup());
+    const second = box.backup();
+    assert.equal(second.status, 0, second.stderr);
+    const report = lastReport(second);
+    const handoff = path.join(box.root, "us", "drill");
+    const name = path.basename(report.file);
+    assert.notEqual(path.basename(first.file), name);
+    assert.deepEqual(readdirSync(handoff).sort(), [name, `${name}.metadata.json`, `${name}.sha256`], "only the newest stays");
+    assert.equal(statSync(handoff).mode & 0o7777, 0o750);
+    assert.equal(statSync(handoff).gid, DRILL_GID);
+    for (const suffix of ["", ".sha256", ".metadata.json"]) {
+      const copy = statSync(path.join(handoff, `${name}${suffix}`));
+      assert.equal(copy.mode & 0o777, 0o640, suffix);
+      assert.equal(copy.gid, DRILL_GID, suffix);
+      assert.equal(sha256(path.join(handoff, `${name}${suffix}`)), sha256(`${report.file}${suffix}`), suffix);
+      // The backup's own copy stays private.
+      assert.equal(statSync(`${report.file}${suffix}`).mode & 0o077, 0, suffix);
+    }
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("a failed handoff fails the backup after the upload, and writes no record", () => {
+  const box = sandbox();
+  try {
+    writeFileSync(path.join(box.etc, "rclone.conf"), "[r2]\n");
+    const result = box.backup("us", { GGD2L_DRILL_GROUP: "no-such-group-ggd2l", HC_PING_BACKUP_US: HC.HC_PING_BACKUP_US });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /FAILED at step drill-handoff/);
+    assert.ok(uploads(box).some((key) => key.includes("/us/hourly/")), "the offsite copy went first");
+    assert.equal(existsSync(path.join(box.root, "us/state/last-backup.json")), false);
+    assert.equal(pings(box).at(-1).body, "backup-us failed: drill-handoff");
+    assert.deepEqual(readdirSync(path.join(box.root, "us/drill")).filter((f) => f.includes(".tmp.")), [], "no copy left half-made");
+  } finally {
+    box.cleanup();
+  }
+});
 
 test("a healthy box pings box, automation and bot; URLs travel on stdin only", () => {
   const box = sandbox();
@@ -917,12 +1012,39 @@ function assertMayWrite(unit, needed) {
 
 const hasUnits = existsSync(path.join(UNIT_DIR, "ggd2l-backup@.service"));
 
-test("the backup and drill units let the scripts write their league folder",
+test("the backup unit writes its league folder, and the drill unit, as ggd2l-drill, only its own",
   { skip: !hasUnits && "the units (WP-E2) are not on this branch" }, () => {
-    // Every write, the locks included, is under the league folder; the drill's
-    // shared lock is a read-only descriptor of /var/backups/ggd2l.
-    assertMayWrite("ggd2l-backup@.service", ["/var/backups/ggd2l/%i", "/var/backups/ggd2l/%i/state"]);
-    assertMayWrite("ggd2l-drill@.service", ["/var/backups/ggd2l/%i", "/var/backups/ggd2l/%i/state"]);
+    // Every write, the locks included, is under the unit's folder; the drill's
+    // shared lock is a read-only descriptor of /var/lib/ggd2l-drill.
+    assertMayWrite("ggd2l-backup@.service", ["/var/backups/ggd2l/%i", "/var/backups/ggd2l/%i/state", "/var/backups/ggd2l/%i/drill"]);
+    assertMayWrite("ggd2l-drill@.service", ["/var/lib/ggd2l-drill/%i"]);
+    const drillUnit = unitSettings(path.join(UNIT_DIR, "ggd2l-drill@.service"));
+    assert.equal(drillUnit["Service.User"]?.at(-1), "ggd2l-drill");
+    assert.ok(!(drillUnit["Service.ReadWritePaths"] ?? []).some((value) => value.includes("/var/backups")), "the drill writes nothing of the backups");
+  });
+
+test("no ggd2l-ops unit, and no agent call as ggd2l-ops, runs a tools clone",
+  { skip: !hasUnits && "the units (WP-E2) are not on this branch" }, () => {
+    const opsUnits = readdirSync(UNIT_DIR).filter((name) => name.endsWith(".service"))
+      .filter((name) => unitSettings(path.join(UNIT_DIR, name))["Service.User"]?.at(-1) === "ggd2l-ops");
+    assert.ok(opsUnits.includes("ggd2l-backup@.service") && !opsUnits.includes("ggd2l-drill@.service"), opsUnits.join(" "));
+    for (const unit of opsUnits) {
+      const settings = unitSettings(path.join(UNIT_DIR, unit));
+      for (const [key, values] of Object.entries(settings)) {
+        if (!/^Service\.Exec/.test(key)) continue;
+        for (const value of values) {
+          const program = value.replace(/^[-+!@:]+/, "").split(/\s+/)[0];
+          assert.ok(program.startsWith("/usr/local/lib/ggd2l/") || program.startsWith("/usr/bin/"), `${unit} ${key} runs ${program}`);
+          // The kit's helpers, as the repo holds them: none may reach for a tools clone.
+          if (!program.startsWith("/usr/local/lib/ggd2l/")) continue;
+          const source = path.join(HERE, path.basename(program));
+          assert.ok(existsSync(source), `${program} is a kit helper in ops/selfhost/backup`);
+          assert.doesNotMatch(readFileSync(source, "utf8").replace(/^\s*#.*$/gm, ""), /\/srv\/ggd2l\/tools|GGD2L_TOOLS/, `${program} names a tools clone`);
+        }
+      }
+    }
+    for (const name of readdirSync(AGENT_DIR).filter((file) => file.endsWith(".mjs") && !file.endsWith(".test.mjs")))
+      assert.doesNotMatch(readFileSync(path.join(AGENT_DIR, name), "utf8"), /user: USERS\.ops/, `${name} runs something as ggd2l-ops`);
   });
 
 test("the README's config-archive unit is one the kit ships, and its sandbox lets the script write",
