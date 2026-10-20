@@ -1159,14 +1159,23 @@ Every transition is a guarded claim; keep it that way (general rules:
     (`actionsInFlightRef`) or awaiting reconciliation, whose controls stay
     locked until a reply lands, or a refocus after a long hide
     (`refocusPending`).
-  - **An action, an offline/online change, a refocus after a long hide and
-    unmounting release a held request** (`releaseHold`: its controller,
-    linked to the `AbortSignal.timeout`; `AbortSignal.any` is missing on
-    older Safari). After an action, request-start ordering drops that
-    request's reply only if the action's reply lands first; a held reply
-    woken by the action's own publish can land first and is applied, which
-    is harmless (it was read after the commit). A release is not a failure;
-    the rerun latch polls next.
+  - **An action, an offline/online change and a refocus after a long hide
+    release a held request** (`releaseHold`: its controller, linked to the
+    `AbortSignal.timeout` by `withDeadline` in `room-poll.ts`;
+    `AbortSignal.any` is missing on older Safari). After an action,
+    request-start ordering drops that request's reply only if the action's
+    reply lands first; a held reply woken by the action's own publish can
+    land first and is applied, which is harmless (it was read after the
+    commit). A release is not a failure; the rerun latch polls next.
+  - **Cleaning up the loop releases the request in flight, held or not**
+    (`releaseInFlight`: an unmount, or React's development double mount,
+    which runs the effect twice), **and a cleaned-up loop never applies a
+    reply.** Request-start ordering assumes one poll in flight per loop: of
+    two at once the server may read the later-started one first, and the
+    gate would then keep the older room. The first mount's unheld request
+    used to keep running, so every development load sent two, and zz4d once
+    saw an accept count of 1, then 0 (2026-10-20). Production mounts once,
+    but nothing else may leave a second poll running either.
   - **A tab back from a hide of `ROOM_POLL_TIMEOUT_MS` (10s) or more asks
     afresh, unheld, once** (`inhouseRefocusResync`): a held request may
     have died silently with its connection while the device slept, and its
@@ -1209,7 +1218,8 @@ Every transition is a guarded claim; keep it that way (general rules:
     (`e2e/zz3-room-poll-resilience.spec.ts`) that hold a short poll run on
     the ladder by stripping `roomVersion`, as an old slot answers;
     `e2e/zz4d-inhouse-room-snapshot.spec.ts` publishes through
-    `/api/test/cache` to make every tab poll.
+    `/api/test/cache` to make every tab poll, and checks that no tab ever
+    has two polls in flight (each leaves after the one before it landed).
 - **Sequence-order every response** (`issueSequence` / `acceptSequence`) for
   poll AND `act()`: a late pre-pick poll put the drafted player back in the
   pool. Mint the sequence BEFORE the `await` and keep `apply()` the only

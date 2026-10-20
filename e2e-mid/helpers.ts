@@ -1,4 +1,4 @@
-import { expect, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Page } from "@playwright/test";
 
 /**
  * Tripwire for the exact failure class this suite exists to catch: a client
@@ -11,6 +11,91 @@ export function trackPageErrors(page: Page): () => void {
   page.on("pageerror", (e) => errors.push(e.message));
   return () =>
     expect(errors, "uncaught client-side errors on the page").toEqual([]);
+}
+
+type RoomPoll = { leftAt: number; headersAt: number | null };
+
+/**
+ * Record, in every document this context opens, each fetch to a room's poll
+ * endpoint (`pathname`, and `action` in its JSON body when given): when it
+ * left and when its response headers arrived, both on the page's own clock.
+ * A room sends its next poll only after reading the previous reply, so polls
+ * sent one at a time never overlap here, and a poll the page aborted before
+ * its headers (a cleaned-up loop's) is not counted. The network log can't say
+ * this: its start time is wall-clock and its end a monotonic offset, a few ms
+ * apart, so a held poll and its immediate re-issue seem to overlap. Call
+ * before the context's pages navigate; read it with expectOneRoomPollAtATime.
+ */
+export async function recordRoomPolls(
+  context: BrowserContext,
+  pathname: string,
+  action?: string,
+): Promise<void> {
+  await context.addInitScript(
+    ([path, wanted]) => {
+      const w = window as unknown as { __roomPolls: RoomPoll[] };
+      w.__roomPolls = [];
+      const original = window.fetch.bind(window);
+      window.fetch = (input: RequestInfo | URL, init?: RequestInit) => {
+        let entry: RoomPoll | null = null;
+        try {
+          const url =
+            typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+          const body =
+            typeof init?.body === "string"
+              ? (JSON.parse(init.body) as { action?: unknown })
+              : null;
+          if (
+            new URL(url, location.href).pathname === path &&
+            (wanted === null || body?.action === wanted)
+          ) {
+            entry = { leftAt: performance.now(), headersAt: null };
+          }
+        } catch {
+          // Not a room poll.
+        }
+        const response = original(input, init);
+        if (entry) {
+          const poll = entry;
+          w.__roomPolls.push(poll);
+          response.then(
+            () => {
+              poll.headersAt = performance.now();
+            },
+            () => undefined,
+          );
+        }
+        return response;
+      };
+    },
+    [pathname, action ?? null] as const,
+  );
+}
+
+/**
+ * The room in this page's current document never had two polls in flight:
+ * each left after the reply before it arrived (recordRoomPolls). Of two at
+ * once the server may read the later-started one first, and request-start
+ * ordering would then keep the older room.
+ */
+export async function expectOneRoomPollAtATime(page: Page, name: string): Promise<void> {
+  const polls = (
+    await page.evaluate(
+      () => (window as unknown as { __roomPolls?: RoomPoll[] }).__roomPolls ?? [],
+    )
+  )
+    .filter((p) => p.headersAt !== null)
+    .sort((a, b) => a.leftAt - b.leftAt);
+  expect(polls.length, `${name}: the room polled`).toBeGreaterThan(1);
+  for (let i = 1; i < polls.length; i++) {
+    const [prev, poll] = [polls[i - 1], polls[i]];
+    expect(
+      poll.leftAt,
+      `${name}: a poll left ${poll.leftAt.toFixed(1)}ms into the page while the one ` +
+        `before it (left ${prev.leftAt.toFixed(1)}ms, answered ` +
+        `${prev.headersAt!.toFixed(1)}ms) was still in flight`,
+    ).toBeGreaterThanOrEqual(prev.headersAt!);
+  }
 }
 
 /**

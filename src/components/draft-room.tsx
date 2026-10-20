@@ -84,7 +84,11 @@ import {
   seedDraftFeed,
   type FeedLine,
 } from "@/lib/draft-feed";
-import { draftPollCadence, draftPollsAtClockZero } from "@/lib/room-poll";
+import {
+  draftPollCadence,
+  draftPollsAtClockZero,
+  withDeadline,
+} from "@/lib/room-poll";
 import {
   draftRoomNeedsRefresh,
   type DraftRoomPhase,
@@ -508,10 +512,24 @@ export function DraftRoom({
     let inFlight = false;
     let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // The tick in flight, if any, so the loop's cleanup can release it.
+    let current: { controller: AbortController; released: boolean } | null =
+      null;
 
     const markFailure = () => {
       consecutiveFailures += 1;
       pollFail();
+    };
+
+    // The loop is being cleaned up: an unmount, a pollKick (a bid, a clock at
+    // zero, Retry) or season change, which re-runs this effect, or React's
+    // development double mount. Nobody will read its tick. Left running, it
+    // lands beside the next loop's first one; the server can read the two in
+    // either order, so request-start ordering could keep the older lot.
+    const releaseInFlight = () => {
+      if (!current) return;
+      current.released = true;
+      current.controller.abort();
     };
 
     const schedule = (ms: number) => {
@@ -552,6 +570,8 @@ export function DraftRoom({
       let reached = false;
       let rateLimited = false;
       let supersededByConnectivityChange = false;
+      const request = { controller: new AbortController(), released: false };
+      current = request;
       try {
         const res = await fetch("/api/draft/tick", {
           method: "POST",
@@ -559,13 +579,18 @@ export function DraftRoom({
           body: JSON.stringify({ seasonId }),
           // See ROOM_POLL_TIMEOUT_MS: without a deadline a request that never
           // answers freezes this loop for good, with `disconnected` false and
-          // every bid control still live on stale state.
-          signal: AbortSignal.timeout(ROOM_POLL_TIMEOUT_MS),
+          // every bid control still live on stale state. The controller lets
+          // the loop's cleanup release it.
+          signal: withDeadline(request.controller, ROOM_POLL_TIMEOUT_MS),
         });
+        // Cleaned up while the reply was on its way: a newer loop owns the
+        // room, and this reply must never touch it.
+        if (!alive) return;
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
         } else if (res.ok) {
           const next = (await res.json()) as DraftState;
+          if (!alive) return;
           if (pollConnectivityEpoch !== connectivityEpochRef.current) {
             supersededByConnectivityChange = true;
           } else if (next.seasonId !== seasonId) {
@@ -606,12 +631,15 @@ export function DraftRoom({
       } catch {
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
+        } else if (request.released) {
+          // The loop was cleaned up: not a failure, and nothing to show.
         } else {
           setInitialError(true);
           markFailure(); // network blip; next poll retries
         }
       } finally {
         inFlight = false;
+        if (current === request) current = null;
       }
       if (supersededByConnectivityChange) {
         setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
@@ -660,6 +688,7 @@ export function DraftRoom({
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
+      releaseInFlight();
     };
   }, [apply, pollKick, pollOk, pollFail, pollMs, seasonId]);
 
