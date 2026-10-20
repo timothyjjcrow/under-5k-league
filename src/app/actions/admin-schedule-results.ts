@@ -97,6 +97,7 @@ import {
 } from "@/lib/scrim-schedule-conflict";
 import { isSerializationConflict } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
+import { bracketSeedLabels } from "@/lib/season-groups";
 import {
   adminOrError,
   ActiveSeasonChangedError,
@@ -819,8 +820,8 @@ export async function startPlayoffs(
     );
   }
   // Seeds come from the frozen first-round pairings, the same source the
-  // bracket on the site labels them from.
-  const seeds = seedsFromFirstRound(bracket);
+  // bracket on the site labels them from ("A1" in a group season).
+  const seeds = bracketSeedLabels(seedsFromFirstRound(bracket), teams);
   await sendDiscordMessage(
     playoffsStartedMessage(
       season.name,

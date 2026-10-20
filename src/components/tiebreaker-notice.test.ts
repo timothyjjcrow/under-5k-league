@@ -8,8 +8,8 @@ const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) 
 import { scenarioReport } from "@/lib/scenarios";
 
 const teams = [
-  { id: "a", name: "Alpha" },
-  { id: "b", name: "Bravo" },
+  { id: "a", name: "Alpha", groupKey: null },
+  { id: "b", name: "Bravo", groupKey: null },
 ];
 const projection = projectPlayoffField(teams, []);
 const render = (props: Partial<Parameters<typeof TiebreakerNotice>[0]> = {}) =>
@@ -25,7 +25,7 @@ const render = (props: Partial<Parameters<typeof TiebreakerNotice>[0]> = {}) =>
 
 describe("public tiebreaker notice", () => {
   it("describes only seeding after the third-place team is eliminated", () => {
-    const threeTeams = [...teams, { id: "c", name: "Charlie" }];
+    const threeTeams = [...teams, { id: "c", name: "Charlie", groupKey: null }];
     const field = projectPlayoffField(threeTeams, []);
     const report = scenarioReport(field.eligibleStandings, [], 2);
     report.forecast = { basis: "final", total: 1 };
@@ -69,7 +69,7 @@ describe("public tiebreaker notice", () => {
   });
 
   it("explains the bounded three-team BO1 bracket and opening draw", () => {
-    const threeTeams = [...teams, { id: "c", name: "Charlie" }];
+    const threeTeams = [...teams, { id: "c", name: "Charlie", groupKey: null }];
     const html = render({
       teams: threeTeams,
       projection: projectPlayoffField(threeTeams, []),

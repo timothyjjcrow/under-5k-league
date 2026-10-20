@@ -15,7 +15,8 @@ export type AdminHomeInput = {
   playerCount: number;
   /** capacityInfo's minPlayers. */
   minPlayers: number;
-  teams: { id: string; withdrawn?: boolean }[];
+  /** With each team's group: a group season's ties are judged per group. */
+  teams: { id: string; withdrawn?: boolean; groupKey: string | null }[];
   /** Every match of the season, any phase. */
   matches: LineMatch[];
   hasChampion: boolean;

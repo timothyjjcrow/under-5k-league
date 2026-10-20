@@ -5,7 +5,8 @@ import { Bracket } from "@/components/bracket";
 import { ChampionMoment } from "@/components/champion-moment";
 import { Countdown } from "@/components/countdown";
 import { LocalTime } from "@/components/local-time";
-import { StandingsTable } from "@/components/standings-table-server";
+import { SeasonStandings } from "@/components/season-standings";
+import { bracketSeedLabels, groupTablesFromResults } from "@/lib/season-groups";
 import {
   Card,
   CardBody,
@@ -180,6 +181,7 @@ export async function CompleteView({
 
       <CompleteBracket
         matches={matches}
+        teams={teams}
         teamName={teamName}
         teamLogoUrl={teamLogoUrl}
         championTeamId={championPresentation.championTeamId}
@@ -204,7 +206,8 @@ export async function CompleteView({
               }
             />
             <CardBody className="p-0">
-              <StandingsTable
+              <SeasonStandings
+                groups={groupTablesFromResults(teams, matches)}
                 standings={standings}
                 teamName={teamName}
                 teamLogoUrl={teamLogoUrl}
@@ -255,11 +258,13 @@ export async function CompleteView({
 // trophy was won belongs on the season's front page.
 function CompleteBracket({
   matches,
+  teams,
   teamName,
   teamLogoUrl,
   championTeamId,
 }: {
   matches: Match[];
+  teams: { id: string; groupKey: string | null }[];
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
   championTeamId: string | null;
@@ -267,12 +272,15 @@ function CompleteBracket({
   const playoffMatches = matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
   );
+  const seeds = seedsFromFirstRound(playoffMatches);
   const rounds = buildBracketRounds(
     playoffMatches,
     teamName,
-    seedsFromFirstRound(playoffMatches),
+    seeds,
     (d) => fmtWhen(d) ?? "",
     teamLogoUrl,
+    undefined,
+    bracketSeedLabels(seeds, teams),
   );
   if (rounds.length === 0) return null;
   return (

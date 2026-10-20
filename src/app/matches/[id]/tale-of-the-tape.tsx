@@ -4,8 +4,8 @@ import { isPlayoffPhase } from "@/lib/league-lifecycle";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffRoad, playoffRoadTitle, type PlayoffRoadStep } from "@/lib/playoff-run";
 import { prisma } from "@/lib/prisma";
+import { bracketSeedLabels, placeInTable, placeOfLabel } from "@/lib/season-groups";
 import {
-  ordinalPlace,
   taleOfTheTape,
   type TapeRow,
   type TapeValue,
@@ -20,6 +20,8 @@ type SeasonTeam = {
   name: string;
   logoUrl: string | null;
   withdrawn: boolean;
+  /** "A", "B" in a group season: places and seeds are the group's. */
+  groupKey: string | null;
 };
 
 type SeasonMatch = Parameters<typeof projectPlayoffField>[1][number] & {
@@ -72,20 +74,27 @@ export async function TaleOfTheTape({
   });
 
   const postseason = isPlayoffPhase(match.phase);
+  // Under the record: the bracket seed in a knockout ("Seed A1" in a group
+  // season), else the place in the team's own table once a regular-season
+  // series is final ("2nd of 6 in Group A").
+  const seedLabels = postseason
+    ? bracketSeedLabels(
+        seedsFromFirstRound(seasonMatches.filter((m) => isPlayoffPhase(m.phase))),
+        teams,
+      )
+    : null;
+  const field =
+    !postseason &&
+    seasonMatches.some((m) => m.phase === "REGULAR" && m.status === "COMPLETED")
+      ? projectPlayoffField(teams, seasonMatches)
+      : null;
   const standing = (teamId: string): string | null => {
-    if (postseason) {
-      const seed = seedsFromFirstRound(
-        seasonMatches.filter((m) => isPlayoffPhase(m.phase)),
-      ).get(teamId);
+    if (seedLabels) {
+      const seed = seedLabels.get(teamId);
       return seed ? `Seed ${seed}` : null;
     }
-    const played = seasonMatches.some(
-      (m) => m.phase === "REGULAR" && m.status === "COMPLETED",
-    );
-    if (!played) return null;
-    const table = projectPlayoffField(teams, seasonMatches).standings;
-    const place = table.findIndex((row) => row.teamId === teamId);
-    return place < 0 ? null : `${ordinalPlace(place + 1)} of ${table.length}`;
+    const place = field ? placeInTable(field, teamId) : null;
+    return place ? placeOfLabel(place) : null;
   };
   const rows = taleOfTheTape({
     homeTeamId: match.homeTeamId,

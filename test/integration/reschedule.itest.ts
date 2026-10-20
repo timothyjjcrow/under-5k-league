@@ -1059,7 +1059,7 @@ describe("reschedule league-calendar rules (integration)", () => {
     const playoffNight = new Date(ORIGINAL_NIGHT.getTime() + 2 * WEEK);
     const tooLate = new Date(playoffNight.getTime() + 24 * HOUR);
     await expect(proposeReschedule(a.captainId, ab.id, tooLate)).rejects.toThrow(
-      /before the playoffs start/,
+      /before the tiebreaker week/,
     );
     // Moving it later inside the regular season is still the captains' call.
     const inTime = new Date(playoffNight.getTime() - 24 * HOUR);
@@ -1083,7 +1083,7 @@ describe("reschedule league-calendar rules (integration)", () => {
     ).toBeLessThanOrEqual(HOUR);
     await expect(
       proposeReschedule(a.captainId, ab.id, deadline!),
-    ).rejects.toThrow(/before the playoffs start/);
+    ).rejects.toThrow(/before the tiebreaker week/);
     // The form's latest allowed entry is a minute earlier, and it is accepted.
     await proposeReschedule(
       b.captainId,
@@ -1114,7 +1114,7 @@ describe("reschedule league-calendar rules (integration)", () => {
     });
     await expect(
       proposeReschedule(a.captainId, ab.id, new Date(earlyPlayoff.getTime() + 6 * HOUR)),
-    ).rejects.toThrow(/before the playoffs start/);
+    ).rejects.toThrow(/before the tiebreaker week/);
   });
 
   it("puts no playoff limit on a playoff match", async () => {

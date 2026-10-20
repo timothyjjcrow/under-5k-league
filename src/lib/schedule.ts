@@ -113,12 +113,15 @@ export function upcomingMatchNight(
  * The latest kickoff a captain-agreed reschedule may choose for a REGULAR
  * match, or null when there is no limit to enforce.
  *
- * `startPlayoffs` refuses while any regular result is outstanding, so a
- * regular match moved past the playoff night blocks the whole bracket. The
- * limit is the earliest playoff kickoff already on the calendar, otherwise the
- * planned playoff night: the league night after the last regular week.
+ * `startPlayoffs` refuses while any regular result is outstanding, and a tie
+ * is played off in the week after the regular season, so a regular match
+ * moved past that night blocks the tiebreakers and the bracket. The limit is
+ * the earliest postseason kickoff already on the calendar (a tiebreaker
+ * counts), otherwise the reserved tiebreaker night: the league night after the
+ * last regular week (season-format.ts keeps that week; the playoffs start the
+ * week after it).
  *
- * Once that planned night has passed with no bracket on the calendar, the
+ * Once that planned night has passed with no postseason on the calendar, the
  * season has slipped and the playoff date is an admin decision the site can't
  * see, so there is no limit. Rolling forward to the next league night instead
  * would refuse any reschedule past this week's night, a rule no admin chose.

@@ -179,7 +179,7 @@ function groupScenarioReport(
     const rows = standings.filter((row) => ids.has(row.teamId));
     if (rows.length === 0 || group.qualifiers === 0) return [];
     const own = matches.filter((m) => ids.has(m.homeTeamId) && ids.has(m.awayTeamId));
-    const report = seasonScenarioReport(rows, own, rows.length, {
+    const groupReport = seasonScenarioReport(rows, own, rows.length, {
       ...field,
       kind: "TABLE",
       groups: null,
@@ -193,7 +193,13 @@ function groupScenarioReport(
         ? group.tiebreakers
         : { ...group.tiebreakers, error: field.tiebreakers.error, resolved: false },
     });
-    return report ? [report] : [];
+    if (!groupReport) return [];
+    // The memoised report is frozen: tag copies of its teams with the group.
+    return [{
+      ...groupReport,
+      teams: new Map([...groupReport.teams].map(([teamId, scenario]) =>
+        [teamId, Object.freeze({ ...scenario, groupKey: group.key })])),
+    }];
   });
   if (reports.length === 0) return null;
   const forecasts = reports.map((report) => report.forecast);

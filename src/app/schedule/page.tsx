@@ -22,7 +22,7 @@ import { MatchNightPollNote } from "@/components/match-night-poll/poll-note";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
-import { computeStandings, standingsMovement } from "@/lib/standings";
+import { computeStandings } from "@/lib/standings";
 import { clinchFromReport, seasonScenarioReport } from "@/lib/stakes";
 import {
   projectPlayoffField,
@@ -43,10 +43,9 @@ import {
   groupPlayoffRounds,
   matchRoundLabel,
   orderScheduleWeeks,
-  pickBracketSize,
-  playoffFirstRound,
   roundName,
   teamByeWeek,
+  type Pairing,
 } from "@/lib/schedule";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ChampionBanner } from "@/components/champion-banner";
@@ -86,7 +85,19 @@ import {
   type RsvpSide,
   type WeekView,
 } from "@/components/schedule-weeks";
-import { StandingsTable } from "@/components/standings-table-server";
+import { SeasonStandings } from "@/components/season-standings";
+import { SeasonPlanFold } from "@/components/season-plan";
+import {
+  describeSeasonFormat,
+  formatName,
+  seasonFormat,
+  seasonPlan,
+} from "@/lib/season-format";
+import {
+  bracketSeedLabels,
+  standingsSections,
+  tableMovement,
+} from "@/lib/season-groups";
 import { SectionNav } from "@/components/section-nav";
 import { weekWrapPath } from "@/lib/week-wrap";
 import {
@@ -404,6 +415,9 @@ export default async function SchedulePage() {
   // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
   // its seeds and the projected matchups.
   const shownDeadHeatTeamIds = publicDeadHeatTeamIds(playoffField, matches);
+  // One table per group in a group-stage season (null: the one table).
+  const tableGroups = playoffField.groups ? standingsSections(playoffField) : null;
+  const groupOfTeam = new Map(teams.map((team) => [team.id, team.groupKey]));
   // Last 5 and the streak chips from one list in play order (Home's rule).
   const { form: teamForm, streaks: teamStreaks } = standingsForm(
     teams.map((t) => t.id),
@@ -432,6 +446,22 @@ export default async function SchedulePage() {
   // reference: the standings would be every team on zero points, and the
   // head-to-head grid a sheet of dashes.
   const hasFixtures = regular.length > 0;
+  // The season's calendar from its schedule: the regular weeks, the reserved
+  // tiebreaker week and each playoff round. Shown until the playoffs start.
+  const planFormat = seasonFormat(teams.length);
+  const seasonPlanView =
+    planFormat &&
+    hasFixtures &&
+    (season.status === "DRAFT" || season.status === "REGULAR_SEASON")
+      ? {
+          format: planFormat,
+          plan: seasonPlan(
+            planFormat,
+            season.firstMatchNight,
+            Math.max(...regular.map((m) => m.week)),
+          ),
+        }
+      : null;
   const status = regularSeasonStatus(matches);
   const weekStatus = new Map(status.weeks.map((w) => [w.week, w]));
   const progress = leagueProgress(matches, scheduleNow);
@@ -501,6 +531,9 @@ export default async function SchedulePage() {
       whenShort: m.scheduledAt ? fmtWhenShort(m.scheduledAt) : null,
       whenTs: m.scheduledAt?.getTime() ?? null,
       isFinalPhase: m.phase === "FINAL",
+      ...(m.phase === "REGULAR" && playoffField.groups
+        ? { groupLabel: `Group ${groupOfTeam.get(m.homeTeamId) ?? ""}` }
+        : {}),
       standins: (standinsByMatch.get(m.id) ?? []).map((a) =>
         // A null `replaced` is EMPTY-SEAT cover (a standin filling an open
         // seat on a short roster), not missing data — the match page and the
@@ -609,14 +642,17 @@ export default async function SchedulePage() {
   });
 
   // Full bracket tree (TBD slots included) for the interactive bracket.
+  const bracketSeeds = seedsFromFirstRound(playoff);
   const bracketRoundsView = buildBracketRounds(
     playoff,
     teamName,
     // Seeds come from the frozen first-round pairings, not live standings —
     // a corrected regular result must not relabel (or blank) bracket seeds.
-    seedsFromFirstRound(playoff),
+    bracketSeeds,
     (d) => fmtWhen(d) ?? "",
     teamLogoUrl,
+    undefined,
+    bracketSeedLabels(bracketSeeds, teams),
   );
   const bracketFoldsOnPhones = bracketColumnCount(bracketRoundsView) > 1;
   const postseasonPhase =
@@ -872,10 +908,13 @@ export default async function SchedulePage() {
               postseason: postseasonPhase,
               bracketSize: playoffField.bracketSize,
               eligibleTeams: playoffField.eligibleTeamIds.length,
+              groupQualifiers:
+                playoffField.groups?.map((group) => group.qualifiers) ?? null,
             })}
           />
           <CardBody className="p-0">
-            <StandingsTable
+            <SeasonStandings
+              groups={tableGroups}
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
@@ -895,10 +934,7 @@ export default async function SchedulePage() {
               clinch={clinchFromReport(stakesReport)}
               playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
               viewerTeamId={[...myTeamIds][0]}
-              movement={standingsMovement(
-                teams.map((t) => t.id),
-                matches,
-              )}
+              movement={tableMovement(standingsSections(playoffField), matches)}
             />
           </CardBody>
         </Card>
@@ -920,6 +956,8 @@ export default async function SchedulePage() {
         >
           <PlayoffPicture
             standings={playoffField.eligibleStandings}
+            projectedPairings={playoffField.pairings}
+            seedLabelByTeam={playoffField.seedLabelByTeam}
             teamName={teamName}
             teamLogoUrl={teamLogoUrl}
             report={stakesReport}
@@ -935,12 +973,21 @@ export default async function SchedulePage() {
           title="Head-to-head results grid"
           description="Each row shows that team's results"
         >
-          <SeasonGrid
-            teamIds={standings.map((s) => s.teamId)}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            matches={matches}
-          />
+          {standingsSections(playoffField).map((section) => (
+            <div key={section.key ?? "table"} className="min-w-0">
+              {section.title ? (
+                <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[0.15em] text-fg first:mt-0">
+                  {section.title}
+                </h3>
+              ) : null}
+              <SeasonGrid
+                teamIds={section.standings.map((s) => s.teamId)}
+                teamName={teamName}
+                teamLogoUrl={teamLogoUrl}
+                matches={matches}
+              />
+            </div>
+          ))}
         </AnalysisDisclosure>
       ) : null}
     </>
@@ -1010,6 +1057,14 @@ export default async function SchedulePage() {
           ) : undefined
         }
       />
+
+      {seasonPlanView ? (
+        <SeasonPlanFold
+          plan={seasonPlanView.plan}
+          formatLine={formatName(seasonPlanView.format)}
+          description={describeSeasonFormat(seasonPlanView.format)}
+        />
+      ) : null}
 
       {jumpItems.length >= 3 ? (
         <div className={standingsRail ? "xl:hidden" : undefined}>
@@ -1228,6 +1283,8 @@ function ReportResultPrompt({
 // team in the race still needs, from the exact scenario engine.
 function PlayoffPicture({
   standings,
+  projectedPairings,
+  seedLabelByTeam,
   teamName,
   teamLogoUrl,
   report,
@@ -1235,6 +1292,10 @@ function PlayoffPicture({
   tiebreakerError,
 }: {
   standings: ReturnType<typeof computeStandings>;
+  /** The field's first round (`projectPlayoffField().pairings`): A1–B4… in groups. */
+  projectedPairings: Pairing[];
+  /** The field's seed names: "3", or "A2" in a group season. */
+  seedLabelByTeam: Map<string, string>;
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
   report: ScenarioReport | null;
@@ -1242,8 +1303,6 @@ function PlayoffPicture({
   tiebreakerError: string | null;
 }) {
   const order = standings.map((s) => s.teamId);
-  const size = pickBracketSize(order.length);
-  const seedOf = new Map(order.slice(0, size).map((id, i) => [id, i + 1]));
   const pendingTeamIds = report?.forecast?.basis === "final"
     ? unresolvedTeamIds.filter((id) => {
         const outlook = report.teams.get(id)?.outlook;
@@ -1251,9 +1310,7 @@ function PlayoffPicture({
       })
     : unresolvedTeamIds;
   const pairings =
-    pendingTeamIds.length > 0 || tiebreakerError
-      ? []
-      : playoffFirstRound(order, size);
+    pendingTeamIds.length > 0 || tiebreakerError ? [] : projectedPairings;
 
   const raceNotes = order.flatMap((teamId) => {
     const scenario = report?.teams.get(teamId);
@@ -1294,14 +1351,14 @@ function PlayoffPicture({
             </div>
             <ProjectedSide
               teamId={p.home}
-              seed={seedOf.get(p.home)}
+              seed={seedLabelByTeam.get(p.home)}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
             />
             <div aria-hidden className="mx-4 h-px bg-line-soft" />
             <ProjectedSide
               teamId={p.away}
-              seed={seedOf.get(p.away)}
+              seed={seedLabelByTeam.get(p.away)}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
             />
@@ -1362,7 +1419,7 @@ function ProjectedSide({
   teamLogoUrl,
 }: {
   teamId: string;
-  seed: number | undefined;
+  seed: string | undefined;
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
 }) {

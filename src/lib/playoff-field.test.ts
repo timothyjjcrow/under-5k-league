@@ -35,9 +35,9 @@ describe("projectPlayoffField", () => {
   it("banks played and forfeit results against a withdrawn team for survivors", () => {
     const projection = projectPlayoffField(
       [
-        { id: "played-winner" },
-        { id: "forfeit-winner" },
-        { id: "withdrawn", withdrawn: true },
+        { id: "played-winner", groupKey: null },
+        { id: "forfeit-winner", groupKey: null },
+        { id: "withdrawn", groupKey: null, withdrawn: true },
       ],
       [
         result("played-winner", "withdrawn", 2, 0),
@@ -78,7 +78,7 @@ describe("projectPlayoffField", () => {
   });
 
   it("truncates a non-power-of-two eligible field at the playoff cut", () => {
-    const teams = ["t1", "t2", "t3", "t4", "t5"].map((id) => ({ id }));
+    const teams = ["t1", "t2", "t3", "t4", "t5"].map((id) => ({ id, groupKey: null }));
     const matches: MatchLike[] = [];
     for (let stronger = 1; stronger <= 4; stronger++) {
       for (let weaker = stronger + 1; weaker <= 5; weaker++) {
@@ -107,7 +107,7 @@ describe("projectPlayoffField", () => {
 
   it("returns no bracket when fewer than two teams are eligible", () => {
     const projection = projectPlayoffField(
-      [{ id: "alive" }, { id: "withdrawn", withdrawn: true }],
+      [{ id: "alive", groupKey: null }, { id: "withdrawn", groupKey: null, withdrawn: true }],
       [],
     );
 
@@ -123,7 +123,7 @@ describe("projectPlayoffField", () => {
   });
 
   it("names the whole unresolved tie when it straddles the cut", () => {
-    const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+    const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, groupKey: null }));
     const matches = [
       ...["b", "c", "d", "e", "f"].map((away) => result("a", away, 2, 0)),
       ...["c", "d", "e", "f"].map((away) => result("b", away, 2, 0)),
@@ -140,7 +140,7 @@ describe("projectPlayoffField", () => {
   });
 
   it("does not warn about a dead heat wholly below the cut", () => {
-    const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+    const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, groupKey: null }));
     const matches = [
       ...["b", "c", "d", "e", "f"].map((away) => result("a", away, 2, 0)),
       ...["c", "d", "e", "f"].map((away) => result("b", away, 2, 0)),
@@ -158,11 +158,11 @@ describe("projectPlayoffField", () => {
 
   it("does not warn when a seed is tied only with a withdrawn team", () => {
     const teams = [
-      { id: "a" },
-      { id: "b" },
-      { id: "c" },
-      { id: "d" },
-      { id: "e", withdrawn: true },
+      { id: "a", groupKey: null },
+      { id: "b", groupKey: null },
+      { id: "c", groupKey: null },
+      { id: "d", groupKey: null },
+      { id: "e", groupKey: null, withdrawn: true },
     ];
     const matches = [
       ...["b", "c", "d", "e"].map((away) => result("a", away, 2, 0)),
@@ -190,7 +190,7 @@ describe("projectPlayoffField", () => {
 });
 
 describe("public tiebreaker badges", () => {
-  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id }));
+  const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, groupKey: null }));
   // d, e and f are level on every standings tiebreak across the cut.
   const played = [
     ...["b", "c", "d", "e", "f"].map((away) => result("a", away, 2, 0)),
@@ -354,7 +354,7 @@ describe("group-stage seasons", () => {
 
   it("plays one table when any team has no group", () => {
     const projection = projectPlayoffField(
-      teams.map((team) => (team.id === "b5" ? { id: team.id } : team)),
+      teams.map((team) => (team.id === "b5" ? { id: team.id, groupKey: null } : team)),
       [...ladder(groupA), ...ladder(groupB)],
     );
     expect(projection.kind).toBe("TABLE");
@@ -369,7 +369,7 @@ describe("one-table bracket size", () => {
     for (let i = 0; i < ids.length; i++) {
       for (let j = i + 1; j < ids.length; j++) matches.push(result(ids[i], ids[j], 2, 0));
     }
-    const projection = projectPlayoffField(ids.map((id) => ({ id })), matches);
+    const projection = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), matches);
     expect(projection.bracketSize).toBe(4);
     expect(projection.seededTeamIds).toEqual(["t1", "t2", "t3", "t4"]);
     expect(projection.seedLabelByTeam.get("t2")).toBe("2");

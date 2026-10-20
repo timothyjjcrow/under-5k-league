@@ -22,8 +22,10 @@ import { weeklyHonors } from "@/lib/honors";
 import { HONOR_WEEK_STATE } from "@/lib/honors-readiness";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { weekOracles } from "@/lib/pickem";
+import { projectPlayoffField } from "@/lib/playoff-field";
 import { prisma } from "@/lib/prisma";
 import { MATCH_LIST_ORDER } from "@/lib/schedule";
+import { standingsSections } from "@/lib/season-groups";
 import { shareMetadata } from "@/lib/share-metadata";
 import { seriesUpset, upsetContext } from "@/lib/upsets";
 import { cn } from "@/lib/utils";
@@ -31,7 +33,8 @@ import {
   bestGameOfWeek,
   weekProgress,
   weekWrapPath,
-  weekWrapTable,
+  weekWrapTables,
+  type WeekWrapRow,
 } from "@/lib/week-wrap";
 
 /** A regular week's number from the URL; null for anything else. */
@@ -85,6 +88,8 @@ export default async function WeekWrapPage({
           id: true,
           name: true,
           logoUrl: true,
+          withdrawn: true,
+          groupKey: true,
           members: { select: { userId: true } },
         },
       },
@@ -152,7 +157,16 @@ export default async function WeekWrapPage({
       : []
     ).map((user) => [user.id, user.name]),
   );
-  const table = weekWrapTable(teamIds, season.matches, week);
+  // The league's one table, or each group's own: places and arrows inside
+  // the group. The playoff field decides whether the season plays groups,
+  // as it does for every other table on the site.
+  const tables = weekWrapTables(
+    standingsSections(projectPlayoffField(season.teams, season.matches)),
+    season.matches,
+    week,
+  );
+  const grouped = tables.some((table) => table.title !== null);
+  const moved = tables.some((table) => table.rows.some((row) => row.movement !== null));
   const upNext = nextWeek ? regular.filter((m) => m.week === nextWeek) : [];
 
   const teamLine = (teamId: string) => {
@@ -164,6 +178,43 @@ export default async function WeekWrapPage({
       </span>
     );
   };
+
+  const tableList = (rows: WeekWrapRow[]) => (
+    <ol className="divide-y divide-line-soft">
+      {rows.map((row) => (
+        <li
+          key={row.teamId}
+          className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] items-center gap-x-3 px-4 py-2 text-sm"
+        >
+          <span className="tabular-nums text-muted">{row.rank}</span>
+          <Link href={`/teams/${row.teamId}`} className="min-w-0 hover:text-info">
+            {teamLine(row.teamId)}
+          </Link>
+          <span className="tabular-nums text-muted">
+            {row.wins}-{row.draws}-{row.losses} · {row.points} pts
+          </span>
+          <span
+            className={cn(
+              "w-8 text-right text-xs tabular-nums",
+              row.movement && row.movement > 0
+                ? "text-success"
+                : row.movement && row.movement < 0
+                  ? "text-danger-soft"
+                  : "text-muted",
+            )}
+          >
+            {row.movement == null ? "" : row.movement > 0 ? (
+              <span role="img" aria-label={`up ${row.movement}`}>▲{row.movement}</span>
+            ) : row.movement < 0 ? (
+              <span role="img" aria-label={`down ${-row.movement}`}>▼{-row.movement}</span>
+            ) : (
+              <span role="img" aria-label="no change">–</span>
+            )}
+          </span>
+        </li>
+      ))}
+    </ol>
+  );
 
   return (
     <div className="space-y-6">
@@ -324,48 +375,33 @@ export default async function WeekWrapPage({
         <Card className="min-w-0 overflow-hidden">
           <CardHeader
             headingLevel={2}
-            title={`The table after week ${week}`}
+            title={grouped ? `The groups after week ${week}` : `The table after week ${week}`}
             subtitle={
-              table.some((row) => row.movement !== null)
-                ? "Arrows show places moved this week."
+              moved
+                ? grouped
+                  ? "Arrows show places moved within each group this week."
+                  : "Arrows show places moved this week."
                 : undefined
             }
           />
           <CardBody className="p-0">
-            <ol className="divide-y divide-line-soft">
-              {table.map((row) => (
-                <li
-                  key={row.teamId}
-                  className="grid grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] items-center gap-x-3 px-4 py-2 text-sm"
-                >
-                  <span className="tabular-nums text-muted">{row.rank}</span>
-                  <Link href={`/teams/${row.teamId}`} className="min-w-0 hover:text-info">
-                    {teamLine(row.teamId)}
-                  </Link>
-                  <span className="tabular-nums text-muted">
-                    {row.wins}-{row.draws}-{row.losses} · {row.points} pts
-                  </span>
-                  <span
-                    className={cn(
-                      "w-8 text-right text-xs tabular-nums",
-                      row.movement && row.movement > 0
-                        ? "text-success"
-                        : row.movement && row.movement < 0
-                          ? "text-danger-soft"
-                          : "text-muted",
-                    )}
+            {grouped ? (
+              <div className="divide-y divide-line">
+                {tables.map((table) => (
+                  <section
+                    key={table.key ?? "table"}
+                    aria-label={`${table.title} after week ${week}`}
                   >
-                    {row.movement == null ? "" : row.movement > 0 ? (
-                      <span role="img" aria-label={`up ${row.movement}`}>▲{row.movement}</span>
-                    ) : row.movement < 0 ? (
-                      <span role="img" aria-label={`down ${-row.movement}`}>▼{-row.movement}</span>
-                    ) : (
-                      <span role="img" aria-label="no change">–</span>
-                    )}
-                  </span>
-                </li>
-              ))}
-            </ol>
+                    <h3 className="bg-surface-2/35 px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-[0.15em] text-fg">
+                      {table.title}
+                    </h3>
+                    {tableList(table.rows)}
+                  </section>
+                ))}
+              </div>
+            ) : (
+              tableList(tables[0]?.rows ?? [])
+            )}
           </CardBody>
         </Card>
 
@@ -407,7 +443,11 @@ export default async function WeekWrapPage({
             ) : (
               <EmptyState
                 title="That was the last regular week"
-                description="The table above is the final regular-season table once every series is in."
+                description={
+                  grouped
+                    ? "The group tables above are final once every series is in."
+                    : "The table above is the final regular-season table once every series is in."
+                }
               />
             )}
           </CardBody>

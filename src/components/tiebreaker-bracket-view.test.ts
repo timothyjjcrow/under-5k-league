@@ -12,9 +12,9 @@ import {
 } from "./tiebreaker-bracket-view";
 
 const teams: TiebreakerBracketTeam[] = [
-  { id: "a", name: "Alpha", logoUrl: "/alpha.png" },
-  { id: "b", name: "Bravo" },
-  { id: "c", name: "Charlie" },
+  { id: "a", name: "Alpha", logoUrl: "/alpha.png", groupKey: null },
+  { id: "b", name: "Bravo", groupKey: null },
+  { id: "c", name: "Charlie", groupKey: null },
 ];
 const kickoff = new Date("2026-09-19T20:00:00Z");
 
@@ -116,9 +116,9 @@ describe("complete tiebreaker bracket presentation", () => {
     const matches = next(next(next(drawnSeason())));
     const [group] = view(matches).groups;
     expect(group.placements).toEqual([
-      { place: 1, seed: 1, qualifies: true, teamId: null, name: null },
-      { place: 2, seed: 2, qualifies: true, teamId: null, name: null },
-      { place: 3, seed: 3, qualifies: false, teamId: "c", name: "Charlie" },
+      { place: 1, seed: 1, seedLabel: "1", qualifies: true, teamId: null, name: null },
+      { place: 2, seed: 2, seedLabel: "2", qualifies: true, teamId: null, name: null },
+      { place: 3, seed: 3, seedLabel: "3", qualifies: false, teamId: "c", name: "Charlie" },
     ]);
     expect(group.matches[3].home.teamId).toBe("b");
     expect(group.matches[3].away.teamId).toBe("a");
@@ -163,7 +163,7 @@ describe("complete tiebreaker bracket presentation", () => {
   });
 
   it("maps a three-way qualification tie to its actual overall seeds, not always seeds one through three", () => {
-    const roster = [{ id: "top1", name: "First" }, { id: "top2", name: "Second" }, ...teams];
+    const roster = [{ id: "top1", name: "First", groupKey: null }, { id: "top2", name: "Second", groupKey: null }, ...teams];
     const regular = [regularResult("top1", "top2"), ...drawnSeason(),
       ...teams.flatMap((team) => [regularResult("top1", team.id), regularResult("top2", team.id)])];
     const [group] = view(regular, roster).groups;
@@ -172,7 +172,7 @@ describe("complete tiebreaker bracket presentation", () => {
   });
 
   it("distinguishes a seeding-only three-team tie from elimination from the playoffs", () => {
-    const roster = [...teams, { id: "d", name: "Delta" }];
+    const roster = [...teams, { id: "d", name: "Delta", groupKey: null }];
     const matches = [...drawnSeason(), ...teams.map((team) => regularResult(team.id, "d"))];
     const [group] = view(matches, roster).groups;
     expect(group.teamIds).toEqual(["a", "b", "c"]);
@@ -181,7 +181,7 @@ describe("complete tiebreaker bracket presentation", () => {
   });
 
   it("keeps independent tie groups and their qualification ranges separate", () => {
-    const roster = [{ id: "top1", name: "First" }, { id: "top2", name: "Second" }, ...teams];
+    const roster = [{ id: "top1", name: "First", groupKey: null }, { id: "top2", name: "Second", groupKey: null }, ...teams];
     const matches = [regular("top1", "top2"), ...drawnSeason(),
       ...teams.flatMap((team) => [regularResult("top1", team.id), regularResult("top2", team.id)])];
     const result = view(matches, roster);
@@ -246,7 +246,7 @@ describe("finished tiebreaker summary line", () => {
     key: "k", format: "BO1_SINGLE_ELIMINATION", round: 1, bestOf: 1,
     teamIds: [], status, byeTeamId: null, week: 6, openingAt: null, matches: [],
     placements: placements.map(([name, seed, qualifies], index) => ({
-      place: index + 1, seed, qualifies,
+      place: index + 1, seed, seedLabel: String(seed), qualifies,
       teamId: name ? name.toLowerCase() : null, name,
     })),
   });

@@ -4,6 +4,8 @@ import {
   drawGroups,
   firstPlayoffWeek,
   formatName,
+  formatSteps,
+  playoffSteps,
   playoffBracketSize,
   regularSeasonFixtures,
   rosterAverageMmr,
@@ -285,5 +287,25 @@ describe("teamCountSeasonNote", () => {
 
   it("says a single week in the singular", () => {
     expect(seasonLengthPhrase(seasonFormat(2)!)).toContain("1 playoff week");
+  });
+});
+
+describe("formatSteps", () => {
+  it("states every format by team count in one sentence", () => {
+    expect(formatSteps()).toBe(
+      "2 teams play one table twice, and both play the grand final; " +
+        "3 teams play one table twice, and the top 2 play the grand final; " +
+        "4 teams play one table twice, and all of them play the semifinals and the grand final; " +
+        "5–9 teams play one table once, and the top 4 play the semifinals and the grand final; " +
+        "10 or more teams play two groups, each a round robin on the same match nights, and the top 4 of each group play the quarterfinals, the semifinals and the grand final",
+    );
+  });
+});
+
+describe("playoffSteps", () => {
+  it("says who makes the playoffs at every team count", () => {
+    expect(playoffSteps()).toBe(
+      "the top 2 of a table of 2–3 teams, the top 4 of a table of 4–9 teams and the top 4 of each group from 10 teams",
+    );
   });
 });

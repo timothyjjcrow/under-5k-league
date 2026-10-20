@@ -13,11 +13,15 @@ import {
 } from "./standings";
 import { resolveTiebreakers, tiebreakerBasis, type TiebreakerState } from "./tiebreakers";
 
-/** A team as the field reads it. `groupKey` is set when the season plays in groups. */
+/**
+ * A team as the field reads it. `groupKey` is required (null for a one-table
+ * season) so every caller selects it: a page that left it out would show a
+ * group season as one table, seeded wrong, without an error anywhere.
+ */
 export type FieldTeam = {
   id: string;
   withdrawn?: boolean;
-  groupKey?: string | null;
+  groupKey: string | null;
 };
 
 /** One group of a group-stage season: its own table, cut and tiebreakers. */

@@ -418,3 +418,79 @@ export function teamCountSeasonNote(teamCount: number): string | null {
     others.length > 0 ? ` ${others.join(" · ")}.` : ""
   }`;
 }
+
+/** What a format plays, without the week count: for `formatSteps`. */
+function formatStepPhrase(format: SeasonFormat): string {
+  const play =
+    format.kind === "GROUPS"
+      ? "play two groups, each a round robin on the same match nights"
+      : format.doubleRound
+        ? "play one table twice"
+        : "play one table once";
+  const entrants = playoffEntrants(format);
+  const who =
+    format.kind === "GROUPS"
+      ? `the top ${format.qualifiersPerGroup} of each group`
+      : entrants.startsWith("All")
+        ? format.teamCount === 2
+          ? "both"
+          : "all of them"
+        : `the top ${format.playoffSpots}`;
+  return `${play}, and ${who} play ${playoffRoundsPhrase(format)}`;
+}
+
+/**
+ * Every format the site picks, by team count, in one sentence for /rules:
+ * "2–3 teams play one table twice, and the top 2 play the grand final; …;
+ * 10 or more teams play two groups…". Read from `seasonFormat`, so a new
+ * rule rewrites this line too.
+ */
+export function formatSteps(maxTeams = 32): string {
+  const steps: { phrase: string; from: number; to: number }[] = [];
+  for (let count = 2; count <= maxTeams; count++) {
+    const phrase = formatStepPhrase(seasonFormat(count)!);
+    const last = steps[steps.length - 1];
+    if (last && last.phrase === phrase) last.to = count;
+    else steps.push({ phrase, from: count, to: count });
+  }
+  return steps
+    .map((step, index) => {
+      const range =
+        index === steps.length - 1 && step.to === maxTeams
+          ? `${step.from} or more teams`
+          : step.from === step.to
+            ? `${step.from} teams`
+            : `${step.from}–${step.to} teams`;
+      return `${range} ${step.phrase}`;
+    })
+    .join("; ");
+}
+
+/**
+ * Who makes the playoffs at every team count, in one phrase for /rules: "the
+ * top 2 of a table of 2–3 teams, the top 4 of a table of 4–9 teams and the top
+ * 4 of each group from 10 teams". Read from `seasonFormat`.
+ */
+export function playoffSteps(maxTeams = 32): string {
+  const steps: { phrase: string; from: number; to: number; groups: boolean }[] = [];
+  for (let count = 2; count <= maxTeams; count++) {
+    const format = seasonFormat(count)!;
+    const groups = format.kind === "GROUPS";
+    const phrase = groups
+      ? `the top ${format.qualifiersPerGroup} of each group`
+      : `the top ${format.playoffSpots}`;
+    const last = steps[steps.length - 1];
+    if (last && last.phrase === phrase) last.to = count;
+    else steps.push({ phrase, from: count, to: count, groups });
+  }
+  const parts = steps.map((step, index) =>
+    step.groups
+      ? `${step.phrase} from ${step.from} teams`
+      : `${step.phrase} of a table of ${step.from === step.to ? step.from : `${step.from}–${step.to}`} teams${
+          index === steps.length - 1 && step.to === maxTeams ? " or more" : ""
+        }`,
+  );
+  return parts.length > 1
+    ? `${parts.slice(0, -1).join(", ")} and ${parts[parts.length - 1]}`
+    : parts[0];
+}

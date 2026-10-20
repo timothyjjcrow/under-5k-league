@@ -63,6 +63,8 @@ export type MatchView = {
   /** Epoch ms — lets the client re-render times in the viewer's timezone. */
   whenTs: number | null;
   isFinalPhase: boolean;
+  /** "Group A" on a group-stage fixture; unset in a one-table season. */
+  groupLabel?: string;
   standins: string[];
   rsvp?: { home: RsvpSide; away: RsvpSide };
   /** The league stream on a playoff or final match still to be played
@@ -742,8 +744,13 @@ function MatchRow({ match: m }: { match: MatchView }) {
             Grand final
           </Badge>
         ) : null}
+        {m.groupLabel ? (
+          <span className="ml-auto text-xs text-muted">{m.groupLabel}</span>
+        ) : null}
         {m.forfeit ? (
-          <span className="ml-auto text-xs text-muted">Ruled result</span>
+          <span className={cn("text-xs text-muted", !m.groupLabel && "ml-auto")}>
+            Ruled result
+          </span>
         ) : null}
       </div>
       <div className="space-y-1 px-3 pb-3 pt-1 sm:px-4">

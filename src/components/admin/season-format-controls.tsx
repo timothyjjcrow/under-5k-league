@@ -19,16 +19,14 @@ const FIELD =
   "h-8 min-w-0 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg";
 
 export function SeasonFormatControls({
-  seasonId,
-  seasonName,
+  season,
   teams,
   firstMatchNight,
   lastRegularWeek,
   regenerateOpen,
   regenerateConsequences,
 }: {
-  seasonId: string;
-  seasonName: string;
+  season: { id: string; name: string };
   /** The season's teams, withdrawn ones included (they keep their group). */
   teams: FormatTeam[];
   firstMatchNight: Date | null;
@@ -93,7 +91,7 @@ export function SeasonFormatControls({
       {drawn && regenerateOpen ? (
         <ActionForm
           action={swapGroupTeams}
-          hidden={{ expectedActiveSeasonId: seasonId }}
+          hidden={{ expectedActiveSeasonId: season.id }}
           className="mt-3 flex flex-wrap items-end gap-2"
         >
           <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
@@ -123,7 +121,7 @@ export function SeasonFormatControls({
             </select>
           </label>
           <DangerSubmit
-            token={seasonName}
+            token={season.name}
             title="Swap these two teams and regenerate the schedule?"
             consequences={[
               "The two teams trade groups, and every regular-season fixture is rebuilt for the new groups from the week-1 night.",

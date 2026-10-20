@@ -20,7 +20,8 @@ import { SEASON_STATUS } from "@/lib/constants";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { Bracket } from "@/components/bracket";
-import { StandingsTable } from "@/components/standings-table-server";
+import { SeasonStandings } from "@/components/season-standings";
+import { bracketSeedLabels, standingsSections } from "@/lib/season-groups";
 import { SeasonGrid } from "@/components/season-grid";
 import { LocalTime } from "@/components/local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
@@ -239,7 +240,10 @@ export default async function SeasonArchivePage({
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
-  const standings = projectPlayoffField(season.teams, season.matches).standings;
+  const archiveField = projectPlayoffField(season.teams, season.matches);
+  const standings = archiveField.standings;
+  // One table (and grid) per group in a group-stage season.
+  const tableSections = standingsSections(archiveField);
   const regular = season.matches.filter((m) => m.phase === "REGULAR");
   const tiebreakers = season.matches.filter((m) => m.phase === "TIEBREAKER");
   const playoff = season.matches.filter(
@@ -252,12 +256,15 @@ export default async function SeasonArchivePage({
   const weeks = [...new Set(regular.map((m) => m.week))].sort((a, b) => a - b);
   // Same interactive bracket the live schedule uses — seeds derive from the
   // archived first-round pairings themselves.
+  const archiveSeeds = seedsFromFirstRound(playoff);
   const bracketRoundsView = buildBracketRounds(
     playoff,
     teamName,
-    seedsFromFirstRound(playoff),
+    archiveSeeds,
     (d) => formatLeagueMatchTime(d, "full"),
     teamLogoUrl,
+    undefined,
+    bracketSeedLabels(archiveSeeds, season.teams),
   );
   const champion = championPresentation.championTeamId
     ? season.teams.find((t) => t.id === championPresentation.championTeamId)
@@ -392,7 +399,8 @@ export default async function SeasonArchivePage({
             }
           />
           <CardBody className="p-0">
-            <StandingsTable
+            <SeasonStandings
+              groups={archiveField.groups ? tableSections : null}
               standings={standings}
               teamName={teamName}
               teamLogoUrl={teamLogoUrl}
@@ -478,12 +486,21 @@ export default async function SeasonArchivePage({
               subtitle="Each row shows that team's results"
             />
             <CardBody className="p-0">
-              <SeasonGrid
-                teamIds={standings.map((row) => row.teamId)}
-                teamName={teamName}
-                teamLogoUrl={teamLogoUrl}
-                matches={regular}
-              />
+              {tableSections.map((section) => (
+                <div key={section.key ?? "table"} className="min-w-0">
+                  {section.title ? (
+                    <h3 className="px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-[0.15em] text-fg sm:px-5">
+                      {section.title}
+                    </h3>
+                  ) : null}
+                  <SeasonGrid
+                    teamIds={section.standings.map((row) => row.teamId)}
+                    teamName={teamName}
+                    teamLogoUrl={teamLogoUrl}
+                    matches={regular}
+                  />
+                </div>
+              ))}
             </CardBody>
           </Card>
           <details className="group rounded-xl border border-line-soft bg-surface">

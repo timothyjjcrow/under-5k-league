@@ -33,13 +33,18 @@ export function TiebreakerNotice({
   )
     return null;
   const names = new Map(teams.map((team) => [team.id, team.name]));
+  // Each table judges its own cut: a group's ties against the group's places.
+  const tables = projection.groups?.map((group) => ({
+    rows: group.eligibleStandings,
+    cut: group.qualifiers,
+  })) ?? [{ rows: projection.eligibleStandings, cut: projection.bracketSize }];
   const qualificationIds = unresolved.filter((id) => {
     const outlook = finalTeams?.get(id)?.outlook;
     if (outlook) return outlook.qualificationTiebreaker > 0;
-    const group = projection.eligibleStandings.find((row) => row.teamId === id)?.idTieGroup;
-    return projection.eligibleStandings.some((row, index) =>
-      row.idTieGroup === group && index >= projection.bracketSize,
-    );
+    const table = tables.find((candidate) => candidate.rows.some((row) => row.teamId === id));
+    if (!table) return false;
+    const group = table.rows.find((row) => row.teamId === id)?.idTieGroup;
+    return table.rows.some((row, index) => row.idTieGroup === group && index >= table.cut);
   });
   const seedingIds = unresolved.filter((id) => !qualificationIds.includes(id));
   const teamList = (ids: string[]) => ids.length > 3 ? `${ids.length} teams` : ids.map((id) => names.get(id) ?? id).join(", ");

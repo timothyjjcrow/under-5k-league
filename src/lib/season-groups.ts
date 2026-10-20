@@ -4,7 +4,12 @@
 // group B's teams as 6th to 10th of one table. Pure + testable.
 
 import type { PlayoffFieldProjection } from "./playoff-field";
-import { standingsMovement, type MatchLike, type TeamStanding } from "./standings";
+import {
+  computeStandings,
+  standingsMovement,
+  type MatchLike,
+  type TeamStanding,
+} from "./standings";
 import { ordinalPlace } from "./tale-of-the-tape";
 
 export type StandingsSection = {
@@ -151,4 +156,94 @@ export function playoffPlacesPhrase(
   return shares.length === 1
     ? `${places}: the top ${shares[0]} of each group`
     : `${places}: ${field.groups.map((group) => `the top ${group.qualifiers} of Group ${group.key}`).join(" and ")}`;
+}
+
+/**
+ * Each group's table straight from the results (no tiebreaker results
+ * applied), for a season view that shows final records rather than seeds:
+ * null for a one-table season. The cut and seed fields are empty; pass the
+ * sections to a <SeasonStandings> that asks for no cut.
+ */
+export function groupTablesFromResults(
+  teams: readonly { id: string; groupKey: string | null }[],
+  matches: MatchLike[],
+): StandingsSection[] | null {
+  const keys = [...new Set(teams.map((team) => team.groupKey))].sort();
+  if (teams.length === 0 || teams.some((team) => !team.groupKey) || keys.length < 2) {
+    return null;
+  }
+  return (keys as string[]).map((key) => {
+    const ids = teams.filter((team) => team.groupKey === key).map((team) => team.id);
+    const standings = computeStandings(ids, matches);
+    return {
+      key,
+      title: `Group ${key}`,
+      standings,
+      playoffCut: 0,
+      playoffSeedByTeam: new Map(),
+      totalTeams: standings.length,
+      eligibleTeams: standings.length,
+      label: `Group ${key} standings`,
+    };
+  });
+}
+
+/** A team's place in its own table and that table's size. */
+export type TablePlace = {
+  /** 1-based place within the table. */
+  place: number;
+  /** Teams in the table, withdrawn ones included. */
+  of: number;
+  /** "A", "B", or null for a one-table season. */
+  groupKey: string | null;
+};
+
+/**
+ * Where a team sits and how big its table is: within its group in a
+ * group-stage season (the group's rows, never the league's), else in the
+ * league table. `tablePlaceOf` plus the table's size, read here without
+ * importing the field's code. Null for a team the field doesn't know.
+ */
+export function placeInTable(
+  field: Pick<PlayoffFieldProjection, "standings" | "groups">,
+  teamId: string,
+): TablePlace | null {
+  const tables: { groupKey: string | null; rows: readonly TeamStanding[] }[] =
+    field.groups
+      ? field.groups.map((group) => ({ groupKey: group.key, rows: group.standings }))
+      : [{ groupKey: null, rows: field.standings }];
+  for (const { groupKey, rows } of tables) {
+    const index = rows.findIndex((row) => row.teamId === teamId);
+    if (index >= 0) return { place: index + 1, of: rows.length, groupKey };
+  }
+  return null;
+}
+
+/** "2nd of 6 in Group A", or "2nd of 10" in a one-table season. */
+export function placeOfLabel(place: TablePlace): string {
+  const text = `${ordinalPlace(place.place)} of ${place.of}`;
+  return place.groupKey ? `${text} in Group ${place.groupKey}` : text;
+}
+
+/** "#2 of 6 in Group A", or "#2 of 10" in a one-table season. */
+export function rankOfLabel(place: TablePlace): string {
+  const text = `#${place.place} of ${place.of}`;
+  return place.groupKey ? `${text} in Group ${place.groupKey}` : text;
+}
+
+/**
+ * Every team in the order one list of the whole season reads them: the
+ * table's order, or in a group season place by place across the groups (A1,
+ * B1, A2, B2…), so group B's leader never sits below group A's last team.
+ */
+export function placeOrder(
+  field: Pick<PlayoffFieldProjection, "standings" | "groups">,
+): string[] {
+  if (!field.groups) return field.standings.map((row) => row.teamId);
+  return field.groups
+    .flatMap((group) =>
+      group.standings.map((row, index) => ({ teamId: row.teamId, index, key: group.key })),
+    )
+    .sort((a, b) => a.index - b.index || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .map((row) => row.teamId);
 }

@@ -147,6 +147,7 @@ import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
 import { teamCountSeasonNote } from "@/lib/season-format";
+import { playoffPlacesPhrase } from "@/lib/season-groups";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
 import { readInhouseNight } from "@/lib/inhouse-night-service";
@@ -3844,7 +3845,9 @@ function ScheduleControls({
                 <SubmitButton
                   variant="secondary"
                   size="sm"
-                  confirm="Generate the regular-season schedule?"
+                  confirm={`Generate the regular-season schedule? ${
+                    teamCountSeasonNote(data.teams.length)?.split(". ")[0] ?? ""
+                  }.`}
                 >
                   Generate schedule
                 </SubmitButton>
@@ -3855,8 +3858,7 @@ function ScheduleControls({
       />
       <CardBody>
         <SeasonFormatControls
-          seasonId={season.id}
-          seasonName={season.name}
+          season={season}
           teams={data.teams}
           firstMatchNight={season.firstMatchNight}
           lastRegularWeek={lastRegularWeek}
@@ -4610,7 +4612,13 @@ function PlayoffControls({
           <p className="text-muted">
             {playoffField.eligibleTeamIds.length < 2
               ? "At least two non-withdrawn teams are needed before a bracket can be seeded."
-              : `Will seed the top ${bracketSize} of ${playoffField.eligibleTeamIds.length} eligible team(s) by standings${data.teams.length !== playoffField.eligibleTeamIds.length ? `; ${data.teams.length - playoffField.eligibleTeamIds.length} withdrawn team(s) keep their results but cannot take a seed` : ""}. Start this after the regular season is finished.`}
+              : `${
+                  playoffField.groups
+                    ? `Will seed ${playoffPlacesPhrase(playoffField)}, crosswise (${playoffField.pairings
+                        .map((pairing) => `${playoffField.seedLabelByTeam.get(pairing.home) ?? "?"}–${playoffField.seedLabelByTeam.get(pairing.away) ?? "?"}`)
+                        .join(", ")}), from ${playoffField.eligibleTeamIds.length} eligible team(s)`
+                    : `Will seed the top ${bracketSize} of ${playoffField.eligibleTeamIds.length} eligible team(s) by standings`
+                }${data.teams.length !== playoffField.eligibleTeamIds.length ? `; ${data.teams.length - playoffField.eligibleTeamIds.length} withdrawn team(s) keep their results but cannot take a seed` : ""}. Start this after the regular season is finished; round one plays the week after the tiebreaker week.`}
           </p>
         )}
         {data.tiebreakerArchive.length > 0 ? (

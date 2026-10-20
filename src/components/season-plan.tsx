@@ -64,3 +64,49 @@ export function SeasonPlanList({
     </ol>
   );
 }
+
+/**
+ * The plan folded to one line, "Season plan · two groups of 6 · playoffs from
+ * Sat, Dec 19", opening to every step. For /schedule and Home, where the
+ * fixtures come first.
+ */
+export function SeasonPlanFold({
+  plan,
+  formatLine,
+  description,
+  className,
+}: {
+  plan: SeasonPlanStep[];
+  /** `formatName(format)`, e.g. "Two groups of 6". */
+  formatLine: string;
+  /** `describeSeasonFormat(format)`, shown when open. */
+  description: string;
+  className?: string;
+}) {
+  const playoffs = plan.find((step) => step.kind === "PLAYOFF");
+  return (
+    <details
+      className={cn(
+        "group rounded-xl border border-line-soft bg-surface px-4 py-1 sm:px-5",
+        className,
+      )}
+    >
+      <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-1.5 py-2 text-sm [&::-webkit-details-marker]:hidden">
+        <span className="font-medium text-fg">Season plan</span>
+        <span className="min-w-0 text-muted">
+          · {formatLine}
+          {playoffs?.from ? (
+            <>
+              {" "}· playoffs from <PlanDate date={playoffs.from} />
+            </>
+          ) : null}
+        </span>
+        <span aria-hidden className="ml-auto text-xs text-info group-open:hidden">
+          Show
+        </span>
+      </summary>
+      <p className="text-xs text-muted">{description}</p>
+      <SeasonPlanList plan={plan} className="mt-2 pb-2" />
+    </details>
+  );
+}
