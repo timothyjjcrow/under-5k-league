@@ -495,6 +495,7 @@ export default async function SeasonArchivePage({
                   ) : null}
                   <SeasonGrid
                     teamIds={section.standings.map((row) => row.teamId)}
+                    {...(section.title ? { groupTitle: section.title } : {})}
                     teamName={teamName}
                     teamLogoUrl={teamLogoUrl}
                     matches={regular}

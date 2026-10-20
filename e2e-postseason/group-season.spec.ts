@@ -31,8 +31,8 @@ test("a ten-team regular season shows two group tables, the season plan and the 
   for (const key of ["A", "B"]) {
     const table = page.getByRole("table", { name: `Group ${key} standings`, exact: true });
     await expect(table).toBeVisible();
-    // A header row and five teams.
-    await expect(table.getByRole("row")).toHaveCount(6);
+    // Five teams, each named in its row header.
+    await expect(table.getByRole("rowheader")).toHaveCount(5);
   }
   await expect(
     page.getByRole("table", { name: "League standings", exact: true }),
@@ -95,9 +95,10 @@ test("a group season's bracket crosses the groups and names its seeds", async ({
   await expect(
     bracket.getByRole("heading", { name: "Quarterfinals", level: 3 }),
   ).toHaveCount(2);
-  // Every quarterfinal is one group against the other, seeds named by group.
+  // Every quarterfinal is one group against the other, seeds named by group
+  // (a winner shows its seed again in the later rounds).
   for (const seed of ["A1", "B1", "A2", "B2", "A3", "B3", "A4", "B4"]) {
-    await expect(bracket.getByText(seed, { exact: true })).toHaveCount(1);
+    await expect(bracket.getByText(seed, { exact: true }).first()).toBeVisible();
   }
   const traced = await bracket
     .locator('button[title^="Trace "]')

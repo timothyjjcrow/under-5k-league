@@ -384,35 +384,44 @@ test("teams say where each one stands in the playoffs", async ({ page }) => {
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/teams");
 
+  // Ten teams in two groups of five: eight make the crossover bracket.
   const statuses = await playoffStatusLines(page);
-  expect(statuses).toHaveLength(8);
+  expect(statuses).toHaveLength(10);
   // Alive first (the grand finalist and both teams in the open semifinal),
-  // then the semifinal loser, then the four quarterfinal losers.
+  // then the semifinal loser, then the four quarterfinal losers, then the
+  // two teams the group stage left out.
   expect(statuses[0]).toBe("Through to the grand final");
   expect(statuses.slice(1, 3).every((text) => /^Semifinal vs /.test(text))).toBe(true);
   expect(statuses[3]).toMatch(/^Out in the semifinal \(lost 0–2 to .+\)$/);
-  for (const text of statuses.slice(4)) {
+  for (const text of statuses.slice(4, 8)) {
     expect(text).toMatch(/^Out in the quarterfinal \(lost 1–2 to .+\)$/);
   }
+  expect(statuses.slice(8)).toEqual(["Missed the playoffs", "Missed the playoffs"]);
   const rosters = page.getByRole("region", { name: "Team rosters" });
   // Each card's summary line leads with its seed ("Seed 2 · Regular season
   // 5W 0D 2L · 15 pts").
-  await expect(rosters.getByText(/^Seed [1-8]$/)).toHaveCount(8);
+  // Seeds are named by group and place, like the bracket's.
+  await expect(rosters.getByText(/^Seed [AB][1-4]$/)).toHaveCount(8);
   await expectNoHorizontalOverflow(page, "/teams playoffs");
 
-  // The last card is a quarterfinal loser; its page says so and shows its seed.
-  await rosters.locator('a[href^="/teams/"]').last().click();
+  // The last quarterfinal loser's card (ahead of the two teams the groups
+  // left out); its page says so and shows its seed (the lower seeds lose:
+  // A3, A4, B3 or B4).
+  await rosters
+    .locator("p", { hasText: /^Out in the quarterfinal \(lost 1–2 to / })
+    .last()
+    .locator("xpath=ancestor::*[.//a[starts-with(@href, '/teams/')]][1]")
+    .locator('a[href^="/teams/"]')
+    .first()
+    .click();
   await expect(page).toHaveURL(/\/teams\/[^/]+$/);
   await expect(
     page.locator("#main p", { hasText: /^Out in the quarterfinal \(lost 1–2 to / }),
   ).toBeVisible();
-  await expect(page.getByText(/^Seed #[5-8]$/)).toBeVisible();
-  // It met its quarterfinal opponent in the round robin too, so that one
-  // opponent, and only that one, is in its Head-to-head card.
-  await expect(
-    page.getByRole("heading", { name: "Head-to-head", exact: true }),
-  ).toBeVisible();
-  await expect(page.locator("#team-rivals li")).toHaveCount(1);
+  await expect(page.getByText(/^Seed [AB][34]$/)).toBeVisible();
+  // Its quarterfinal opponent came from the other group, so they never met
+  // in the group stage: no rematch, no Head-to-head card.
+  await expect(page.locator("#team-rivals")).toHaveCount(0);
   await expectNoHorizontalOverflow(page, "/teams/[id] eliminated");
   assertNoErrors();
 });
@@ -479,8 +488,9 @@ test("complete-season public pages agree on the champion and recap", async ({
     page.getByText("Completed series", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Imported games", { exact: true })).toBeVisible();
-  await expectStatValue(page, "Completed series", 35);
-  await expectStatValue(page, "Imported games", 74);
+  // Ten teams in two groups of five: 20 group matches and 7 playoff series.
+  await expectStatValue(page, "Completed series", 27);
+  await expectStatValue(page, "Imported games", 58);
 
   // A finished season's boards point at that page too.
   await page.goto("/leaders");
@@ -1024,7 +1034,8 @@ test("a champion recap remains complete without imported Dota games", async ({
     page.getByText("Completed series", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Imported games", { exact: true })).toBeVisible();
-  await expectStatValue(page, "Completed series", 35);
+  // Ten teams in two groups of five: 20 group matches and 7 playoff series.
+  await expectStatValue(page, "Completed series", 27);
   await expectStatValue(page, "Imported games", 0);
   await expect(page.getByText("No imported game stats")).toBeVisible();
   await expect(
@@ -1079,18 +1090,21 @@ test("an archived champion season keeps its bracket, standings, and recap", asyn
   await expect(
     page.getByRole("region", { name: "Season awards" }),
   ).toBeVisible();
-  await expectStatValue(page, "Completed series", 35);
+  // Ten teams in two groups of five: 20 group matches and 7 playoff series.
+  await expectStatValue(page, "Completed series", 27);
   await expect(
     page.locator("#main").getByRole("link", {
       name: "Season recap",
       exact: true,
     }),
   ).toHaveCount(0);
-  // The season page uses Schedule's head-to-head grid, the league's one
-  // results grid.
-  await expect(
-    page.getByRole("table", { name: /^Head-to-head results\./ }),
-  ).toBeVisible();
+  // The season page uses Schedule's head-to-head grid, one per group in a
+  // group season.
+  for (const key of ["A", "B"]) {
+    await expect(
+      page.getByRole("table", { name: new RegExp(`^Group ${key} head-to-head results\\.`) }),
+    ).toBeVisible();
+  }
   await expectNoHorizontalOverflow(page, "/seasons/[id] archived postseason");
 
   for (const [path, heading] of [

@@ -982,6 +982,7 @@ export default async function SchedulePage() {
               ) : null}
               <SeasonGrid
                 teamIds={section.standings.map((s) => s.teamId)}
+                {...(section.title ? { groupTitle: section.title } : {})}
                 teamName={teamName}
                 teamLogoUrl={teamLogoUrl}
                 matches={matches}
