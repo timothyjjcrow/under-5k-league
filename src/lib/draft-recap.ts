@@ -1,6 +1,21 @@
 // Draft-night superlatives from recorded purchases. Legacy callers may supply
 // surviving roster observations; their presentation must identify that scope.
 
+import { DRAFT_STATUS } from "./constants";
+
+/**
+ * The recap card's title: "so far" only while the auction can still sell
+ * (live or paused). Not the season phase: the season stays in Draft after the
+ * last sale until an admin starts the Regular season, and /teams said "so far"
+ * over a finished auction all that time.
+ */
+export function draftRecapTitle(draftStatus: string | null | undefined): string {
+  return draftStatus === DRAFT_STATUS.IN_PROGRESS ||
+    draftStatus === DRAFT_STATUS.PAUSED
+    ? "Draft night — so far"
+    : "Draft night";
+}
+
 export type DraftedPlayer = {
   name: string;
   teamName: string;

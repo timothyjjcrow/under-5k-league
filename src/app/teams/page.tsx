@@ -11,7 +11,7 @@ import {
   publicDeadHeatTeamIds,
 } from "@/lib/playoff-field";
 import { TiedChip } from "@/components/standings-table";
-import { draftRecap } from "@/lib/draft-recap";
+import { draftRecap, draftRecapTitle } from "@/lib/draft-recap";
 import { readDraftSales } from "@/lib/draft-history";
 import { AuctionHistory } from "@/components/auction-history";
 import { DraftRecapCard } from "@/components/draft-recap-card";
@@ -530,7 +530,7 @@ export default async function TeamsPage() {
       {recap ? (
         <DraftRecapCard
           recap={recap}
-          title={isDraft ? "Draft night — so far" : "Draft night"}
+          title={draftRecapTitle(draft?.status)}
         />
       ) : null}
 
