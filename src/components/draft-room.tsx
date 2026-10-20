@@ -2215,7 +2215,9 @@ function DraftAdminToolbar({
       ) : null}
       {controls.resume ? (
         <ActionForm action={resumeAction} hidden={hidden}>
-          <SubmitButton variant="primary" size="sm" disabled={disabled}>
+          {/* Gold, as on /admin: red is Void's, the one control here that
+              cancels something. */}
+          <SubmitButton variant="accent" size="sm" disabled={disabled}>
             Resume auction
           </SubmitButton>
         </ActionForm>

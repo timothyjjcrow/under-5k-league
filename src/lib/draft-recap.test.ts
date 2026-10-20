@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { draftRecap, type DraftedPlayer } from "./draft-recap";
+import { draftRecap, draftRecapTitle, type DraftedPlayer } from "./draft-recap";
 
 const p = (
   name: string,
@@ -60,5 +61,31 @@ describe("draftRecap", () => {
     expect(recap.topSpender).toEqual({ teamId: "a", teamName: "New name", spent: 32 });
     expect(recap.bargainHunter).toEqual({ teamId: "b", teamName: "New name", spent: 5 });
     expect(recap.totalSpent).toBe(37);
+  });
+});
+
+describe("draftRecapTitle", () => {
+  it('says "so far" only while the auction can still sell', () => {
+    expect(draftRecapTitle("IN_PROGRESS")).toBe("Draft night — so far");
+    expect(draftRecapTitle("PAUSED")).toBe("Draft night — so far");
+  });
+
+  it("drops it once the auction is over or not running", () => {
+    expect(draftRecapTitle("COMPLETE")).toBe("Draft night");
+    expect(draftRecapTitle("NOT_STARTED")).toBe("Draft night");
+    expect(draftRecapTitle(null)).toBe("Draft night");
+    expect(draftRecapTitle(undefined)).toBe("Draft night");
+  });
+
+  // REGRESSION (2026-10-19 mock draft): /teams keyed the title on the season
+  // phase, which stays Draft after the last sale, so a finished auction read
+  // "so far" until the Regular season started.
+  it("is what /teams titles its recap with", () => {
+    const page = readFileSync(
+      new URL("../app/teams/page.tsx", import.meta.url),
+      "utf8",
+    );
+    expect(page).toContain("title={draftRecapTitle(draft?.status)}");
+    expect(page).not.toContain("so far");
   });
 });

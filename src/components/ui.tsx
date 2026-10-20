@@ -571,11 +571,13 @@ export function Avatar({
       />
     );
   }
+  // Never wrap the initials: a parent's `[overflow-wrap:anywhere]` (long
+  // names) otherwise breaks wide ones like "MO" onto two lines at small sizes.
   return (
     <span
       style={dim}
       className={cn(
-        "inline-flex items-center justify-center rounded-full bg-surface-2 text-xs font-semibold text-muted",
+        "inline-flex items-center justify-center whitespace-nowrap rounded-full bg-surface-2 text-xs font-semibold text-muted [overflow-wrap:normal]",
         className,
       )}
     >

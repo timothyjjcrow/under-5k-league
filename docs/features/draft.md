@@ -348,7 +348,10 @@ In the Captains & draft card on `/admin` and inside the room
   steal, top- and least-spending teams and total spent, captains excluded.
 - **The `/teams` "Draft night" card reads sale receipts** (`readDraftSales` on
   the active COMMAND run). A season drafted before receipts has no card:
-  roster prices stop matching the auction once moves and refunds land.
+  roster prices stop matching the auction once moves and refunds land. Its
+  title says "so far" only while the auction is live or paused
+  (`draftRecapTitle`, keyed on the auction, not the phase: the season stays in
+  Draft after the last sale until the Regular season starts).
 - **Completion posts once per run.** Sales post nothing; completion posts the
   teams then `draftRecapMessage`; a repeat completion after Undo posts plain
   names and no recap (see the Discord notes).
