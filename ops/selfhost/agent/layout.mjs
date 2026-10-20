@@ -65,6 +65,8 @@ export const USERS = Object.freeze({
   build: "ggd2l-build",
   caddy: "caddy",
   ops: "ggd2l-ops",
+  // Runs the restore drill: the build user's tools clone, so never as ggd2l-ops.
+  drill: "ggd2l-drill",
   bot: "ggd2l-bot",
   league: (lg) => `ggd2l-${lg}`,
 });
@@ -104,6 +106,8 @@ export function createLayout(root = "/") {
     toolLog: (name) => at("var/log/ggd2l/tools", `${name}.log`),
     caddyLogs: at("var/log/caddy"),
     backupDir: (lg) => at("var/backups/ggd2l", lg),
+    // The drill's own folder: its record and its private copy of the dump.
+    drillState: (lg) => at("var/lib/ggd2l-drill", lg),
     cutoverDir: (lg) => at("var/backups/ggd2l/cutover", lg),
     buildHome: at("var/cache/ggd2l-build"),
     npmCache: at("var/cache/ggd2l-build/npm"),

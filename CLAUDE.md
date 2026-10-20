@@ -431,6 +431,11 @@ and `ops/selfhost/README.md`.
   taken back (`takeBackTree`) before root touches it by path. Deletes use
   GNU `rm` (`removeTree`), never `rmSync`
   ([admin-and-operations](docs/features/admin-and-operations.md#the-box)).
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key, so the
+  hourly backup runs the kit's copies of `backup-db.mjs`, `verify-backup.mjs`
+  and their imports (`BACKUP_APP_FILES` in `install-kit.sh`; keep them free
+  of packages, and ship a change with `install-kit.sh`). The drill runs as
+  `ggd2l-drill`.
 - **A slot can write only `RELEASE_WRITABLE_DIRS`**
   (`ops/selfhost/agent/layout.mjs`: `.next/cache`, `.next/server/route-cache`).
   The build creates them, the units name them, and CI's boot step fails a

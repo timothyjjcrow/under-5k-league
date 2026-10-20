@@ -1077,8 +1077,9 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 
 `box_agent status` reports the units (the config archive's included), each
 league's live release and slots, disk, memory, swap, the last backup, the last
-drill (the later of the drill unit's last run and `state/last-drill.json`,
-which every passing drill writes, the agent's `drill <lg> <sha>` included), a
+drill (the later of the drill unit's last run and the drill's
+`last-drill.json`, which every passing drill writes, the agent's
+`drill <lg> <sha>` included), a
 pending reboot, and two counts for the last 24 hours: real 5xx
 (`serverErrors24h`) and the maintenance page's own 503s
 (`maintenance503s24h`). Every unit refuses to start without a valid

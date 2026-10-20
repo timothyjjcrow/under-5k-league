@@ -219,7 +219,7 @@ test("install-kit.sh changes a folder as root only in a parent no service user c
   }
   for (const call of calls.filter((entry) => entry.fn === "ensure_user_dir")) {
     const parent = ensured.get(path.posix.dirname(call.path));
-    assert.ok(parent && parent.owner === `${call.user}:${call.user}`, `${call.path}: inside a folder ${call.user} owns`);
+    assert.ok(parent && parent.owner.split(":")[0] === call.user, `${call.path}: inside a folder ${call.user} owns`);
   }
   // The two folders that let a link through before, now made by their own users.
   for (const [user, folder] of [["ggd2l-build", "/var/cache/ggd2l-build/npm"], ["ggd2l-ops", "/var/backups/ggd2l/us/local"], ["ggd2l-ops", "/var/backups/ggd2l/eu/offsite"]])
@@ -332,4 +332,47 @@ test("ensure_user_dir leaves the folder to its user, and refuses a link or file 
     assert.match(result.stderr, /is a link or not a folder; ggd2l-build may have been misused/);
     assert.deepEqual(result.calls, [], "not even the user's own commands ran");
   }
+});
+
+// 2026-10-19: ggd2l-ops, which holds the R2 key, ran the hourly backup's
+// scripts from a tools clone the build user's npm ci wrote. install-kit.sh now
+// installs them, and everything they import, from root's own clone. A new
+// import that the list misses would fail every backup on the box.
+test("install-kit.sh installs exactly the files the hourly backup's scripts import, and no package", () => {
+  const listed = /\nBACKUP_APP_FILES="\n([^"]*)"/.exec(KIT)?.[1].split("\n").filter(Boolean);
+  assert.ok(listed, "install-kit.sh lists BACKUP_APP_FILES");
+  const repo = path.resolve(SELFHOST, "../..");
+  const seen = new Set();
+  const walk = (relative) => {
+    if (seen.has(relative)) return;
+    seen.add(relative);
+    const source = readFileSync(path.join(repo, relative), "utf8");
+    for (const match of source.matchAll(/(?:^|\n)\s*(?:import|export)\b[^;]*?\bfrom\s*["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/g)) {
+      const spec = match[1] ?? match[2];
+      if (spec.startsWith("node:")) continue;
+      assert.ok(spec.startsWith("."), `${relative} imports the package ${spec}, which the kit does not install`);
+      walk(path.posix.normalize(path.posix.join(path.posix.dirname(relative), spec)));
+    }
+  };
+  for (const script of ["scripts/backup-db.mjs", "scripts/verify-backup.mjs"]) walk(script);
+  assert.deepEqual([...listed].sort(), [...seen].sort());
+  // Installed under app/ with their paths, so their relative imports resolve.
+  assert.match(KIT_CODE, /for f in \$BACKUP_APP_FILES; do install -D -m 0644 "\$\{KIT_ROOT\}\/\$\{f\}" "\$\{STAGE\}\/app\/\$\{f\}"; done/);
+  // The backup runs those copies.
+  const backupScript = readFileSync(path.join(SELFHOST, "backup/backup-league.sh"), "utf8");
+  assert.match(backupScript, /^APP_DIR="\$\{GGD2L_APP_DIR:-\/usr\/local\/lib\/ggd2l\/app\}"$/m);
+});
+
+test("install-kit.sh gives the drill its own user, folders and group, and ggd2l-ops the right to hand it a dump", () => {
+  const calls = folderCalls();
+  const owner = (folder) => calls.find((call) => call.fn === "ensure_dir" && call.path === folder);
+  assert.match(KIT_CODE, /^ensure_user ggd2l-drill \/nonexistent$/m);
+  assert.match(KIT_CODE, /id -nG ggd2l-ops \| tr ' ' '\\n' \| grep -qx ggd2l-drill; then\n\s*usermod -aG ggd2l-drill ggd2l-ops/);
+  for (const lg of ["us", "eu"]) {
+    // The drill's group traverses to drill/, never lists; nobody else gets in.
+    assert.deepEqual(owner(`/var/backups/ggd2l/${lg}`), { fn: "ensure_dir", mode: "0710", owner: "ggd2l-ops:ggd2l-drill", path: `/var/backups/ggd2l/${lg}` });
+    assert.deepEqual(owner(`/var/lib/ggd2l-drill/${lg}`), { fn: "ensure_dir", mode: "0700", owner: "ggd2l-drill:ggd2l-drill", path: `/var/lib/ggd2l-drill/${lg}` });
+  }
+  assert.equal(owner("/var/backups/ggd2l").mode, "0751");
+  assert.equal(owner("/var/lib/ggd2l-drill").owner, "root:root");
 });

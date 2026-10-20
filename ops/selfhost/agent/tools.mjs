@@ -219,15 +219,22 @@ export function readBackupRecord(ctx, lg) {
 /**
  * The record drill-league.sh writes after a passing drill, whether the weekly
  * unit or `drill <lg> <sha>` (systemd-run, outside the unit) ran it:
- * /var/backups/ggd2l/<lg>/state/last-drill.json, {ok, league, dump,
- * dumpSha256, tools, finishedAt}. A failed drill writes none, so this is the
- * last pass. Only a record for this league that says ok and carries a
- * readable finishedAt counts.
+ * /var/lib/ggd2l-drill/<lg>/last-drill.json, {ok, league, dump, dumpSha256,
+ * tools, finishedAt}. A failed drill writes none, so this is the last pass.
+ * Drills before 2026-10-19 ran as ggd2l-ops and wrote
+ * /var/backups/ggd2l/<lg>/state/last-drill.json; of the two, the later
+ * finishedAt answers. Only a record for this league that says ok and carries
+ * a readable finishedAt counts.
  */
 export function readDrillRecord(ctx, lg) {
-  const record = readJson(path.join(ctx.layout.backupDir(lg), "state", "last-drill.json"));
-  if (record?.ok !== true || record.league !== lg || !Number.isFinite(Date.parse(record.finishedAt ?? ""))) return null;
-  return record;
+  let best = null;
+  for (const file of [path.join(ctx.layout.drillState(lg), "last-drill.json"), path.join(ctx.layout.backupDir(lg), "state", "last-drill.json")]) {
+    const record = readJson(file);
+    const finishedAt = Date.parse(record?.finishedAt ?? "");
+    if (record?.ok !== true || record.league !== lg || !Number.isFinite(finishedAt)) continue;
+    if (!best || finishedAt > Date.parse(best.finishedAt)) best = record;
+  }
+  return best;
 }
 
 /**
@@ -271,8 +278,11 @@ export function newestDump(ctx, lg) {
 }
 
 /**
- * `drill <lg> [sha]`: the newest local dump restored into ld2l_restore_test by
- * rehearse-backup-restore.mjs as ggd2l_rehearsal, then dropped. Without a sha
+ * `drill <lg> [sha]`: the newest dump the backup handed to the drill, restored
+ * into ld2l_restore_test by rehearse-backup-restore.mjs as ggd2l_rehearsal,
+ * then dropped. It runs as ggd2l-drill, never ggd2l-ops: the drill runs the
+ * tools clone, which the build user's npm ci wrote, and ggd2l-ops holds the R2
+ * key and the backups. Without a sha
  * this is the weekly drill unit; with one, the same helper runs against that
  * sha's tools clone (design §2.5 step 4), so the new migrations are
  * rehearsed before `migrate` applies them.
@@ -291,7 +301,7 @@ export async function drill(ctx, lg, commit) {
   if (!existsSync(ctx.layout.drillEnv)) throw new AgentError("env_missing");
   const { env } = loadEnvFile(ctx, ctx.layout.drillEnv);
   const unit = systemdRunArgs({
-    user: USERS.ops,
+    user: USERS.drill,
     envFiles: [ctx.layout.drillEnv],
     properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },

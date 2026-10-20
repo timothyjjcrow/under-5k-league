@@ -19,9 +19,10 @@
 #
 # Idempotent, and safe on a live box. It:
 #   - creates the service users and the directory tree with its modes (§1.1-1.2)
-#   - installs the agent, the env contract, the SQL files and the shell helpers
-#     into a fresh folder, then swaps it in as /usr/local/lib/ggd2l (a real
-#     directory, never a symlink); the entry point is /usr/local/sbin/ggd2l-agent
+#   - installs the agent, the env contract, the SQL files, the shell helpers and
+#     the hourly backup's repo scripts (app/) into a fresh folder, then swaps it
+#     in as /usr/local/lib/ggd2l (a real directory, never a symlink); the entry
+#     point is /usr/local/sbin/ggd2l-agent
 #   - installs the systemd units, timers and drop-ins (one gives the packaged
 #     caddy.service its restart policy), and NEVER enables, disables, starts,
 #     stops or restarts any of them
@@ -139,11 +140,25 @@ systemd/caddy.service.d/10-ggd2l.conf
 for f in $REQUIRED; do
   [[ -f "${SELFHOST}/${f}" ]] || die "missing ops/selfhost/${f} in the kit clone"
 done
+# The hourly backup's repo scripts and everything they import (no packages),
+# installed under app/ with their paths: ggd2l-ops, which holds the R2 key,
+# runs nothing from a tools clone the build user's npm ci wrote.
+# install-kit.test.mjs checks this is exactly what the two scripts import.
+BACKUP_APP_FILES="
+scripts/backup-db.mjs
+scripts/verify-backup.mjs
+src/lib/backup-receipt.mjs
+src/lib/postgres-cli-env.mjs
+src/lib/postgres-identity.mjs
+"
+for f in $BACKUP_APP_FILES; do
+  [[ -f "${KIT_ROOT}/${f}" ]] || die "missing ${f} in the kit clone"
+done
 cmp -s "${SELFHOST}/systemd/ggd2l-us@.service" "${SELFHOST}/systemd/ggd2l-eu@.service" \
   || die "ggd2l-us@.service and ggd2l-eu@.service must be identical copies"
 
 log "Prerequisites (provision-base.sh)"
-for cmd in node npm git psql caddy cloudflared age rclone rsync openssl flock runuser useradd; do
+for cmd in node npm git psql caddy cloudflared age rclone rsync openssl flock runuser useradd usermod; do
   command -v "$cmd" >/dev/null || die "${cmd} is not installed; run provision-base.sh first"
 done
 [[ "$(node -p 'process.versions.node.split(".")[0]')" == "22" ]] || die "expected Node 22"
@@ -159,6 +174,7 @@ while IFS= read -r f; do bash -n "$f" || die "${f} does not parse"; done \
   < <(find "${SELFHOST}" -name '*.sh' -type f)
 while IFS= read -r f; do node --check "$f" || die "${f} does not parse"; done \
   < <(find "${SELFHOST}/agent" "${SELFHOST}/backup" -name '*.mjs' -type f)
+for f in $BACKUP_APP_FILES; do node --check "${KIT_ROOT}/${f}" || die "${f} does not parse"; done
 # This kit's env contract must pass each league's live env file before it is
 # installed: every slot's ExecStartPre and the agent's builds run it, so a
 # rule the kit tightens (such as the production DOTA_LOBBY_BOT_URL rule) would
@@ -222,8 +238,17 @@ ensure_user ggd2l-build /var/cache/ggd2l-build
 ensure_user ggd2l-us /nonexistent
 ensure_user ggd2l-eu /nonexistent
 ensure_user ggd2l-ops /var/lib/ggd2l-ops
+# The restore drill runs a tools clone (the build user's npm ci wrote it), so
+# it gets its own user: it reads only the dump the backup hands it.
+ensure_user ggd2l-drill /nonexistent
 ensure_user ggd2l-bot /var/lib/ggd2l-bot
 ensure_user cloudflared /nonexistent
+# The hourly backup hands each new dump to the drill's group, which only a
+# member may do (chgrp).
+if ! id -nG ggd2l-ops | tr ' ' '\n' | grep -qx ggd2l-drill; then
+  usermod -aG ggd2l-drill ggd2l-ops
+  note "added ggd2l-ops to the ggd2l-drill group"
+fi
 
 log "Directories (§1.2)"
 ensure_dir 0750 ggd2l-build:ggd2l-build /var/cache/ggd2l-build
@@ -244,10 +269,13 @@ ensure_dir 0755 root:root /srv/ggd2l/bot
 ensure_dir 0755 root:root /srv/ggd2l/bot/releases
 ensure_dir 0755 root:root /srv/ggd2l/www
 ensure_dir 0755 root:root /var/lib/ggd2l
+# The drill's own folders: one per league, and the root its shared lock opens.
+ensure_dir 0755 root:root /var/lib/ggd2l-drill
 ensure_dir 0750 "root:${ADMIN_USER}" /var/log/ggd2l
 ensure_dir 0750 "root:${ADMIN_USER}" /var/log/ggd2l/builds
 ensure_dir 0750 caddy:caddy /var/log/caddy
-ensure_dir 0750 root:ggd2l-ops /var/backups/ggd2l
+# Others may traverse, never list: the drill reaches its league's drill/.
+ensure_dir 0751 root:ggd2l-ops /var/backups/ggd2l
 ensure_dir 0700 root:root /var/backups/ggd2l/cutover
 # The daily config archive's output (ggd2l-config-archive.service, as root).
 ensure_dir 0700 root:root /var/backups/ggd2l/config
@@ -266,10 +294,12 @@ for lg in $LEAGUES; do
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}/static/_next"
   ensure_dir 0755 root:root "/srv/ggd2l/${lg}/static/_next/static"
   ensure_dir 0755 root:root "/var/lib/ggd2l/${lg}"
-  ensure_dir 0700 ggd2l-ops:ggd2l-ops "/var/backups/ggd2l/${lg}"
+  # The drill's group may traverse to drill/ (the handoff), never list.
+  ensure_dir 0710 ggd2l-ops:ggd2l-drill "/var/backups/ggd2l/${lg}"
   ensure_user_dir ggd2l-ops 0700 "/var/backups/ggd2l/${lg}/local"
   ensure_user_dir ggd2l-ops 0700 "/var/backups/ggd2l/${lg}/offsite"
   ensure_dir 0700 root:root "/var/backups/ggd2l/cutover/${lg}"
+  ensure_dir 0700 ggd2l-drill:ggd2l-drill "/var/lib/ggd2l-drill/${lg}"
 done
 
 log "Slot ports (§1.3)"
@@ -300,6 +330,7 @@ done
 install -m 0755 "${SELFHOST}/postgres/provision-league-db.sh" "${STAGE}/provision-league-db.sh"
 install -d -m 0755 "${STAGE}/sql" "${STAGE}/caddy" "${STAGE}/cloudflared" "${STAGE}/postgres" "${STAGE}/systemd"
 install -m 0644 "${SELFHOST}"/sql/*.sql "${STAGE}/sql/"
+for f in $BACKUP_APP_FILES; do install -D -m 0644 "${KIT_ROOT}/${f}" "${STAGE}/app/${f}"; done
 # Reference copies: the agent's renderers and the operator read these.
 install -m 0644 "${SELFHOST}/caddy/Caddyfile" "${SELFHOST}"/caddy/*.caddy "${SELFHOST}/caddy/maintenance.html" "${STAGE}/caddy/"
 install -m 0644 "${SELFHOST}/cloudflared/config.yml.template" "${STAGE}/cloudflared/"

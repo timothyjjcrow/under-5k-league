@@ -135,13 +135,16 @@ test("drill without a sha is the drill unit; with one it runs the helper on that
   await drill(box.ctx, "us", SHA);
   const call = box.calls.find((entry) => entry.command.endsWith("/systemd-run") && entry.args.some((arg) => arg.endsWith("drill-league.sh")));
   const args = call.args;
-  assert.ok(args.includes("User=ggd2l-ops"));
+  // The drill runs the build user's tools clone: its own user, never ggd2l-ops,
+  // which holds the R2 key and the backups.
+  assert.ok(args.includes("User=ggd2l-drill"));
+  assert.ok(!args.includes("User=ggd2l-ops"));
   assert.ok(args.includes(`EnvironmentFile=${box.layout.drillEnv}`));
   assert.ok(args.includes(`GGD2L_TOOLS_DIR=${box.layout.toolsDir(SHA)}`));
   // drill-league.sh us|eu [<40-hex sha>]: without the sha it drills tools/current,
   // the live commit, and would pass without rehearsing the new migrations.
   assert.deepEqual(args.slice(-4), ["/usr/bin/bash", box.layout.helper("drill-league.sh"), "us", SHA]);
-  assert.ok(args.includes(`HOME=${box.layout.buildHome}`) === false, "the drill runs as ggd2l-ops, not the build user");
+  assert.ok(args.includes(`HOME=${box.layout.buildHome}`) === false, "the drill runs as ggd2l-drill, not the build user");
 
   box.on((command, args) => (command.endsWith("/systemd-run") && args.some((arg) => arg.endsWith("drill-league.sh")) ? { code: 1, lines: ["drill-us: restore failed"] } : undefined));
   await assert.rejects(drill(box.ctx, "us", SHA), { code: "drill_failed" });
@@ -244,6 +247,21 @@ test("the last drill is the later of the unit's last run and the last passing dr
   assert.deepEqual(lastDrill(unit("exit-code", "Sun 2026-10-18 12:31:00 CEST"), record),
     { result: "exit-code", at: "Sun 2026-10-18 12:31:00 CEST", source: "unit" });
   assert.deepEqual(lastDrill(unit("success", "Sun 2026-10-18 12:31:00 CEST"), record), passed);
+});
+
+test("the drill's own record answers, and a record from before the move still counts until a later one", () => {
+  const box = makeBox();
+  const own = path.join(box.layout.drillState("us"), "last-drill.json");
+  const legacy = path.join(box.layout.backupDir("us"), "state", "last-drill.json");
+  mkdirSync(path.dirname(own), { recursive: true });
+  mkdirSync(path.dirname(legacy), { recursive: true });
+  const at = (finishedAt, tools) => JSON.stringify({ ok: true, league: "us", finishedAt, tools });
+  writeFileSync(legacy, at("2026-10-18T10:31:00Z", "legacy"));
+  assert.equal(readDrillRecord(box.ctx, "us").tools, "legacy", "the old record alone answers");
+  writeFileSync(own, at("2026-10-19T10:31:00Z", "own"));
+  assert.equal(readDrillRecord(box.ctx, "us").tools, "own");
+  writeFileSync(own, JSON.stringify({ ok: false, league: "us", finishedAt: "2026-10-20T10:31:00Z" }));
+  assert.equal(readDrillRecord(box.ctx, "us").tools, "legacy", "a record that does not say ok never counts");
 });
 
 test("a drill record counts only for its league, when it says ok and has a time", () => {

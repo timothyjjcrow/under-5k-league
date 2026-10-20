@@ -430,6 +430,18 @@ respect there:
 
   `install-kit.test.mjs` fails an `ensure_dir` whose parent a service user
   can write.
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups. Code the build user wrote, including whatever a dependency's
+  install script changed in the tools clone, runs only as users without
+  them. The hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and their imports
+  (`/usr/local/lib/ggd2l/app/`). A change to those files therefore reaches
+  the box with `install-kit.sh`, not with an app release, and they must
+  stay free of packages: `install-kit.test.mjs` keeps `BACKUP_APP_FILES`
+  equal to their imports. The restore drill needs the tools clone, so it
+  runs as `ggd2l-drill`, from a private copy of the one dump each backup
+  hands it (`drill/`). `backup-scripts.test.mjs` fails a `ggd2l-ops` unit or
+  agent call that reaches for a tools clone.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.
