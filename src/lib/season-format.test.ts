@@ -1,0 +1,267 @@
+import { describe, expect, it } from "vitest";
+import {
+  describeSeasonFormat,
+  drawGroups,
+  firstPlayoffWeek,
+  formatName,
+  playoffBracketSize,
+  regularSeasonFixtures,
+  rosterAverageMmr,
+  seasonFormat,
+  seasonPlan,
+  seedGroups,
+} from "./season-format";
+import { playoffFirstRound } from "./schedule";
+
+describe("seasonFormat", () => {
+  // Tim's table (2026-10-19): one table up to nine teams, two groups from ten,
+  // a reserved tiebreaker week, then the playoffs.
+  const expected: Record<number, [string, number[], boolean, number, [number, number], number, number]> = {
+    //    kind      groups   double weeks matches  spots total
+    2: ["TABLE", [2], true, 2, [2, 2], 2, 4],
+    3: ["TABLE", [3], true, 6, [4, 4], 2, 8],
+    4: ["TABLE", [4], true, 6, [6, 6], 4, 9],
+    5: ["TABLE", [5], false, 5, [4, 4], 4, 8],
+    6: ["TABLE", [6], false, 5, [5, 5], 4, 8],
+    7: ["TABLE", [7], false, 7, [6, 6], 4, 10],
+    8: ["TABLE", [8], false, 7, [7, 7], 4, 10],
+    9: ["TABLE", [9], false, 9, [8, 8], 4, 12],
+    10: ["GROUPS", [5, 5], false, 5, [4, 4], 8, 9],
+    11: ["GROUPS", [6, 5], false, 5, [4, 5], 8, 9],
+    12: ["GROUPS", [6, 6], false, 5, [5, 5], 8, 9],
+    13: ["GROUPS", [7, 6], false, 7, [5, 6], 8, 11],
+    14: ["GROUPS", [7, 7], false, 7, [6, 6], 8, 11],
+    15: ["GROUPS", [8, 7], false, 7, [6, 7], 8, 11],
+    16: ["GROUPS", [8, 8], false, 7, [7, 7], 8, 11],
+    17: ["GROUPS", [9, 8], false, 9, [7, 8], 8, 13],
+  };
+
+  for (const [count, [kind, groups, double, weeks, [min, max], spots, total]] of Object.entries(expected)) {
+    it(`${count} teams: ${kind} ${groups.join("+")}, ${weeks} weeks, top ${spots}, ${total} weeks in all`, () => {
+      const format = seasonFormat(Number(count))!;
+      expect(format.kind).toBe(kind);
+      expect(format.groupSizes).toEqual(groups);
+      expect(format.doubleRound).toBe(double);
+      expect(format.regularWeeks).toBe(weeks);
+      expect(format.matchesPerTeam).toEqual({ min, max });
+      expect(format.playoffSpots).toBe(spots);
+      expect(format.qualifiersPerGroup * groups.length).toBe(spots);
+      expect(format.tiebreakerWeek).toBe(weeks + 1);
+      expect(format.firstPlayoffWeek).toBe(weeks + 2);
+      expect(format.totalWeeks).toBe(total);
+      expect(format.totalWeeks).toBe(weeks + 1 + format.playoffRounds);
+    });
+  }
+
+  it("has no format below two teams", () => {
+    expect(seasonFormat(0)).toBeNull();
+    expect(seasonFormat(1)).toBeNull();
+    expect(seasonFormat(2.5)).toBeNull();
+  });
+
+  it("someone always misses the playoffs from five teams up", () => {
+    for (let count = 5; count <= 20; count++) {
+      expect(seasonFormat(count)!.playoffSpots).toBeLessThan(count);
+    }
+  });
+});
+
+describe("the fixtures match the format", () => {
+  for (let count = 2; count <= 17; count++) {
+    it(`${count} teams`, () => {
+      const format = seasonFormat(count)!;
+      const teams = Array.from({ length: count }, (_, i) => ({
+        id: `t${String(i).padStart(2, "0")}`,
+        averageMmr: 3000 + i * 37,
+      }));
+      const groups = format.kind === "GROUPS" ? drawGroups(teams) : [teams.map((t) => t.id)];
+      expect(groups.map((g) => g.length).sort((a, b) => b - a)).toEqual(format.groupSizes);
+      const fixtures = regularSeasonFixtures(groups, format.doubleRound);
+
+      expect(Math.max(...fixtures.map((f) => f.week))).toBe(format.regularWeeks);
+      for (const group of groups) {
+        const mine = fixtures.filter((f) => group.includes(f.home));
+        // Every group starts in week 1 and finishes in the last week.
+        expect(Math.min(...mine.map((f) => f.week))).toBe(1);
+        expect(Math.max(...mine.map((f) => f.week))).toBe(format.regularWeeks);
+        // Everyone in the group meets everyone else (twice for a double).
+        for (let i = 0; i < group.length; i++) {
+          for (let j = i + 1; j < group.length; j++) {
+            const meetings = mine.filter(
+              (f) =>
+                (f.home === group[i] && f.away === group[j]) ||
+                (f.home === group[j] && f.away === group[i]),
+            );
+            expect(meetings).toHaveLength(format.doubleRound ? 2 : 1);
+          }
+        }
+      }
+      // Nobody leaves their group, and nobody plays twice in one week.
+      for (const f of fixtures) {
+        expect(groups.some((g) => g.includes(f.home) && g.includes(f.away))).toBe(true);
+      }
+      for (let week = 1; week <= format.regularWeeks; week++) {
+        const playing = fixtures.filter((f) => f.week === week).flatMap((f) => [f.home, f.away]);
+        expect(new Set(playing).size).toBe(playing.length);
+      }
+      const played = teams.map((t) => fixtures.filter((f) => f.home === t.id || f.away === t.id).length);
+      expect(Math.min(...played)).toBe(format.matchesPerTeam.min);
+      expect(Math.max(...played)).toBe(format.matchesPerTeam.max);
+    });
+  }
+
+  it("spreads a smaller group's rounds over the longer group's weeks", () => {
+    const seven = ["a1", "a2", "a3", "a4", "a5", "a6", "a7"];
+    const six = ["b1", "b2", "b3", "b4", "b5", "b6"];
+    const fixtures = regularSeasonFixtures([seven, six], false);
+    const sixWeeks = [...new Set(fixtures.filter((f) => six.includes(f.home)).map((f) => f.week))];
+    expect(sixWeeks).toEqual([1, 3, 4, 6, 7]);
+  });
+});
+
+describe("drawGroups", () => {
+  it("snakes the strongest rosters across the groups", () => {
+    const teams = Array.from({ length: 12 }, (_, i) => ({ id: `t${i}`, averageMmr: 5000 - i * 100 }));
+    expect(drawGroups(teams)).toEqual([
+      ["t0", "t3", "t4", "t7", "t8", "t11"],
+      ["t1", "t2", "t5", "t6", "t9", "t10"],
+    ]);
+  });
+
+  it("is the same draw whatever order the teams arrive in, ties by id", () => {
+    const teams = [
+      { id: "c", averageMmr: 4000 },
+      { id: "a", averageMmr: 4000 },
+      { id: "b", averageMmr: 4500 },
+      { id: "d", averageMmr: null },
+      { id: "e", averageMmr: 3000 },
+    ];
+    const first = drawGroups(teams);
+    expect(drawGroups([...teams].reverse())).toEqual(first);
+    // b (4500), a (4000, id first), c (4000), e (3000), d (unknown, last)
+    expect(first).toEqual([["b", "e", "d"], ["a", "c"]]);
+  });
+
+  it("averages only the MMR on file", () => {
+    expect(rosterAverageMmr([4000, 0, 3000])).toBe(3500);
+    expect(rosterAverageMmr([0, 0])).toBeNull();
+    expect(rosterAverageMmr([])).toBeNull();
+  });
+});
+
+describe("seedGroups", () => {
+  const A = ["a1", "a2", "a3", "a4", "a5"];
+  const B = ["b1", "b2", "b3", "b4", "b5", "b6"];
+
+  it("interleaves places so the bracket pairs A1–B4, B2–A3, B1–A4, A2–B3", () => {
+    const seeding = seedGroups([{ key: "A", eligibleTeamIds: A }, { key: "B", eligibleTeamIds: B }], 8);
+    expect(seeding.seededTeamIds).toEqual(["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4"]);
+    expect(playoffFirstRound(seeding.seededTeamIds, 8)).toEqual([
+      { home: "a1", away: "b4" },
+      { home: "b2", away: "a3" },
+      { home: "b1", away: "a4" },
+      { home: "a2", away: "b3" },
+    ]);
+    expect(seeding.labels.get("b2")).toBe("B2");
+    expect(seeding.qualifiers).toEqual(new Map([["A", 4], ["B", 4]]));
+  });
+
+  it("gives a short group's spare spot to the other group's next team", () => {
+    const seeding = seedGroups(
+      [{ key: "A", eligibleTeamIds: ["a1", "a2", "a3"] }, { key: "B", eligibleTeamIds: B }],
+      8,
+    );
+    expect(seeding.seededTeamIds).toEqual(["a1", "b1", "a2", "b2", "a3", "b3", "b5", "b4"]);
+    expect(seeding.labels.get("b5")).toBe("B5");
+    expect(seeding.qualifiers).toEqual(new Map([["A", 3], ["B", 5]]));
+  });
+
+  it("seeds a four-team bracket from the top two of each group", () => {
+    const seeding = seedGroups([{ key: "A", eligibleTeamIds: A }, { key: "B", eligibleTeamIds: B }], 4);
+    expect(playoffFirstRound(seeding.seededTeamIds, 4)).toEqual([
+      { home: "a1", away: "b2" },
+      { home: "b1", away: "a2" },
+    ]);
+  });
+});
+
+describe("playoffBracketSize", () => {
+  it("sends the top 4 of a table of four to nine, the top 2 below that", () => {
+    expect(playoffBracketSize("TABLE", 3, 3)).toBe(2);
+    expect(playoffBracketSize("TABLE", 4, 4)).toBe(4);
+    expect(playoffBracketSize("TABLE", 8, 8)).toBe(4);
+    expect(playoffBracketSize("TABLE", 9, 9)).toBe(4);
+  });
+
+  it("sends 8 from two groups, fewer when withdrawals leave too few", () => {
+    expect(playoffBracketSize("GROUPS", 12, 12)).toBe(8);
+    expect(playoffBracketSize("GROUPS", 10, 8)).toBe(8);
+    expect(playoffBracketSize("GROUPS", 10, 7)).toBe(4);
+    expect(playoffBracketSize("GROUPS", 10, 1)).toBe(0);
+  });
+
+  it("keeps the eight-team bracket of a table generated before groups", () => {
+    expect(playoffBracketSize("TABLE", 12, 12)).toBe(8);
+  });
+
+  it("shrinks a table's bracket to what its eligible teams can fill", () => {
+    expect(playoffBracketSize("TABLE", 5, 3)).toBe(2);
+  });
+});
+
+describe("seasonPlan", () => {
+  it("lists the group stage, the tiebreaker week and each playoff round", () => {
+    const first = new Date("2026-11-07T22:00:00Z");
+    const plan = seasonPlan(seasonFormat(12)!, first, undefined, null);
+    expect(plan.map((s) => [s.kind, s.label, s.fromWeek, s.toWeek])).toEqual([
+      ["REGULAR", "Group stage", 1, 5],
+      ["TIEBREAKER", "Tiebreakers", 6, 6],
+      ["PLAYOFF", "Quarterfinals", 7, 7],
+      ["PLAYOFF", "Semifinals", 8, 8],
+      ["PLAYOFF", "Grand final", 9, 9],
+    ]);
+    expect(plan[0].to?.toISOString()).toBe("2026-12-05T22:00:00.000Z");
+    expect(plan[1].from?.toISOString()).toBe("2026-12-12T22:00:00.000Z");
+    expect(plan[4].from?.toISOString()).toBe("2027-01-02T22:00:00.000Z");
+  });
+
+  it("follows the schedule's real last week and has no dates without week 1", () => {
+    const plan = seasonPlan(seasonFormat(6)!, null, 6);
+    expect(plan.map((s) => [s.label, s.fromWeek])).toEqual([
+      ["Regular season", 1],
+      ["Tiebreakers", 7],
+      ["Semifinals", 8],
+      ["Grand final", 9],
+    ]);
+    expect(plan.every((s) => s.from === null && s.to === null)).toBe(true);
+  });
+});
+
+describe("describeSeasonFormat", () => {
+  it("says the format in one plain line", () => {
+    expect(describeSeasonFormat(seasonFormat(12)!)).toBe(
+      "Two groups of 6. Each group plays a round robin over 5 weeks, then the top 4 of each group play the quarterfinals, the semifinals and the grand final.",
+    );
+    expect(describeSeasonFormat(seasonFormat(7)!)).toBe(
+      "One table. Everyone plays everyone once over 7 weeks, then the top 4 play the semifinals and the grand final.",
+    );
+    expect(describeSeasonFormat(seasonFormat(4)!)).toBe(
+      "One table, played twice. Everyone plays everyone twice over 6 weeks, then all 4 teams play the semifinals and the grand final.",
+    );
+    expect(describeSeasonFormat(seasonFormat(3)!)).toBe(
+      "One table, played twice. Everyone plays everyone twice over 6 weeks, then the top 2 play the grand final.",
+    );
+    expect(formatName(seasonFormat(11)!)).toBe("Two groups of 6 and 5");
+  });
+});
+
+describe("firstPlayoffWeek", () => {
+  it("keeps the week after the regular season for tiebreakers, used or not", () => {
+    expect(firstPlayoffWeek(5, 0)).toBe(7);
+    expect(firstPlayoffWeek(5, 6)).toBe(7);
+  });
+
+  it("waits for tiebreakers that ran past their week", () => {
+    expect(firstPlayoffWeek(5, 8)).toBe(9);
+  });
+});

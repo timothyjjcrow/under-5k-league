@@ -291,6 +291,9 @@ model Team {
   // banked points could otherwise seed a dead team into the bracket. Rows,
   // rosters and history are kept; standings badge it.
   withdrawn  Boolean  @default(false)
+  // "A" or "B" when the season plays two groups (10+ teams; season-format.ts).
+  // Written for every team by generateSchedule, null for a one-table season.
+  groupKey   String?
   createdAt  DateTime @default(now())
 
   season            Season             @relation(fields: [seasonId], references: [id], onDelete: Cascade)
