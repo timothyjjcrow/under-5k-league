@@ -41,6 +41,34 @@ function fits(snapshot: LeagueStatusSnapshot) {
   expect(totalText(payload.components)).toBeLessThanOrEqual(STATUS_MAX_TEXT);
 }
 
+/** The league's one table; fails on a group season's tables. */
+function oneTable(snapshot: LeagueStatusSnapshot) {
+  const table = snapshot.table;
+  if (!table || table.kind === "GROUPS") throw new Error("expected the league's one table");
+  return table;
+}
+
+/** A group season's tables; fails on one table. */
+function groupTables(snapshot: LeagueStatusSnapshot) {
+  const table = snapshot.table;
+  if (!table || table.kind !== "GROUPS") throw new Error("expected one table per group");
+  return table.groups;
+}
+
+/** Every text display's content in the rendered card, in order. */
+function cardText(snapshot: LeagueStatusSnapshot): string {
+  const out: string[] = [];
+  const walk = (list: unknown[]) => {
+    for (const c of list) {
+      const node = c as { content?: unknown; components?: unknown[] };
+      if (typeof node.content === "string") out.push(node.content);
+      if (Array.isArray(node.components)) walk(node.components);
+    }
+  };
+  walk(renderLeagueStatus(snapshot).payload.components);
+  return out.join("\n");
+}
+
 describe("league status snapshot — between seasons", () => {
   it("names the last champion when no season is active", async () => {
     const old = await makeSeason({
@@ -384,9 +412,10 @@ describe("league status snapshot — the regular season", () => {
       expect.objectContaining({ home: "Bravo", away: "Delta", moved: true, standins: [] }),
     ]);
     // Alpha won week 1; five teams make a four-team bracket.
-    expect(snap.table?.rows[0]).toEqual({ pos: 1, team: "Alpha", points: 3 });
-    expect(snap.table?.rows).toHaveLength(5);
-    expect(snap.table?.playoffSpots).toBe(4);
+    expect(oneTable(snap).rows[0]).toEqual({ pos: 1, team: "Alpha", points: 3 });
+    expect(oneTable(snap).rows).toHaveLength(5);
+    expect(oneTable(snap).playoffSpots).toBe(4);
+    expect(cardText(snap)).toContain("**Standings**\n```");
     expect(snap.highlights).toMatchObject({
       week: 1,
       player: { name: "Star Carry", hero: "Drow Ranger" },
@@ -432,6 +461,122 @@ describe("league status snapshot — the regular season", () => {
     const snap = await loadLeagueStatusSnapshot();
     expect(snap.week?.matchNightAtMs).toBe(newNight.getTime());
     expect(snap.week!.fixtures.map((f) => f.moved)).toEqual([false, false]);
+  });
+});
+
+describe("league status snapshot — a group season", () => {
+  it("prints each group's own table: places within the group, a line under its qualifiers", async () => {
+    const firstMatchNight = new Date(Date.now() - 6 * DAY);
+    const season = await makeSeason({
+      name: "Season 3",
+      status: SEASON_STATUS.REGULAR_SEASON,
+      firstMatchNight,
+      teamSize: 5,
+    });
+    // Ten teams: two groups of five, as schedule generation draws them.
+    const groups = {
+      A: ["Alpha", "Bravo", "Charlie", "Delta", "Echo"],
+      B: ["Foxtrot", "Golf", "Hotel", "India", "Juliet"],
+    };
+    const id: Record<string, string> = {};
+    let draftOrder = 0;
+    for (const [groupKey, names] of Object.entries(groups)) {
+      for (const name of names) {
+        const team = await makeTeam(season.id, name, draftOrder++);
+        await prisma.team.update({ where: { id: team.id }, data: { groupKey } });
+        id[name] = team.id;
+      }
+    }
+    const night = (week: number) => matchNightForWeek(firstMatchNight, week);
+    const fixture = (week: number, home: string, away: string, score?: [number, number]) =>
+      prisma.match.create({
+        data: {
+          seasonId: season.id,
+          week,
+          phase: MATCH_PHASE.REGULAR,
+          homeTeamId: id[home],
+          awayTeamId: id[away],
+          scheduledAt: night(week),
+          bestOf: 3,
+          ...(score
+            ? {
+                homeScore: score[0],
+                awayScore: score[1],
+                winnerTeamId: id[score[0] > score[1] ? home : away],
+                status: MATCH_STATUS.COMPLETED,
+                completedAt: new Date(),
+              }
+            : {}),
+        },
+      });
+    // Week 1 inside each group: the 2–0 winners lead, the 2–1 winners are
+    // second, and the teams that sat out sit third.
+    await fixture(1, "Alpha", "Bravo", [2, 0]);
+    await fixture(1, "Charlie", "Delta", [2, 1]);
+    await fixture(1, "Golf", "Foxtrot", [2, 0]);
+    await fixture(1, "Hotel", "India", [2, 1]);
+    await fixture(2, "Alpha", "Charlie");
+    await fixture(2, "Echo", "Bravo");
+    await fixture(2, "Golf", "Hotel");
+    await fixture(2, "Juliet", "Foxtrot");
+
+    const snap = await loadLeagueStatusSnapshot();
+    expect(snap.phase).toBe("REGULAR_SEASON");
+    expect(snap.week).toMatchObject({ label: "Week 2 of 2", byes: ["Delta", "India"] });
+    // Group B's leader is first in Group B, never 6th of one table, and the
+    // top four of each group go through to an eight-team bracket.
+    const row = (pos: number, team: string, points: number) => ({ pos, team, points });
+    expect(groupTables(snap)).toEqual([
+      {
+        title: "Group A",
+        rows: [
+          row(1, "Alpha", 3),
+          row(2, "Charlie", 3),
+          row(3, "Echo", 0),
+          row(4, "Delta", 0),
+          row(5, "Bravo", 0),
+        ],
+        playoffSpots: 4,
+      },
+      {
+        title: "Group B",
+        rows: [
+          row(1, "Golf", 3),
+          row(2, "Hotel", 3),
+          row(3, "Juliet", 0),
+          row(4, "India", 0),
+          row(5, "Foxtrot", 0),
+        ],
+        playoffSpots: 4,
+      },
+    ]);
+    const text = cardText(snap);
+    expect(text).not.toContain("**Standings**");
+    expect(text).toContain(
+      [
+        "**Group A**",
+        "```",
+        " # Team                  Pts",
+        " 1 Alpha                   3",
+        " 2 Charlie                 3",
+        " 3 Echo                    0",
+        " 4 Delta                   0",
+        "   ── playoff line ─────────",
+        " 5 Bravo                   0",
+        "```",
+        "**Group B**",
+        "```",
+        " # Team                  Pts",
+        " 1 Golf                    3",
+        " 2 Hotel                   3",
+        " 3 Juliet                  0",
+        " 4 India                   0",
+        "   ── playoff line ─────────",
+        " 5 Foxtrot                 0",
+        "```",
+      ].join("\n"),
+    );
+    fits(snap);
   });
 });
 

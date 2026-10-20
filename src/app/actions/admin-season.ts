@@ -26,6 +26,12 @@ import {
   HARD_MMR_CEILING,
   type SeasonStatus,
 } from "@/lib/constants";
+import {
+  SEASON_GROUP_KEYS,
+  formatName,
+  seasonFormat,
+  seasonPlan,
+} from "@/lib/season-format";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import {
   SERIES_LENGTH_PHASES,
@@ -622,7 +628,7 @@ export async function reactivateSeasonAction(
  * commits, for the announcement only.
  */
 async function seasonOpeningSlate(seasonId: string) {
-  const [fixtures, teams] = await Promise.all([
+  const [fixtures, teams, season] = await Promise.all([
     prisma.match.findMany({
       where: { seasonId, phase: MATCH_PHASE.REGULAR },
       orderBy: [{ week: "asc" }, { createdAt: "asc" }, { id: "asc" }],
@@ -638,10 +644,26 @@ async function seasonOpeningSlate(seasonId: string) {
     prisma.team.findMany({
       where: { seasonId, withdrawn: false },
       orderBy: { draftOrder: "asc" },
-      select: { id: true, name: true },
+      select: { id: true, name: true, groupKey: true },
+    }),
+    prisma.season.findUnique({
+      where: { id: seasonId },
+      select: { firstMatchNight: true },
     }),
   ]);
   if (fixtures.length === 0) return undefined;
+  // The season's shape and calendar: its groups, and when the reserved
+  // tiebreaker week and the playoffs fall (season-format.ts).
+  const format = seasonFormat(teams.length);
+  const grouped = teams.length > 0 && teams.every((team) => team.groupKey);
+  const plan =
+    format && season?.firstMatchNight
+      ? seasonPlan(
+          format,
+          season.firstMatchNight,
+          Math.max(...fixtures.map((fixture) => fixture.week)),
+        )
+      : null;
   const week = fixtures[0].week;
   const opening = fixtures
     .filter((fixture) => fixture.week === week)
@@ -664,6 +686,17 @@ async function seasonOpeningSlate(seasonId: string) {
       whenMs: fixture.scheduledAt?.getTime() ?? null,
     })),
     byes: teams.filter((team) => !playing.has(team.id)).map((team) => team.name),
+    ...(grouped && format
+      ? {
+          format: `${formatName(format)}: the top ${format.qualifiersPerGroup} of each group make the playoffs.`,
+          groups: SEASON_GROUP_KEYS.map((key) => ({
+            key,
+            teams: teams.filter((team) => team.groupKey === key).map((team) => team.name),
+          })),
+        }
+      : {}),
+    tiebreakerMs: plan?.find((step) => step.kind === "TIEBREAKER")?.from?.getTime() ?? null,
+    playoffsMs: plan?.find((step) => step.kind === "PLAYOFF")?.from?.getTime() ?? null,
   };
 }
 

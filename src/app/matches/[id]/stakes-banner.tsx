@@ -44,9 +44,10 @@ export async function StakesBanner({
   if (match.phase !== "REGULAR") return null;
   if (match.season.status !== "REGULAR_SEASON") return null;
 
+  // The group too: in a group season each group races for its own places.
   const teams = await prisma.team.findMany({
     where: { seasonId: match.seasonId },
-    select: { id: true, name: true, withdrawn: true },
+    select: { id: true, name: true, withdrawn: true, groupKey: true },
   });
   const playoffField = projectPlayoffField(teams, seasonMatches);
   const report = seasonScenarioReport(

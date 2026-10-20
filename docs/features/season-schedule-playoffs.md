@@ -2,10 +2,63 @@
 
 How a GGD2L season changes phase, gets fixtures and kickoff times, reschedules,
 ranks teams, settles ties, runs its bracket and becomes history. Main files:
-`src/lib/season-phase-policy.ts`, `schedule.ts`, `standings.ts`,
-`playoff-field.ts`, `tiebreaker-service.ts`, `scenarios.ts` + `stakes.ts`,
-`playoff-service.ts`, `reschedule-service.ts`; admin actions in
-`src/app/actions/admin-season.ts`, `admin-schedule-results.ts`, `admin-roster.ts`.
+`src/lib/season-phase-policy.ts`, `season-format.ts`, `season-groups.ts`,
+`schedule.ts`, `standings.ts`, `playoff-field.ts`, `tiebreaker-service.ts`,
+`scenarios.ts` + `stakes.ts`, `playoff-service.ts`, `reschedule-service.ts`;
+admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
+`admin-roster.ts`.
+
+## Season format
+
+- **The team count sets the format; nobody designs a season**
+  (`seasonFormat`, `season-format.ts`, Tim's call on 2026-10-19). One table up
+  to nine teams, played twice up to four (`DOUBLE_ROUND_MAX_TEAMS`); two
+  groups from ten (`GROUP_STAGE_MIN_TEAMS`), split as evenly as possible, each
+  a single round robin on the same match nights. The playoffs take the top 2
+  of a table of two or three, the top 4 of a table of four to nine and the top
+  4 of each group. Every rule and sentence (/rules' `formatSteps` and
+  `playoffSteps`, the admin card, the captain-count note) reads that one
+  function. A table of ten or more only exists in a season generated before
+  groups and keeps the bracket it was built for (`pickBracketSize`).
+- **The week after the regular season is reserved for tiebreakers.** Round
+  one plays at `firstPlayoffWeek` (two weeks after the last regular week, or
+  the week after tiebreakers that ran long), whether or not a tie needed the
+  week, so `seasonPlan` can print every date the day the schedule is made.
+  Tiebreakers still take the week after the last fixture (the reserved one),
+  and the reschedule deadline is that week's night.
+- **Groups are drawn when the schedule is generated** (`drawGroups`): teams
+  ranked by their roster's average signup MMR (`rosterAverageMmr`, players with
+  none on file ignored, ties by team id) and dealt A, B, B, A, A, B… A
+  regenerate keeps groups that still fit the format (a swap survives a new
+  first night) unless "redraw the groups" is ticked; `swapGroupTeams` trades
+  one team from each group and rebuilds the fixtures from the season's week-1
+  night. Both write `Team.groupKey` in the same Serializable transaction as the
+  fixtures (`replaceRegularSchedule`); a one-table schedule clears it.
+- **A smaller group finishes with the bigger one** (`regularSeasonFixtures`):
+  13 teams are 7 and 6, and the 6-team group's five rounds spread over seven
+  weeks (off weeks 2 and 5) so both groups end on the same night. There are no
+  cross-group games: a 5- or 7-team group has a bye week.
+- **A group is its own league.** `projectPlayoffField` computes each group's
+  table from its own results (a result between the groups counts in neither),
+  plays off its ties against its own cut (`resolveTiebreakers` per group, with
+  a tiebreaker basis bound to the group's results and only the group's
+  tiebreaker fixtures; one between the groups fails closed), and the scenario
+  engine runs per group (`groupScenarioReport`, whose ranks are group places
+  and whose scenarios carry `groupKey`). A team without a group in a group
+  season makes the whole season render as one table; regenerate to fix it.
+- **Seeds interleave place by place** (`seedGroups`): A1, B1, A2, B2…, so the
+  standard order pairs A1–B4, B2–A3, B1–A4, A2–B3 and the two group winners can
+  only meet in the final. A group left short by withdrawals hands each spare
+  spot to the other group's next team, which takes the missing team's slot and
+  keeps its own name (B5). The bracket engine is unchanged.
+- **`FieldTeam.groupKey` is required.** A page whose team query left it out
+  would show a group season as one table, seeded wrong, with no error; the type
+  makes every caller select it.
+- **Never read a place from an index of `field.standings`.** In a group season
+  it is group A's table followed by group B's. Use `tablePlaceOf` and
+  `placeLabel` ("2nd in Group A"), `standingsSections` and `<SeasonStandings>`
+  for the tables (each group's own cut, seeds and sizes), `tableMovement` for
+  arrows, and `bracketSeedLabels` to name a frozen bracket's seeds ("A1").
 
 ## Season phases
 
@@ -59,9 +112,10 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   `admin-flow-audit.itest.ts`), no withdrawn team, 2+ teams, no confirmed-scrim
   clash. A regenerate replaces fixture ids, so it names the check-ins, picks,
   bookings and proposals it wipes, before (confirm) and after (toast, log).
-- **Decide double round robin before generating.** `roundRobin(ids, doubleRound)`
-  is a checkbox; the toast names the week count. Switching later is a full
-  regenerate.
+- **The format decides the round robin, not a checkbox.** Four teams or fewer
+  play it twice (`seasonFormat`); the double round robin checkbox is gone, and
+  a stale form's `doubleRound` field is ignored. The toast names the format,
+  the groups, the week count, the tiebreaker week and the first playoff night.
 - **Every retime follows one contract.** Set time (`setMatchTime`), "Move a match
   night" (`setWeekNight`) and a reschedule accept each, in their transaction:
   re-assert SCHEDULED, bump `Match.scheduleRevision`, reset
@@ -111,10 +165,11 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
 - **Date new postseason rounds with `upcomingMatchNight`**, which rolls a passed
   date forward in whole weeks. Otherwise a slipped season stamps a new round with
   last week's kickoff and auto-sync searches a closed window.
-- **Regular matches must fit before the playoffs.** `rescheduleDeadline` (via
-  `loadRescheduleDeadline`, shared by the check and the form hint) is the earliest
-  postseason kickoff, else the planned playoff night while still ahead. Start
-  playoffs refuses while any regular result is outstanding.
+- **Regular matches must fit before the tiebreaker night.** `rescheduleDeadline`
+  (via `loadRescheduleDeadline`, shared by the check and the form hint) is the
+  earliest postseason kickoff (a tiebreaker counts), else the night of the week
+  after the last regular week, the reserved tiebreaker night, while still
+  ahead. Start playoffs refuses while any regular result is outstanding.
 
 - **Fixture lists sort by week, kickoff, then id** (`MATCH_LIST_ORDER`,
   `byKickoff` with an id tiebreak; `schedule.ts`): /schedule, Home, the season
@@ -275,10 +330,11 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   mini-diff. A forfeit can mix imported and awarded games; dropping it erased
   real games and split identical records.
 - **Read seeds, the cut and tie status through `projectPlayoffField`**
-  (`playoff-field.ts`): standings over all teams, withdrawn teams dropped, bracket
-  sized on the eligible count (`pickBracketSize`), `resolveTiebreakers`, seeds,
-  first-round pairings, `seedingDeadHeatTeamIds`. `createPlayoffBracket`, /admin
-  and every public page with seeds use it.
+  (`playoff-field.ts`): standings (per group in a group season), withdrawn teams
+  dropped, the bracket sized by the format and the eligible count
+  (`playoffBracketSize`), `resolveTiebreakers`, seeds and their names
+  (`seedLabelByTeam`), first-round pairings, `seedingDeadHeatTeamIds`.
+  `createPlayoffBracket`, /admin and every public page with seeds use it.
 - **Keep `clinchStatuses` points-only and conservative** (ties count against a
   clinch, for a survival). Only the scenario engine refines it.
 - **One table layout**: `standings-table-server.tsx` feeds the server-rendered
@@ -286,7 +342,10 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   Qualified / Eliminated / Withdrawn / Tiebreaker pending / Tied / Settled by
   tiebreaker / "Your team", W-D-L, game difference, points, Last 5 from `sm`).
   Movement arrows (`standingsMovement`), ✓/✗ marks. Team names truncate on one
-  line (full name in `title`) rather than wrap on phones.
+  line (full name in `title`) rather than wrap on phones. A group season shows
+  one titled table per group through `<SeasonStandings>`: each with the
+  group's own cut line, places, seed names ("Seed A2") and movement, and the
+  head-to-head grid splits the same way.
 - **A win streak rides the status line, never a column** (`StreakChip`, "W3
   streak", neutral, spoken "Won the last 3 series"): from two series wins,
   and on live tables only. Home and /schedule pass `streakByTeam` from
@@ -358,7 +417,8 @@ ranks teams, settles ties, runs its bracket and becomes history. Main files:
   (`playoff-service.ts`, seam `playoffs.create.beforeTx`). Start and Reset are
   separate controls, each carrying a claim (expected phase +
   `playoffSetupRevision`) re-checked inside. It needs every regular result and
-  resolved ties, writes round 0 as `R0M{i}` (FINAL when one pair), yields
+  resolved ties, writes round 0 as `R0M{i}` (FINAL when one pair) in
+  `firstPlayoffWeek`, after the reserved tiebreaker week, yields
   clashing scrims, tears the old bracket down and flips to PLAYOFFS with a
   guarded `updateMany`. Slots are `R{round}M{match}`; `pickBracketSize`,
   `playoffFirstRound`, `nextRoundPairings`, `roundName` are pure in `schedule.ts`.

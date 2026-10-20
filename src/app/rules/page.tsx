@@ -37,9 +37,9 @@ export default async function RulesPage() {
   // The match night and the playoff field are the ACTIVE season's: between
   // seasons the next season's are not known yet. While a match-night poll
   // is choosing the night, it says so, as Home does (pollDecidesMatchNight).
-  const [fixtures, teamCount, pollOpen]: [
+  const [fixtures, teamFlags, pollOpen]: [
     FixtureKickoff[],
-    number | null,
+    { withdrawn: boolean }[] | null,
     boolean,
   ] = active
     ? await Promise.all([
@@ -47,7 +47,10 @@ export default async function RulesPage() {
           where: { seasonId: active.id, scheduledAt: { not: null } },
           select: { scheduledAt: true, status: true },
         }),
-        prisma.team.count({ where: { seasonId: active.id, withdrawn: false } }),
+        prisma.team.findMany({
+          where: { seasonId: active.id },
+          select: { withdrawn: true },
+        }),
         pollCanDecideMatchNight(active) ? matchNightPollOpen() : false,
       ])
     : [[], null, false];
@@ -55,7 +58,9 @@ export default async function RulesPage() {
     season,
     matchNight: announcedMatchNight(active, fixtures),
     matchNightPoll: pollDecidesMatchNight(active, fixtures, pollOpen),
-    teamCount,
+    // The playoff field counts teams still in; the format counts them all.
+    teamCount: teamFlags ? teamFlags.filter((team) => !team.withdrawn).length : null,
+    formatTeamCount: teamFlags ? teamFlags.length : null,
   });
 
   return (

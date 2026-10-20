@@ -91,6 +91,11 @@ export type TeamScenario = {
   /** Explicitly scoped normal-series forecast, or actual final ordering. */
   outlook?: ScenarioOutlook;
   paths?: ScenarioPaths;
+  /**
+   * The team's group in a group-stage season (`groupScenarioReport`): its
+   * ranks and cut are its group's, and playoff order reads "A2".
+   */
+  groupKey?: string;
 };
 
 export type ScenarioReport = {

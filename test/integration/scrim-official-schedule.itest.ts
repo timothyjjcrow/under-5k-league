@@ -152,7 +152,9 @@ describe("official fixture creation respects confirmed scrims", () => {
   it("builds the first playoff round anyway and cancels the clashing booked scrim", async () => {
     const firstNight = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000);
     const { season, teams, matches } = await completedRegularSeason(firstNight);
-    const firstPlayoffWeek = Math.max(...matches.map((match) => match.week)) + 1;
+    // Round one plays two weeks after the last regular week: the week after
+    // it is kept for tiebreakers.
+    const firstPlayoffWeek = Math.max(...matches.map((match) => match.week)) + 2;
     const playoffNight = upcomingMatchNight(
       firstNight,
       firstPlayoffWeek,

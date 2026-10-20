@@ -75,7 +75,9 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   (`weekOracles`), the best single game (`bestGameOfWeek`: highest impact line
   by a league player, ties by kills, fewer deaths, user id), the table after
   the week with places moved (`weekWrapTable`: `regularTableBeforeWeek(week +
-  1)` against `(week)`, no arrows until a week of results is behind it), and
+  1)` against `(week)`, no arrows until a week of results is behind it; in a
+  group season `weekWrapTables` over `standingsSections` gives each group its
+  own table, places and arrows, each waiting for its own results), and
   next week's fixtures. Under the season's own URL (`weekWrapPath`), so an old
   link opens its week after the handoff; an unknown week is a 404.
 - **Linked from where a week ends:** each finished week on /schedule, the
@@ -191,7 +193,10 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 - **Playoffs judge the frozen seeds** (`seedsFromFirstRound` over PLAYOFF and
   FINAL rows only, because a tiebreaker's `TB1` slot parses as round 0). The
   higher seed number winning is the upset; a side without a seed gets no
-  tag. **Draws, forfeits and TIEBREAKER series are never upsets.**
+  tag. In a group season (`upsetContext`'s `teams`) the place within the
+  group decides and the seeds are named like the bracket's ("seed A3 over
+  seed B2"); two teams at the same place in different groups are no upset.
+  **Draws, forfeits and TIEBREAKER series are never upsets.**
 - **The upset of the week** (`biggestUpset`) comes from the latest week with
   a played series: the largest gap, then the lowest match id. When that
   week had none there is no line; an older week's never stands in. Forfeits

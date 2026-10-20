@@ -17,6 +17,8 @@ export type BracketSide = {
   name: string;
   logoUrl?: string | null;
   seed: number | null;
+  /** The seed's name when it isn't its number: "A1", "B4" in a group season. */
+  seedLabel?: string;
 };
 
 export type BracketMatchView = {
@@ -71,16 +73,23 @@ export function buildBracketRounds(
   teamLogoUrl: Map<string, string | null> = new Map(),
   formatWhenShort: (d: Date) => string = (d) =>
     formatLeagueMatchTime(d, "short"),
+  /** `bracketSeedLabels` output; a label equal to the number adds nothing. */
+  seedLabelByTeam: ReadonlyMap<string, string> = new Map(),
 ): BracketRound[] {
   const { totalRounds, rounds } = bracketSkeleton(matches);
-  const side = (teamId: string): BracketSide => ({
-    teamId,
-    name: teamName.get(teamId) ?? "?",
-    ...(teamLogoUrl.has(teamId)
-      ? { logoUrl: teamLogoUrl.get(teamId) ?? null }
-      : {}),
-    seed: seedByTeam.get(teamId) ?? null,
-  });
+  const side = (teamId: string): BracketSide => {
+    const seed = seedByTeam.get(teamId) ?? null;
+    const label = seedLabelByTeam.get(teamId);
+    return {
+      teamId,
+      name: teamName.get(teamId) ?? "?",
+      ...(teamLogoUrl.has(teamId)
+        ? { logoUrl: teamLogoUrl.get(teamId) ?? null }
+        : {}),
+      seed,
+      ...(label && label !== String(seed) ? { seedLabel: label } : {}),
+    };
+  };
   return rounds.map(({ round, slots }) => ({
     name:
       round === totalRounds - 1

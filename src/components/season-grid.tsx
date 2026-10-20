@@ -17,12 +17,15 @@ export function SeasonGrid({
   teamName,
   teamLogoUrl,
   matches,
+  groupTitle,
 }: {
   /** Row and column order: the standings. */
   teamIds: string[];
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
   matches: CrossMatch[];
+  /** "Group A" in a group season, so each group's grid has its own name. */
+  groupTitle?: string;
 }) {
   const table = crossTable(teamIds, matches);
   const rankOf = new Map(teamIds.map((id, i) => [id, i + 1]));
@@ -77,7 +80,8 @@ export function SeasonGrid({
       <div className="overflow-x-auto">
         <table className="w-full min-w-max border-separate border-spacing-0 text-sm">
           <caption className="sr-only">
-            Head-to-head results. Each row shows that team&apos;s results
+            {groupTitle ? `${groupTitle} head-to-head results.` : "Head-to-head results."}{" "}
+            Each row shows that team&apos;s results
             against the team in each column: W win, D draw, L loss, F
             forfeit, with the row team&apos;s games first.
           </caption>

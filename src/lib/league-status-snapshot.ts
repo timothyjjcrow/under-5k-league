@@ -29,6 +29,8 @@ import {
 } from "./schedule";
 import { leagueProgress } from "./league-progress";
 import { projectPlayoffField } from "./playoff-field";
+import { standingsSections } from "./season-groups";
+import type { TeamStanding } from "./standings";
 import { getSeasonHonorReadiness } from "./honors-readiness-service";
 import { HONOR_WEEK_STATE } from "./honors-readiness";
 import { weeklyHonors } from "./honors";
@@ -57,6 +59,7 @@ import type {
   StatusStandin,
   StatusChampion,
   StatusTable,
+  StatusTableRow,
   StatusWeek,
 } from "./league-status";
 
@@ -64,7 +67,8 @@ import type {
 // it). Every number comes from the helper the site already prints it with, so
 // the card can never disagree with Home: capacityInfo for the team goal,
 // leagueProgress and isRelevantOpenMatch for "this week", projectPlayoffField
-// for the table and its cut, the weekly honors readiness for the highlights,
+// for the table and its cut (standingsSections for each group's, in a group
+// season), the weekly honors readiness for the highlights,
 // resolveChampionPresentation for the champion.
 //
 // READ-ONLY, and cheap enough to run on every repaint check: the service
@@ -99,6 +103,7 @@ const TEAM_SELECT = {
   logoUrl: true,
   captainId: true,
   withdrawn: true,
+  groupKey: true,
   members: {
     select: {
       userId: true,
@@ -599,17 +604,32 @@ async function loadRegularSeason(
   }
 
   const field = projectPlayoffField(
-    teams.map((t) => ({ id: t.id, withdrawn: t.withdrawn })),
+    teams.map((t) => ({ id: t.id, withdrawn: t.withdrawn, groupKey: t.groupKey })),
     [...matches],
   );
-  const table: StatusTable = {
-    rows: field.standings.map((row, i) => ({
+  const rowsOf = (standings: readonly TeamStanding[]): StatusTableRow[] =>
+    standings.map((row, i) => ({
       pos: i + 1,
       team: teamName.get(row.teamId) ?? "",
       points: row.points,
-    })),
-    playoffSpots: field.bracketSize > 0 ? field.bracketSize : null,
-  };
+    }));
+  // A group season prints each group's own table (standingsSections): places
+  // count within the group and the line falls under that group's
+  // qualifiers. field.standings there is group A then group B, so an index
+  // into it is no place at all.
+  const table: StatusTable = field.groups
+    ? {
+        kind: "GROUPS",
+        groups: standingsSections(field).map((section) => ({
+          title: section.title ?? "Standings",
+          rows: rowsOf(section.standings),
+          playoffSpots: section.playoffCut > 0 ? section.playoffCut : null,
+        })),
+      }
+    : {
+        rows: rowsOf(field.standings),
+        playoffSpots: field.bracketSize > 0 ? field.bracketSize : null,
+      };
 
   return {
     week,

@@ -53,7 +53,8 @@ const BUTTON_LINK = 5;
 /** Discord's limits for one Components V2 message. */
 export const STATUS_MAX_COMPONENTS = 40;
 export const STATUS_MAX_TEXT = 4000;
-/** Rows of the code-block table; past this the rest is "N more". */
+/** Rows of one code-block table (each group's, in a group season); past
+ *  this the rest is "N more". */
 const TABLE_MAX_ROWS = 12;
 /** Team names in the monospace table. A row is 28 characters: a phone's
  *  code block holds about 30 before it wraps, and a wrapped row breaks the
@@ -185,16 +186,34 @@ export type StatusWeek = {
 };
 
 export type StatusTableRow = {
+  /** The team's place in its table: within its group in a group season. */
   pos: number;
   team: string;
   points: number;
 };
 
-export type StatusTable = {
+/** One code-block table: its rows and where its playoff line falls. */
+export type StatusTableBlock = {
   rows: StatusTableRow[];
-  /** Teams that reach the playoffs; null = unknown, no line drawn. */
+  /** Teams this table sends to the playoffs; null = unknown, no line drawn. */
   playoffSpots: number | null;
 };
+
+/** One group's table in a group-stage season. */
+export type StatusGroupTable = StatusTableBlock & {
+  /** "Group A" (site text, never a player's): the block's heading. */
+  title: string;
+};
+
+/**
+ * The regular-season standings: the league's one table, or (GROUPS) one
+ * table per group in group order, each with its own places 1..n and its own
+ * playoff line under that group's qualifiers. A group season is never one
+ * table: group B's teams are not 6th to 10th of anything.
+ */
+export type StatusTable =
+  | (StatusTableBlock & { kind?: "TABLE" })
+  | { kind: "GROUPS"; groups: StatusGroupTable[] };
 
 export type StatusHighlights = {
   week: number;
@@ -481,7 +500,7 @@ function tableName(raw: string): string {
 }
 
 /** The table as an aligned code block, with the playoff line drawn in. */
-export function tableBlock(table: StatusTable): string {
+export function tableBlock(table: StatusTableBlock): string {
   const rows = table.rows.slice(0, TABLE_MAX_ROWS);
   const lines = [` # ${"Team".padEnd(TABLE_NAME_WIDTH)}  Pts`];
   rows.forEach((r, i) => {
@@ -503,6 +522,24 @@ export function tableBlock(table: StatusTable): string {
     lines.push(`   + ${table.rows.length - rows.length} more`);
   }
   return ["```", ...lines, "```"].join("\n");
+}
+
+/**
+ * The standings as one text display: the league's table under "Standings",
+ * or each group's table under its own name, one after the other. One display
+ * either way, so a group season costs the card no extra component.
+ */
+function standingsSection(table: StatusTable | null): Component | null {
+  if (!table) return null;
+  if (table.kind === "GROUPS") {
+    const groups = table.groups.filter((g) => g.rows.length > 0);
+    return groups.length > 0
+      ? textDisplay(groups.map((g) => `**${g.title}**\n${tableBlock(g)}`).join("\n"))
+      : null;
+  }
+  return table.rows.length > 0
+    ? textDisplay(`**Standings**\n${tableBlock(table)}`)
+    : null;
 }
 
 // --- Phases --------------------------------------------------------------------
@@ -730,9 +767,8 @@ function seasonCard(s: LeagueStatusSnapshot): Component[] {
   }
   // The race before last week's awards: the table changes every result,
   // the highlights once a week.
-  if (s.table && s.table.rows.length > 0) {
-    blocks.push(divider(), textDisplay(`**Standings**\n${tableBlock(s.table)}`));
-  }
+  const standings = standingsSection(s.table);
+  if (standings) blocks.push(divider(), standings);
   const highlights = highlightsSection(s);
   if (highlights) blocks.push(divider(), highlights);
   pushPoll(blocks, s);

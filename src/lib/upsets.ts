@@ -12,12 +12,16 @@
 // being judged, so a postponed result played later never changes a verdict
 // after the fact.
 // Playoffs: the higher seed NUMBER won, with seeds from the frozen first-round
-// pairings (seedsFromFirstRound), never live standings. Draws, forfeits and
+// pairings (seedsFromFirstRound), never live standings. In a group season the
+// seeds alternate between the groups place by place (A1 is seed 1, B1 seed 2),
+// so the place within the group decides instead: B1 beating A1 is two group
+// winners meeting, and A3 beating B2 is the upset. Draws, forfeits and
 // tiebreaker matches are never upsets: a draw beat nobody, a forfeit is a
 // ruling rather than a result, and a tiebreaker is a playoff for a place.
 
 import { seedsFromFirstRound } from "./bracket-view";
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { bracketSeedLabels } from "./season-groups";
 import {
   regularTableBeforeWeek,
   regularWeeksWithResultsBefore,
@@ -56,12 +60,16 @@ export type SeriesUpset = {
   loserId: string;
   /** "points": the table going into the week; "seed": the bracket's seeds. */
   kind: "points" | "seed";
-  /** Points the winner trailed by, or how many seed places apart they were. */
+  /** Points the winner trailed by, or how many seed places apart they were
+   *  (places in their groups, in a group season). */
   gap: number;
   /** The winner's points going into the week, or its seed. */
   winner: number;
   /** The loser's points going into the week, or its seed. */
   loser: number;
+  /** In a group season, how the bracket names the two seeds: "A3", "B2". */
+  winnerSeed?: string;
+  loserSeed?: string;
 };
 
 /** What `seriesUpset` judges against; build it once per season's matches. */
@@ -72,16 +80,23 @@ export type UpsetContext = {
   tableBefore: (match: UpsetMatch) => ReadonlyMap<string, UpsetTableRow> | null;
   /** Playoff seeds from the frozen first round (seedsFromFirstRound). */
   seeds: ReadonlyMap<string, number>;
+  /** How the bracket names each seed (`bracketSeedLabels`): "A1", "B4" in a
+   *  group season, else the number. Absent reads as one table. */
+  seedLabels?: ReadonlyMap<string, string>;
 };
 
 /**
  * The tables and seeds for one season's matches. `teamIds` is every team in
  * the season, withdrawn ones included: their banked points are real. Each
  * table is built once per week and kickoff, however many series it judges.
+ * `teams` carries each team's group: pass it for a group season, whose seeds
+ * are named and judged by their places (A1, B4); without it the bracket
+ * reads as one table's.
  */
 export function upsetContext(
   teamIds: string[],
   matches: readonly UpsetMatch[],
+  teams: readonly { id: string; groupKey?: string | null }[] = [],
 ): UpsetContext {
   const tables = new Map<string, ReadonlyMap<string, UpsetTableRow> | null>();
   const seeds = seedsFromFirstRound(
@@ -97,6 +112,7 @@ export function upsetContext(
   );
   return {
     seeds,
+    seedLabels: bracketSeedLabels(seeds, teams),
     tableBefore(match) {
       const kickoff = match.scheduledAt?.getTime() ?? null;
       const key = JSON.stringify([match.week, kickoff]);
@@ -166,12 +182,33 @@ export function seriesUpset(
     const loser = context.seeds.get(loserId);
     // No seed (a team the first round didn't place): no tag.
     if (winner == null || loser == null) return null;
-    const gap = winner - loser;
-    return gap > 0
-      ? { matchId: match.id, winnerId, loserId, kind: "seed", gap, winner, loser }
-      : null;
+    const winnerSeed = context.seedLabels?.get(winnerId);
+    const loserSeed = context.seedLabels?.get(loserId);
+    const winnerPlace = groupPlace(winnerSeed);
+    const loserPlace = groupPlace(loserSeed);
+    // Both named by a group (A3, B2): the places decide, never the seed
+    // numbers, which only alternate the groups.
+    const grouped = winnerPlace !== null && loserPlace !== null;
+    const gap = grouped ? winnerPlace - loserPlace : winner - loser;
+    if (gap <= 0) return null;
+    return {
+      matchId: match.id,
+      winnerId,
+      loserId,
+      kind: "seed",
+      gap,
+      winner,
+      loser,
+      ...(grouped ? { winnerSeed, loserSeed } : {}),
+    };
   }
   return null;
+}
+
+/** The place in a group seed's name ("B4" is 4th in Group B), else null. */
+function groupPlace(label: string | undefined): number | null {
+  const named = label ? /^[A-Z]+(\d+)$/.exec(label) : null;
+  return named ? Number(named[1]) : null;
 }
 
 /**
@@ -208,12 +245,13 @@ export function biggestUpset<M extends UpsetMatch>(
 
 /**
  * Why a series counts as an upset, in the words Home prints after it:
- * "from 6 points behind going into the week", or "seed 4 over seed 1".
- * Stored facts only: the table it was judged against, or the seeds.
+ * "from 6 points behind going into the week", or "seed 4 over seed 1"
+ * ("seed A3 over seed B2" in a group season). Stored facts only: the table
+ * it was judged against, or the seeds.
  */
 export function upsetDetail(upset: SeriesUpset): string {
   if (upset.kind === "seed") {
-    return `seed ${upset.winner} over seed ${upset.loser}`;
+    return `seed ${upset.winnerSeed ?? upset.winner} over seed ${upset.loserSeed ?? upset.loser}`;
   }
   const points = upset.gap === 1 ? "point" : "points";
   return `from ${upset.gap} ${points} behind going into the week`;

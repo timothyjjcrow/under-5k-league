@@ -9,6 +9,7 @@ import {
 // teams of 5, a 4,500 soft MMR limit). Every sentence comes from leagueRules
 // (src/lib/league-rules.ts); this checks the page renders it whole.
 const SECTIONS = [
+  "Season format",
   "Series format",
   "Standings and tiebreakers",
   "Playoffs",

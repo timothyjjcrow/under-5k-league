@@ -4,6 +4,7 @@ import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
 import { nextRoundPairings, upcomingMatchNight } from "./schedule";
 import { projectPlayoffField } from "./playoff-field";
+import { firstPlayoffWeek } from "./season-format";
 import {
   playoffSetupRevision,
   type PlayoffCommandIntent,
@@ -468,9 +469,17 @@ export async function createPlayoffBracket(
         }
 
         const pairings = playoffField.pairings;
-        const lastRegularWeek = matches
-          .filter((match) => match.phase === MATCH_PHASE.REGULAR || match.phase === MATCH_PHASE.TIEBREAKER)
-          .reduce((max, match) => Math.max(max, match.week), 0);
+        const lastWeekOf = (phase: string) =>
+          matches
+            .filter((match) => match.phase === phase)
+            .reduce((max, match) => Math.max(max, match.week), 0);
+        // The week after the regular season is kept for tiebreakers, so round
+        // one plays the week after that, or after the tiebreakers if they ran
+        // long, whether or not a tie needed the week.
+        const roundOneWeek = firstPlayoffWeek(
+          lastWeekOf(MATCH_PHASE.REGULAR),
+          lastWeekOf(MATCH_PHASE.TIEBREAKER),
+        );
         const phase =
           pairings.length === 1 ? MATCH_PHASE.FINAL : MATCH_PHASE.PLAYOFF;
         const bestOf =
@@ -483,7 +492,7 @@ export async function createPlayoffBracket(
         const playoffScheduledAt = season.firstMatchNight
           ? upcomingMatchNight(
               season.firstMatchNight,
-              lastRegularWeek + 1,
+              roundOneWeek,
               Math.max(Date.now(), lastTiebreakerKickoff + 1),
             )
           : null;
@@ -504,7 +513,7 @@ export async function createPlayoffBracket(
         await tx.match.createMany({
           data: pairings.map((pairing, index) => ({
             seasonId,
-            week: lastRegularWeek + 1,
+            week: roundOneWeek,
             phase,
             homeTeamId: pairing.home,
             awayTeamId: pairing.away,

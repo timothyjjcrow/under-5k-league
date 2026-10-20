@@ -123,6 +123,21 @@ describe("weekList", () => {
   });
 });
 
+describe("standingsCaption in a group-stage season", () => {
+  const live = { total: 20, completed: 4, pending: 16, allComplete: false, pendingWeeks: [2] };
+  it("says how the groups share the places, and names the final tables", () => {
+    expect(
+      standingsCaption({ status: live as never, postseason: false, bracketSize: 8, eligibleTeams: 10, groupQualifiers: [4, 4] }),
+    ).toBe("Top 4 of each group make the playoffs · 10 eligible teams");
+    expect(
+      standingsCaption({ status: { ...live, completed: 20, pending: 0, allComplete: true } as never, postseason: false, bracketSize: 8, eligibleTeams: 10, groupQualifiers: [4, 4] }),
+    ).toBe("Final group tables");
+    expect(
+      standingsCaption({ status: live as never, postseason: false, bracketSize: 8, eligibleTeams: 9, groupQualifiers: [3, 5] }),
+    ).toBe("8 playoff places · 9 eligible teams");
+  });
+});
+
 describe("standingsCaption", () => {
   const caption = (
     matches: ReturnType<typeof m>[],

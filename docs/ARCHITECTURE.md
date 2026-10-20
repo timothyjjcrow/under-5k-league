@@ -209,11 +209,17 @@ write so it cannot race Start/Abort, phase changes, standin cover, or another
 roster command.
 
 **Schedule generation.** `generateSchedule`
-(`src/app/actions/admin-schedule-results.ts`) runs
-the pure circle-method round robin (`roundRobin` in `src/lib/schedule.ts`,
-home/away fairness, rotating BYE, optional mirrored second leg) and stamps
-kickoffs as pure arithmetic off `Season.firstMatchNight`
-(`matchNightForWeek`: week N = first + (N−1)×7d). The rendered active-season
+(`src/app/actions/admin-schedule-results.ts`, over `replaceRegularSchedule`,
+shared with `swapGroupTeams`) takes the season's format from its team count
+(`seasonFormat`, `src/lib/season-format.ts`: one table up to nine teams,
+played twice up to four; two groups from ten, drawn by roster MMR and stored
+on `Team.groupKey`), runs the pure circle-method round robin per group
+(`regularSeasonFixtures` over `roundRobin` in `src/lib/schedule.ts`,
+home/away fairness, rotating BYE, mirrored second leg for small tables) and
+stamps kickoffs as pure arithmetic off `Season.firstMatchNight`
+(`matchNightForWeek`: week N = first + (N−1)×7d). The week after the last
+regular week is reserved for tiebreakers; round one plays the week after it
+(`firstPlayoffWeek`). The rendered active-season
 id is a required mutation claim. Active season, lifecycle/Draft, teams,
 withdrawal flags, played rows, attached games, and replacement collateral are
 read in the same Serializable transaction that deletes/recreates fixtures and
@@ -290,10 +296,11 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
 - _Standings and stats_: everything is derived at read time.
   `computeStandings` (`src/lib/standings.ts`, 3/1/0 points, tiebreak chain
   ending in head-to-head mini-tables) is the regular points table. The shared
-  `projectPlayoffField` projection computes that complete table first and only
-  then removes withdrawn teams from eligibility, preserving every survivor's
-  played/ruled results while producing the cut, one-indexed seed map, and
-  first-round pairings used by every page and the write service. Unresolved
+  `projectPlayoffField` projection computes that complete table first (one per
+  group in a group season, each from its own results) and only then removes
+  withdrawn teams from eligibility, preserving every survivor's played/ruled
+  results while producing the cut, one-indexed seed map (A1, B1, A2… across
+  groups), and first-round pairings used by every page and the write service. Unresolved
   qualification/seeding ties require a tiebreaker week (BO1 single-elimination
   brackets, at most three games per team; ties published before 20 September
   2026 keep their BO3 / BO1 double-elimination rules): `TIEBREAKER`
@@ -860,7 +867,8 @@ enums, so every status column is a string whose allowed values live in
   status ACTIVE/WITHDRAWN/REMOVED, MMR + questionnaire.
 - `Team` / `TeamMember` — rosters; `TeamMember @@unique([seasonId, userId])`
   stops double-drafting; `price > 0` is the exact auction-vs-free-agent
-  discriminator `undoLastSale` relies on.
+  discriminator `undoLastSale` relies on. `Team.groupKey` ("A"/"B") is the
+  team's group in a season of ten or more teams, null for one table.
 - `Draft` — one row per season: the whole auction state (status, rotation,
   live lot, both clocks). Every transition is a guarded `updateMany` claim on
   this row.

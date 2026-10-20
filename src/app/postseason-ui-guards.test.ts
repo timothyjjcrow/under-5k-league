@@ -135,7 +135,7 @@ describe("postseason status semantics", () => {
 
     expect(standings).toContain('<th scope="row"');
     expect(standings).toContain("current playoff seed");
-    expect(standings).toContain("seed {row.playoffSeed}");
+    expect(standings).toContain("seed {row.playoffSeedLabel ?? row.playoffSeed}");
     expect(standings).toContain("outside the current playoff field");
     expect(standings).not.toContain('<tr aria-hidden className="bg-success');
   });

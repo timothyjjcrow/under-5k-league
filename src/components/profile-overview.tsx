@@ -31,7 +31,10 @@ export function ProfileOverview({
   streakLabel: string | undefined;
   /** Their team this season, if drafted: the fourth tile. */
   team: {
+    /** Its place in its table (its group's in a group season); 0 when unknown. */
     rank: number;
+    /** "A", "B" in a group season: the tile reads "Group A rank". */
+    groupKey: string | null;
     row: (SeriesRecordCounts & { points: number }) | undefined;
     /** Their playoff run, once the season has a bracket. */
     playoffTile: { value: string; hint: string } | null;
@@ -106,8 +109,10 @@ export function ProfileOverview({
                   size="md"
                 />
               ) : team ? (
+                // In a group season the rank is the group's: the label
+                // names it, so "#2" keeps the tile's size on a phone.
                 <Stat
-                  label="Team rank"
+                  label={team.groupKey ? `Group ${team.groupKey} rank` : "Team rank"}
                   value={team.rank > 0 ? `#${team.rank}` : "—"}
                   hint={
                     team.row

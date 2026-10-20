@@ -33,6 +33,12 @@ import {
   type TeamPlayoffStatus,
 } from "@/lib/playoff-status";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
+import {
+  bracketSeedLabels,
+  placeInTable,
+  placeLabel,
+  placeOrder,
+} from "@/lib/season-groups";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { cn } from "@/lib/utils";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
@@ -137,7 +143,9 @@ export default async function TeamsPage() {
   // Level teams waiting on a tiebreaker match: the standings table swaps
   // their "Tied" chip for the tiebreaker badge, so these cards drop it too.
   const tiebreakerPending = new Set(publicDeadHeatTeamIds(field, matches));
-  const rankOf = new Map(standings.map((s, i) => [s.teamId, i + 1]));
+  // The cards' order: the table's, or in a group season place by place
+  // across the groups (A1, B1, A2, B2…). A sort key, never a printed place.
+  const rankOf = new Map(placeOrder(field).map((teamId, i) => [teamId, i + 1]));
   const rowOf = new Map(standings.map((s) => [s.teamId, s]));
   const played = matches.some(
     (m) => m.status === "COMPLETED" && m.phase === "REGULAR",
@@ -205,6 +213,8 @@ export default async function TeamsPage() {
       (m) => m.phase === MATCH_PHASE.PLAYOFF || m.phase === MATCH_PHASE.FINAL,
     ),
   );
+  // How the bracket names each seed: "A1", "B4" in a group season.
+  const seedLabelOf = bracketSeedLabels(seedOf, teams);
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   // The signed-in player's own card gets a "Your team" tag.
   const viewerTeamId = viewer
@@ -291,7 +301,8 @@ export default async function TeamsPage() {
             screens tall, each card a wide band with its chips on the left. */}
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
           {ordered.map((t) => {
-            const rank = rankOf.get(t.id) ?? 0;
+            // Its place in its own table: its group's in a group season.
+            const place = placeInTable(field, t.id);
             const seed = playoffStatus.size > 0 ? seedOf.get(t.id) : undefined;
             const status = playoffStatus.get(t.id);
             const row = played ? rowOf.get(t.id) : undefined;
@@ -306,13 +317,13 @@ export default async function TeamsPage() {
             if (seed) {
               summary.push(
                 <span key="seed" className="font-medium text-fg">
-                  Seed {seed}
+                  Seed {seedLabelOf.get(t.id) ?? seed}
                 </span>,
               );
-            } else if (row && rank > 0) {
+            } else if (row && place) {
               summary.push(
                 <span key="rank" className="font-medium text-fg">
-                  Rank {rank}
+                  {place.groupKey ? placeLabel(place) : `Rank ${place.place}`}
                 </span>,
               );
             }

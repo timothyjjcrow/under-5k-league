@@ -421,7 +421,7 @@ function TeamRow({
     <button
       type="button"
       aria-pressed={selected}
-      aria-label={`${selected ? "Stop tracing" : "Trace"} ${side.name}${side.seed != null ? `, seed ${side.seed}` : ""}${showScore ? `, score ${score}` : ""}${isChampion ? ", champion" : completed && won ? ", match winner" : ""} through the playoff bracket`}
+      aria-label={`${selected ? "Stop tracing" : "Trace"} ${side.name}${side.seed != null ? `, seed ${side.seedLabel ?? side.seed}` : ""}${showScore ? `, score ${score}` : ""}${isChampion ? ", champion" : completed && won ? ", match winner" : ""} through the playoff bracket`}
       title={`Trace ${side.name}'s bracket run`}
       onClick={() => trace.onSelect(selected ? null : side.teamId)}
       onMouseEnter={() => trace.onHover(side.teamId)}
@@ -436,7 +436,7 @@ function TeamRow({
       )}
     >
       <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
-        {side.seed ?? ""}
+        {side.seedLabel ?? side.seed ?? ""}
       </span>
       <TeamCrest
         name={side.name}
