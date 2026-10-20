@@ -37,7 +37,7 @@ import {
   otherSlot,
   unitName,
 } from "./layout.mjs";
-import { asUser, must } from "./runner.mjs";
+import { asUser, must, removeTree } from "./runner.mjs";
 
 export function readLive(ctx, lg) {
   const live = readJson(ctx.layout.liveJson(lg));
@@ -383,7 +383,7 @@ function removeEmptyDirs(root, relative = "") {
  * Resolves {removed: [release ids and "tools/<sha12>"], staticFilesRemoved};
  * release-box.mjs counts `removed` as an array.
  */
-export function pruneLeague(ctx, lg) {
+export async function pruneLeague(ctx, lg) {
   const { layout } = ctx;
   const live = readLive(ctx, lg);
   const ids = (() => {
@@ -406,7 +406,8 @@ export function pruneLeague(ctx, lg) {
   const removedReleases = [];
   for (const id of ids) {
     if (keep.has(id)) continue;
-    rmSync(layout.release(id), { recursive: true, force: true });
+    // Other users wrote parts of it: the build user, the league user's caches.
+    await removeTree(ctx.runner, layout.release(id), "prune_failed");
     removedReleases.push(id);
   }
 
@@ -422,12 +423,14 @@ export function pruneLeague(ctx, lg) {
       .filter((name) => /^[0-9a-f]{12}$/.test(name))
       .map((name) => ({ name, mtime: statSync(path.join(layout.tools, name)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime || b.name.localeCompare(a.name));
-    clones.slice(TOOLS_KEPT).forEach(({ name }) => {
-      if (name === current) return;
-      rmSync(path.join(layout.tools, name), { recursive: true, force: true });
+    for (const { name } of clones.slice(TOOLS_KEPT)) {
+      if (name === current) continue;
+      // A tools clone stays the build user's tree.
+      await removeTree(ctx.runner, path.join(layout.tools, name), "prune_failed");
       removedTools.push(name);
-    });
-  } catch {
+    }
+  } catch (error) {
+    if (error instanceof AgentError) throw error;
     // No tools folder yet.
   }
 

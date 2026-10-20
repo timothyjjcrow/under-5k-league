@@ -6,10 +6,10 @@
 // the build under memory limits. The league env reaches the build only through
 // `-p EnvironmentFile=`; the build log is written with every env value of 8 or
 // more characters replaced by [redacted].
-import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readlinkSync } from "node:fs";
 import path from "node:path";
 import { parseCgroupReport } from "./cgroup-report.mjs";
-import { loadLeagueEnv, openRedactedLog, writeJsonAtomic } from "./context.mjs";
+import { loadLeagueEnv, openRedactedLog, writeFileAtomic, writeJsonAtomic } from "./context.mjs";
 import { AgentError, BIN, MIN_BUILD_FREE_BYTES, RELEASE_WRITABLE_DIRS, USERS, makeReleaseId } from "./layout.mjs";
 import { asUser, must, systemdRunArgs } from "./runner.mjs";
 
@@ -50,12 +50,51 @@ export const REQUIRED_ARTIFACTS = Object.freeze([
  * The build user's home and npm cache. ggd2l-build has no login home, and npm,
  * Prisma and Next each write a little under $HOME, so every unit that runs
  * repo code as ggd2l-build gets this one. Created here, idempotently.
+ *
+ * Root makes the home: it sits in root's /var/cache, where nobody else can put
+ * anything. The npm cache sits in the home, where any build's install script
+ * can leave a link in its place, and GNU `install -d` run as root would re-own
+ * the link's target (say /usr/local/lib/ggd2l, the agent itself). So root
+ * never creates, chowns or chmods it: it must be missing or a real folder, and
+ * the build user makes it.
  */
 export async function buildUserEnv(ctx) {
   const { layout, runner } = ctx;
-  for (const dir of [layout.buildHome, layout.npmCache])
-    await must(runner, "install_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0750", dir]);
+  await must(runner, "install_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0750", layout.buildHome]);
+  requireDirOrMissing(layout.npmCache);
+  const [command, args] = asUser(USERS.build, BIN.install, ["-d", "-m", "0750", layout.npmCache]);
+  await must(runner, "install_failed", command, args);
   return { HOME: layout.buildHome, npm_config_cache: layout.npmCache };
+}
+
+/** `file` is missing or a real directory: never a link, never anything else. */
+function requireDirOrMissing(file) {
+  let stat;
+  try {
+    stat = lstatSync(file);
+  } catch {
+    return;
+  }
+  if (!stat.isDirectory()) throw new AgentError("unsafe_path");
+}
+
+/**
+ * A fresh folder for the build user to clone or unpack into (tools/<sha12>, a
+ * release, bot/releases/<sha12>). Root makes it with a plain mkdir, which
+ * fails on anything already at the name, a link included, and follows
+ * nothing; it sets the mode while the folder is still root's, and only then
+ * hands it over with chown -h. The parent is root's and the build user cannot
+ * write it (install-kit.sh), so it can neither plant a link at the name first
+ * nor swap the folder for one later.
+ */
+export async function makeBuildDir(ctx, dir, mode, code) {
+  try {
+    mkdirSync(dir, { mode: 0o700 });
+  } catch (error) {
+    throw new AgentError(error?.code === "EEXIST" ? "unsafe_path" : code);
+  }
+  await must(ctx.runner, code, BIN.chmod, [mode, dir]);
+  await must(ctx.runner, code, BIN.chown, ["-h", `${USERS.build}:${USERS.build}`, dir]);
 }
 
 /**
@@ -88,13 +127,13 @@ export async function requireOnMain(ctx, commit) {
 }
 
 /**
- * A fresh clone of the mirror at exactly `commit`, owned by ggd2l-build.
- * The mirror's main lives under refs/remotes, which a plain clone skips, so
- * the clone fetches it by name before checking out.
+ * A fresh clone of the mirror at exactly `commit`, owned by ggd2l-build, into
+ * the empty folder makeBuildDir made. The mirror's main lives under
+ * refs/remotes, which a plain clone skips, so the clone fetches it by name
+ * before checking out.
  */
 export async function cloneAt(ctx, dir, commit) {
   const { runner } = ctx;
-  await must(runner, "clone_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0755", dir]);
   for (const args of [
     ["clone", "--quiet", "--no-hardlinks", "--no-checkout", ctx.layout.repo, dir],
     ["-C", dir, "fetch", "--quiet", "--no-tags", "origin", "+refs/remotes/origin/main:refs/remotes/origin/main"],
@@ -146,20 +185,36 @@ export function assertLinksContained(dir, code = "link_escapes") {
   }
 }
 
-// A release or the bot: its group reads it, others nothing. A tools clone,
-// which the build user and ggd2l-ops both read: everyone reads it.
-const RELEASE_TREE_MODE = "g+rX,g-w,o-rwx";
-export const TOOLS_TREE_MODE = "a+rX,go-w";
+/**
+ * Take back a tree the build user wrote: root owns every entry (chown never
+ * following a link), the top must now be a real folder root owns, and only
+ * root may add or replace entries in it. Nothing root does through `dir`
+ * (read it, chmod it, write a record into it) comes before this: until the
+ * chown the top is the build user's, and were its parent ever writable again,
+ * the folder could have been renamed aside and a link left in its place. A
+ * chown -h on that link re-owns only the link, so the check sees it.
+ */
+export async function takeBackTree(runner, dir, group, code) {
+  await must(runner, code, BIN.chown, ["-R", "-P", "-h", `root:${group}`, dir]);
+  let stat = null;
+  try {
+    stat = lstatSync(dir);
+  } catch {
+    // Gone: refused below.
+  }
+  // The agent runs as root; a test runs as its own user and fakes the chown.
+  if (!stat?.isDirectory() || stat.uid !== process.getuid()) throw new AgentError("unsafe_path");
+  await must(runner, code, BIN.chmod, ["go-w", dir]);
+}
 
 /**
- * Take a tree the build user wrote: root owns it (never following a link),
- * no link escapes it, then nobody but root can write it, and the group (or,
- * with TOOLS_TREE_MODE, everyone) can read it.
+ * Take a tree the build user wrote (takeBackTree), check that no link escapes
+ * it, then the group can read it and others nothing.
  */
-export async function lockDownTree(runner, dir, group, code, mode = RELEASE_TREE_MODE) {
-  await must(runner, code, BIN.chown, ["-R", "-P", "-h", `root:${group}`, dir]);
+export async function lockDownTree(runner, dir, group, code) {
+  await takeBackTree(runner, dir, group, code);
   assertLinksContained(dir);
-  await must(runner, code, BIN.chmod, ["-R", mode, dir]);
+  await must(runner, code, BIN.chmod, ["-R", "g+rX,g-w,o-rwx", dir]);
 }
 
 /**
@@ -226,12 +281,16 @@ export async function buildRelease(ctx, lg, commit) {
     buildLogSha256: null,
   };
 
+  // Set once this run has made the folder: a failure before that leaves
+  // whatever holds the name alone.
+  let made = false;
   try {
-    // 3. Clone as ggd2l-build.
+    // 3. Clone as ggd2l-build. The build writes the server-action key into
+    // .next, so nobody else reads the folder. Root writes no record into it
+    // until it has taken the folder back (step 8, or a failure below).
+    await makeBuildDir(ctx, dir, "0700", "clone_failed");
+    made = true;
     await cloneAt(ctx, dir, commit);
-    // The build writes the server-action key into .next: nobody else reads it.
-    await must(runner, "clone_failed", BIN.chmod, ["0700", dir]);
-    writeJsonAtomic(path.join(dir, "release.json"), record);
 
     // 4. Install with devDependencies (typescript, tailwind): NODE_ENV unset.
     const install = systemdRunArgs({
@@ -333,16 +392,18 @@ export async function buildRelease(ctx, lg, commit) {
     ]);
 
     // 10. Record.
-    writeFileSync(path.join(dir, ".release.env"), `LEAGUE_RELEASE_SHA=${commit}\n`, { mode: 0o644 });
+    writeFileAtomic(path.join(dir, ".release.env"), `LEAGUE_RELEASE_SHA=${commit}\n`);
     logSha256 = await log.close();
     Object.assign(record, { state: "BUILT", builtAt: new Date(ctx.now()).toISOString(), buildLogSha256: logSha256 });
     writeJsonAtomic(path.join(dir, "release.json"), record);
     return { id, buildSeconds: record.buildSeconds, peakRssMb: record.peakRssMb };
   } catch (error) {
     if (logSha256 === null) logSha256 = await log.close();
-    // Leave the folder for inspection; prune removes a FAILED release.
-    if (existsSync(dir)) {
+    // Leave the folder for inspection, taken back first so the build user can
+    // neither change it nor rewrite its record; prune removes a FAILED release.
+    if (made) {
       try {
+        await takeBackTree(runner, dir, "root", "lockdown_failed");
         writeJsonAtomic(path.join(dir, "release.json"), { ...record, state: "FAILED", buildLogSha256: logSha256 });
       } catch {
         // The failure itself is what the caller needs to see.

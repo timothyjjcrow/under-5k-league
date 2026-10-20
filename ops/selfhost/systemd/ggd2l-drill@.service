@@ -4,6 +4,12 @@
 # league. drill.env holds only PG_RESTORE_TEST_URL; the drill never sees a
 # league role's password. Every run ends in ggd2l-alert@drill-%i.service, which
 # posts to Discord when a drill fails and when the next one passes.
+#
+# It runs as ggd2l-drill, never ggd2l-ops: it runs a tools clone, which the
+# build user's npm ci wrote, and ggd2l-ops holds the R2 key and the backups.
+# It reads only the dump the hourly backup hands it
+# (/var/backups/ggd2l/%i/drill/, group ggd2l-drill) and writes only its own
+# folder.
 [Unit]
 Description=GGD2L %i backup restore drill
 After=network-online.target postgresql@18-main.service
@@ -13,9 +19,9 @@ OnSuccess=ggd2l-alert@drill-%i.service
 
 [Service]
 Type=oneshot
-User=ggd2l-ops
-Group=ggd2l-ops
-WorkingDirectory=/var/backups/ggd2l/%i
+User=ggd2l-drill
+Group=ggd2l-drill
+WorkingDirectory=/var/lib/ggd2l-drill/%i
 EnvironmentFile=/etc/ggd2l/drill.env
 EnvironmentFile=-/etc/ggd2l/healthchecks.env
 # Prisma (the drill migrates the restored copy) must not phone home.
@@ -30,14 +36,9 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
-# The one writable path: drill-league.sh refuses a league folder it cannot
-# write (state/, last-drill.json). ProtectSystem=strict leaves everything else
-# read-only, /run and /run/lock included, so the lock both leagues' drills
-# share (they share the scratch database) must need no write outside it
-# (units.test.mjs checks the script).
-ReadWritePaths=/var/backups/ggd2l/%i
-# The drill uploads nothing, and it runs Prisma's CLI from the tools clone:
-# the R2 credentials, which can delete every offsite copy, stay out of its
-# reach. "-": a box with no R2 yet still drills. The agent's `drill <lg> <sha>`
-# passes the same property (agent/tools.mjs).
-InaccessiblePaths=-/etc/ggd2l/rclone.conf
+# The one writable path: drill-league.sh refuses a folder it cannot write
+# (its copy of the dump, last-drill.json). ProtectSystem=strict leaves
+# everything else read-only, /run and /run/lock included, so the lock both
+# leagues' drills share (they share the scratch database) is a read-only
+# descriptor of /var/lib/ggd2l-drill (backup-scripts.test.mjs checks both).
+ReadWritePaths=/var/lib/ggd2l-drill/%i

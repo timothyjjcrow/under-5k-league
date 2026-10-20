@@ -45,9 +45,10 @@ KIT_ROOT="$(cd "${HERE}/../.." && pwd -P)"
 untrusted="$(kit_untrusted "${KIT_ROOT}")" || die "could not inspect the clone ${KIT_ROOT}"
 [[ -z "$untrusted" ]] \
   || die "${untrusted} is owned or writable by a user other than root; run this only from root's own clone (see the header)"
-# The agent locks every tools clone and release down to root once the build
+# The agent locks every release and bot release down to root once the build
 # user's npm has run in it, so they pass the check above; what is in them is
-# still the build user's work. The same refusal is in install-kit.sh.
+# still the build user's work. A tools clone stays the build user's, which
+# the check above refuses. The same refusal is in install-kit.sh.
 case "${KIT_ROOT}/" in
   /srv/ggd2l/*) die "${KIT_ROOT} is a clone the build user made; run this only from root's own clone (see the header)" ;;
 esac

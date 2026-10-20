@@ -8,32 +8,14 @@
 // Its output goes, redacted like the build log, to
 // /var/log/ggd2l/tools/<verb>-<lg>-<stamp>-<sha12>.log; stdout and the error
 // JSON never carry it.
-//
-// A tools clone is root's from the end of its npm ci (TOOLS_TREE_MODE: all
-// read it, only root writes it), like a release: the hourly backup and the
-// drill run its scripts as ggd2l-ops, which holds the R2 credentials and the
-// dumps, so the build user, whose npm runs third-party code, must not be able
-// to change them. No verb runs from a clone root has not locked down.
-import {
-  cpSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readdirSync,
-  readFileSync,
-  readlinkSync,
-  renameSync,
-  rmSync,
-  statSync,
-  symlinkSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { ENV_GATE_LINE, TOOLS_TREE_MODE, buildUserEnv, cloneAt, fetchMain, lockDownTree, requireOnMain } from "./build.mjs";
+import { ENV_GATE_LINE, buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
 import { readLive } from "./releases.mjs";
-import { asUser, createRedactor, must, systemdRunArgs } from "./runner.mjs";
+import { asUser, createRedactor, must, removeTree, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
 
@@ -50,22 +32,10 @@ async function headOf(ctx, dir) {
   return result.code === 0 ? result.stdout.trim() : null;
 }
 
-/** Root owns the clone itself (lockDownTree has run), never through a link. */
-function lockedDown(ctx, dir) {
-  try {
-    return ctx.ownerOf(dir) === 0;
-  } catch {
-    return false;
-  }
-}
-
-/**
- * npm ci finished (it writes node_modules/.package-lock.json last) at this
- * exact sha, and root has locked the clone down since.
- */
+/** npm ci finished (it writes node_modules/.package-lock.json last) at this exact sha. */
 async function toolsReady(ctx, commit) {
   const dir = ctx.layout.toolsDir(commit);
-  if (!lockedDown(ctx, dir) || !existsSync(path.join(dir, "node_modules/.package-lock.json"))) return null;
+  if (!existsSync(path.join(dir, "node_modules/.package-lock.json"))) return null;
   return (await headOf(ctx, dir)) === commit ? dir : null;
 }
 
@@ -95,45 +65,21 @@ async function runUnit(ctx, unit, code) {
   if (result.stdout.trim() !== "success") throw new AgentError(code);
 }
 
-/**
- * `prepare <sha>`: the tools clone at the sha, with dev dependencies, owned by
- * root and readable by everyone.
- */
+/** `prepare <sha>`: the tools clone at the sha, with dev dependencies. */
 export async function prepareTools(ctx, commit) {
   await fetchMain(ctx);
   await requireOnMain(ctx, commit);
   const dir = ctx.layout.toolsDir(commit);
   if (!(await toolsReady(ctx, commit))) {
-    // A half-made clone (a crash inside npm ci), or one root never locked down
-    // (made before 2026-10-19, or a crash before the lockdown), is rebuilt
-    // from nothing: the build user could have changed it.
-    rmSync(dir, { recursive: true, force: true });
+    // A half-made clone (a crash inside npm ci) is rebuilt from nothing.
+    await removeTree(ctx.runner, dir, "clone_failed");
     mkdirSync(ctx.layout.tools, { recursive: true });
+    await makeBuildDir(ctx, dir, "0755", "clone_failed");
     await cloneAt(ctx, dir, commit);
     await npmCi(ctx, dir, ["--include=dev"], "install_failed");
   }
-  // After npm ci's unit has exited, as build does to a release. Again on a
-  // ready clone: it changes nothing there, and it finishes a lockdown a crash
-  // cut short after the chown. A clone it refuses (a link out of it) is
-  // removed: root may own it by then, and it must not look ready.
-  try {
-    await lockDownTree(ctx.runner, dir, "root", "tools_lockdown_failed", TOOLS_TREE_MODE);
-  } catch (error) {
-    rmSync(dir, { recursive: true, force: true });
-    throw error;
-  }
   if (!existsSync(ctx.layout.toolsCurrent)) linkAtomically(ctx.layout.toolsCurrent, path.basename(dir));
   return { dir };
-}
-
-/**
- * git refuses a repository another user owns ("dubious ownership"), and the
- * clone is root's: release-migrations.mjs reads HEAD and status as the build
- * user. Command-scope config (GIT_CONFIG_COUNT), which git honours for
- * safe.directory, names exactly this clone.
- */
-function gitSafeDirectory(dir) {
-  return { GIT_CONFIG_COUNT: "1", GIT_CONFIG_KEY_0: "safe.directory", GIT_CONFIG_VALUE_0: dir };
 }
 
 /**
@@ -150,13 +96,13 @@ function openToolLog(ctx, verb, lg, commit, envs) {
  * Run one repo script from the tools clone; resolves its output lines. With
  * several env files systemd reads them in order and a later file's value wins.
  */
-async function runTool(ctx, { dir, envFiles, setEnv = {}, properties = [], script, args = [], code, log }) {
+async function runTool(ctx, { dir, envFiles, setEnv = {}, script, args = [], code, log }) {
   const unit = systemdRunArgs({
     user: USERS.build,
     cwd: dir,
     envFiles,
-    properties: [...TOOLS_PROPERTIES, ...properties],
-    setEnv: { ...(await buildUserEnv(ctx)), ...gitSafeDirectory(dir), ...setEnv },
+    properties: TOOLS_PROPERTIES,
+    setEnv: { ...(await buildUserEnv(ctx)), ...setEnv },
     command: BIN.node,
     args: [script, ...args],
   });
@@ -264,25 +210,6 @@ export async function preflight(ctx, lg, commit) {
 }
 
 /**
- * A copy of the clone's prisma/ that the build user may write, for one
- * migrate run, in `work` (a folder root has just made). release-migrations.mjs
- * switches prisma/schema.prisma to postgresql for Prisma and back, and the
- * clone is root's. Root copies the folder out of the locked clone, so nothing
- * the build user could have planted is followed; the unit mounts the copy over
- * the clone's prisma/ (BindPaths=), where git still sees the committed files.
- */
-async function writablePrisma(ctx, dir, work) {
-  const copy = path.join(work, "prisma");
-  try {
-    cpSync(path.join(dir, "prisma"), copy, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true });
-  } catch {
-    throw new AgentError("migrate_failed");
-  }
-  await must(ctx.runner, "migrate_failed", BIN.chown, ["-R", "-P", "-h", `${USERS.build}:${USERS.build}`, copy]);
-  return `BindPaths=${copy}:${path.join(dir, "prisma")}`;
-}
-
-/**
  * `migrate <lg> <sha>`: release-migrations.mjs as the owner, with
  * VERCEL_ENV=production set only in that child (design D16), then the grant
  * check. The drill and backups then use these tools.
@@ -292,34 +219,25 @@ async function writablePrisma(ctx, dir, work) {
  * postflight attests the instance identity from APP_URL and the region. So
  * the unit reads the league env first and the migrate env second: systemd
  * lets the later file win, and only the owner's DATABASE_URL and DIRECT_URL
- * replace the app role's. Its prisma/ is a per-run copy (writablePrisma),
- * removed when the run ends.
+ * replace the app role's.
  */
 export async function migrate(ctx, lg, commit) {
   const env = loadLeagueEnv(ctx, lg);
   const owner = loadMigrateEnv(ctx, lg);
   const dir = await requireTools(ctx, commit);
-  mkdirSync(ctx.layout.runDir, { recursive: true });
-  const work = mkdtempSync(path.join(ctx.layout.runDir, "ggd2l-migrate-"));
-  try {
-    const bindPrisma = await writablePrisma(ctx, dir, work);
-    await withToolLog(ctx, "migrate", lg, commit, [env, owner], async (log) => {
-      const lines = await runTool(ctx, {
-        dir,
-        envFiles: [ctx.layout.leagueEnv(lg), ctx.layout.migrateEnv(lg)],
-        setEnv: { VERCEL_ENV: "production" },
-        properties: [bindPrisma],
-        script: "scripts/release-migrations.mjs",
-        args: ["--apply", commit],
-        code: "migrate_failed",
-        log,
-      });
-      if (!lines.some((line) => line.includes(`Migration release completed for ${commit}.`)))
-        throw new AgentError("migrate_failed");
+  await withToolLog(ctx, "migrate", lg, commit, [env, owner], async (log) => {
+    const lines = await runTool(ctx, {
+      dir,
+      envFiles: [ctx.layout.leagueEnv(lg), ctx.layout.migrateEnv(lg)],
+      setEnv: { VERCEL_ENV: "production" },
+      script: "scripts/release-migrations.mjs",
+      args: ["--apply", commit],
+      code: "migrate_failed",
+      log,
     });
-  } finally {
-    rmSync(work, { recursive: true, force: true });
-  }
+    if (!lines.some((line) => line.includes(`Migration release completed for ${commit}.`)))
+      throw new AgentError("migrate_failed");
+  });
   await grantsCheck(ctx, lg);
   linkAtomically(ctx.layout.toolsCurrent, path.basename(dir));
   return { ok: true };
@@ -353,15 +271,22 @@ export function readBackupRecord(ctx, lg) {
 /**
  * The record drill-league.sh writes after a passing drill, whether the weekly
  * unit or `drill <lg> <sha>` (systemd-run, outside the unit) ran it:
- * /var/backups/ggd2l/<lg>/state/last-drill.json, {ok, league, dump,
- * dumpSha256, tools, finishedAt}. A failed drill writes none, so this is the
- * last pass. Only a record for this league that says ok and carries a
- * readable finishedAt counts.
+ * /var/lib/ggd2l-drill/<lg>/last-drill.json, {ok, league, dump, dumpSha256,
+ * tools, finishedAt}. A failed drill writes none, so this is the last pass.
+ * Drills before 2026-10-19 ran as ggd2l-ops and wrote
+ * /var/backups/ggd2l/<lg>/state/last-drill.json; of the two, the later
+ * finishedAt answers. Only a record for this league that says ok and carries
+ * a readable finishedAt counts.
  */
 export function readDrillRecord(ctx, lg) {
-  const record = readJson(path.join(ctx.layout.backupDir(lg), "state", "last-drill.json"));
-  if (record?.ok !== true || record.league !== lg || !Number.isFinite(Date.parse(record.finishedAt ?? ""))) return null;
-  return record;
+  let best = null;
+  for (const file of [path.join(ctx.layout.drillState(lg), "last-drill.json"), path.join(ctx.layout.backupDir(lg), "state", "last-drill.json")]) {
+    const record = readJson(file);
+    const finishedAt = Date.parse(record?.finishedAt ?? "");
+    if (record?.ok !== true || record.league !== lg || !Number.isFinite(finishedAt)) continue;
+    if (!best || finishedAt > Date.parse(best.finishedAt)) best = record;
+  }
+  return best;
 }
 
 /**
@@ -405,8 +330,11 @@ export function newestDump(ctx, lg) {
 }
 
 /**
- * `drill <lg> [sha]`: the newest local dump restored into ld2l_restore_test by
- * rehearse-backup-restore.mjs as ggd2l_rehearsal, then dropped. Without a sha
+ * `drill <lg> [sha]`: the newest dump the backup handed to the drill, restored
+ * into ld2l_restore_test by rehearse-backup-restore.mjs as ggd2l_rehearsal,
+ * then dropped. It runs as ggd2l-drill, never ggd2l-ops: the drill runs the
+ * tools clone, which the build user's npm ci wrote, and ggd2l-ops holds the R2
+ * key and the backups. Without a sha
  * this is the weekly drill unit; with one, the same helper runs against that
  * sha's tools clone (design §2.5 step 4), so the new migrations are
  * rehearsed before `migrate` applies them.
@@ -425,17 +353,9 @@ export async function drill(ctx, lg, commit) {
   if (!existsSync(ctx.layout.drillEnv)) throw new AgentError("env_missing");
   const { env } = loadEnvFile(ctx, ctx.layout.drillEnv);
   const unit = systemdRunArgs({
-    user: USERS.ops,
+    user: USERS.drill,
     envFiles: [ctx.layout.drillEnv],
-    // As in ggd2l-drill@.service: the drill uploads nothing, and Prisma runs
-    // from the clone, so the R2 credentials stay out of its reach.
-    properties: [
-      "MemoryMax=700M",
-      "Nice=10",
-      "IOSchedulingClass=idle",
-      "RuntimeMaxSec=3600",
-      `InaccessiblePaths=-${ctx.layout.rcloneConf}`,
-    ],
+    properties: ["MemoryMax=700M", "Nice=10", "IOSchedulingClass=idle", "RuntimeMaxSec=3600"],
     setEnv: { GGD2L_TOOLS_DIR: dir },
     command: BIN.bash,
     args: [ctx.layout.helper("drill-league.sh"), lg, commit],
@@ -462,16 +382,17 @@ export async function botDeploy(ctx, commit) {
   const dir = path.join(layout.botReleases, short);
   const botDir = path.join(dir, "ops/dota-lobby-bot");
   if (!existsSync(path.join(botDir, "node_modules/.package-lock.json"))) {
-    rmSync(dir, { recursive: true, force: true });
+    await removeTree(runner, dir, "bot_deploy_failed");
     mkdirSync(layout.botReleases, { recursive: true });
-    await must(runner, "bot_deploy_failed", BIN.install, ["-d", "-o", USERS.build, "-g", USERS.build, "-m", "0755", dir]);
+    await makeBuildDir(ctx, dir, "0755", "bot_deploy_failed");
     const archive = path.join(dir, ".source.tar");
+    // The folder is the build user's until the lockdown, so it removes the archive too.
     for (const [command, args] of [
       asUser(USERS.build, BIN.git, ["-c", "safe.directory=*", "-C", layout.repo, "archive", "--format=tar", `--output=${archive}`, commit, "ops/dota-lobby-bot"]),
       asUser(USERS.build, BIN.tar, ["-x", "-f", archive, "-C", dir]),
+      asUser(USERS.build, BIN.rm, ["-f", "--", archive]),
     ])
       await must(runner, "bot_deploy_failed", command, args);
-    rmSync(archive, { force: true });
     await npmCi(ctx, botDir, ["--omit=dev"], "bot_deploy_failed");
     await lockDownTree(runner, dir, USERS.bot, "bot_deploy_failed");
   }

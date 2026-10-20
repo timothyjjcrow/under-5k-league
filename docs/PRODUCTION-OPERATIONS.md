@@ -1109,8 +1109,9 @@ vCPU, 2 GB RAM plus 4 GB swap, 50 GB disk). Its units:
 
 `box_agent status` reports the units (the config archive's included), each
 league's live release and slots, disk, memory, swap, the last backup, the last
-drill (the later of the drill unit's last run and `state/last-drill.json`,
-which every passing drill writes, the agent's `drill <lg> <sha>` included), a
+drill (the later of the drill unit's last run and the drill's
+`last-drill.json`, which every passing drill writes, the agent's
+`drill <lg> <sha>` included), a
 pending reboot, and two counts for the last 24 hours: real 5xx
 (`serverErrors24h`) and the maintenance page's own 503s
 (`maintenance503s24h`). Every unit refuses to start without a valid
@@ -1220,12 +1221,12 @@ versionId R2 refuses; the kit README's Backups section has the detail and a
 diagnosis command). The weekly drill restores the newest dump on the box. Quarterly,
 about 15 minutes: Tim decrypts one daily offsite copy on the Mac, checks its
 SHA-256 and runs the same restore rehearsal against the Mac's scratch Postgres.
-Backups and drills run their scripts from a tools clone, which root owns
-from the end of its `npm ci` (`agent prepare`), so the build user cannot
-change what `ggd2l-ops` runs with the R2 credentials; the drill, which runs
-Prisma from the clone and uploads nothing, never sees `rclone.conf`. The R2
-token can still delete objects, so an R2 bucket lock on the backup prefixes
-is the remaining protection of the offsite history (kit README, Backups).
+The hourly backup runs the kit's own copies of its scripts, so `ggd2l-ops`,
+which holds the R2 credentials, runs nothing the build user wrote; the drill,
+which runs Prisma from a tools clone, runs as `ggd2l-drill`, which cannot
+read `rclone.conf`. The R2 token can still delete objects, so an R2 bucket
+lock on the backup prefixes is the remaining protection of the offsite
+history (kit README, Backups).
 
 **Cutover cleanup.** Once the 14 days are over (the old origins on 308 and
 both Neon databases deleted), shred the plaintext Neon dumps left in

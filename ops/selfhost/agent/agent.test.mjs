@@ -278,10 +278,6 @@ function secretBox() {
   const tools = box.layout.toolsDir(SHA);
   mkdirSync(path.join(tools, "node_modules"), { recursive: true });
   writeFileSync(path.join(tools, "node_modules/.package-lock.json"), "{}");
-  mkdirSync(path.join(tools, "prisma"), { recursive: true });
-  writeFileSync(path.join(tools, "prisma/schema.prisma"), 'datasource db {\n  provider = "sqlite"\n}\n');
-  // A prepared clone: root locked it down after npm ci.
-  box.own(tools);
   writeFileSync(box.layout.drillEnv, `PG_RESTORE_TEST_URL=postgresql://ggd2l_rehearsal:${"7a".repeat(32)}@127.0.0.1:5432/ld2l_restore_test\n`);
   writeFileSync(box.layout.modeFile("us"), renderMode("maintenance"));
   const dump = path.join(box.layout.cutoverDir("us"), "backup-2026-10-16T15-25-00-000-123.sql");

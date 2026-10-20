@@ -188,6 +188,17 @@ export function systemdRunArgs({ user, cwd, envFiles = [], setEnv = {}, unsetEnv
   return out;
 }
 
+/**
+ * `rm -rf` as root on a tree another user wrote (a clone, a release). GNU rm
+ * descends by file descriptor and never enters a folder swapped for a link
+ * mid-walk. Node 22's rmSync lstats a folder, then reads and deletes inside
+ * it by path, so whoever can write the tree can swap the folder for a link in
+ * between and have root delete files elsewhere.
+ */
+export function removeTree(runner, dir, code) {
+  return must(runner, code, BIN.rm, ["-rf", "--one-file-system", "--", dir]);
+}
+
 /** Run a command as an unprivileged user without systemd (short git and tar calls). */
 export function asUser(user, command, args) {
   return [BIN.runuser, ["-u", user, "--", command, ...args]];

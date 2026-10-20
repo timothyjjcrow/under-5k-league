@@ -376,13 +376,6 @@ Procedures live in `README.md` (Deployment, Backups), `docs/RELEASING.md` and
 - **A verified checksum is not a restorable backup.** `db:backup:verify`
   proves bytes; only a restore (`db:backup:rehearse`, which the box's weekly
   drill runs) proves the league comes back.
-- **Keep the backup's code first-party.** The hourly backup runs
-  `scripts/backup-db.mjs` and `verify-backup.mjs` (and the `src/lib/*.mjs`
-  they import) from a tools clone as `ggd2l-ops`, which holds the R2
-  credentials. The agent locks every tools clone to root after its `npm ci`
-  and runs nothing from one it has not, so the build user's npm can't change
-  them; a `node_modules` import in either script would bring third-party code
-  to those credentials. The drill runs Prisma and never sees `rclone.conf`.
 - **A rollback runs once.** `box_agent rollback <lg>` records the release it
   left (`rolledBackFrom` in `live.json`) and a second one refuses until the
   next promote, so a retry can't put the bad release back; going back to it
@@ -457,6 +450,37 @@ live since the cutover on 2026-10-17). What a code change must respect there:
   255 can repeat from the unit's first second. Count a new dependency's
   install and build cost on one vCPU, and a new background request's
   database work.
+- **Root never works through a link a service user could have left.** The
+  build user runs third-party install scripts and `ggd2l-ops` runs the
+  build user's tools clone, so either can leave a link wherever it writes,
+  and GNU `install -d`, `chown` and `chmod` change a link's target (until
+  2026-10-19 that let a build re-own the agent's own code). In
+  `ops/selfhost/`:
+  - Root changes only folders in a parent no service user can write.
+  - A folder the build user fills is made by `makeBuildDir`: root's
+    `mkdir`, then the mode, then `chown -h`.
+  - A tree comes back through `takeBackTree` before root reads, chmods or
+    writes through it.
+  - Such trees are deleted with `removeTree` (GNU `rm`). Node 22's
+    `rmSync` follows a folder swapped for a link mid-walk.
+  - Records go through `writeFileAtomic`.
+  - A folder inside a service user's own folder is that user's to make
+    (`buildUserEnv`'s npm cache, `ensure_user_dir`).
+
+  `install-kit.test.mjs` fails an `ensure_dir` whose parent a service user
+  can write.
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups. Code the build user wrote, including whatever a dependency's
+  install script changed in the tools clone, runs only as users without
+  them. The hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and their imports
+  (`/usr/local/lib/ggd2l/app/`). A change to those files therefore reaches
+  the box with `install-kit.sh`, not with an app release, and they must
+  stay free of packages: `install-kit.test.mjs` keeps `BACKUP_APP_FILES`
+  equal to their imports. The restore drill needs the tools clone, so it
+  runs as `ggd2l-drill`, from a private copy of the one dump each backup
+  hands it (`drill/`). `backup-scripts.test.mjs` fails a `ggd2l-ops` unit or
+  agent call that reaches for a tools clone.
 - **Never run a test suite, `pg:up` or `db:push` on the box.** Its localhost
   Postgres is production (`ggd2l_us`, `ggd2l_eu`), and the destructive
   scripts accept only the test names, which production never takes.

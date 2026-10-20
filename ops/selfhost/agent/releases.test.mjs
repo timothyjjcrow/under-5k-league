@@ -274,11 +274,15 @@ test("prune keeps live, previous and the newest build, and every slot's release"
   await startRelease(box.ctx, "us", NEW);
   await promoteRelease(box.ctx, "us", NEW);
   // Point slot a back at the old release explicitly: still referenced.
-  const result = pruneLeague(box.ctx, "us");
+  const result = await pruneLeague(box.ctx, "us");
   assert.deepEqual([...result.removed].sort(), [ancient, failed].sort());
   assert.equal(result.ok, true);
   for (const id of [OLD, NEW, newest]) assert.ok(existsSync(box.layout.release(id)), id);
   for (const id of [ancient, failed]) assert.ok(!existsSync(box.layout.release(id)), id);
+  // Other users wrote these trees: GNU rm deletes them, never Node's rmSync,
+  // which a folder swapped for a link mid-walk can steer outside the tree.
+  const removals = box.commandsMatching(/^\/usr\/bin\/rm -rf --one-file-system -- /).map((call) => call.args.at(-1));
+  assert.deepEqual(removals.sort(), [ancient, failed].map((id) => box.layout.release(id)).sort());
 });
 
 test("prune keeps the previous release for rollback even when no slot points at it", async () => {
@@ -293,7 +297,7 @@ test("prune keeps the previous release for rollback even when no slot points at 
   // The next candidate takes slot a, so the previous release is on no slot.
   await startRelease(box.ctx, "us", NEWER);
   assert.equal(liveJson(box).previous, OLD);
-  assert.deepEqual(pruneLeague(box.ctx, "us").removed, [ancient]);
+  assert.deepEqual((await pruneLeague(box.ctx, "us")).removed, [ancient]);
   for (const id of [OLD, NEW, NEWER]) assert.ok(existsSync(box.layout.release(id)), id);
 });
 
@@ -314,7 +318,7 @@ test("prune removes static files older than 14 days unless a kept release still 
     utimesSync(path.join(box.layout.tools, name), time, time);
   }
   symlinkSync("111111111111", box.layout.toolsCurrent);
-  const result = pruneLeague(box.ctx, "us");
+  const result = await pruneLeague(box.ctx, "us");
   assert.equal(result.staticFilesRemoved, 1);
   assert.ok(existsSync(path.join(root, "chunks/app.js")), "shipped by the live release");
   assert.ok(existsSync(path.join(root, "chunks/recent.js")));
@@ -323,8 +327,9 @@ test("prune removes static files older than 14 days unless a kept release still 
   // A fourth, older clone goes, by its tools/ name; current stays however old.
   mkdirSync(path.join(box.layout.tools, "000000000000"));
   utimesSync(path.join(box.layout.tools, "000000000000"), (T0 - 9000) / 1000, (T0 - 9000) / 1000);
-  assert.deepEqual(pruneLeague(box.ctx, "us").removed, ["tools/000000000000"]);
+  assert.deepEqual((await pruneLeague(box.ctx, "us")).removed, ["tools/000000000000"]);
   assert.ok(existsSync(path.join(box.layout.tools, "111111111111")));
+  assert.ok(box.commandsMatching(/^\/usr\/bin\/rm -rf --one-file-system -- /).some((call) => call.args.at(-1) === path.join(box.layout.tools, "000000000000")));
 });
 
 test("release-box counts the releases a real prune answer removed, not its tools clones", async () => {
@@ -339,7 +344,7 @@ test("release-box counts the releases a real prune answer removed, not its tools
   }
   symlinkSync("333333333333", box.layout.toolsCurrent);
   // The agent prints its answer as JSON; release-box reads that JSON.
-  const answer = JSON.parse(JSON.stringify(pruneLeague(box.ctx, "us")));
+  const answer = JSON.parse(JSON.stringify(await pruneLeague(box.ctx, "us")));
   assert.deepEqual([...answer.removed].sort(), [ancient, "tools/000000000000", "tools/111111111111"].sort());
   assert.equal(prunedReleaseCount(answer), 1);
 });

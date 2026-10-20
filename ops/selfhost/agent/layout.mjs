@@ -53,6 +53,7 @@ export const BIN = Object.freeze({
   node: "/usr/bin/node",
   npm: "/usr/bin/npm",
   psql: "/usr/bin/psql",
+  rm: "/usr/bin/rm",
   rsync: "/usr/bin/rsync",
   runuser: "/usr/sbin/runuser",
   systemctl: "/usr/bin/systemctl",
@@ -64,6 +65,8 @@ export const USERS = Object.freeze({
   build: "ggd2l-build",
   caddy: "caddy",
   ops: "ggd2l-ops",
+  // Runs the restore drill: the build user's tools clone, so never as ggd2l-ops.
+  drill: "ggd2l-drill",
   bot: "ggd2l-bot",
   league: (lg) => `ggd2l-${lg}`,
 });
@@ -80,9 +83,6 @@ export function createLayout(root = "/") {
     leagueEnv: (lg) => at("etc/ggd2l", `${lg}.env`),
     migrateEnv: (lg) => at("etc/ggd2l", `${lg}-migrate.env`),
     drillEnv: at("etc/ggd2l/drill.env"),
-    // The R2 credentials: the hourly backup and the config archive upload with
-    // them; the restore drill never sees them (InaccessiblePaths=).
-    rcloneConf: at("etc/ggd2l/rclone.conf"),
     caddyfile: at("etc/caddy/Caddyfile"),
     modeFile: (lg) => at("etc/caddy/ggd2l", `${lg}-mode.caddy`),
     allowFile: at("etc/caddy/ggd2l/allow.caddy"),
@@ -106,12 +106,12 @@ export function createLayout(root = "/") {
     toolLog: (name) => at("var/log/ggd2l/tools", `${name}.log`),
     caddyLogs: at("var/log/caddy"),
     backupDir: (lg) => at("var/backups/ggd2l", lg),
+    // The drill's own folder: its record and its private copy of the dump.
+    drillState: (lg) => at("var/lib/ggd2l-drill", lg),
     cutoverDir: (lg) => at("var/backups/ggd2l/cutover", lg),
     buildHome: at("var/cache/ggd2l-build"),
     npmCache: at("var/cache/ggd2l-build/npm"),
     lock: at("run/ggd2l-agent.lock"),
-    // Root's own folder for a verb's scratch copies (migrate's prisma/).
-    runDir: at("run"),
     rebootRequired: at("var/run/reboot-required"),
     srv: at("srv/ggd2l"),
   });
@@ -150,8 +150,8 @@ export const ERRORS = Object.freeze({
   gate_line_missing: "the build output lacks a production gate line",
   artifact_missing: "the built release lacks a required file",
   lockdown_failed: "locking down the release failed",
-  tools_lockdown_failed: "locking down the tools clone failed",
   link_escapes: "a symlink in the release points outside it",
+  unsafe_path: "refused a link or unexpected file where the agent works as root",
   publish_failed: "publishing static files failed",
   release_missing: "no such release on the box",
   release_not_built: "the release did not finish building",
@@ -189,6 +189,7 @@ export const ERRORS = Object.freeze({
   backup_failed: "the backup unit failed",
   drill_failed: "the restore drill failed",
   bot_deploy_failed: "deploying the lobby bot failed",
+  prune_failed: "removing an old release or tools clone failed",
   internal: "the agent hit an unexpected error",
 });
 

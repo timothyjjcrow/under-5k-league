@@ -58,7 +58,7 @@ export function parseMeminfo(text) {
 /**
  * A league's newest drill, from two sources. The drill unit's last run
  * (Result, ExecMainExitTimestamp) covers the weekly timer and `drill <lg>`,
- * failures included. state/last-drill.json, which every passing drill writes,
+ * failures included. last-drill.json (readDrillRecord), which every passing drill writes,
  * also covers `drill <lg> <sha>`, which runs outside the unit. The later one
  * answers: a failed run writes no record, so a failure after the last pass
  * shows, and a pass after a failure clears it. Times are ISO when readable.

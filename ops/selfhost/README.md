@@ -42,18 +42,20 @@ upgrades at 08:00 UTC with a reboot window at 09:00 UTC, journald capped at 500 
 |---|---|
 | Release agent | `/usr/local/sbin/ggd2l-agent` (runs `/usr/local/lib/ggd2l/ggd2l-agent.mjs`) |
 | Agent modules, env contract, renderers | `/usr/local/lib/ggd2l/` |
+| The hourly backup's repo scripts (kit copies) | `/usr/local/lib/ggd2l/app/{scripts,src/lib}/` |
 | SQL (parity, grants, scrub, identity) | `/usr/local/lib/ggd2l/sql/<name>.sql` |
 | Shell helpers | `/usr/local/lib/ggd2l/{provision-league-db,backup-league,drill-league,heartbeat,config-archive}.sh`, `discord-alert.mjs` |
 | Alert state (Discord) | `/var/lib/ggd2l-alerts/` (one JSON file per alert, `ggd2l-ops`) |
 | Releases, slots, live pointer | `/srv/ggd2l/<lg>/releases/<id>/`, `/srv/ggd2l/<lg>/slots/{a,b}`, `/var/lib/ggd2l/<lg>/live.json` |
 | Union static files (14-day prune) | `/srv/ggd2l/<lg>/static/_next/static/` |
-| Tools clones (root's; migrate, attest, backups, drills) | `/srv/ggd2l/tools/<sha12>/`, `/srv/ggd2l/tools/current` |
+| Tools clones (migrate, attest, drill) | `/srv/ggd2l/tools/<sha12>/`, `/srv/ggd2l/tools/current` |
 | Settings and secrets (root) | `/etc/ggd2l/` |
 | Caddy mode files | `/etc/caddy/ggd2l/{us,eu}-mode.caddy`, `/etc/caddy/ggd2l/allow.caddy` |
 | Tunnel | `/etc/cloudflared/config.yml`, `/etc/cloudflared/<uuid>.json` |
 | Caddy's admin API | the socket `/run/caddy/admin.sock` (0600 in a 0700 folder, both `caddy`'s): only caddy and root can open it |
 | Lobby bot | code `/srv/ggd2l/bot/current` (`agent bot-deploy <sha>`), settings `/etc/ggd2l/bot.env`, state `/var/lib/ggd2l-bot` (0700 `ggd2l-bot`, in the daily config archive) |
 | Backups | `/var/backups/ggd2l/<lg>/{local,offsite,state}/`, `/var/backups/ggd2l/config/` |
+| The drill's dump (handed over by the backup) and its own folder | `/var/backups/ggd2l/<lg>/drill/` (group `ggd2l-drill`), `/var/lib/ggd2l-drill/<lg>/` (`last-drill.json`) |
 | Cutover dumps | `/var/backups/ggd2l/cutover/<lg>/` (root, 0700) |
 | Logs | journald; Caddy JSON access logs in `/var/log/caddy/{us,eu,apex}.access.json` |
 
@@ -85,8 +87,9 @@ could reroute both leagues. Nothing calls it but `caddy reload`, the unit's
 root with `sudo curl -sS --unix-socket /run/caddy/admin.sock http://localhost/config/`.
 
 Linux users: `ggd2l` (admin, sudo), `ggd2l-build` (builds; holds no secret),
-`ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, drills,
-heartbeat), `ggd2l-bot`.
+`ggd2l-us` and `ggd2l-eu` (the web slots), `ggd2l-ops` (backups, heartbeat,
+alerts; holds the R2 key), `ggd2l-drill` (restore drills; reads only the dump
+the backup hands it), `ggd2l-bot`.
 
 ## Rules that are different on the box
 
@@ -121,6 +124,33 @@ heartbeat), `ggd2l-bot`.
   them for the league user and the unit's `ReadWritePaths=` names them; the
   rest of the release is read-only. CI's boot step fails a build that writes
   anywhere else.
+- **Root never works through a link a service user could have left.** GNU
+  `install -d`, `chown` and `chmod`, given a link, change its target. The
+  build user runs third-party install scripts, so it can leave a link
+  anywhere it can write, and so can any user that runs code it wrote. So
+  the agent and `install-kit.sh` change, as root, only
+  folders in a parent no service user can write. The agent makes each
+  folder the build user clones or unpacks into itself, with a plain `mkdir`
+  in a root-only parent (`tools/`, `bot/releases/`, `<lg>/releases/`), and
+  hands it over with `chown -h`. It takes a tree back
+  (`chown -R -P -h`, then requires a real, root-owned folder) before it
+  reads, chmods or writes through it. It deletes such trees with GNU `rm`,
+  never Node's `rmSync`. A folder inside a service user's own folder (the
+  npm cache, the backups' `local/` and `offsite/`) is made by that user. A
+  link or file where one of these folders goes stops the agent
+  (`unsafe_path`) or the install: treat that as an incident (see Kit
+  changes).
+- **`ggd2l-ops` runs only the kit's own code.** It holds the R2 key and the
+  backups, while the tools clone is whatever the build user's `npm ci`
+  wrote. So the hourly backup runs the kit's copies of `scripts/backup-db.mjs`,
+  `scripts/verify-backup.mjs` and what they import
+  (`/usr/local/lib/ggd2l/app/`, from root's clone): a change to those files
+  reaches the box with `install-kit.sh`, not with an app release
+  (`install-kit.test.mjs` keeps the list equal to their imports). The
+  restore drill needs the tools clone (Prisma, the commit's migrations), so
+  it runs as `ggd2l-drill`, which cannot read `rclone.conf` or write the
+  backups, from a private copy of the one dump each backup hands it in
+  `drill/`.
 - Each slot process holds one Prisma pool of `connection_limit=8`
   (`provision-league-db.sh`), so four processes in a release overlap use 32 of
   PostgreSQL's 47 usable connections. A release built before 2026-10-17's fix
@@ -134,8 +164,10 @@ heartbeat), `ggd2l-bot`.
   `serverErrors24h`, the real 5xx, and `maintenance503s24h`, the maintenance
   page's own 503s (a league held in maintenance answers everything with one).
   `lastDrill` is the later of the drill unit's last run (the weekly timer,
-  failures included) and `state/last-drill.json`, which every passing drill
-  writes, so a `drill <lg> <sha>` before a migration counts too.
+  failures included) and `/var/lib/ggd2l-drill/<lg>/last-drill.json`, which
+  every passing drill writes (before 2026-10-19, `state/last-drill.json` in
+  the backups, still read), so a `drill <lg> <sha>` before a migration
+  counts too.
 - **Logs:** `ssh ggd2l-1 sudo journalctl -u ggd2l-us@<slot> -f` for the live
   slot (`status` names it under `leagues.<lg>.live.slot`; a release flips it).
   `sudo -n ggd2l-agent logs us <sinceMs>` is the release gate's evidence, not a
@@ -226,23 +258,54 @@ output in the install's evidence. It rewrites files
 under `/etc/caddy`, `/etc/cloudflared` and `/etc/ggd2l`, so finish with one
 config archive (`sudo systemctl start ggd2l-config-archive`, see Backups).
 
-<a id="kit-2026-10-19"></a>**The first install after 2026-10-19, once,** brings Caddy's admin
-socket, the 08:00 package window, the bot's state in the config archive,
-tools clones locked to root, the drill without the R2 credentials,
-`envcheck` running the production validation, and `rollback` refusing a
-second time. Do the install and every step below in one sitting between
-07:20 and 08:10 UTC, with no release, match night, inhouse night or draft
-on: that is inside the release window and step 7's package window, and
-clear of the backups at :17 (they read `tools/current`, which step 2
-rebuilds). As the admin user on the box, straight after `install-kit.sh`:
+<a id="kit-2026-10-19"></a>**The first install after 2026-10-19, once,** closes a root escalation from
+the build user (step 1), takes the build user's code away from `ggd2l-ops`
+(step 5), moves Caddy's admin API to its socket (step 3), moves the package
+window to 08:00 (step 7) and adds the bot's state to the config archive
+(step 8). Its agent also runs the production validation in `envcheck` (step
+6) and refuses a second `rollback` (Rollback below). Do it all in one
+sitting between 07:20 and 08:10 UTC, with no release, match night, inhouse
+night or draft on. Each bound has a reason: step 3 restarts Caddy (both
+sites blink), which belongs inside the release window and straight after
+step 2; step 5's drills must not overlap an hourly backup at :17, whose
+handoff replaces the dump in `drill/` and deletes the old one, failing a
+drill still copying it (`no-dump`), so start after the 07:17 backups and
+keep step 5 clear of 08:17; and step 7 must run between 07:10 and 08:30. As
+the admin user on the box:
 
-1. **Caddy's admin API moves to its socket.** `install-kit.sh` installs the new
-   agent, Caddyfile and drop-in together, then finds the running Caddy still
-   on `localhost:2019`: it skips the reload (`caddy reload` would dial the
-   socket the new Caddyfile names, which nothing listens on yet) and prints
-   `NEEDS A RESTART`. Until Caddy restarts, every reload fails, the agent's
-   mode switches and so every release included (each puts its file back and
-   reports `caddy_reload_failed`), so restart it straight after the install,
+1. **Check that nothing was handed over, before installing.** Until now the
+   agent ran `install -d -o ggd2l-build` as root on the npm cache inside the
+   build user's own home, and on clone folders in parents the build user
+   could write; `install-kit.sh` did the same on the backups' `local/` and
+   `offsite/` inside `ggd2l-ops`'s folder. A link left there would have
+   handed its target (the agent's own code, say) to that user. `-xdev` stays
+   on `/`, the box's only filesystem:
+
+   ```bash
+   sudo find / -xdev \( -user ggd2l-build -o -user ggd2l-ops \) ! -path '/srv/ggd2l/*' \
+     ! -path '/var/cache/ggd2l-build' ! -path '/var/cache/ggd2l-build/*' ! -path '/var/backups/ggd2l/*' \
+     ! -path '/var/lib/ggd2l-ops' ! -path '/var/lib/ggd2l-ops/*' ! -path '/var/lib/ggd2l-alerts' \
+     ! -path '/var/lib/ggd2l-alerts/*' ! -path '/etc/ggd2l/rclone.conf' ! -path '/tmp/*' ! -path '/var/tmp/*' -print
+   sudo stat -c '%F %U:%G %a %n' /var/cache/ggd2l-build/npm /var/backups/ggd2l/{us,eu}/{local,offsite}
+   ```
+
+   The `find` prints nothing, and `stat` says `directory`, owned by
+   `ggd2l-build` or `ggd2l-ops`, for all five. Anything else (a symbolic link
+   there, or something of root's, such as `/usr/local/lib/ggd2l`, now owned
+   by one of those users) means root may already have run that user's code:
+   stop, install nothing, leave the box as it is, and handle it as an
+   incident (PRODUCTION-OPERATIONS). Record both outputs in the install's
+   evidence.
+2. **Install** as above. An install that stops at "is a link or not a
+   folder" is the same incident as step 1's `find` printing something. Among
+   its notes it prints `NEEDS A RESTART` for Caddy (step 3).
+3. **Restart Caddy, straight after the install.** `install-kit.sh` installs
+   the new agent, Caddyfile and drop-in together, then finds the running
+   Caddy still on `localhost:2019`: it skips the reload (`caddy reload`
+   would dial the socket the new Caddyfile names, which nothing listens on
+   yet) and prints `NEEDS A RESTART`. Until Caddy restarts, every reload
+   fails, the agent's mode switches and so every release included (each
+   puts its file back and reports `caddy_reload_failed`), so restart it
    before any `agent mode` or release, and never before the install (the old
    Caddyfile has no socket):
 
@@ -254,37 +317,39 @@ rebuilds). As the admin user on the box, straight after `install-kit.sh`:
    ```
 
    The restart also gives Caddy its `OOMScoreAdjust=-500`.
-2. **Lock the tools clone the backups run (steps 2-6).** Find the commit the backups run: `readlink /srv/ggd2l/tools/current` names
-   its `<sha12>` (the last `migrate`'s commit, which can be older than the
-   live one), and `sudo cat /srv/ggd2l/tools/<sha12>/.git/HEAD` its full
-   `<sha>`, which must start with that `<sha12>` (stop if it doesn't). Then
-   `sudo -n ggd2l-agent prepare <sha>`. That clone is the build user's, so
-   prepare deletes it and builds it again, locked (about a minute), and
-   `tools/current` keeps pointing at it. If it fails, run it again at once:
-   until it passes, `tools/current` is missing and every backup fails and
-   alerts. Every other clone stays the build user's until `prune` removes
-   it, and no verb runs from one (`tools_missing`) until a `prepare`
-   rebuilds it.
-3. Check it is root's and nobody else can write it:
-   `sudo stat -c '%U:%G %a' /srv/ggd2l/tools/<sha12> /srv/ggd2l/tools/<sha12>/scripts/backup-db.mjs`
-   (`root:root 755`, then `root:root 644`), and
-   `sudo find /srv/ggd2l/tools/<sha12> -not -user root -print -quit` prints
-   nothing. Git must still read it as the build user, as `migrate` does:
-   `cd / && sudo -u ggd2l-build env HOME=/var/cache/ggd2l-build GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.directory GIT_CONFIG_VALUE_0=/srv/ggd2l/tools/<sha12> git -C /srv/ggd2l/tools/<sha12> status --porcelain`
-   prints nothing and exits 0.
-4. `sudo systemctl start ggd2l-backup@us`, then `ggd2l-drill@us`, the same for
-   `eu`, and `systemctl show -p Result ggd2l-backup@us ggd2l-drill@us ggd2l-backup@eu ggd2l-drill@eu`
-   says `Result=success` four times (see Backups). The drill unit now hides
-   `rclone.conf`: `systemctl show -p InaccessiblePaths ggd2l-drill@us` names it.
-5. `sudo -n ggd2l-agent envcheck us` and `envcheck eu` each answer
-   `{"ok":true,"problems":[]}`. If one names a key, the live file already
-   fails the production validation: fix it before anything restarts that
-   league (Rules above), and don't wait for the reboot.
-6. `sudo -n ggd2l-agent attest <lg> <sha>` (step 2's commit) for each league
-   answers `{"ok":true}`: the build user's scripts run on the locked clone.
-   The first `migrate` on a locked clone is the next maintenance release's;
-   its `prepare`, `preflight` and `drill <lg> <sha>` run on the new commit's
-   locked clone first.
+4. **Check the new modes:**
+   `stat -c '%a %U:%G %n' /srv/ggd2l/tools /srv/ggd2l/bot/releases /srv/ggd2l/{us,eu}/releases`
+   prints `755`, `755`, `751` and `751`, each `root:root`. The next
+   release's `agent build` is the first run of the new folder handling; an
+   `unsafe_path` refusal from the agent, then or at any later verb, is step
+   1's incident too.
+5. **One backup, then one drill, per league.** The install added the
+   `ggd2l-drill` user and put `ggd2l-ops` in its group, installed the hourly
+   backup's scripts under `/usr/local/lib/ggd2l/app/`, and moved the drill
+   onto `ggd2l-drill`. First `systemctl is-active ggd2l-backup@us ggd2l-backup@eu`
+   must show neither `activating` (wait for the 07:17 runs to end). Then, in
+   this order, since each drill restores the dump its league's backup has
+   just handed over:
+
+   ```bash
+   sudo systemctl start ggd2l-backup@us
+   sudo systemctl start ggd2l-drill@us
+   sudo systemctl start ggd2l-backup@eu
+   sudo systemctl start ggd2l-drill@eu
+   systemctl show -p Result ggd2l-backup@us ggd2l-drill@us ggd2l-backup@eu ggd2l-drill@eu   # Result=success four times
+   sudo ls -l /var/backups/ggd2l/{us,eu}/drill/
+   ```
+
+   Each `drill/` holds one dump with its `.sha256` and `.metadata.json`,
+   `-rw-r----- ggd2l-ops ggd2l-drill`. A backup uploads to R2 before it hands
+   the drill its copy, so even a backup that fails `at step drill-handoff`
+   has its offsite copy.
+6. **envcheck both leagues:** `sudo -n ggd2l-agent envcheck us` and
+   `envcheck eu` each answer `{"ok":true,"problems":[]}`. If one names a
+   key, the live file already fails the production validation: fix it
+   before anything restarts that league (Rules above), and don't wait for
+   the reboot. This comes before step 7, whose package run can restart a
+   live slot (needrestart).
 7. **Move the package window** on the box that predates `provision-base.sh`'s
    drop-in. Do it between 07:10 and 08:30 UTC. systemd counts the next run
    from the last one (today's stock run, 06:00-07:00): before 08:00 the first
@@ -315,6 +380,12 @@ rebuilds). As the admin user on the box, straight after `install-kit.sh`:
    gets the bot's Steam session back. Only Tim's key reads it; on the Mac,
    `age -d -i <key file> config-<stamp>.tar.gz.age | tar -tzf - | grep ggd2l-bot`
    lists `steam-auth.json`, `lobbies.json` and `steam/`, and no lock or log.
+
+If a check in step 5 fails, installing the previous kit SHA the same way
+puts the backup and the drill back as they were. That kit's Caddyfile puts
+the admin API back on `localhost:2019`, which the Caddy step 3 restarted (on
+the socket) can't reload into, so that install stops at its Caddy reload:
+`sudo systemctl restart caddy`, then run it again.
 
 ## Rollback
 
@@ -364,8 +435,9 @@ rebuilds). As the admin user on the box, straight after `install-kit.sh`:
 **Each hourly backup** (as `ggd2l-ops`, with only `/etc/ggd2l/backup-<lg>.env`:
 the app role's `DIRECT_URL` and `BACKUP_DIR`):
 
-1. `scripts/backup-db.mjs` from `tools/current` writes
-   `local/backup-<stamp>-<pid>.sql` with its `.sha256` and `.metadata.json`.
+1. `scripts/backup-db.mjs` (the kit's copy in `/usr/local/lib/ggd2l/app`)
+   writes `local/backup-<stamp>-<pid>.sql` with its `.sha256` and
+   `.metadata.json`, all private to `ggd2l-ops`.
 2. `scripts/verify-backup.mjs` checks the checksum. No receipt secret is ever
    present, so no receipt reaches the journal; receipts for a season delete are
    minted by hand in a private terminal.
@@ -380,19 +452,24 @@ the app role's `DIRECT_URL` and `BACKUP_DIR`):
    - `ggd2l-backups/<lg>/daily/<date>/` for the first success at or after
      03:00Z each day;
    - `ggd2l-backups/<lg>/monthly/<YYYY-MM>/` for the first daily of each month.
-6. `state/last-backup.json` records the file, both sha256 values and the R2
+6. The dump and both sidecars are copied to `drill/` (0640, group
+   `ggd2l-drill`), replacing the last copy: all the drill can read. A failed
+   copy fails the run (`at step drill-handoff`) after the upload, so the
+   offsite copy is never lost to it, but no record is written.
+7. `state/last-backup.json` records the file, both sha256 values and the R2
    key, with a copy at `/var/backups/ggd2l/<lg>/last-backup.json`;
    `agent backup` and `agent status` report from it. healthchecks gets a ping,
    or `/fail` with the step that failed.
 
-The units run sandboxed (`ProtectSystem=strict`), so the backup and the drill
-write only inside their league folder, their locks included (the drills share
-one lock, a read-only hold on `/var/backups/ggd2l`). After installing or
+The units run sandboxed (`ProtectSystem=strict`), so the backup writes only
+inside its league folder and the drill only inside
+`/var/lib/ggd2l-drill/<lg>`, their locks included (the drills share one lock,
+a read-only hold on `/var/lib/ggd2l-drill`). After installing or
 changing the kit, start each unit once and check it, so a sandbox gap shows up
 now and not at the next hour:
 
 ```bash
-sudo systemctl start ggd2l-backup@us    # first: the drill restores the newest dump
+sudo systemctl start ggd2l-backup@us    # first: it hands the drill the dump it restores
 sudo systemctl start ggd2l-drill@us
 systemctl show -p Result ggd2l-backup@us ggd2l-drill@us   # Result=success for both
 ```
@@ -422,15 +499,15 @@ fresh dump before every migration.
 **Who can delete the offsite history.** The R2 token in `rclone.conf` is
 Object Read & Write, and on R2 that includes delete: whatever runs as
 `ggd2l-ops` with that file could wipe every offsite copy along with the local
-dumps it owns. The box keeps third-party code away from it: the backup runs
-only first-party scripts (`backup-db.mjs`, `verify-backup.mjs` and the
-`src/lib` files they import, no `node_modules`) from a tools clone root owns
-and nobody else can write, since the agent locks every clone down after its
-`npm ci` and runs nothing from one it has not; and the drill, which runs
-Prisma's CLI from the clone and uploads nothing, never sees `rclone.conf`
-(`InaccessiblePaths=` in `ggd2l-drill@.service` and in the agent's
-`drill <lg> <sha>`). **The remaining protection is Tim's to set in the
-Cloudflare dashboard (not done yet):** an R2 bucket lock on `ggd2l-backups`
+dumps it owns. The box keeps code it did not install away from it:
+`ggd2l-ops` runs only the kit's own code (Rules above: the hourly backup runs
+the kit's copies of `backup-db.mjs`, `verify-backup.mjs` and the `src/lib`
+files they import, with no packages), and the drill, which runs Prisma's CLI
+from a tools clone the build user's `npm ci` wrote, runs as `ggd2l-drill`,
+which cannot read `rclone.conf` (0600 `ggd2l-ops`). That still leaves the
+offsite history to anything that runs as `ggd2l-ops` or root, a kit bug or a
+stolen admin login among them. **The remaining protection is Tim's to set in
+the Cloudflare dashboard (not done yet):** an R2 bucket lock on `ggd2l-backups`
 (the bucket's settings, bucket lock rules; or `wrangler r2 bucket lock add`
 from the Mac with Tim's own login), one rule per prefix,
 retaining objects as long as its lifecycle rule keeps them or less
@@ -534,15 +611,19 @@ with `LoadCredential=`, otherwise from `/etc/ggd2l/`, which must then let
 ## Restore
 
 **The weekly drill** (`drill-league.sh`, or `sudo -n ggd2l-agent drill <lg> [sha]`
-before a migration) restores the newest local dump into the scratch database
-`ld2l_restore_test` as `ggd2l_rehearsal` (URL in `/etc/ggd2l/drill.env`), using
+before a migration) runs as `ggd2l-drill`. It copies the dump the newest
+backup handed it (`/var/backups/ggd2l/<lg>/drill/`) into its own folder, as
+`verify-backup.mjs` accepts only private files, and restores that copy into
+the scratch database `ld2l_restore_test` as `ggd2l_rehearsal` (URL in
+`/etc/ggd2l/drill.env`), using
 `scripts/rehearse-backup-restore.mjs` from `tools/current`, or with a SHA from
 `tools/<sha12>` (the agent passes the SHA as the second argument and the
 same folder as `GGD2L_TOOLS_DIR`, which must agree; `tools/current` still
 points at the live commit until `migrate` moves it).
 That verifies the checksum, restores in one transaction, applies the commit's
 migrations and attests the full schema. The scratch database is dropped
-afterwards, pass or fail. The result is in `state/last-drill.json`.
+afterwards, pass or fail, and so is the drill's copy of the dump. The result
+is in `/var/lib/ggd2l-drill/<lg>/last-drill.json`.
 
 **Tim's quarterly decrypt drill** (about 15 min, on the Mac): download one
 `daily/` object with its two `.sha256` files into an empty folder, then:
