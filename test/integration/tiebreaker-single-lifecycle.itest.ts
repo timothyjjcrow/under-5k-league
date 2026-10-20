@@ -39,12 +39,24 @@ function form(values: Record<string, string>) {
   return data;
 }
 
+// Eight teams tied for all eight places of a ten-team table (a one-table
+// season generated before groups; a table of four to nine now sends four):
+// the eight draw each other and beat the two others, who draw each other.
 async function setup() {
   const season = await makeSeason({ status: "REGULAR_SEASON" });
   const teams = [];
-  for (let i = 0; i < 8; i++) teams.push(await makeTeam(season.id, `Team ${i}`, i));
+  for (let i = 0; i < 10; i++) teams.push(await makeTeam(season.id, `Team ${i}`, i));
+  const below = new Set(teams.slice(8).map((team) => team.id));
   const regular = await generateRegularSchedule(season.id);
-  for (const match of regular) await recordMatch(match.id, 1, 1);
+  for (const match of regular) {
+    const homeBelow = below.has(match.homeTeamId);
+    const awayBelow = below.has(match.awayTeamId);
+    await recordMatch(
+      match.id,
+      homeBelow === awayBelow ? 1 : homeBelow ? 0 : 2,
+      homeBelow === awayBelow ? 1 : homeBelow ? 2 : 0,
+    );
+  }
   await createTiebreakerWeek(season.id);
   return { season, teams, regular };
 }

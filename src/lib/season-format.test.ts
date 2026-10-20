@@ -8,8 +8,10 @@ import {
   regularSeasonFixtures,
   rosterAverageMmr,
   seasonFormat,
+  seasonLengthPhrase,
   seasonPlan,
   seedGroups,
+  teamCountSeasonNote,
 } from "./season-format";
 import { playoffFirstRound } from "./schedule";
 
@@ -200,8 +202,9 @@ describe("playoffBracketSize", () => {
     expect(playoffBracketSize("GROUPS", 10, 1)).toBe(0);
   });
 
-  it("keeps the eight-team bracket of a table generated before groups", () => {
+  it("keeps the bracket a table generated before groups was built for", () => {
     expect(playoffBracketSize("TABLE", 12, 12)).toBe(8);
+    expect(playoffBracketSize("TABLE", 24, 24)).toBe(16);
   });
 
   it("shrinks a table's bracket to what its eligible teams can fill", () => {
@@ -263,5 +266,24 @@ describe("firstPlayoffWeek", () => {
 
   it("waits for tiebreakers that ran past their week", () => {
     expect(firstPlayoffWeek(5, 8)).toBe(9);
+  });
+});
+
+describe("teamCountSeasonNote", () => {
+  it("names the season this many teams make and the counts either side", () => {
+    expect(teamCountSeasonNote(12)).toBe(
+      "12 teams: two groups of 6, 9 weeks in all: 5 group weeks, the tiebreaker week and 3 playoff weeks. 11 teams: 9 weeks · 13 teams: 11 weeks.",
+    );
+    expect(teamCountSeasonNote(9)).toBe(
+      "9 teams: one table, 12 weeks in all: 9 regular weeks, the tiebreaker week and 2 playoff weeks. 8 teams: 10 weeks · 10 teams: 9 weeks.",
+    );
+    expect(teamCountSeasonNote(2)).toBe(
+      "2 teams: one table, played twice, 4 weeks in all: 2 regular weeks, the tiebreaker week and 1 playoff week. 3 teams: 8 weeks.",
+    );
+    expect(teamCountSeasonNote(1)).toBeNull();
+  });
+
+  it("says a single week in the singular", () => {
+    expect(seasonLengthPhrase(seasonFormat(2)!)).toContain("1 playoff week");
   });
 });

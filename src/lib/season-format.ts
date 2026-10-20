@@ -58,12 +58,14 @@ function roundsFor(size: number, doubleRound: boolean): number {
 /**
  * Playoff spots for a one-table season of `teamCount` teams: a final between
  * the top two with three teams or fewer, else the top four. A table of ten or
- * more teams only exists in a season generated before groups (it keeps the
- * eight-team bracket it was built for).
+ * more teams only exists in a season generated before groups, and it keeps
+ * the bracket it was built for: the largest power of two that fits.
  */
 function tablePlayoffSpots(teamCount: number): number {
   if (teamCount <= 3) return 2;
-  return teamCount < GROUP_STAGE_MIN_TEAMS ? TABLE_PLAYOFF_SPOTS : GROUP_PLAYOFF_SPOTS;
+  return teamCount < GROUP_STAGE_MIN_TEAMS
+    ? TABLE_PLAYOFF_SPOTS
+    : pickBracketSize(teamCount);
 }
 
 /**
@@ -389,4 +391,30 @@ export function describeSeasonFormat(format: SeasonFormat): string {
         : `Everyone plays everyone once over ${weeks}`;
   const entrants = playoffEntrants(format);
   return `${formatName(format)}. ${play}, then ${entrants.charAt(0).toLowerCase()}${entrants.slice(1)} play ${playoffRoundsPhrase(format)}.`;
+}
+
+/** "9 weeks in all: 5 group weeks, the tiebreaker week and 3 playoff weeks". */
+export function seasonLengthPhrase(format: SeasonFormat): string {
+  const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  return `${plural(format.totalWeeks, "week")} in all: ${plural(
+    format.regularWeeks,
+    format.kind === "GROUPS" ? "group week" : "regular week",
+  )}, the tiebreaker week and ${plural(format.playoffRounds, "playoff week")}`;
+}
+
+/**
+ * What an admin reads while picking captains: the season this many teams
+ * make, and how long one fewer or one more would make it, so a count that
+ * stretches the season (9 teams, 13 teams) is a choice and not a surprise.
+ */
+export function teamCountSeasonNote(teamCount: number): string | null {
+  const here = seasonFormat(teamCount);
+  if (!here) return null;
+  const others = [teamCount - 1, teamCount + 1].flatMap((count) => {
+    const format = seasonFormat(count);
+    return format ? [`${count} teams: ${format.totalWeeks} weeks`] : [];
+  });
+  return `${teamCount} teams: ${formatName(here).toLowerCase()}, ${seasonLengthPhrase(here)}.${
+    others.length > 0 ? ` ${others.join(" · ")}.` : ""
+  }`;
 }

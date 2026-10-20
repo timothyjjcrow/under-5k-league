@@ -1025,7 +1025,8 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     const matches = await prisma.match.findMany({
       where: { seasonId: season.id },
     });
-    expect(matches).toHaveLength(6);
+    // Four teams play everyone twice (season-format.ts).
+    expect(matches).toHaveLength(12);
     for (const match of matches) {
       expect(match.scheduledAt?.getTime()).toBe(
         matchNightForWeek(new Date(Number(fields.firstNightTs)), match.week).getTime(),
@@ -1998,11 +1999,11 @@ describe("generateSchedule — the results gate (both halves)", () => {
   });
 });
 
-describe("generateSchedule — the double-round-robin switch is actually wired", () => {
-  // roundRobin(ids, doubleRound) was built and unit-tested from the start but
-  // no caller ever passed the flag — the exact "the rendering half was built,
-  // the switch was never wired" class. This pins the wiring end to end.
-  it("doubleRound=on mirrors every pairing home/away over twice the weeks", async () => {
+describe("generateSchedule — the team count sets the format, not a switch", () => {
+  // The double round robin was a checkbox (wired 2026-07-28 after the lib
+  // had it for weeks). Since the season format (2026-10-19) the team count
+  // decides: four teams or fewer play twice, five to nine play once.
+  it("plays four teams twice, every pairing mirrored home/away", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `RR${i}`, i + 1);
     await prisma.draft.create({
@@ -2011,17 +2012,11 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
 
     const res = await generateSchedule(
       empty,
-      fd({
-        ...firstNightFields(),
-        doubleRound: "on",
-        expectedActiveSeasonId: season.id,
-      }),
+      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).toMatch(
-      /12 matches over 6 week\(s\) \(double round robin\)/,
-    );
+    expect(res?.message).toMatch(/One table, played twice · 12 matches over 6 week\(s\)/);
     const matches = await prisma.match.findMany({
       where: { seasonId: season.id },
     });
@@ -2043,23 +2038,26 @@ describe("generateSchedule — the double-round-robin switch is actually wired",
     }
   });
 
-  it("unchecked stays a single round robin, byte-for-byte the old behavior", async () => {
+  it("plays six teams once, whatever a stale form still sends", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
-    for (let i = 0; i < 4; i++) await makeTeam(season.id, `SR${i}`, i + 1);
+    for (let i = 0; i < 6; i++) await makeTeam(season.id, `SR${i}`, i + 1);
     await prisma.draft.create({
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
 
     const res = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
+      fd({
+        ...firstNightFields(),
+        doubleRound: "on",
+        expectedActiveSeasonId: season.id,
+      }),
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).toMatch(/6 matches over 3 week\(s\)/);
-    expect(res?.message).not.toMatch(/double round robin/);
+    expect(res?.message).toMatch(/One table · 15 matches over 5 week\(s\)/);
     expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
-      6,
+      15,
     );
   });
 });

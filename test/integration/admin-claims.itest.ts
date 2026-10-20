@@ -158,11 +158,14 @@ describe("admin schedule writes only touch the rows they claim to", () => {
 
     const updated = await prisma.season.findUniqueOrThrow({ where: { id: season.id } });
     expect(updated.firstMatchNight?.getTime()).toBe(anchor.getTime());
-    const planned = matchNightForWeek(anchor, lastWeek + 1);
+    // A regular match must be played before the tiebreaker week's night;
+    // the playoffs start the week after it.
+    const tiebreakerNight = matchNightForWeek(anchor, lastWeek + 1);
+    const planned = matchNightForWeek(anchor, lastWeek + 2);
     const regular = matches.find((m) => m.week === lastWeek)!;
     expect(
       (await loadRescheduleDeadline(prisma, regular, updated.firstMatchNight, Date.now()))?.getTime(),
-    ).toBe(planned.getTime());
+    ).toBe(tiebreakerNight.getTime());
 
     // Finish the regular season without ties (lower draft order wins), then
     // start the bracket: round one lands on the league's night, not the one-off.

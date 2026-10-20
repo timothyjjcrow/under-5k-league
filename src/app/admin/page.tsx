@@ -145,6 +145,8 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { SeasonFormatControls } from "@/components/admin/season-format-controls";
+import { teamCountSeasonNote } from "@/lib/season-format";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
 import { readInhouseNight } from "@/lib/inhouse-night-service";
@@ -2699,6 +2701,13 @@ function CaptainControls({
                     ? `${poolCount} draftable so far; the seat fit shows once there are 2 captains`
                     : seatFitSentence(seats, season.teamSize)}
               </li>
+              {captainCount >= 2 ? (
+                <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                  <b className="text-fg">Season format:</b>{" "}
+                  {teamCountSeasonNote(captainCount)} One captain is one team,
+                  and the site picks the format from that count.
+                </li>
+              ) : null}
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
                 <ActionForm
                   action={setDraftNight}
@@ -3701,7 +3710,12 @@ function ScheduleControls({
     (m) => m.phase === "TIEBREAKER",
   );
   const playoffField = projectPlayoffField(data.teams, data.matches);
+  const seasonGrouped = playoffField.kind === "GROUPS";
   const collateral = data.collateral;
+  const lastRegularWeek = regularMatches.reduce(
+    (max, match) => Math.max(max, match.week),
+    0,
+  );
   const draftStatus = data.draft?.status ?? null;
   const scheduleEditingOpen = postAuctionWorkOpen(season.status, draftStatus);
   const scheduleEditingLockedReason = scheduleEditingOpen
@@ -3731,7 +3745,7 @@ function ScheduleControls({
       <CardHeader
         headingLevel={2}
         title="Schedule & results"
-        subtitle="Generate the round-robin and enter weekly scores."
+        subtitle="Generate the schedule (the team count sets the format) and enter weekly scores."
         action={
           // The lock reason sits where the control would be, not in a banner
           // over the card: once any result exists it is true all season.
@@ -3772,21 +3786,23 @@ function ScheduleControls({
                 timeZone={LEAGUE_CONFIG.timeZone}
                 className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
               />
-              {/* The lib always supported the mirrored second leg; this box is
-                what finally wires it. Decide BEFORE generating: switching
-                later is a full Regenerate, which clears every check-in, pick
-                and booking on the old fixtures. */}
-              <label
-                className="flex items-center gap-1.5 text-xs text-muted"
-                title="Every pairing plays twice, home/away swapped — roughly doubles the season length. Best for small leagues (4-6 teams), whose single round robin is only 3-5 weeks."
-              >
-                <input
-                  type="checkbox"
-                  name="doubleRound"
-                  className="h-3.5 w-3.5 accent-[var(--color-brand)]"
-                />
-                double round robin
-              </label>
+              {/* The team count picks one table or two groups (and a
+                  double round robin for four teams or fewer); nothing to
+                  choose here. A regenerate keeps the groups it finds, so a
+                  swap survives a new first night, unless this is ticked. */}
+              {seasonGrouped ? (
+                <label
+                  className="flex items-center gap-1.5 text-xs text-muted"
+                  title="Deal the groups again by each roster's average signup MMR, undoing any swap. Unticked, the regenerated schedule keeps today's groups."
+                >
+                  <input
+                    type="checkbox"
+                    name="redrawGroups"
+                    className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+                  />
+                  redraw the groups
+                </label>
+              ) : null}
               {/* GENERATE and REGENERATE are the same action and were the same
                 button. The first is routine; the second deletes every regular
                 fixture and recreates the identical pairings with NEW ids, so
@@ -3800,7 +3816,9 @@ function ScheduleControls({
                   token={season.name}
                   title="Replace the regular-season schedule?"
                   consequences={[
-                    `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
+                    seasonGrouped
+                      ? `All ${regularCount} regular-season fixture(s) are deleted and recreated with new ids — the same pairings unless "redraw the groups" is ticked.`
+                      : `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
                     ...(collateral.rsvps
                       ? [`${collateral.rsvps} player check-in(s) are cleared.`]
                       : []),
@@ -3836,12 +3854,36 @@ function ScheduleControls({
         }
       />
       <CardBody>
+        <SeasonFormatControls
+          seasonId={season.id}
+          seasonName={season.name}
+          teams={data.teams}
+          firstMatchNight={season.firstMatchNight}
+          lastRegularWeek={lastRegularWeek}
+          regenerateOpen={!scheduleGenerationLockedReason && regularCount > 0}
+          regenerateConsequences={[
+            ...(collateral.rsvps
+              ? [`${collateral.rsvps} player check-in(s) are cleared.`]
+              : []),
+            ...(collateral.picks
+              ? [`${collateral.picks} pick'em pick(s) are deleted.`]
+              : []),
+            ...(collateral.covers
+              ? [
+                  `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
+                ]
+              : []),
+            ...(collateral.proposals
+              ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
+              : []),
+          ]}
+        />
         {data.matches.length === 0 ? (
-          <p className="text-sm text-muted">
+          <p className="mt-3 text-sm text-muted">
             No fixtures have been generated for this season.
           </p>
         ) : (
-          <div className="space-y-2">
+          <div className="mt-3 space-y-2">
             {status.total > 0 ? (
               <div
                 className={`rounded-lg border px-3 py-2 text-sm ${
