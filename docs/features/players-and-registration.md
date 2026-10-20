@@ -193,6 +193,9 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   thing that tells them apart.
 - **Last league season** (`loadPoolLastSeasons`): team, record, price, title
   from seasons created before the active one, from the Seasons card's facts.
+  The appearances come from the Hall of Fame's cached career facts
+  (`getCareerFacts`), so a pool view decodes no box score; results and
+  champions are its own reads.
 - **Show "no Discord" only to viewers allowed contact:** handles are blanked
   for others, so the row can't tell hidden from missing. Pool: `showContact`
   from `canViewLeagueDirectoryContact`; profile: `canViewLeagueContact`

@@ -10,8 +10,17 @@
 #                /etc/caddy/ggd2l/allow.caddy reach the slot
 #   maintenance  everyone gets the 503 maintenance page
 # The reference copies of the three forms are beside this file.
+#
+# The admin API, which can replace the whole live configuration, is a unix
+# socket only caddy and root can open: the socket is 0600 and its folder,
+# /run/caddy, is the 0700 RuntimeDirectory= of the kit's caddy.service drop-in.
+# On TCP (localhost:2019, until 2026-10-19) any local user could call it with
+# no authentication: either league's slot, the bot, a build. `caddy reload`
+# (the unit's ExecReload, as caddy) finds the socket in this file, so the
+# first install of this line needs one `systemctl restart caddy`
+# (ops/selfhost/README.md, Kit changes).
 {
-	admin localhost:2019
+	admin unix//run/caddy/admin.sock|0600
 	auto_https off
 	servers {
 		trusted_proxies static 127.0.0.1/32 ::1/128

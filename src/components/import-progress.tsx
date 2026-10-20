@@ -3,6 +3,7 @@ import { LocalTime } from "@/components/local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { ImportProgressControls } from "@/components/import-progress-controls";
 import Link from "@/components/app-link";
+import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
 
 const labels: Record<string, string> = {
   PENDING: "Waiting for game details",
@@ -26,6 +27,11 @@ export async function ImportProgress({ seasonId, page, query = {} }: {
   const requestedPage = typeof page === "string" && /^[1-9]\d{0,8}$/.test(page)
     ? Number(page) : 1;
   const currentPage = Math.min(requestedPage, lastPage);
+  // Feed games the last automatic league-feed pass stopped on: while one is
+  // listed, no fixture imports from the feed (discovery fails closed).
+  const feedWaiting = new Set(
+    (await loadLeagueFeedWaiting(seasonId)).map((row) => row.dotaMatchId),
+  );
   const rows = await prisma.importCandidate.findMany({
       where: { seasonId, status: { in: Object.keys(labels) } },
       // The fixed status names put NEEDS_REVIEW before PENDING/READY/RETRYABLE.
@@ -76,6 +82,13 @@ export async function ImportProgress({ seasonId, page, query = {} }: {
                 <> · Retry after <LocalTime ts={row.nextAttemptAt.getTime()} variant="short" initial={formatLeagueMatchTime(row.nextAttemptAt, "short")} /></>
               ) : null}
             </p>
+            {feedWaiting.has(row.dotaMatchId) ? (
+              <p className="text-xs text-danger">
+                Automatic league-feed imports are waiting on this game: no fixture
+                imports a game from the league feed until it clears.
+                Retry next sync fetches it again; Ignore this game excludes it.
+              </p>
+            ) : null}
             <ImportProgressControls candidateId={row.id} seasonId={seasonId} revision={row.revision} />
           </li>
         ))}

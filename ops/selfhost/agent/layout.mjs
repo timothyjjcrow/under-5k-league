@@ -136,6 +136,7 @@ export const ERRORS = Object.freeze({
   busy: "another mutating agent verb holds the lock",
   argv_secret: "refused to place a secret in a command line",
   env_contract: "the league env file breaks the env contract",
+  env_invalid: "the league env file fails the production validation (scripts/validate-prod-env.mjs)",
   env_missing: "an env file the verb needs is missing",
   disk_low: "less than 5 GB free under /srv/ggd2l",
   fetch_failed: "git fetch of origin/main failed",
@@ -162,6 +163,8 @@ export const ERRORS = Object.freeze({
   too_soon: "the previous slot is inside its 90 s warm overlap",
   no_live: "the league has no live release",
   no_previous: "the league has no previous release to roll back to",
+  rolled_back:
+    "live is already a rollback (rolledBackFrom); to put back the release it replaced, run promote <lg> <rolledBackFrom>",
   is_live: "refused: that release is live",
   mode_is_maintenance: "the league is in maintenance; promote with an explicit --mode",
   live_mismatch: "live.json, the Caddy mode file and the slot symlink disagree",

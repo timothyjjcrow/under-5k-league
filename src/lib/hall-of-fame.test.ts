@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { careerGameCounts, rankCounts, topPlaces } from "./hall-of-fame";
+import {
+  careerGameCounts,
+  hallOfFameGameBoards,
+  hallOfFameGameFacts,
+  rankCounts,
+  topPlaces,
+} from "./hall-of-fame";
 
 describe("rankCounts", () => {
   it("drops values under the floor and sorts best first", () => {
@@ -92,5 +98,31 @@ describe("careerGameCounts", () => {
     expect(counts.get("a")).toEqual({ games: 2, wins: 2 });
     expect(counts.get("b")).toEqual({ games: 2, wins: 0 });
     expect(counts.size).toBe(2);
+  });
+});
+
+describe("hallOfFameGameFacts", () => {
+  const box = (prefix: string, kills = 4) => JSON.stringify(Array.from({ length: 10 }, (_, i) => ({
+    userId: `${prefix}${i}`, accountId: i + 1, heroId: i + 1, isRadiant: i < 5,
+    kills, deaths: 2, assists: 6, gpm: 450, lastHits: 120,
+  })));
+
+  it("counts trusted complete games only, and seasons only where the match is known", () => {
+    const facts = JSON.parse(JSON.stringify(hallOfFameGameFacts([
+      { matchId: "m1", radiantWin: true, players: box("u") },
+      { matchId: "m2", radiantWin: false, players: box("u", 9) },
+      // A partial box score never enters a board, nor makes its season count.
+      { matchId: "m3", radiantWin: true, players: JSON.stringify(JSON.parse(box("x")).slice(0, 9)) },
+      // A deleted fixture's game still counts, without a season.
+      { matchId: "gone", radiantWin: true, players: box("u") },
+    ], new Map([["m1", "s1"], ["m2", "s2"], ["m3", "s3"]]))));
+    const boards = hallOfFameGameBoards(facts);
+    expect(boards.seasonsWithGames).toBe(2);
+    expect(boards.gameCounts.get("u0")).toEqual({ games: 3, wins: 2 });
+    expect(boards.gameCounts.get("u7")).toEqual({ games: 3, wins: 1 });
+    expect(boards.gameCounts.has("x0")).toBe(false);
+    // Impact points over the same games (history-cache-size.test.ts checks the
+    // values against pointsByPlayer on a full history).
+    expect([...boards.impact.keys()].sort()).toEqual([...boards.gameCounts.keys()].sort());
   });
 });

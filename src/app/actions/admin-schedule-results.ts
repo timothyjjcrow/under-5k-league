@@ -2361,8 +2361,15 @@ export async function syncLeagueAction(
   refreshGames();
   // Removed games stay removed here too; say how many, and the way back.
   const removed = res.removedSkipped ?? 0;
+  // A game whose details OpenDota didn't return holds the whole feed (it
+  // fails closed), so "imported 0" alone would read as "nothing to import".
+  const waiting = res.pending ? (res.waitingOn ?? []) : [];
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games${
+      waiting.length > 0
+        ? ` · OpenDota didn't return details for ${waiting.length === 1 ? `game ${waiting[0]}` : `${waiting.length} games`}, so nothing from the league feed imports until ${waiting.length === 1 ? "it clears" : "they clear"}. ${waiting.length === 1 ? "It is" : "They are"} listed under Saved import progress`
+        : ""
+    }${
       removed > 0
         ? ` · skipped ${removed} ${removed === 1 ? "game" : "games"} an admin removed. To bring one back, open its match and press “Add game” with its match ID, or “Auto-fetch games”`
         : ""

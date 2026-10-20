@@ -689,7 +689,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/login`           | Steam login + dev quick-login, return-path/error/logout feedback                               | Signed out; available in every phase                                                               | —                                                                                                             |
 | `/me`              | My account: signup, Steam-derived Dota metadata refresh, Discord linking, withdraw, prefill    | Signed in; identity controls available in every phase, signup interaction follows season phase     | Registration, prior-season prefill, live Discord membership, rank/medal hint (independent reads parallelized) |
 | `/players`         | Player pool table with standins as rows (URL-mirrored filters)                                 | Always                                                                                             | 4 inline queries → client `PlayerPool`                                                                        |
-| `/players/[id]`    | Player profile: career stats, report card, achievements, seasons, inhouse card                 | Always                                                                                             | Cached `getAllGameLines` two-pass scan                                                                        |
+| `/players/[id]`    | Player profile: career stats, report card, achievements, seasons, inhouse card                 | Always                                                                                             | Indexed `getPlayerGameFacts` two-pass read; cached `getRecordWatchBook`                                       |
 | `/players/compare` | GET-form two-player career comparison with invalid/missing/same-player states                  | Always                                                                                             | Trusted `getAllGameScores`, `meetings`; metadata uses the same career eligibility                             |
 | `/teams`           | Teams index + power rankings + draft recap                                                     | Nav from DRAFT                                                                                     | Standings order post-results; `powerRankings`                                                                 |
 | `/teams/[id]`      | Team detail: scenario card, roster, hero pool, H2H, captain's name/logo form                   | Always (archived works)                                                                            | `seasonScenarioReport`, cached season scan                                                                    |
@@ -701,8 +701,8 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/meta/[hero]`     | One hero's season: /meta's numbers for it, most-built shop and neutral items, every game with final items, who plays it | Linked from /meta's table and the "Find a hero" box; `/meta/find` is the box's no-script redirect | `getSeasonHeroGames`, `heroPageView`, bundled hero and item catalogues |
 | `/fantasy`         | Fantasy-five picker (sticky Save bar), standings, player scores, impact-points explainer       | Nav while picks are open, then for entrants; COMPLETE/archive read-only                            | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
 | `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav once the auction is complete; picks until each kickoff; COMPLETE/archive read-only             | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
-| `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Nav (Statistics, Explore) once a game exists                                                       | `getAllGamesForRecords` (deterministic chronology), `leagueRecords`                                           |
-| `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Nav once a season has an official champion (`hasOfficialChampion`)                                 | `appearanceCareers`, all-seasons scans                                                                        |
+| `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy            | Nav (Statistics, Explore) once a game exists                                                       | Cached `getRecordBookView` per scope (`recordBookView`, deterministic chronology)                             |
+| `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Nav once a season has an official champion (`hasOfficialChampion`)                                 | Cached `getCareerFacts`, `careersFromFacts` over fresh results                                                |
 | `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |
 | `/seasons`         | Season history + audit archive/delete; offseason-only reactivation                              | Nav once an archive exists; reactivation disabled while a season is active                         | —                                                                                                             |
 | `/seasons/[id]`    | Season page: champion, standings, bracket, awards once finished, results, rosters              | Same                                                                                               | Recomputed from archived rows; `computeSeasonAwards`                                                          |
@@ -747,7 +747,7 @@ read showing Dota's postgame marks the game over (`endInhouseGameFromBot`);
 result cursor; no POST/mutation path); `/api/overlay/[id]/[rev]` — public,
 read-only GET of one fixture's overlay data, its version (the result cursor and
 a 10-minute bucket until the series is decided) in the path so an edge cache
-could keep each answer (Vercel's did; on the box none does);
+could keep each answer (Vercel's did; on the box none does), 60/min/IP;
 `/api/cron/automation` — the
 `CRON_SECRET` bearer-authenticated one-minute worker route (Node runtime,
 60-second route ceiling); `/api/health/live` — dependency-free process
@@ -757,8 +757,10 @@ a bounded status enum (200 for fresh clean success, 503 otherwise);
 `/api/health/release` — public code identity (`ok`, `region`, `commit`, and
 `site` and `deployEnv`, the origin the build was baked with and the box's
 deploy marker) that a release reads to confirm what is live;
-`/api/calendar` — the .ics feed; `/api/calendar/inhouse-night` — the planned
-inhouse night as a one-event .ics download (404 when none);
+`/api/calendar` — the .ics feed, each feed built at most once per 30 seconds
+(an in-process memo keyed by `?team=`; it reads no cookie or session) and
+600/min/IP shared with the two downloads; `/api/calendar/inhouse-night` — the
+planned inhouse night as a one-event .ics download (404 when none);
 `/api/calendar/inhouse-time?at=` — a Play later time as a one-event .ics
 download (404 once nobody is in on it or it's over);
 `/api/reschedule?match=<id>` — read-only,
@@ -829,6 +831,9 @@ enums, so every status column is a string whose allowed values live in
   responses. The v2 `Float` is deliberate: JavaScript/PostgreSQL double
   precision represents every positive unsigned 32-bit account id exactly,
   while Prisma's signed 32-bit `Int` cannot represent the full Dota range.
+  Postgres refuses to bind an id of 2^31 or more to the legacy column, so
+  every query leaves the legacy predicate out for such an id
+  (`fitsLegacyDotaAccountColumn`).
 - `MatchNightPoll` / `MatchNightBallot` — the season-independent match-night
   poll (slots as JSON on the league's clock, one `closesAt` deadline, at most
   one open) and one availability ballot per voter per poll (the slots they can
@@ -985,7 +990,9 @@ enums, so every status column is a string whose allowed values live in
 - `Setting` — a two-column key/value table serving **five distinct
   patterns**: (1) plain config via `getSetting`/`setSetting`
   (`src/lib/settings.ts`; empty value _deletes_ the row) — the Discord
-  webhooks, ping role id, `sessionEpoch`; (2) atomic global throttles via
+  webhooks, ping role id, `sessionEpoch`, and the worker-written
+  `leagueFeedWait` (the feed games the last automatic league-feed pass waited
+  on, `src/lib/league-feed-wait.ts`); (2) atomic global throttles via
   `claimThrottle` (conditional `updateMany` on an ISO-string value, then
   create-with-P2002-catch) — `leagueAutoSyncAt`, `rosterAutoSyncAt`,
   `announceRetryAt`, `inhouseBoardAt`, `leagueStatusAt`,
@@ -1058,7 +1065,7 @@ an expired RUNNING lease before taking ownership.
 | Scheduled maintenance (`runAutomation` → `runResultSync`) | Owns unattended league, draft, inhouse, reminder, playoff, Discord, and cursor work | Private Cloudflare Cron Trigger every minute; Admin → Automation → **Run maintenance now** uses the same election path | One global 90s tokened lease; 45s work budget; independent steps report stable issue/deferred codes instead of suppressing unrelated work |
 | Draft clock resolver (`resolveExpiredNomination` / `resolveStalledNomination`) | Resolves an expired nomination or bid clock when no draft-room client remains open | Every maintenance pass; draft-room reads also resolve immediately | Cheap due-time preflight plus phase/turn/lot write claims; duplicate room/worker attempts are harmless |
 | Result sync, roster scan (`syncDueMatches` → `autoDetectGamesForMatch`) | Claims one due fixture and roster-scans OpenDota | Every pass in REGULAR_SEASON/PLAYOFFS when the match throttle permits | Global `rosterAutoSyncAt`, per-match compare-and-set, exponential empty-scan backoff; recent-list and match calls receive the worker deadline/abort signal, and an unreachable/deadline scan releases its throttle for recovery |
-| Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, revision-fenced `ImportCandidate` decisions (reconsidered each pass; the legacy `leagueSyncSkip` Setting is read-only), and the same deadline/abort propagation; manual admin sync remains a bounded override |
+| Result sync, league feed (`syncLeagueGames({auto:true})`) | Uses one Valve league feed to discover all league games when `Season.dotaLeagueId` exists | Preferred result path in the same phase-bound pass | `leagueAutoSyncAt` (180s), ≤25 unknown ids, revision-fenced `ImportCandidate` decisions (reconsidered each pass; the legacy `leagueSyncSkip` Setting is read-only), and the same deadline/abort propagation; discovery fails closed on a game in review or retry backoff, and a pass that stopped only on those keeps its claim, names them in `leagueFeedWait` and lets the gate sleep to their earliest retry; manual admin sync remains a bounded override |
 | Playoff reconciliation (`advancePlayoffBracket`) | Repairs a committed result whose immediate round-build/crown handoff was interrupted | Every maintenance pass while PLAYOFFS | Round claims plus Serializable revalidation of current source winners/final; committed work is idempotently rediscovered |
 | Inhouse resolver chain (`syncInhouse` + `getInhouseState`) | Abandoned-lobby sweep, formation, ready check, vote, stalled pick, auto-detect, board repaint | Every maintenance pass; a signed-in `/api/inhouse` state poll resolves at once when `inhouseRoomDue` finds work and it wins the 2s claim | Each transition has its own claim; auto-detect is throttled and deadline-aware; parked lobbies no longer depend on a visitor; both chains publish the room version after their resolvers and before any provider call |
 | League marker reconciliation | Recovers series, champion, reminder, and honor announcement generations | Immediate domain path plus bounded maintenance retry sweep | 90s marker leases recover pre-enqueue death; stable generation/dedupe keys reuse the same `LeagueAnnouncement` after enqueue-before-finalize death; exact-value finalization cannot overwrite a newer claim |

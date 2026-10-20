@@ -97,6 +97,8 @@ export async function status(ctx, { meminfo = "/proc/meminfo" } = {}) {
     leagues[lg] = {
       live: live ? { id: live.id, sha: live.sha, slot: live.slot, promotedAt: live.promotedAt } : null,
       previous: live?.previous ?? null,
+      // Set while live came from `rollback`, which then refuses a second one.
+      rolledBackFrom: live?.rolledBackFrom ?? null,
       mode: readModeFile(layout.modeFile(lg)).mode,
       slots: Object.fromEntries(SLOTS.map((slot) => [slot, slotTarget(ctx, lg, slot)])),
       lastBackupAt: backup?.finishedAt ?? (dump ? new Date(dump.mtimeMs).toISOString() : null),

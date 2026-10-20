@@ -1885,6 +1885,19 @@ export type LeagueSyncResult = {
   scanned: number;
   /** Discovery/assignment has durable retry work; do not count it as empty. */
   pending?: boolean;
+  /**
+   * Automatic discovery stopped ONLY on feed games in review or still in
+   * their retry backoff: no fetch cap, deadline or failure this pass. Nothing
+   * can be fetched or imported until one of them clears, so the worker keeps
+   * its feed throttle instead of retrying on the next tick.
+   */
+  blocked?: boolean;
+  /**
+   * The feed games discovery waited on (in review, in retry backoff, or whose
+   * details failed this pass), in feed order. While any is listed, no fixture
+   * imports from the feed: discovery fails closed.
+   */
+  waitingOn?: string[];
   reviewRequired?: boolean;
   error?: string;
   /** OpenDota didn't answer — the caller may retry sooner than usual. */
@@ -2093,6 +2106,10 @@ export async function syncLeagueGames(
   let deadlineReached = false;
   let discoveryComplete = true;
   let reviewRequired = false;
+  // Discovery stopped for a reason the next tick should retry at once (the
+  // fetch cap, the deadline, a failed fetch), not only on games that wait.
+  let retryNow = false;
+  const waitingOn: string[] = [];
   const detailFetchOptions = {
     ...fetchOptions,
     deadlineMs: fetchOptions.deadlineMs === undefined
@@ -2166,10 +2183,12 @@ export async function syncLeagueGames(
       if (opts.auto && saved?.status === "NEEDS_REVIEW") {
         discoveryComplete = false;
         reviewRequired = true;
+        waitingOn.push(idStr);
         continue;
       }
       if (opts.auto && saved?.status === "RETRYABLE" && saved.nextAttemptAt && saved.nextAttemptAt.getTime() > Date.now()) {
         discoveryComplete = false;
+        waitingOn.push(idStr);
         continue;
       }
       let od = readImportEvidence(saved?.payload ?? null, idStr);
@@ -2177,6 +2196,7 @@ export async function syncLeagueGames(
         if (fetches >= maxFetches ||
             (opts.auto && !canStartOpenDotaFetch(fetchOptions, OPEN_DOTA_MATCH_TIMEOUT_MS + IMPORT_COMMIT_RESERVE_MS))) {
           discoveryComplete = false;
+          retryNow = true;
           deadlineReached = budgetStopped() || fetches < maxFetches;
           break feed;
         }
@@ -2184,6 +2204,7 @@ export async function syncLeagueGames(
         od = await fetchOpenDotaMatch(idStr, detailFetchOptions);
         if (!od || !hasFinalLeagueMatchDetails(od, dotaId)) {
           discoveryComplete = false;
+          retryNow = true;
           // Deadline cancellation is not a provider failure and must not
           // spend retry attempts or quarantine an otherwise healthy game.
           if (budgetStopped() || openDotaBudgetExpired(detailFetchOptions)) {
@@ -2191,6 +2212,7 @@ export async function syncLeagueGames(
             break feed;
           }
           await recordImportFetchFailure(seasonId, idStr, od ? "DETAILS_NOT_FINAL" : "PROVIDER_UNAVAILABLE");
+          waitingOn.push(idStr);
           continue;
         }
         // Persist before classification, including when this fetch used the
@@ -2200,6 +2222,7 @@ export async function syncLeagueGames(
       }
       if (budgetStopped()) {
         discoveryComplete = false;
+        retryNow = true;
         deadlineReached = true;
         break feed;
       }
@@ -2347,6 +2370,8 @@ export async function syncLeagueGames(
     }
     return {
       imported: 0, scanned: leagueMatchIds.length, pending: true,
+      ...(!retryNow ? { blocked: true } : {}),
+      ...(waitingOn.length > 0 ? { waitingOn: [...new Set(waitingOn)] } : {}),
       ...(await removedSkipped()),
       ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review before automatic feed assignment can continue" } : {}),
       ...(deadlineReached ? { deadlineReached: true } : {}),

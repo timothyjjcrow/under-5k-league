@@ -118,14 +118,19 @@ export async function backfillGameParticipants(options: {
   return result;
 }
 
-// A single Game statement avoids the gap between indexed and fallback reads.
-// Only relevant covered games (plus uncovered legacy sources) transfer JSON.
-const selectedGame = {
+/** Every Game column a page shows: all but the index's proof columns, whose
+ *  `participantSource` is a second copy of the box score (about 9 KB a game).
+ *  Pages that load whole games select this instead of `include`. */
+export const GAME_VIEW_COLUMNS = {
   id: true, matchId: true, dotaMatchId: true, radiantWin: true,
   durationSecs: true, startTime: true, radiantScore: true, direScore: true,
   radiantTeamId: true, direTeamId: true, winnerTeamId: true,
   players: true, fetchedAt: true,
 } as const;
+
+// A single Game statement avoids the gap between indexed and fallback reads.
+// Only relevant covered games (plus uncovered legacy sources) transfer JSON.
+const selectedGame = GAME_VIEW_COLUMNS;
 
 export async function fetchGamesForPlayers(
   userIds: string[], seasonId?: string,
@@ -138,8 +143,13 @@ export async function fetchGamesForPlayers(
     where: { AND: [
       ...(seasonId ? [{ match: { seasonId } }] : []),
       { OR: [
-        { AND: [participantCoveredWhere(), { participantComplete: true },
-          { participants: { some: { userId: { in: ids } } } }] },
+        // Postgres keeps this order inside the OR and stops at the first
+        // false term, so the cheap index test goes first: another player's
+        // covered game then skips the exact-source comparison, which
+        // detoasts both copies of its box score (about 9 KB each). The guard
+        // itself is unchanged (docs/HISTORICAL-PARTICIPATION.md).
+        { AND: [{ participants: { some: { userId: { in: ids } } } },
+          participantCoveredWhere(), { participantComplete: true }] },
         participantUncoveredWhere(),
       ] },
     ] },

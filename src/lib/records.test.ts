@@ -8,8 +8,11 @@ import {
   formatRecordMark,
   analyzeRecordGames,
   leagueRecords,
+  recordBookView,
   recordGameMetricsValid,
   recordWatchBook,
+  recordWatchBookData,
+  recordWatchBookFromData,
   recordWatchFor,
   recordWatchLines,
   recordWatchText,
@@ -601,5 +604,67 @@ describe("toRecordGames", () => {
     ]);
     const book = leagueRecords(games);
     expect(book.players.find((r) => r.key === "kills")?.matchId).toBe("m1");
+  });
+});
+
+describe("cached record book forms", () => {
+  const roster = (seasonTag: string, kills: number) =>
+    JSON.stringify(Array.from({ length: 10 }, (_, index) => ({
+      accountId: 1000 + index,
+      userId: `${seasonTag}-u${index}`,
+      heroId: index + 1,
+      kills: index === 0 ? kills : 1,
+      deaths: 2,
+      assists: 3,
+      netWorth: 10000,
+      gpm: 400,
+      lastHits: 100,
+      // Only the newer imports report these.
+      ...(seasonTag === "new" ? { xpm: 500, heroDamage: 20000 } : {}),
+      isRadiant: index < 5,
+    })));
+  const stored = (matchId: string, seasonId: string, kills: number, home: string) => ({
+    matchId, radiantWin: true, durationSecs: 2000 + kills, radiantScore: 20 + kills,
+    direScore: 10, players: roster(seasonId, kills),
+    match: { seasonId, homeTeam: { name: home }, awayTeam: { name: `${home} rivals` } },
+  });
+  const rows = [
+    stored("m1", "old", 9, "Old Home"),
+    stored("m2", "new", 12, "New Home"),
+    { ...stored("m3", "new", 30, "Broken"), players: "not json" },
+  ];
+
+  it("round-trips the record watch book through JSON unchanged", () => {
+    const book = recordWatchBook(toRecordGames(rows));
+    const cached = recordWatchBookFromData(
+      JSON.parse(JSON.stringify(recordWatchBookData(book))),
+    );
+    expect(cached).toEqual(book);
+    // A metric a player never reported stays absent, never a zero best.
+    expect(cached.bests.get("old-u0")?.has("xpm")).toBe(false);
+    expect(cached.bests.get("new-u0")?.get("xpm")).toBe(500);
+    for (const userId of ["old-u0", "new-u0", "new-u3", "nobody"]) {
+      expect(recordWatchFor(cached, userId)).toEqual(recordWatchFor(book, userId));
+    }
+  });
+
+  it("works out /records for all history and for one season", () => {
+    const all = recordBookView(rows, null);
+    expect(all.book).toEqual(leagueRecords(toRecordGames(rows)));
+    expect(all).toMatchObject({ scopedGames: 3, eligibleGames: 2, extendedGames: 1 });
+    expect(all.diagnostics.malformedGames).toBe(1);
+    expect(all.seasonIdsWithGames.sort()).toEqual(["new", "old"]);
+    // A fixture for each match record, and only for those.
+    expect(new Set(all.matchups.map((matchup) => matchup.matchId)))
+      .toEqual(new Set(all.book.games.map((record) => record.matchId)));
+    expect(all.matchups).toContainEqual({ matchId: "m2", home: "New Home", away: "New Home rivals" });
+
+    const old = recordBookView(rows, "old");
+    expect(old.book).toEqual(leagueRecords(toRecordGames([rows[0]])));
+    expect(old).toMatchObject({ scopedGames: 1, eligibleGames: 1, extendedGames: 0 });
+    expect(old.seasonIdsWithGames.sort()).toEqual(["new", "old"]);
+    expect(old.matchups.map((matchup) => matchup.matchId)).toEqual(["m1"]);
+    expect(recordBookView(rows, "missing")).toMatchObject({ scopedGames: 0, eligibleGames: 0 });
+    expect(JSON.parse(JSON.stringify(all))).toEqual(all);
   });
 });

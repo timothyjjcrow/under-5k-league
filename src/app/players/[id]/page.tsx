@@ -13,8 +13,9 @@ import { ProfilePerformance } from "@/components/profile-performance";
 import { profileMatch } from "@/lib/profile-match";
 import { profileSections } from "@/lib/profile-sections";
 import { prisma } from "@/lib/prisma";
-import { getAllGamesForRecords } from "@/lib/cached-queries";
+import { getRecordWatchBook } from "@/lib/cached-queries";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
+import { GAME_VIEW_COLUMNS } from "@/lib/game-participants";
 import { getRosterHistory } from "@/lib/player-roster-history";
 import { playerProfileMetadata, shareMetadata } from "@/lib/share-metadata";
 import { loadProfileSeasonRows } from "@/lib/profile-season-history";
@@ -37,11 +38,7 @@ import {
   trustedGamePlayers,
 } from "@/lib/player-stats";
 import { profileGameFolds, profileGameRows } from "@/lib/profile-games";
-import {
-  recordWatchBook,
-  recordWatchFor,
-  toRecordGames,
-} from "@/lib/records";
+import { recordWatchFor } from "@/lib/records";
 import { cn, hasText } from "@/lib/utils";
 import { aboutText } from "@/lib/about-you";
 import {
@@ -136,7 +133,7 @@ export default async function PlayerProfilePage({
     rosterHistory,
     gamesLite,
     recentInhouse,
-    recordRows,
+    recordBook,
     viewerRegistration,
     coversServed,
     draft,
@@ -167,11 +164,11 @@ export default async function PlayerProfilePage({
       },
       select: { id: true },
     }),
-    // All-time record book input — the cached /records scan ("games"-tagged).
-    // Awaited in the page body on purpose: an unstable_cache wrapper awaited
-    // inside a nested Suspense component silently never resolved once
-    // (documented in cached-queries.ts).
-    getAllGamesForRecords(),
+    // The all-time record book and every career best, cached once per result
+    // revision ("games"-tagged, cached-queries.ts), so a view decodes no box
+    // score. Awaited in the page body on purpose: an unstable_cache wrapper
+    // awaited inside a nested Suspense component silently never resolved once.
+    getRecordWatchBook(),
     season && viewer
       ? prisma.registration.findUnique({
           where: {
@@ -207,6 +204,8 @@ export default async function PlayerProfilePage({
   ]);
   // Pass 2: only THIS player's games carry the heavy match/team/season joins
   // that feed the match history, stat tiles, achievements, and report card.
+  // The shown columns only: the participant index's copy of each box score
+  // stays in the database.
   const myGameIds = gamesLite
     .filter((g) =>
       trustedGamePlayers(decodeGamePlayers(g.players)).some(
@@ -217,7 +216,8 @@ export default async function PlayerProfilePage({
   const games = myGameIds.length
     ? await prisma.game.findMany({
         where: { id: { in: myGameIds } },
-        include: {
+        select: {
+          ...GAME_VIEW_COLUMNS,
           match: { include: { homeTeam: true, awayTeam: true, season: true } },
         },
         orderBy: { startTime: "desc" },
@@ -248,9 +248,8 @@ export default async function PlayerProfilePage({
   );
 
   // All-time league records THIS player holds, and the one within reach.
-  // Same mapping as /records (shared toRecordGames) so neither can disagree
-  // with the book.
-  const recordBook = recordWatchBook(toRecordGames(recordRows));
+  // The book is mapped as /records maps it (shared toRecordGames), so neither
+  // can disagree with it.
   const heldRecords = recordBook.records.filter((r) => r.userId === id);
   const recordWatch = recordWatchFor(recordBook, id);
 

@@ -173,6 +173,8 @@ import {
 import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
+import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
+import { leagueFeedWaitText } from "@/lib/league-feed-wait";
 import {
   AUTOMATION_BACKLOG_STUCK_MS,
   automationAttention,
@@ -1310,7 +1312,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -1328,6 +1330,8 @@ async function loadSeasonAdminData(seasonId: string) {
     prisma.importCandidate.count({
       where: { seasonId, status: "NEEDS_REVIEW" },
     }),
+    // Feed games the last automatic league-feed pass stopped on.
+    loadLeagueFeedWaiting(seasonId),
   ]);
   return {
     players,
@@ -1343,6 +1347,7 @@ async function loadSeasonAdminData(seasonId: string) {
     collateral: { rsvps, picks, covers, proposals },
     unlinkedDiscord,
     importsNeedingReview,
+    feedWaiting,
     captainsInRoom,
   };
 }
@@ -1549,6 +1554,9 @@ function AdminAttention({
       draftComplete: draftRostersReady(season, data),
       automation,
       importsNeedingReview: data.importsNeedingReview,
+      feedWaitingForReview: data.feedWaiting
+        .filter((row) => row.status === "NEEDS_REVIEW")
+        .map((row) => row.dotaMatchId),
       shortTeams: shortTeams(data.teams, season.teamSize).map(
         ({ team, missing }) => ({ name: team.name, missing }),
       ),
@@ -5212,7 +5220,7 @@ async function AutoSyncHealth({ season }: { season: Season }) {
   // for client components.
   // eslint-disable-next-line react-hooks/purity
   const now = Date.now();
-  const [inWindow, leagueSyncAt, cursor, setAside, privatePlayers] =
+  const [inWindow, leagueSyncAt, cursor, setAside, privatePlayers, feedWaiting] =
     await Promise.all([
       prisma.match.findMany({
         where: {
@@ -5257,6 +5265,10 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         select: { id: true, name: true },
         orderBy: { name: "asc" },
       }),
+      // Feed games automatic feed imports are waiting on (fail closed).
+      season.dotaLeagueId
+        ? loadLeagueFeedWaiting(season.id)
+        : Promise.resolve([]),
     ]);
   const ts = (iso: string | null) => {
     const t = iso ? Date.parse(iso) : NaN;
@@ -5277,6 +5289,11 @@ async function AutoSyncHealth({ season }: { season: Season }) {
         }
       />
       <CardBody className="space-y-3">
+        {feedWaiting.length > 0 ? (
+          <p className="text-sm text-danger">
+            {leagueFeedWaitText(feedWaiting)}
+          </p>
+        ) : null}
         {inWindow.length === 0 ? (
           <p className="text-sm text-muted">
             No matches in their detection window — the sync sleeps until{" "}

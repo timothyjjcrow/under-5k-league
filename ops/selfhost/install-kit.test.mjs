@@ -140,6 +140,13 @@ test("both scripts carry the same check and run it before any git command", () =
       const at = code.search(later);
       if (at !== -1) assert.ok(check < at, `${SCRIPTS[index]}: the check comes before ${later}`);
     }
+    // A release or bot release passes the ownership check once the agent has
+    // locked it to root, but npm ran there as the build user first: both
+    // scripts refuse anything under /srv/ggd2l, before git too.
+    const refusal = code.indexOf('case "${KIT_ROOT}/" in\n  /srv/ggd2l/*) die ');
+    assert.ok(refusal > check, `${SCRIPTS[index]} refuses a clone under /srv/ggd2l after the ownership check`);
+    for (const later of [/\bgit(_kit)? /, /\bbash "\$\{HERE\}/])
+      if (code.search(later) !== -1) assert.ok(refusal < code.search(later), `${SCRIPTS[index]}: the refusal comes before ${later}`);
     // Root needs no safe.directory exception for its own clone, and git runs
     // no fsmonitor or hook from it.
     assert.doesNotMatch(code, /safe\.directory/);
@@ -173,6 +180,78 @@ test("install-kit.sh checks the live league env files with its own contract befo
     assert.ok(at > 0, change);
     assert.ok(check < at, `the env check comes before ${change}`);
   }
+});
+
+// 2026-10-19 audit: the admin API moved from localhost:2019 to a socket in
+// /run/caddy. `caddy reload` reaches the running Caddy at the address the NEW
+// Caddyfile names, so a Caddy started before the socket existed (the live box
+// before this kit, or the package's own Caddy on a fresh box) refuses every
+// reload until it restarts, and a plain `systemctl reload-or-restart caddy`
+// would stop install-kit.sh half way (set -e). caddy_reload runs here on its
+// own, with systemctl and the live units stubbed and a real socket file.
+test("install-kit.sh reloads Caddy only on its admin socket, and restarts it only while nothing is live", async (t) => {
+  const code = readFileSync(path.join(SELFHOST, "install-kit.sh"), "utf8");
+  const fn = /\ncaddy_reload\(\) \{\n[\s\S]*?\n\}\n/.exec(code)?.[0];
+  assert.ok(fn, "install-kit.sh defines caddy_reload");
+  const steps = code.replace(/^\s*#.*$/gm, "");
+  const call = steps.indexOf('\ncaddy_reload "$caddy_changed"\n');
+  assert.ok(call > steps.indexOf("mv -f /etc/caddy/Caddyfile.ggd2l-new /etc/caddy/Caddyfile"), "it runs once the Caddyfile is in place");
+  assert.doesNotMatch(steps.replace(fn.replace(/^\s*#.*$/gm, ""), ""), /^\s*systemctl (reload|reload-or-restart|restart) caddy\b/m,
+    "Caddy is reloaded or restarted only through caddy_reload");
+
+  const dir = realpathSync(mkdtempSync(path.join(tmpdir(), "ggd2l-caddy-")));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const socket = path.join(dir, "admin.sock");
+  const { createServer } = await import("node:net");
+  const run = ({ active = true, onSocket = false, live = false, changed = 1 }) => {
+    const log = path.join(dir, "calls.log");
+    rmSync(log, { force: true });
+    const script = `set -euo pipefail
+CADDY_ADMIN_SOCKET=${JSON.stringify(socket)}
+systemctl() { echo "$*" >> ${JSON.stringify(log)}; if [[ "$1" == is-active ]]; then return ${active ? 0 : 3}; fi; }
+active_units() { ${live ? "echo ggd2l-us@a.service; echo ggd2l-bot.service" : ":"}; }
+note() { printf '%s\\n' "$*"; }
+${fn}
+caddy_reload ${changed}
+`;
+    const server = onSocket ? createServer() : null;
+    return new Promise((resolve, reject) => {
+      const go = () => {
+        const result = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+        server?.close();
+        if (result.status !== 0) reject(new Error(result.stderr));
+        const calls = existsSync(log) ? readFileSync(log, "utf8").trim().split("\n").filter((c) => !c.startsWith("is-active")) : [];
+        resolve({ calls, out: result.stdout });
+      };
+      if (server) server.listen(socket, go);
+      else go();
+    });
+  };
+
+  // The live box at its first install of this kit: no reload (it would fail),
+  // no restart under live traffic, and a note that says what to run.
+  let r = await run({ live: true });
+  assert.deepEqual(r.calls, []);
+  assert.match(r.out, /NEEDS A RESTART: .* until: systemctl restart caddy\n/);
+  assert.match(r.out, /ggd2l-us@a\.service ggd2l-bot\.service is running/);
+  // The same box on a re-run before anyone restarted Caddy: still the note.
+  r = await run({ live: true, changed: 0 });
+  assert.deepEqual(r.calls, []);
+  assert.match(r.out, /NEEDS A RESTART/);
+  // A fresh box (the package's Caddy, nothing live): restarted at once.
+  r = await run({ live: false });
+  assert.deepEqual(r.calls, ["restart caddy"]);
+  // A Caddy on the socket takes a reload, live traffic or not.
+  for (const live of [true, false]) {
+    r = await run({ onSocket: true, live });
+    assert.deepEqual(r.calls, ["reload-or-restart caddy"]);
+    r = await run({ onSocket: true, live, changed: 0 });
+    assert.deepEqual(r.calls, []);
+    assert.equal(r.out, "unchanged\n");
+  }
+  // A stopped Caddy is started by the reload-or-restart, with the new files.
+  r = await run({ active: false });
+  assert.deepEqual(r.calls, ["reload-or-restart caddy"]);
 });
 
 // 2026-10-19: GNU chown and chmod, given a link, change its target. ensure_dir

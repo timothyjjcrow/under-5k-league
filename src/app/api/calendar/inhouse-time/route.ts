@@ -3,6 +3,7 @@ import { buildCalendar } from "@/lib/ics";
 import { inhouseTimeCalendarEvent, parseInhouseTimeParam } from "@/lib/inhouse-times";
 import { readInhouseTime } from "@/lib/inhouse-times-service";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
+import { limitPublicGet } from "@/lib/public-get-limit";
 import { singleSearchParam } from "@/lib/search-params";
 import { resolveSiteUrl } from "@/lib/site-url";
 
@@ -13,10 +14,13 @@ export const dynamic = "force-dynamic";
  * for "Apple or Outlook (.ics)" on /inhouse: the reminder the site gives in
  * place of a Discord ping. Only for a time that's on the list (someone is in
  * on it and it isn't over). Read-only, so a browser loading it as an image
- * changes nothing.
+ * changes nothing. One address shares the calendar feed's per-IP limit
+ * (`PUBLIC_GET_LIMITS`).
  */
 export async function GET(request: NextRequest) {
   const nowMs = Date.now();
+  const limited = limitPublicGet(request, "calendar", nowMs);
+  if (limited) return limited;
   const values = request.nextUrl.searchParams.getAll("at");
   // A repeated key names no one time (singleSearchParam's rule).
   const raw = singleSearchParam(values.length > 1 ? values : values[0]);

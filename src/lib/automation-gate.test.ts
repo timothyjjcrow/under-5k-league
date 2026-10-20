@@ -21,6 +21,7 @@ const prismaMocks = vi.hoisted(() => ({
   inhouseQueueEntry: { findMany: vi.fn() },
   leagueAnnouncement: { findMany: vi.fn() },
   inhouseAnnouncement: { findMany: vi.fn() },
+  importCandidate: { findMany: vi.fn() },
 }));
 
 const databaseNowMock = vi.hoisted(() => vi.fn());
@@ -149,6 +150,7 @@ function inputs(
     outboxClock: { databaseNowMs: NOW, appNowMs: NOW },
     globalAnnouncementMarkers: [],
     boardNeedsSync: false,
+    leagueFeedWaitRows: [],
     ...overrides,
   };
 }
@@ -170,7 +172,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 12,
+      version: 13,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -264,7 +266,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 12,
+      version: 13,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -442,6 +444,94 @@ describe("computeAutomationGateSnapshot", () => {
     expect(snapshot).toMatchObject({
       nextWakeAtMs: leagueThrottleAt,
       reason: "LEAGUE",
+    });
+  });
+
+  describe("a league feed waiting on games in retry backoff", () => {
+    const scheduledAt = NOW - 60 * 60_000;
+    const stampMs = NOW - 30_000;
+    const throttleAt = stampMs + AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 + 1;
+    const stamp = new Date(stampMs).toISOString();
+    const feedInputs = (
+      rows: AutomationGateInputs["leagueFeedWaitRows"],
+      wait: { at?: string; ids?: string[]; seasonId?: string; more?: boolean } = {},
+    ) =>
+      inputs({
+        seasons: [
+          season({
+            status: "REGULAR_SEASON",
+            dotaLeagueId: "42",
+            matches: [match({ scheduledAt: new Date(scheduledAt) })],
+          }),
+        ],
+        settings: {
+          [SETTING_KEYS.LEAGUE_AUTO_SYNC_AT]: stamp,
+          [SETTING_KEYS.LEAGUE_FEED_WAIT]: JSON.stringify({
+            seasonId: wait.seasonId ?? "season-1",
+            at: wait.at ?? stamp,
+            ids: wait.ids ?? rows.map((row) => row.dotaMatchId),
+            more: wait.more ?? false,
+          }),
+        },
+        leagueFeedWaitRows: rows,
+      });
+    const retrying = (dotaMatchId: string, inMs: number) => ({
+      dotaMatchId,
+      status: "RETRYABLE",
+      nextAttemptAt: new Date(NOW + inMs),
+    });
+
+    it("sleeps to the earliest retry when it is later than the throttle", () => {
+      const snapshot = computeAutomationGateSnapshot(
+        feedInputs([retrying("701", 16 * 60_000), retrying("702", 8 * 60_000)]),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({
+        nextWakeAtMs: NOW + 8 * 60_000,
+        reason: "LEAGUE",
+      });
+    });
+
+    it("keeps the throttle when the retry is sooner", () => {
+      const snapshot = computeAutomationGateSnapshot(
+        feedInputs([retrying("701", 30_000)]),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({ nextWakeAtMs: throttleAt, reason: "LEAGUE" });
+    });
+
+    it("keeps the throttle while a waited-on game is in review or has cleared", () => {
+      for (const rows of [
+        [retrying("701", 16 * 60_000), { dotaMatchId: "702", status: "NEEDS_REVIEW", nextAttemptAt: null }],
+        // An admin pressed Retry next sync: the row is PENDING, due at once.
+        [retrying("701", 16 * 60_000), { dotaMatchId: "702", status: "PENDING", nextAttemptAt: null }],
+      ]) {
+        expect(computeAutomationGateSnapshot(feedInputs(rows), NOW)).toMatchObject({
+          nextWakeAtMs: throttleAt,
+          reason: "LEAGUE",
+        });
+      }
+      // A recorded game whose row is gone (imported since) no longer waits.
+      expect(
+        computeAutomationGateSnapshot(
+          feedInputs([retrying("701", 16 * 60_000)], { ids: ["701", "703"] }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: throttleAt, reason: "LEAGUE" });
+    });
+
+    it("ignores a wait list from another pass, another season or a truncated one", () => {
+      const rows = [retrying("701", 16 * 60_000)];
+      for (const wait of [
+        { at: new Date(stampMs - 60_000).toISOString() },
+        { seasonId: "season-0" },
+        { more: true },
+      ]) {
+        expect(computeAutomationGateSnapshot(feedInputs(rows, wait), NOW)).toMatchObject({
+          nextWakeAtMs: throttleAt,
+          reason: "LEAGUE",
+        });
+      }
     });
   });
 
@@ -1986,7 +2076,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 12,
+      version: 13,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

@@ -199,6 +199,11 @@ export type AdminAttentionInput = {
   /** Plain lines from automationAttention. */
   automation: readonly string[];
   importsNeedingReview: number;
+  /**
+   * Feed games in review that automatic league-feed imports are waiting on
+   * (the last feed pass stopped on them; `loadLeagueFeedWaiting`).
+   */
+  feedWaitingForReview: readonly string[];
   shortTeams: readonly { name: string; missing: number }[];
   standinClashes: readonly { standin: string; first: string; second: string }[];
   outStandins: readonly { standin: string; fixture: string }[];
@@ -227,6 +232,21 @@ export function adminAttention(input: AdminAttentionInput): AttentionItem[] {
     items.push({
       key: "imports",
       text: `${n} imported ${plural(n, "game needs", "games need")} review before ${n === 1 ? "it counts" : "they count"}.`,
+      href: "#adm-sync",
+    });
+  }
+  if (input.feedWaitingForReview.length > 0) {
+    const ids = input.feedWaitingForReview;
+    const one = ids.length === 1;
+    const games =
+      ids.length === 1
+        ? ids[0]
+        : `${ids.slice(0, -1).join(", ")} and ${ids[ids.length - 1]}`;
+    // Discovery fails closed on a game in review, so no fixture imports from
+    // the feed until an admin retries or ignores it: say which, and how.
+    items.push({
+      key: "feed-waiting",
+      text: `Automatic league-feed imports are waiting on ${one ? "game" : "games"} ${games}, which ${one ? "needs" : "need"} review. Under Saved import progress, press Retry next sync or Ignore this game.`,
       href: "#adm-sync",
     });
   }

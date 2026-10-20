@@ -16,6 +16,8 @@ import {
 } from "@/lib/constants";
 import { steamIdToAccountId } from "@/lib/dota";
 import { runResultSync } from "@/lib/result-sync-service";
+import { loadAutomationGateSnapshot } from "@/lib/automation-gate";
+import { parseLeagueFeedWait } from "@/lib/league-feed-wait";
 import { nominatePlayer } from "@/lib/draft-service";
 import { importGameForMatch, loadImportSkips, rememberImportSkip, syncLeagueGames } from "@/lib/match-import";
 import { importScrimGame } from "@/lib/scrim-result-service";
@@ -1005,6 +1007,120 @@ describe("result sync — league feed outage (integration)", () => {
     const empty = await syncLeagueGames(season.id);
     expect(empty.unreachable).toBeUndefined();
     expect(empty.error).toBeUndefined();
+  });
+});
+
+// One feed game stuck in retry backoff or review keeps discovery fail-closed
+// (a partial newest-first buffer can't prove the real series), so the feed
+// imports nothing until it clears. What must NOT happen is the worker
+// rolling its feed claim back for that and reading /leagues/{id}/matchIds,
+// plus a full pass, on every scheduler tick for nothing.
+describe("result sync — a league feed waiting on a stuck game (integration)", () => {
+  const leagueClaim = () =>
+    prisma.setting.findUnique({ where: { key: SETTING_KEYS.LEAGUE_AUTO_SYNC_AT } });
+  const feedWait = async () =>
+    parseLeagueFeedWait(
+      (await prisma.setting.findUnique({ where: { key: SETTING_KEYS.LEAGUE_FEED_WAIT } }))?.value,
+    );
+  const healthyRunner = () =>
+    prisma.automationRunState.create({
+      data: { key: "league-maintenance", lastStatus: "SUCCEEDED", lastFinishedAt: new Date() },
+    });
+  const ticketed = async (leagueId: string) => {
+    const night = await setupNight({ offsetMs: -HOUR });
+    await prisma.season.update({ where: { id: night.season.id }, data: { dotaLeagueId: leagueId } });
+    return night;
+  };
+
+  it("keeps the feed claim while discovery waits only on a game in retry backoff, and the gate sleeps to its retry", async () => {
+    const { season, match, homeAccts, awayAccts } = await ticketed("18282");
+    await healthyRunner();
+    const STUCK = 6670001;
+    const REAL = 6670002;
+    const retryAt = new Date(Date.now() + 10 * 60_000);
+    const stuck = await prisma.importCandidate.create({ data: {
+      seasonId: season.id, dotaMatchId: String(STUCK), status: "RETRYABLE", reason: "PROVIDER_UNAVAILABLE",
+      attempts: 6, nextAttemptAt: retryAt, expiresAt: new Date(Date.now() + 24 * HOUR),
+    } });
+    mockLeague.mockResolvedValue([REAL, STUCK]);
+    mockMatch.mockImplementation(async (id) =>
+      id === String(REAL)
+        ? odGame(REAL, homeAccts, awayAccts, match.scheduledAt!.getTime() + 10 * 60_000)
+        // Once retried: a test lobby that fits no fixture.
+        : odGame(STUCK, [], [], match.scheduledAt!.getTime()));
+
+    expect((await runResultSync()).imported).toBe(0); // fail closed: nothing imports around it
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    // The real game's details are fetched and saved; the stuck one isn't
+    // fetched again inside its backoff.
+    expect(mockMatch.mock.calls.map(([id]) => id)).toEqual([String(REAL)]);
+    const claim = await leagueClaim();
+    expect(claim).not.toBeNull();
+    expect(await feedWait()).toEqual({ seasonId: season.id, at: claim!.value, ids: [String(STUCK)], more: false });
+
+    // The next tick can only stop on the same game: the claim stands.
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    // And the gate sleeps to that game's retry, not to the next tick.
+    expect(await loadAutomationGateSnapshot()).toMatchObject({ reason: "LEAGUE", nextWakeAtMs: retryAt.getTime() });
+
+    // An admin presses Retry next sync: the feed is due again at its
+    // ordinary throttle, not at the old retry time.
+    await prisma.importCandidate.update({ where: { id: stuck.id }, data: { status: "PENDING", nextAttemptAt: null, attempts: 0 } });
+    expect(await loadAutomationGateSnapshot()).toMatchObject({
+      reason: "LEAGUE",
+      nextWakeAtMs: Date.parse(claim!.value) + AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 + 1,
+    });
+
+    // The next pass fetches it, sets it aside and imports the real game,
+    // and the cleared feed records nothing waiting.
+    await backdateThrottle(SETTING_KEYS.LEAGUE_AUTO_SYNC_AT, 10 * 60_000);
+    expect((await runResultSync()).imported).toBe(1);
+    expect(await prisma.game.count({ where: { matchId: match.id, dotaMatchId: String(REAL) } })).toBe(1);
+    expect(await feedWait()).toBeNull();
+  });
+
+  it("keeps the claim while a feed game waits for review, at the ordinary throttle", async () => {
+    const { season } = await ticketed("18283");
+    await healthyRunner();
+    await prisma.importCandidate.create({ data: {
+      seasonId: season.id, dotaMatchId: "6670011", status: "NEEDS_REVIEW", reason: "DETAILS_NOT_FINAL",
+      attempts: IMPORT_CANDIDATE_MAX_ATTEMPTS, expiresAt: new Date(Date.now() + 24 * HOUR),
+    } });
+    mockLeague.mockResolvedValue([6670011]);
+
+    await runResultSync();
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    expect(mockMatch).not.toHaveBeenCalled();
+    const claim = await leagueClaim();
+    expect(claim).not.toBeNull();
+    expect((await feedWait())?.ids).toEqual(["6670011"]);
+    // A game in review never clears on its own: the feed keeps its ordinary
+    // cadence rather than sleeping until an admin acts.
+    expect(await loadAutomationGateSnapshot()).toMatchObject({
+      reason: "LEAGUE",
+      nextWakeAtMs: Date.parse(claim!.value) + AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 + 1,
+    });
+  });
+
+  it("still retries at once after a game's details fail this pass, and names that game", async () => {
+    const { season } = await ticketed("18284");
+    mockLeague.mockResolvedValue([6670021]);
+    mockMatch.mockResolvedValue(null);
+
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(1);
+    expect(await leagueClaim()).toBeNull(); // rolled back: the next tick retries
+    expect(await feedWait()).toMatchObject({ seasonId: season.id, ids: ["6670021"] });
+    expect(
+      await prisma.importCandidate.findUniqueOrThrow({
+        where: { seasonId_dotaMatchId: { seasonId: season.id, dotaMatchId: "6670021" } },
+      }),
+    ).toMatchObject({ status: "RETRYABLE", attempts: 1 });
+
+    await runResultSync();
+    expect(mockLeague).toHaveBeenCalledTimes(2);
   });
 });
 

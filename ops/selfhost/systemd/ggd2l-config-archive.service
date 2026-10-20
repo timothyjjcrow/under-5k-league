@@ -1,12 +1,13 @@
 # Daily encrypted archive of the box's configuration (design §5.1): /etc/ggd2l
 # (env files, database passwords, rclone and healthchecks settings),
-# /etc/cloudflared (the tunnel's credentials) and /etc/caddy go through tar,
-# gzip and age to Tim's offline key, then to R2 under config/. The plaintext
-# never touches disk. A box rebuilt from zero gets every secret back from this
-# archive (provision-ggd2l.sh prints the steps).
+# /etc/cloudflared (the tunnel's credentials), /etc/caddy and the lobby bot's
+# state in /var/lib/ggd2l-bot (less its locks and logs) go through tar, gzip
+# and age to Tim's offline key, then to R2 under config/. The plaintext never
+# touches disk. A box rebuilt from zero gets every secret, and the bot's Steam
+# session, back from this archive (provision-ggd2l.sh prints the steps).
 #
-# Runs as root because those directories are root-only; the only path it may
-# write is its own output folder. config-archive.sh takes no lock. Every run
+# Runs as root because those directories are root-only (the bot's is 0700
+# ggd2l-bot); the only path it may write is its own output folder. config-archive.sh takes no lock. Every run
 # ends in ggd2l-alert@config-archive.service, which posts to Discord when the
 # archive fails and when the next one passes.
 [Unit]

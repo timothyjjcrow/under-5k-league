@@ -44,6 +44,12 @@ export const SETTING_KEYS = {
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's
   // atomic global throttle for the /leagues/{id}/matchIds path).
   LEAGUE_AUTO_SYNC_AT: "leagueAutoSyncAt",
+  // The feed games the last automatic league-feed pass waited on (in review,
+  // in retry backoff, or failed that pass), as JSON `{seasonId, at, ids,
+  // more}` (league-feed-wait.ts). Written only by syncDueMatches after a pass
+  // that ran; absent means the last pass waited on nothing. /admin names the
+  // games, and the automation gate sleeps to their earliest retry.
+  LEAGUE_FEED_WAIT: "leagueFeedWait",
   // ISO timestamp of the last roster scan on ANY match (global speed bump so
   // concurrent pollers can't each claim a different match in one burst).
   ROSTER_AUTO_SYNC_AT: "rosterAutoSyncAt",

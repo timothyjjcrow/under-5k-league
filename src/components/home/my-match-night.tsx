@@ -4,8 +4,9 @@ import { HeroIcon } from "@/components/hero-icon";
 import { Badge, Card, CardBody, CardHeader, LinkArrow, textLink } from "@/components/ui";
 import { MATCH_STATUS } from "@/lib/constants";
 import { heroById } from "@/lib/heroes";
-import { myMatchNight } from "@/lib/my-match-night";
+import { matchNightWindowOpen, myMatchNight } from "@/lib/my-match-night";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
+import { prisma } from "@/lib/prisma";
 import { matchRoundLabel, playoffTotalRounds } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
@@ -16,7 +17,10 @@ import { cn } from "@/lib/utils";
  * time. The moment a series was final, the player's own night vanished from
  * Home; this is the reason to come back the next day. Renders nothing outside
  * its window, so Home streams it with a null fallback. Database reads only:
- * the viewer's own games, which their profile reads the same way.
+ * first when the season's decided games ended (start and duration, by the
+ * indexed match id), and only if one ended inside the window the viewer's own
+ * games, which their profile reads the same way. That participant read checks
+ * every stored game, so most days of the week it never runs.
  */
 export async function MyMatchNightCard({
   userId,
@@ -33,14 +37,20 @@ export async function MyMatchNightCard({
       .map((match) => [match.id, match]),
   );
   if (completed.size === 0) return null;
+  // Async server component: rendered once per request.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const ended = await prisma.game.findMany({
+    where: { matchId: { in: [...completed.keys()] } },
+    select: { startTime: true, durationSecs: true },
+  });
+  if (!matchNightWindowOpen(ended, nowMs)) return null;
   const games = await getPlayerGameFacts(userId);
   const recap = myMatchNight({
     userId,
     games,
     completedMatchIds: new Set(completed.keys()),
-    // Async server component: rendered once per request.
-    // eslint-disable-next-line react-hooks/purity
-    nowMs: Date.now(),
+    nowMs,
   });
   if (!recap) return null;
   const match = completed.get(recap.matchId);

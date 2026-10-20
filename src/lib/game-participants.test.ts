@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { Prisma } from "@prisma/client";
-import { buildParticipantProjection } from "./game-participants";
+import {
+  GAME_VIEW_COLUMNS,
+  buildParticipantProjection,
+  fetchGamesForPlayers,
+  participantCoveredWhere,
+  participantUncoveredWhere,
+} from "./game-participants";
 
 const COLUMNS = new Set<string>(Object.values(Prisma.GameParticipantScalarFieldEnum));
 
@@ -46,5 +52,35 @@ describe("buildParticipantProjection", () => {
       for (const key of Object.keys(row)) expect(COLUMNS).toContain(key);
       expect(row).not.toHaveProperty("items");
     }
+  });
+});
+
+describe("GAME_VIEW_COLUMNS", () => {
+  it("is every Game column but the index's proof, so a new column shows up", () => {
+    const proof = ["participantSource", "participantVersion", "participantComplete"];
+    expect(Object.keys(GAME_VIEW_COLUMNS).sort()).toEqual(
+      Object.values(Prisma.GameScalarFieldEnum).filter((key) => !proof.includes(key)).sort(),
+    );
+  });
+});
+
+describe("fetchGamesForPlayers' filter", () => {
+  it("tests the participant index before the exact-source guard, and keeps the guard", async () => {
+    let where: Prisma.GameWhereInput | undefined;
+    const db = { game: { findMany: async (args: { where: Prisma.GameWhereInput }) => {
+      where = args.where;
+      return [];
+    } } } as unknown as Pick<Prisma.TransactionClient, "game">;
+    await fetchGamesForPlayers(["u1"], undefined, db);
+    const [covered, uncovered] = ((where!.AND as Prisma.GameWhereInput[])[0].OR)!;
+    // Postgres evaluates these terms in order: the cheap index test first
+    // spares another player's covered game both detoasts of its box score.
+    expect(covered.AND).toEqual([
+      { participants: { some: { userId: { in: ["u1"] } } } },
+      participantCoveredWhere(),
+      { participantComplete: true },
+    ]);
+    expect(uncovered).toEqual(participantUncoveredWhere());
+    expect(JSON.stringify(participantCoveredWhere())).toContain("participantSource");
   });
 });

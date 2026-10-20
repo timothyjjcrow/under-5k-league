@@ -267,7 +267,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
       expire: 0,
     });
   });
@@ -279,7 +279,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
       expire: 0,
     });
   });
@@ -290,7 +290,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
       expire: 0,
     });
   });
@@ -307,7 +307,7 @@ describe("POST /api/inhouse request boundary", () => {
     // Maintenance is the poll's call, never the route's own.
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v12", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
       expire: 0,
     });
   });

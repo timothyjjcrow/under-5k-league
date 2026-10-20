@@ -206,14 +206,52 @@ test("rollback promotes the previous release in the current mode and refuses in 
   await assert.rejects(rollbackRelease(box.ctx, "us"), { code: "no_previous" });
   await startRelease(box.ctx, "us", NEW);
   await promoteRelease(box.ctx, "us", NEW, { mode: "allowlist" });
+  await setMode(box.ctx, "us", "maintenance");
+  await assert.rejects(rollbackRelease(box.ctx, "us"), { code: "mode_is_maintenance" });
+  await setMode(box.ctx, "us", "allowlist");
   const restarts = box.commandsMatching(/systemctl restart ggd2l-us@a/).length;
   assert.deepEqual(await rollbackRelease(box.ctx, "us"), { id: OLD });
   assert.equal(box.commandsMatching(/systemctl restart ggd2l-us@a/).length, restarts + 1, "restarted clean");
   assert.deepEqual(readMode(read(box.layout.modeFile("us"))), { mode: "allowlist", port: 3001 });
   assert.equal(liveJson(box).previous, NEW);
+  assert.equal(liveJson(box).rolledBackFrom, NEW);
+});
 
-  await setMode(box.ctx, "us", "maintenance");
-  await assert.rejects(rollbackRelease(box.ctx, "us"), { code: "mode_is_maintenance" });
+// 2026-10-19 audit: promote makes the release it replaces the previous one, so
+// a bare second rollback (a retry after a silent two minutes, or after an
+// enable/disable failure reported once the switch was done) put the bad
+// release straight back with ok:true.
+test("a second rollback refuses, naming the promote that would undo the first; any promote clears the mark", async () => {
+  const box = liveBox();
+  await goLive(box);
+  await startRelease(box.ctx, "us", NEW);
+  await promoteRelease(box.ctx, "us", NEW);
+  box.clock.t += 120_000;
+  assert.equal(liveJson(box).rolledBackFrom, undefined, "a promote is not a rollback");
+  assert.deepEqual(await rollbackRelease(box.ctx, "us"), { id: OLD });
+
+  const before = box.calls.length;
+  for (const wait of [0, 120_000]) {
+    box.clock.t += wait;
+    await assert.rejects(rollbackRelease(box.ctx, "us"), (error) => {
+      assert.equal(error.code, "rolled_back");
+      assert.deepEqual(error.extra, { live: OLD, rolledBackFrom: NEW });
+      return true;
+    });
+  }
+  assert.equal(box.calls.length, before, "a refused rollback runs nothing");
+  assert.equal(liveJson(box).id, OLD);
+  assert.equal(liveJson(box).previous, NEW, "the release it left stays on disk for a promote by id");
+  const { status } = await import("./status.mjs");
+  assert.equal((await status(box.ctx, { meminfo: path.join(box.root, "missing") })).leagues.us.rolledBackFrom, NEW);
+
+  // Going back to it on purpose is a promote by id, which clears the mark;
+  // a rollback after that is an ordinary one again.
+  assert.deepEqual(await promoteRelease(box.ctx, "us", NEW), { id: NEW, previous: OLD });
+  assert.equal(liveJson(box).rolledBackFrom, undefined);
+  box.clock.t += 120_000;
+  assert.deepEqual(await rollbackRelease(box.ctx, "us"), { id: OLD });
+  assert.equal(liveJson(box).rolledBackFrom, NEW);
 });
 
 test("promote can re-promote the live release onto the slot start put it on (cutover W9-W10a)", async () => {

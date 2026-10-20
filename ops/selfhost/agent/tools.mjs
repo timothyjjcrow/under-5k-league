@@ -1,5 +1,6 @@
 // The tools clone and what runs from it (design §2.1, §2.5, §5.1, §7):
-// prepare, attest, preflight, migrate, backup, drill, bot-deploy, bot-status.
+// prepare, attest, preflight, migrate, backup, drill, bot-deploy, bot-status,
+// and envcheck's production validation.
 //
 // Each repo script runs as ggd2l-build from /srv/ggd2l/tools/<sha12> inside a
 // systemd-run unit that reads the env files itself (-p EnvironmentFile=), so
@@ -9,11 +10,12 @@
 // JSON never carry it.
 import { existsSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, rmSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
-import { buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
+import { ENV_GATE_LINE, buildUserEnv, cloneAt, fetchMain, lockDownTree, makeBuildDir, requireOnMain } from "./build.mjs";
 import { loadEnvFile, loadLeagueEnv, loadMigrateEnv, openRedactedLog, readJson } from "./context.mjs";
 import { grantsCheck } from "./database.mjs";
 import { AgentError, BIN, USERS, compactStamp } from "./layout.mjs";
-import { asUser, must, removeTree, systemdRunArgs } from "./runner.mjs";
+import { readLive } from "./releases.mjs";
+import { asUser, createRedactor, must, removeTree, systemdRunArgs } from "./runner.mjs";
 
 const TOOLS_PROPERTIES = Object.freeze(["CPUWeight=20", "IOWeight=20", "Nice=10", "RuntimeMaxSec=1800"]);
 
@@ -137,6 +139,56 @@ export async function attest(ctx, lg, commit) {
     const schema = await runTool(ctx, { ...common, script: "scripts/production-schema-check.mjs" });
     if (!schema.some((line) => line.includes("Production schema attestation passed"))) throw new AgentError("attest_failed");
     return { ok: true };
+  });
+}
+
+// scripts/validate-prod-env.mjs: the production gate every build, attest and
+// migrate runs. envcheck runs it too, against the file as it stands.
+const PROD_ENV_SCRIPT = "scripts/validate-prod-env.mjs";
+const ENVCHECK_PROPERTIES = Object.freeze(["CPUWeight=20", "Nice=10", "RuntimeMaxSec=120"]);
+// An env name as the validator's messages spell one (AUTH_SECRET, APP_URL).
+const ENV_NAME_RE = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
+
+/**
+ * `envcheck`'s production validation: the league env file as it stands,
+ * checked by the live release's own scripts/validate-prod-env.mjs. A restart,
+ * a reboot or a rollback starts a slot on that file with no build, and the
+ * slot's ExecStartPre runs only the env contract, which never checks
+ * AUTH_SECRET, CRON_SECRET, ADMIN_STEAM_IDS or STEAM_API_KEY. It runs as the
+ * league user, which already reads the file, from the release that user
+ * already runs, in a unit that reads the file itself. Resolves problems that
+ * name env keys only, never a value or the script's text; which rule each
+ * broke is in the redacted tool log, envcheck-<lg>-<stamp>-<sha12>.log.
+ */
+export async function productionEnvProblems(ctx, lg, env) {
+  const live = readLive(ctx, lg);
+  if (!live) return ["production validation: no live release to run it from (a build runs it)"];
+  const unit = systemdRunArgs({
+    user: USERS.league(lg),
+    cwd: ctx.layout.release(live.id),
+    envFiles: [ctx.layout.leagueEnv(lg)],
+    properties: ENVCHECK_PROPERTIES,
+    setEnv: { NODE_ENV: "production" },
+    command: BIN.node,
+    args: [PROD_ENV_SCRIPT],
+  });
+  const redact = createRedactor([env]);
+  return withToolLog(ctx, "envcheck", lg, live.sha, [env], async (log) => {
+    log.write(`== ${PROD_ENV_SCRIPT} from ${live.id} (${new Date(ctx.now()).toISOString()})`);
+    const lines = [];
+    const onLine = (line) => {
+      lines.push(redact(line));
+      log.write(line);
+    };
+    const result = await ctx.runner.run(BIN.systemdRun, unit, { onLine, capture: false });
+    log.write(`== exit ${result.code}`);
+    if (result.code === 0 && lines.some((line) => line.includes(ENV_GATE_LINE))) return [];
+    // Its failures are "  - <message>" lines, each naming the keys it broke.
+    const names = new Set();
+    for (const line of lines.filter((text) => /^\s*- /.test(text)))
+      for (const [name] of line.matchAll(ENV_NAME_RE)) names.add(name);
+    if (names.size === 0) return ["production validation: failed or printed no pass line (the envcheck tool log says why)"];
+    return [...names].map((name) => `${name}: fails the production validation`);
   });
 }
 
