@@ -3,6 +3,7 @@ import { getGuildConfig, memoGuildMembership } from "@/lib/discord-roles";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
+import { discordConsentText } from "@/lib/account-page";
 
 // The "you signed up, now finish" prompt.
 //
@@ -92,11 +93,9 @@ export function DiscordSetupCard({
         </div>
 
         <p className="text-xs text-muted">
-          {oneClick
-            ? "Discord gives us your account ID and username to verify the link and lets us add that account to the league server. We don't request your email or server list, and the OAuth token is discarded after the callback."
-            : linkAvailable
-              ? "Discord gives us your account ID and username to verify the link. We don't request your email or server list, and the OAuth token is discarded after the callback."
-              : "Your handle is how captains find you."}
+          {linkAvailable
+            ? discordConsentText(oneClick)
+            : "Your handle is how captains find you."}
         </p>
       </CardBody>
     </Card>

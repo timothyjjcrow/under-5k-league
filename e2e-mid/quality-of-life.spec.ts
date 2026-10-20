@@ -257,14 +257,15 @@ test("profile saves optional details with clear dirty state", async ({
     page.getByRole("heading", { name: "My account", level: 1 }),
   ).toBeVisible();
   // A signup needs a linked Discord, so link one the way the OAuth callback
-  // stores it; the signup form then opens in place of that step.
-  await expect(page.locator("#signup-discord-step")).toBeVisible();
+  // stores it; the steps then show Discord done and the form opens.
+  const discordStep = page.locator("#signup-discord-step");
+  await expect(discordStep).toHaveAttribute("data-state", "current");
   await db.user.update({
     where: { steamId },
     data: { discordId: `7${steamId.slice(-17)}`, discordName: "qol_player" },
   });
   await page.reload();
-  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
+  await expect(discordStep).toHaveAttribute("data-state", "done");
   // The old four-tile setup checklist is gone; nothing is asked of someone
   // who hasn't signed up (their only step is the season card itself).
   await expect(page.locator("#signup-next-steps")).toHaveCount(0);
@@ -310,7 +311,8 @@ test("profile saves optional details with clear dirty state", async ({
       name: /^(Link|Add) your Discord so captains can reach you$/,
     }),
   ).toHaveAttribute("href", "#profile-discord");
-  await expect(page.locator("#signup-discord-step")).toHaveCount(0);
+  // Signed up already, so no steps to join, though Discord is unlinked now.
+  await expect(page.locator("#signup-checklist")).toHaveCount(0);
   // Returning players see their current participation without the full form.
   const savedSignup = page.locator("#signup-details");
   await expect(savedSignup).not.toHaveAttribute("open", "");

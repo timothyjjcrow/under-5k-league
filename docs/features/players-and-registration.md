@@ -68,20 +68,36 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   re-read inside the write's transaction (`RegistrationDiscordChangedError`),
   so an unlink or a re-link mid-submit can't admit an account nobody checked.
   A refusal revalidates /me, so a stale page turns into the step.
-- **/me shows the step in place of the form, never beside it**
-  (`signupDiscordStep`, `<SignupDiscordStepPanel>`): linking is a full-page
-  round trip, so a half-filled form would be lost. The returning one-tap card
-  hides with it. The step points at the Discord card ("Link your Discord ↓"),
-  as the next-steps list does, rather than repeating its buttons: the card
-  keeps the consent text beside them, and no two controls on /me share a
-  name. Unlinked is known at render; a linked player's card waits on
-  the page's one member lookup behind `<Suspense>` with a status line, never
-  the form (a form swapped out mid-typing loses its answers), and an unknown
-  answer shows the form. "Check again" is a plain link that reloads /me. How
-  it works' first step says what a signup needs here (`signupStepDetail`).
+- **/me shows the steps to join: Steam, Discord, then the signup**
+  (`signupChecklist`, `<SignupChecklist>`; Tim's call, 2026-10-19). Steam is
+  done (they're signed in). The Discord step carries the real buttons ("Link
+  Discord & join the server", or the join and invite buttons, with "Check
+  again" after an invite join or accepting the rules), one plain sentence
+  on why ("so teams and admins can contact you about the league"; Tim's
+  call: no ids, tokens or scopes here, since the button says it joins the
+  server and Discord's own screen says the rest) and the callback's
+  `?discord=` note.
+  The signup step opens the form, and the returning one-tap card, under it
+  once Discord is done, never beside an unfinished step: linking is a
+  full-page round trip, so a half-filled form would be lost. A first version
+  only pointed at the Discord card ("Link your Discord ↓"), which made new
+  players click twice in two places. Now the Discord card leaves its buttons,
+  note and typed-handle fallback to the steps and points to step 2
+  (`signupOwnsDiscord`), so each action has one button on the page. Unlinked,
+  and linked with no bot to ask, are known at render; a linked player's
+  Discord step shows "checking" behind `<Suspense>` until the page's one
+  member lookup answers, never the form (a form swapped out mid-typing loses
+  its answers), and an unknown answer counts as done without claiming the
+  server. **Keep the steps and the form in two fixed slots in every state**
+  (`SignupDiscordGate` in `src/app/me/page.tsx`, source-guarded): a first
+  signup turns the steps off, and a form that moved in the tree remounted
+  with its open editor and "Saved" collapsed (#90 shipped that for a player
+  the bot checked). How it works' first step says what a signup needs here
+  (`signupStepDetail`).
 - **Tests:** `signup-discord.test.ts` (the rule, the copy, and source guards on
-  the action's order and the /me wrap), `signup-discord-step.test.ts` (the
-  panel's links), `test/integration/signup-discord.itest.ts`
+  the action's order and the /me wrap), `signup-checklist.test.ts` (the
+  steps' controls and states), `account-discord-card.test.ts` (the card's
+  `signupOwnsDiscord` mode), `test/integration/signup-discord.itest.ts`
   (the real action over HTTP to a stand-in member route, with the seams), and
   the mid-season e2e, which links accounts (`signed-in.spec.ts`,
   `quality-of-life.spec.ts`).
