@@ -237,9 +237,17 @@ Grid, filter and URL rules: `pages-and-ui.md`.
     row's line (`scoutingRowParts`: "plays Pos 3 · in Ancient 5 games ·
     solo · US East", warnings tinted, each fact unbreakable, every finding
     in the hover) with "Recent pubs" heroes from the window in place of the
-    all-time strip, and the profile's "Pub scouting report"
+    all-time strip, and the profile's "Pub scouting" card
     (`profile-pub-scouting.tsx`), first in the "Player profile" band. The
-    hero pool's all-time list says "all time". A Turbo-only account has an
+    hero pool's all-time list says "all time".
+  - **Keep the card small** (Tim, 2026-10-21: the first report's list of
+    rows took too much space). It is a grid of tiles (`scoutingTiles`: a
+    label, a few-word lead, a one-line note, the full finding as the hover),
+    `auto-fit` so it is two across in the rail and on a phone and one row
+    across a new player's main column; an odd last tile takes its row in a
+    narrow column. Recent heroes are one strip of icons with games and win
+    rate; the role averages and how it is read sit behind "More". Notes wrap
+    rather than truncate: a phone has no hover. A Turbo-only account has an
     empty W/L window but still a scouting line (`poolPubRecord`;
     `pubHasWindow` gates the W/L token).
 - **Name the window and the snapshot age** ("Pubs 54% in last 100 · checked 3d

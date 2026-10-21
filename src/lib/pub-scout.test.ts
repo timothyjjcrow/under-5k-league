@@ -15,6 +15,7 @@ import {
   roleClaimDiffers,
   scoutingFacts,
   scoutingRowParts,
+  scoutingTiles,
   scoutingTitle,
   summarizePubMatches,
   type PubScout,
@@ -440,5 +441,98 @@ describe("parsePubScout", () => {
       regions: [{ region: 2, games: 3 }],
       heroes: [{ heroId: 5, games: 2, wins: 2 }],
     });
+  });
+});
+
+describe("scoutingTiles", () => {
+  const tiles = (s: PubScout, c: ScoutContext) =>
+    Object.fromEntries(scoutingTiles(s, c).map((t) => [t.key, t]));
+
+  it("says each finding in a few words, with the full sentence as its hover", () => {
+    const t = tiles(scout(), ctx());
+    expect(Object.keys(t)).toEqual([
+      "role",
+      "level",
+      "modes",
+      "server",
+      "form",
+    ]);
+    expect(t.role).toMatchObject({
+      lead: "Support 100%",
+      note: "Matches signup (Pos 4, 5)",
+      tone: "good",
+    });
+    expect(t.role.title).toContain("Support in 100 of 100 games");
+    expect(t.level).toMatchObject({
+      label: "Ranked games at",
+      lead: "≈4,250",
+      note: "Near signup 4,200",
+      rankTier: 63,
+      tone: "good",
+    });
+    expect(t.modes).toMatchObject({ lead: "100% ranked", note: "Solo" });
+    expect(t.server).toMatchObject({ lead: "US East 100%", note: null });
+    expect(t.form).toMatchObject({
+      label: "Last 20 games",
+      lead: "20–0",
+      note: "~24 games a day",
+    });
+  });
+
+  it("leads with a position when lanes settle one, and tints what to look at", () => {
+    const t = tiles(
+      scout({
+        positions: [0, 0, 0, 8, 1],
+        ranked: 40,
+        unranked: 10,
+        turbo: 50,
+        abandons: 3,
+      }),
+      ctx({ roles: "1,2", signupMmr: 3500, league: "eu" }),
+    );
+    expect(t.role).toMatchObject({
+      lead: "Pos 4",
+      note: "Signed up Pos 1, 2",
+      tone: "warn",
+    });
+    expect(t.level).toMatchObject({
+      note: "750 over signup 3,500",
+      tone: "warn",
+    });
+    expect(t.modes).toMatchObject({
+      lead: "50% Turbo",
+      note: "Solo · 40% ranked",
+      tone: "warn",
+    });
+    expect(t.server).toMatchObject({
+      note: "Far from league servers",
+      tone: "warn",
+    });
+    expect(t.leaves).toMatchObject({
+      lead: "3 games",
+      note: "of their last 100",
+      tone: "warn",
+    });
+  });
+
+  it("names a stale medal, and leaves out what has too few games", () => {
+    expect(tiles(scout(), ctx({ rankTier: 15 })).level.note).toBe(
+      "Above their Herald 5 medal",
+    );
+    expect(
+      scoutingTiles(
+        scout({
+          games: 9,
+          core: 5,
+          support: 4,
+          lobbyGames: 9,
+          regionGames: 9,
+          partyKnown: 9,
+          recentWins: 5,
+          recentLosses: 4,
+        }),
+        ctx(),
+      ),
+    ).toEqual([]);
   });
 });

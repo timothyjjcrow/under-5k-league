@@ -2,54 +2,60 @@ import {
   Card,
   CardBody,
   CardHeader,
-  FormStrip,
-  HeroPool,
+  HeroIcon,
   KDA,
   RankMedal,
 } from "@/components/ui";
+import { heroById } from "@/lib/heroes";
 import {
   pubHeroRows,
-  pubLobbyRead,
-  scoutingFacts,
+  scoutingTiles,
   type PubRoleAverages,
   type PubScout,
   type ScoutContext,
-  type ScoutFact,
+  type ScoutTile,
   type ScoutTone,
 } from "@/lib/pub-scout";
-import type { FormResult } from "@/lib/team-matches";
 import { cn } from "@/lib/utils";
 
-/** Games on a hero before its win rate gets a colour; below it, a plain W–L. */
-const HERO_RATE_MIN_GAMES = 3;
+/** Heroes in the strip: one row in a wide main column, two in the rail. */
+const STRIP_HEROES = 6;
 /** Games in a role before its averages are worth a line. */
 const ROLE_LINE_MIN_GAMES = 5;
 
-const TONE_MARK: Record<
+const TONE: Record<
   ScoutTone,
-  { glyph: string; spoken: string; className: string }
+  { tile: string; lead: string; mark: string | null; spoken: string }
 > = {
   good: {
-    glyph: "✓",
-    spoken: "Agrees with their signup:",
-    className: "text-success",
+    tile: "border-line-soft bg-surface-2/30",
+    lead: "text-fg",
+    mark: "✓",
+    spoken: "Agrees with their signup: ",
   },
   warn: {
-    glyph: "!",
-    spoken: "Worth a second look:",
-    className: "text-accent",
+    tile: "border-accent/40 bg-accent/5",
+    lead: "text-accent",
+    mark: "!",
+    spoken: "Worth a second look: ",
   },
-  info: { glyph: "•", spoken: "", className: "text-muted" },
+  info: {
+    tile: "border-line-soft bg-surface-2/30",
+    lead: "text-fg",
+    mark: null,
+    spoken: "",
+  },
 };
 
 /**
- * The pub scouting report captains read before bidding: what a signup's last
- * 100 public games say about their role and lanes, the level of their games
- * set against their signup MMR and medal, their modes, queue, server, form
- * and activity, then their recent heroes and how they play as a core or a
- * support. Every line comes from the stored snapshot's counts
- * (pub-scout.ts) and shows only with enough games behind it; the page
- * renders the card only when one does.
+ * The pub scouting report captains read before bidding, sized to sit in the
+ * profile's rail (two tiles across) and across a new player's main column
+ * (one row): a tile per finding from a signup's last 100 public games (role,
+ * the level of their games, modes, server, form, early leaves), each tinted
+ * when it is worth a second look, then their recent heroes as one strip.
+ * Averages by role and how it is all read sit behind "More". Every line comes
+ * from the stored snapshot's counts (pub-scout.ts); the page renders the
+ * card only when one has enough games.
  */
 export function ProfilePubScouting({
   scout,
@@ -61,10 +67,8 @@ export function ProfilePubScouting({
   /** How long ago the snapshot was taken ("3d ago"). */
   checkedLabel: string | null;
 }) {
-  const facts = scoutingFacts(scout, context);
-  const lobby = pubLobbyRead(scout);
-  const heroes = pubHeroRows(scout);
-  const form = scout.form.split("") as FormResult[];
+  const tiles = scoutingTiles(scout, context);
+  const heroes = pubHeroRows(scout).slice(0, STRIP_HEROES);
   const roleLines = [
     { label: "As a core", averages: scout.coreAverages },
     { label: "As a support", averages: scout.supportAverages },
@@ -75,135 +79,156 @@ export function ProfilePubScouting({
   return (
     <Card id="player-scouting" className="min-w-0 scroll-mt-40">
       <CardHeader
-        title="Pub scouting report"
-        subtitle={`Their last ${scout.games} public games on OpenDota${
+        title="Pub scouting"
+        subtitle={`Their last ${scout.games} public games${
           checkedLabel ? ` · checked ${checkedLabel}` : ""
         }`}
       />
-      <CardBody className="space-y-5">
-        {facts.length > 0 ? (
-          <dl className="divide-y divide-line-soft">
-            {facts.map((fact) => (
-              <FactRow
-                key={fact.key}
-                fact={fact}
-                extra={
-                  fact.key === "level" && lobby ? (
-                    <RankMedal rankTier={lobby.rankTier} size={22} />
-                  ) : null
-                }
-                after={
-                  fact.key === "form" && form.length > 0 ? (
-                    <FormStrip form={form} size={5} className="mt-1" />
-                  ) : null
-                }
-              />
+      <CardBody className="space-y-3">
+        {tiles.length > 0 ? (
+          // auto-fit, never grid-cols-1: two across in the rail, one row on
+          // a wide page, however many tiles have enough games.
+          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(9.5rem,100%),1fr))]">
+            {tiles.map((tile) => (
+              <ScoutTileView key={tile.key} tile={tile} />
             ))}
-          </dl>
+          </ul>
         ) : null}
 
         {heroes.length > 0 ? (
-          <div className="space-y-2">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">
-              Recent heroes
-              <span className="font-normal normal-case tracking-normal">
-                {" "}
-                · {scout.heroCount} different in these games
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <span className="text-xs text-muted">
+              Recent heroes{" "}
+              <span className="whitespace-nowrap">
+                ({scout.heroCount} played)
               </span>
-            </div>
-            <HeroPool
-              heroes={heroes}
-              limit={6}
-              minGamesForRate={HERO_RATE_MIN_GAMES}
-              columns="container"
-            />
-          </div>
-        ) : null}
-
-        {roleLines.length > 0 ? (
-          <div className="space-y-2">
-            <div className="text-xs font-medium uppercase tracking-wide text-muted">
-              How they play
-            </div>
-            <ul className="space-y-1.5 text-sm">
-              {roleLines.map(({ label, averages }) => (
-                <li key={label} className="min-w-0">
-                  <span className="font-medium text-fg">{label}</span>
-                  <span className="text-muted">
-                    {" "}
-                    ({averages.games} games):{" "}
-                  </span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    {averages.lastHitsPerMin} last hits a minute
-                  </span>
-                  <span className="text-muted"> · </span>
-                  <span className="whitespace-nowrap tabular-nums">
-                    {averages.gpm} GPM
-                  </span>
-                  <span className="text-muted"> · </span>
-                  <span className="whitespace-nowrap">
-                    <KDA
-                      kills={averages.kills}
-                      deaths={averages.deaths}
-                      assists={averages.assists}
-                    />
-                  </span>
-                </li>
-              ))}
+            </span>
+            <ul className="flex flex-wrap gap-x-3 gap-y-2">
+              {heroes.map((h) => {
+                const hero = heroById(h.heroId);
+                const name = hero?.name ?? `Hero ${h.heroId}`;
+                const winPct = Math.round((h.wins / h.games) * 100);
+                const summary = `${name}: ${h.games} games, ${h.wins}–${h.games - h.wins}, ${h.kda} KDA`;
+                return (
+                  <li
+                    key={h.heroId}
+                    className="flex items-center gap-1.5"
+                    title={summary}
+                  >
+                    {hero ? (
+                      <HeroIcon hero={hero} size={24} title={summary} />
+                    ) : null}
+                    <span className="sr-only">{summary}</span>
+                    <span
+                      aria-hidden
+                      className="text-xs leading-tight tabular-nums text-muted"
+                    >
+                      <span className="font-semibold text-fg">{h.games}g</span>{" "}
+                      <span
+                        className={cn(
+                          h.games >= 3 && winPct >= 60 && "text-success",
+                          h.games >= 3 && winPct < 40 && "text-danger-soft",
+                        )}
+                      >
+                        {winPct}%
+                      </span>
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           </div>
         ) : null}
 
-        <p className="text-xs leading-relaxed text-muted">
-          A game counts as core at 3.5+ last hits a minute and support under
-          2.5, in ranked and unranked games of 10+ minutes. Lanes come from the
-          games OpenDota analysed. &ldquo;Plays at&rdquo; is the average medal
-          of the players in their games.
-        </p>
+        <details className="group text-xs text-muted">
+          <summary className="cursor-pointer select-none py-1 hover:text-fg">
+            More: averages by role, and how this is read
+          </summary>
+          <div className="mt-2 space-y-2">
+            {roleLines.length > 0 ? (
+              <ul className="space-y-1">
+                {roleLines.map(({ label, averages }) => (
+                  <li key={label}>
+                    <span className="font-medium text-fg">{label}</span> (
+                    {averages.games} games):{" "}
+                    <span className="whitespace-nowrap tabular-nums">
+                      {averages.lastHitsPerMin} last hits a minute
+                    </span>
+                    {" · "}
+                    <span className="whitespace-nowrap tabular-nums">
+                      {averages.gpm} GPM
+                    </span>
+                    {" · "}
+                    <span className="whitespace-nowrap">
+                      <KDA
+                        kills={averages.kills}
+                        deaths={averages.deaths}
+                        assists={averages.assists}
+                      />
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+            <p className="leading-relaxed">
+              Core at 3.5+ last hits a minute, support under 2.5, in ranked and
+              unranked games of 10+ minutes; positions come from the games
+              OpenDota analysed. &ldquo;Games at&rdquo; is the average medal of
+              everyone in their games. Hover a tile for the full finding.
+            </p>
+          </div>
+        </details>
       </CardBody>
     </Card>
   );
 }
 
-function FactRow({
-  fact,
-  extra,
-  after,
-}: {
-  fact: ScoutFact;
-  extra: React.ReactNode;
-  after: React.ReactNode;
-}) {
-  const mark = TONE_MARK[fact.tone];
+function ScoutTileView({ tile }: { tile: ScoutTile }) {
+  const tone = TONE[tile.tone];
   return (
-    <div className="grid grid-cols-1 gap-x-4 gap-y-0.5 py-2.5 first:pt-0 last:pb-0 @md:grid-cols-[6.5rem_minmax(0,1fr)]">
-      <dt className="flex items-center gap-1.5 text-xs font-medium text-muted @md:pt-0.5">
-        <span
-          aria-hidden
-          className={cn("w-3 text-center font-bold", mark.className)}
-        >
-          {mark.glyph}
-        </span>
-        {mark.spoken ? <span className="sr-only">{mark.spoken}</span> : null}
-        {fact.label}
-      </dt>
-      <dd className="min-w-0">
-        <div
-          className={cn(
-            "flex items-center gap-2 text-sm font-semibold",
-            fact.tone === "warn" ? "text-accent" : "text-fg",
-          )}
-        >
-          {extra}
-          <span className="min-w-0 [overflow-wrap:anywhere]">{fact.lead}</span>
-        </div>
-        {fact.detail ? (
-          <div className="text-xs text-muted [overflow-wrap:anywhere]">
-            {fact.detail}
-          </div>
+    <li
+      className={cn(
+        // In a narrow column (the rail, a phone) the tiles sit two across,
+        // so an odd last tile takes the whole row instead of leaving a hole.
+        "min-w-0 rounded-lg border px-3 py-2 @max-md:odd:last:col-span-full",
+        tone.tile,
+      )}
+      title={tile.title}
+    >
+      <div className="flex items-center gap-1 text-[11px] font-medium uppercase tracking-wide text-muted">
+        <span className="truncate">{tile.label}</span>
+        {tone.mark ? (
+          <span
+            aria-hidden
+            className={cn(
+              "font-bold",
+              tile.tone === "warn" ? "text-accent" : "text-success",
+            )}
+          >
+            {tone.mark}
+          </span>
         ) : null}
-        {after}
-      </dd>
-    </div>
+      </div>
+      <div
+        className={cn(
+          "mt-0.5 flex min-w-0 items-center gap-1.5 font-display text-base font-semibold leading-tight tabular-nums",
+          tone.lead,
+        )}
+      >
+        {tile.rankTier ? (
+          <RankMedal rankTier={tile.rankTier} size={20} />
+        ) : null}
+        <span className="truncate">
+          {tone.spoken ? <span className="sr-only">{tone.spoken}</span> : null}
+          {tile.lead}
+        </span>
+      </div>
+      {tile.note ? (
+        // Wraps rather than truncates: a phone has no hover to read the rest.
+        <div className="mt-0.5 text-xs leading-snug text-muted [overflow-wrap:anywhere]">
+          {tile.note}
+        </div>
+      ) : null}
+    </li>
   );
 }

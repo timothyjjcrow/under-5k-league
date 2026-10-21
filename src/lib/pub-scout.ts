@@ -1013,3 +1013,180 @@ export function scoutingTitle(scout: PubScout, ctx: ScoutContext): string {
     ),
   ].join("\n");
 }
+
+// --- The report's tiles --------------------------------------------------------
+// The profile shows the report as a grid of small tiles, one finding each:
+// a short lead and a one-line note, sized to sit two across in the profile's
+// rail and in one row on a new player's wide page. The full sentences stay
+// in `scoutingFacts` (the hover and the tests read them).
+
+export type ScoutTile = {
+  key: "role" | "level" | "modes" | "server" | "form" | "leaves";
+  label: string;
+  /** A few words: "Pos 1", "Core 86%", "≈3,250", "80% ranked". */
+  lead: string;
+  /** One short line: what the lead is set against, or what it rests on. */
+  note: string | null;
+  tone: ScoutTone;
+  /** The full sentence, for the tile's hover. */
+  title: string;
+  /** The medal the level tile shows beside its lead. */
+  rankTier?: number;
+};
+
+const SHORT_REGION: Record<string, string> = {
+  "Europe West": "EU West",
+  "Europe East": "EU East",
+  "South America": "S. America",
+};
+
+export function scoutingTiles(scout: PubScout, ctx: ScoutContext): ScoutTile[] {
+  const facts = new Map(scoutingFacts(scout, ctx).map((f) => [f.key, f]));
+  const sentence = (key: ScoutFact["key"]) => {
+    const f = facts.get(key);
+    return f ? `${f.lead}${f.detail ? `. ${f.detail}` : ""}` : "";
+  };
+  const tiles: ScoutTile[] = [];
+  const claimed = parseRoles(ctx.roles);
+  const claimText = claimed.length ? `Pos ${claimed.join(", ")}` : null;
+
+  const role = facts.get("role");
+  const roleRead = pubRoleRead(scout);
+  if (role && roleRead) {
+    const positions = pubPositionRead(scout);
+    const lanes = positions?.reduce((s, p) => s + p.games, 0) ?? 0;
+    const top = positions?.[0];
+    const settled = top && top.games / lanes >= 0.6;
+    const lead = settled
+      ? positionName(top.position)
+      : roleRead.lean === "both"
+        ? "Core & support"
+        : `${roleRead.lean === "core" ? "Core" : "Support"} ${roleRead.percent}%`;
+    const note =
+      role.tone === "warn"
+        ? `Signed up ${claimText}`
+        : role.tone === "good"
+          ? `Matches signup (${claimText})`
+          : settled
+            ? `${top.games} of ${lanes} known lanes`
+            : `${roleRead.core + roleRead.support} games judged`;
+    tiles.push({
+      key: "role",
+      label: "Role",
+      lead,
+      note,
+      tone: role.tone,
+      title: [
+        sentence("role"),
+        facts.has("positions") ? sentence("positions") : "",
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  const level = facts.get("level");
+  const lobby = pubLobbyRead(scout);
+  if (level && lobby) {
+    const signup = ctx.signupMmr && ctx.signupMmr > 0 ? ctx.signupMmr : null;
+    const gap = signup != null ? lobby.mmr - signup : 0;
+    const medal = medalMidMmr(ctx.rankTier);
+    const staleMedal = medal != null && lobby.mmr - medal >= 770;
+    const note = staleMedal
+      ? `Above their ${rankMedalName(ctx.rankTier)} medal`
+      : signup != null && Math.abs(gap) >= LOBBY_GAP_MMR
+        ? `${groupedNumber.format(Math.abs(Math.round(gap / 50) * 50))} ${gap > 0 ? "over" : "under"} signup ${groupedNumber.format(signup)}`
+        : signup != null
+          ? `Near signup ${groupedNumber.format(signup)}`
+          : `${rankMedalName(lobby.rankTier)} games`;
+    tiles.push({
+      key: "level",
+      label: lobby.ranked ? "Ranked games at" : "Games at",
+      lead: `≈${groupedNumber.format(lobby.mmr)}`,
+      note,
+      tone: level.tone,
+      title: sentence("level"),
+      rankTier: lobby.rankTier,
+    });
+  }
+
+  const modes = pubModeRead(scout);
+  const modeFact = facts.get("modes");
+  if (modes && modes.length > 0 && modeFact) {
+    const turbo = modes.find((m) => m.key === "turbo");
+    const heavyTurbo = modeFact.tone === "warn" && turbo;
+    const lead = heavyTurbo
+      ? `${turbo.percent}% Turbo`
+      : `${modes[0].percent}% ${modes[0].label}`;
+    const queue = facts.get("queue");
+    const queueText = queue
+      ? queue.lead === "Solo"
+        ? "Solo"
+        : queue.lead === "With a party"
+          ? "Party"
+          : "Solo & party"
+      : null;
+    const second = modes.find(
+      (m) => `${m.percent}% ${m.label}` !== lead && m.percent >= 5,
+    );
+    tiles.push({
+      key: "modes",
+      label: "Modes",
+      lead,
+      note:
+        [queueText, second ? `${second.percent}% ${second.label}` : null]
+          .filter(Boolean)
+          .join(" · ") || null,
+      tone: modeFact.tone,
+      title: [sentence("modes"), queue ? sentence("queue") : ""]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  const server = facts.get("server");
+  const regions = pubRegionRead(scout);
+  if (server && regions) {
+    const short = (name: string) => SHORT_REGION[name] ?? name;
+    tiles.push({
+      key: "server",
+      label: "Server",
+      lead: `${short(regions[0].name)} ${regions[0].percent}%`,
+      note:
+        server.tone === "warn"
+          ? "Far from league servers"
+          : regions[1]
+            ? `${short(regions[1].name)} ${regions[1].percent}%`
+            : null,
+      tone: server.tone,
+      title: sentence("server"),
+    });
+  }
+
+  const form = facts.get("form");
+  if (form) {
+    const activity = facts.get("activity");
+    tiles.push({
+      key: "form",
+      label: `Last ${scout.recentWins + scout.recentLosses} games`,
+      lead: `${scout.recentWins}–${scout.recentLosses}`,
+      note: activity ? activity.lead.replace(/^About /, "~") : null,
+      tone: "info",
+      title: [sentence("form"), activity ? sentence("activity") : ""]
+        .filter(Boolean)
+        .join(" · "),
+    });
+  }
+
+  if (facts.has("leaves")) {
+    tiles.push({
+      key: "leaves",
+      label: "Left early",
+      lead: `${scout.abandons} games`,
+      note: `of their last ${scout.games}`,
+      tone: "warn",
+      title: sentence("leaves"),
+    });
+  }
+  return tiles;
+}
