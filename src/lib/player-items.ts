@@ -12,6 +12,14 @@ import type { OpenDotaPlayer } from "./dota";
 const MAX_ITEM_ID = 100_000;
 const INVENTORY_KEYS = ["item_0", "item_1", "item_2", "item_3", "item_4", "item_5"] as const;
 const BACKPACK_KEYS = ["backpack_0", "backpack_1", "backpack_2"] as const;
+const OPEN_DOTA_ITEM_KEYS = [
+  ...INVENTORY_KEYS,
+  ...BACKPACK_KEYS,
+  "item_neutral",
+  "item_neutral2",
+] as const;
+
+type OpenDotaItemFields = Pick<OpenDotaPlayer, (typeof OPEN_DOTA_ITEM_KEYS)[number]>;
 
 export type PlayerItems = {
   /** The six inventory slots in slot order, 0 for an empty slot. Null when
@@ -68,6 +76,23 @@ export function playerItemsFromOpenDota(
     neutral: heldItem(player.item_neutral),
     neutralEnchantment: heldItem(player.item_neutral2),
   };
+}
+
+/**
+ * A player's raw item fields, bounded for saved import evidence
+ * (`serializeImportEvidence`), so a game imported from that evidence on a
+ * later pass keeps its build. A number stays a number (an unusable id
+ * becomes the empty slot `playerItemsFromOpenDota` would read it as) and any
+ * other value is left out, so the saved copy reads back exactly as the
+ * payload it came from.
+ */
+export function openDotaItemFields(player: OpenDotaPlayer): OpenDotaItemFields {
+  const fields: OpenDotaItemFields = {};
+  for (const key of OPEN_DOTA_ITEM_KEYS) {
+    const value: unknown = player[key];
+    if (typeof value === "number") fields[key] = slotId(value) ?? 0;
+  }
+  return fields;
 }
 
 function storedSlots(value: unknown, length: number): number[] | null | undefined {

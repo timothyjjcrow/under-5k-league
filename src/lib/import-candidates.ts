@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import type { OpenDotaMatch, OpenDotaPlayer } from "./dota";
+import { openDotaItemFields } from "./player-items";
 import { prisma } from "./prisma";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
@@ -26,7 +27,12 @@ export function hasFinalImportDetails(
   );
 }
 
-/** Retain only evidence already used by classification and the public boxscore. */
+/**
+ * Retain only evidence already used by classification and the public boxscore.
+ * A later pass imports from this copy instead of refetching, so every field
+ * `buildPlayers` stores must survive here: a dropped field is stored as null
+ * and the backfill treats that as OpenDota's own answer.
+ */
 export function serializeImportEvidence(match: OpenDotaMatch): string {
   const players: OpenDotaPlayer[] = match.players.map((p) => ({
     account_id: p.account_id,
@@ -53,6 +59,7 @@ export function serializeImportEvidence(match: OpenDotaMatch): string {
             pct: typeof value?.pct === "number" ? value.pct : null },
         ]))
       : null,
+    ...openDotaItemFields(p),
   }));
   const payload = JSON.stringify({
     match_id: match.match_id,
