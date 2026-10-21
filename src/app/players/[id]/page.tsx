@@ -546,7 +546,12 @@ export default async function PlayerProfilePage({
         pubScouting ? (
           <ProfilePubScouting
             scout={pubScouting}
-            roles={activeReg?.roles}
+            context={{
+              roles: activeReg?.roles,
+              signupMmr: activeReg?.mmr,
+              rankTier: user.rankTier,
+              league: LEAGUE_CONFIG.region,
+            }}
             checkedLabel={pubCheckedLabel}
           />
         ) : null

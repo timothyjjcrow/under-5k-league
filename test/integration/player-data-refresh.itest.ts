@@ -32,7 +32,8 @@ import {
 import { runResultSync } from "@/lib/result-sync-service";
 import { SETTING_KEYS, getSetting, setSetting } from "@/lib/settings";
 import { DRAFT_STATUS, MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
-import type { PubStats } from "@/lib/pub-stats";
+import { PUB_SCOUT_MARKER, type PubStats } from "@/lib/pub-stats";
+import { summarizePubMatches } from "@/lib/pub-scout";
 import { makePlayer, makeSeason, makeTeam, makeUser } from "./factories";
 
 const PUB: PubStats = {
@@ -41,7 +42,9 @@ const PUB: PubStats = {
   totalGames: 900,
   lastPlayedAt: 1_722_000_000,
   topHeroes: [{ heroId: 14, games: 50, wins: 30 }],
-  scout: null,
+  // A current-version report (an empty window), so a snapshot stored from it
+  // is not due again inside the week.
+  scout: summarizePubMatches([]),
 };
 
 const rank = vi.mocked(fetchRankTier);
@@ -105,12 +108,15 @@ describe("the hourly player data refresh", () => {
     ).toMatchObject({ rankTier: 55, pubStats: JSON.stringify(PUB) });
   });
 
-  it("refreshes a snapshot from before the scouting counts, even inside the week", async () => {
+  it("refreshes a snapshot without the current report, even inside the week", async () => {
     const before = await makeUser("Checked Before Scouting");
     const current = await makeUser("Checked Since");
     const yesterday = new Date(Date.now() - 86_400_000);
-    const legacy = { ...PUB } as Record<string, unknown>;
-    delete legacy.scout;
+    // The first report shape (2026-10-21 morning) had no version.
+    const legacy = {
+      ...PUB,
+      scout: { games: 100, ranked: 90, unranked: 6, turbo: 4, core: 10, support: 70 },
+    };
     await prisma.user.update({
       where: { id: before.id },
       data: { pubStats: JSON.stringify(legacy), pubStatsAt: yesterday },
@@ -128,7 +134,7 @@ describe("the hourly player data refresh", () => {
     const after = await prisma.user.findUniqueOrThrow({
       where: { id: before.id },
     });
-    expect(after.pubStats).toContain('"scout":');
+    expect(after.pubStats).toContain(PUB_SCOUT_MARKER);
     expect(after.pubStatsAt!.getTime()).toBeGreaterThan(yesterday.getTime());
     expect(
       (await prisma.user.findUniqueOrThrow({ where: { id: current.id } }))

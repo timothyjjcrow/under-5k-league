@@ -17,6 +17,8 @@
 // Refuses any DATABASE_URL without "fixture" in it (seed-fixture's guard) —
 // the generated Prisma client's baked .env silently points at dev.db.
 import { PrismaClient } from "@prisma/client";
+import { summarizePubMatches } from "@/lib/pub-scout";
+import { approxRankTierFromMmr } from "@/lib/rank";
 
 const url = process.env.DATABASE_URL ?? "";
 if (!url.includes("fixture")) {
@@ -73,39 +75,63 @@ async function main() {
   // Pub-scouting variety: most players carry a snapshot (recent W/L, lifetime
   // games, last-played), a few have none (private data / never synced), and
   // one in seven is a quiet account — the pool's "last played Nmo ago" flag.
-  // The scouting counts (pub-scout.ts) vary too: a core or support lean that
-  // follows the signup's position except every fourth player (the row's
-  // "not the side their signup lists" tint), lobbies near the signed-up MMR,
-  // a Turbo-heavy account, an EU West regular, and one in eleven snapshots
-  // from before the counts were stored (no scouting line yet).
+  // The scouting report (pub-scout.ts) is folded from 100 made-up games per
+  // player through the real `summarizePubMatches`, so the fixture shows what
+  // the live fold makes: a core or support lean that follows the signup's
+  // position except every fourth player (the "other side" tint), lobbies near
+  // the signed-up MMR except a few well above it, a Turbo-heavy account, a
+  // party regular, a Europe West regular (a US league's ping warning), one who
+  // leaves games, and one in eleven snapshots from before the report (none
+  // shown yet).
   const nowSecs = Math.floor(Date.now() / 1000);
   const scoutFor = (i: number) => {
-    const supportSide = i % 5 >= 3; // positions 4 and 5
-    const flipped = i % 4 === 1;
-    const leansSupport = supportSide !== flipped;
-    const turbo = i % 9 === 6 ? 62 : 4 + (i % 3) * 3;
-    const unranked = 6 + (i % 4) * 3;
-    const ranked = 100 - turbo - unranked - 2;
-    const matchmaking = ranked + unranked;
-    const judged = matchmaking - 9;
-    const lean = Math.round(judged * (0.72 + (i % 3) * 0.08));
-    const euWest = i % 8 === 5;
-    const main = Math.round(matchmaking * 0.8);
-    return {
-      games: 100,
-      ranked,
-      unranked,
-      turbo,
-      core: leansSupport ? judged - lean : lean,
-      support: leansSupport ? lean : judged - lean,
-      lobbyMmr: 1500 + i * 60 + (((i * 37) % 9) - 4) * 50,
-      lobbyGames: matchmaking - 2,
-      regions: [
-        { region: euWest ? 3 : 2, games: main },
-        { region: euWest ? 9 : 1, games: matchmaking - main - 1 },
-      ],
-      regionGames: matchmaking - 1,
+    let seed = 1_013 + i * 7_919;
+    const rand = () => {
+      seed = (seed * 16_807) % 2_147_483_647;
+      return (seed - 1) / 2_147_483_646;
     };
+    const claimed = (i % 5) + 1;
+    const supportSide = claimed >= 4;
+    const leansSupport = supportSide !== (i % 4 === 1);
+    const turboShare = i % 9 === 6 ? 0.55 : 0.04;
+    const lobbyMmr = 1500 + i * 60 + (i % 7 === 3 ? 900 : 0);
+    const cluster = i % 8 === 5 ? 133 : 122;
+    const pool = Array.from({ length: 6 + (i % 20) }, (_, k) => 1 + ((i * 11 + k * 7) % 120));
+    const rows = Array.from({ length: 100 }, (_, g) => {
+      const turbo = rand() < turboShare;
+      const other = !turbo && rand() < 0.02;
+      const ranked = !turbo && !other && rand() < 0.85;
+      const asSupport = rand() < (leansSupport ? 0.82 : 0.12);
+      const minutes = 25 + Math.floor(rand() * 25);
+      const won = rand() < 0.5;
+      const hero = pool[Math.min(pool.length - 1, Math.floor(rand() ** 2 * pool.length))];
+      return {
+        hero_id: hero,
+        player_slot: won ? 1 : 129,
+        radiant_win: true,
+        kills: asSupport ? Math.floor(rand() * 6) : 4 + Math.floor(rand() * 10),
+        deaths: 2 + Math.floor(rand() * 8),
+        assists: asSupport ? 8 + Math.floor(rand() * 14) : 3 + Math.floor(rand() * 10),
+        gold_per_min: asSupport ? 250 + Math.floor(rand() * 120) : 450 + Math.floor(rand() * 250),
+        last_hits: Math.round(minutes * (asSupport ? 0.6 + rand() * 1.4 : 4 + rand() * 4)),
+        duration: minutes * 60,
+        game_mode: turbo ? 23 : other ? 18 : 22,
+        lobby_type: ranked ? 7 : 0,
+        party_size: i % 6 === 2 ? (rand() < 0.8 ? 3 : 1) : rand() < 0.1 ? 2 : 1,
+        average_rank: approxRankTierFromMmr(lobbyMmr + Math.round((rand() - 0.5) * 600)),
+        cluster: rand() < 0.85 ? cluster : cluster === 122 ? 111 : 192,
+        leaver_status: i % 10 === 7 && g % 30 === 4 ? 3 : 0,
+        start_time: nowSecs - (i % 10) * 86_400 - g * Math.round((0.2 + (i % 4) * 0.3) * 86_400),
+        lane_role:
+          rand() < 0.2
+            ? asSupport
+              ? rand() < 0.5 ? 1 : 3
+              : supportSide ? 1 : Math.min(3, claimed)
+            : null,
+        is_roaming: false,
+      };
+    });
+    return summarizePubMatches(rows);
   };
   const pubStatsFor = (i: number): string | null => {
     if (i % 5 === 3) return null; // never synced / private

@@ -27,18 +27,22 @@ import {
   lastSeasonTitle,
   lastSeasonToken,
   pubHeroTitle,
-  pubScoutParts,
-  pubScoutTitle,
   pubTitle,
+  recentHeroTitle,
   pubToken,
   sortByInhouseRecord,
   type PoolPlayer,
   type PoolScoutInfo,
-  type PubScoutPart,
   type PoolSort,
   type PoolStatusFilter,
 } from "@/lib/player-pool";
 import { pubHasWindow, pubLastPlayed, type PubHero } from "@/lib/pub-stats";
+import {
+  scoutingRowParts,
+  scoutingTitle,
+  type ScoutPart,
+} from "@/lib/pub-scout";
+import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
@@ -501,12 +505,35 @@ export function PlayerPool({
                         ) : null}
                         {pub?.scout ? (
                           <PubScoutLine
-                            parts={pubScoutParts(pub.scout, p.roles)}
-                            title={pubScoutTitle(pub.scout, p.roles)}
+                            parts={scoutingRowParts(pub.scout, {
+                              roles: p.roles,
+                              signupMmr: p.mmr,
+                              rankTier: p.rankTier,
+                              league: LEAGUE_CONFIG.region,
+                            })}
+                            title={scoutingTitle(pub.scout, {
+                              roles: p.roles,
+                              signupMmr: p.mmr,
+                              rankTier: p.rankTier,
+                              league: LEAGUE_CONFIG.region,
+                            })}
                           />
                         ) : null}
-                        {pub && pub.topHeroes.length > 0 ? (
-                          <PubHeroStrip heroes={pub.topHeroes} />
+                        {/* What they play now beats what they played years
+                            ago: their last 100 games' heroes once the
+                            snapshot has them, else the all-time list. */}
+                        {pub?.scout && pub.scout.heroes.length > 0 ? (
+                          <PubHeroStrip
+                            label="Recent pubs"
+                            heroes={pub.scout.heroes.slice(0, 3)}
+                            titleOf={(h) => recentHeroTitle(h, pub.scout!.games)}
+                          />
+                        ) : pub && pub.topHeroes.length > 0 ? (
+                          <PubHeroStrip
+                            label="Most played (pubs)"
+                            heroes={pub.topHeroes}
+                            titleOf={pubHeroTitle}
+                          />
                         ) : null}
                         {activity?.quiet ? (
                           <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
@@ -794,7 +821,7 @@ function PubScoutLine({
   parts,
   title,
 }: {
-  parts: PubScoutPart[];
+  parts: ScoutPart[];
   title: string;
 }) {
   if (parts.length === 0) return null;
@@ -806,7 +833,7 @@ function PubScoutLine({
         <span key={part.key}>
           {i > 0 ? " · " : null}
           <span
-            className={cn("whitespace-nowrap", part.differs && "text-accent")}
+            className={cn("whitespace-nowrap", part.warn && "text-accent")}
           >
             {part.text}
           </span>
@@ -816,13 +843,21 @@ function PubScoutLine({
   );
 }
 
-function PubHeroStrip({ heroes }: { heroes: PubHero[] }) {
+function PubHeroStrip({
+  label,
+  heroes,
+  titleOf,
+}: {
+  label: string;
+  heroes: PubHero[];
+  titleOf: (h: PubHero) => string;
+}) {
   return (
     <span className="flex items-center gap-1">
-      <span aria-hidden>Most played (pubs)</span>
+      <span aria-hidden>{label}</span>
       <span
         role="img"
-        aria-label={`Most played (pubs): ${heroes
+        aria-label={`${label}: ${heroes
           .map((h) => heroById(h.heroId)?.name ?? `Hero #${h.heroId}`)
           .join(", ")}`}
         className="flex items-center gap-1"
@@ -833,7 +868,7 @@ function PubHeroStrip({ heroes }: { heroes: PubHero[] }) {
           // title, and the img fills any span around it.
           return hero ? (
             <span key={h.heroId} aria-hidden>
-              <HeroIcon hero={hero} size={18} title={pubHeroTitle(h)} />
+              <HeroIcon hero={hero} size={18} title={titleOf(h)} />
             </span>
           ) : null;
         })}

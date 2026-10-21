@@ -11,6 +11,7 @@ import {
   fetchRecentMatchIds,
   fetchLeagueMatchIds,
 } from "./dota";
+import { PUB_MATCH_FIELDS, summarizePubMatches } from "./pub-scout";
 
 describe("bounded OpenDota fetches", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -334,21 +335,13 @@ describe("fetchPubStats", () => {
     return fetchMock;
   };
 
-  const NO_SCOUT = {
-    games: 0,
-    ranked: 0,
-    unranked: 0,
-    turbo: 0,
-    core: 0,
-    support: 0,
-    lobbyMmr: null,
-    lobbyGames: 0,
-    regions: [],
-    regionGames: 0,
-  };
+  const NO_SCOUT = summarizePubMatches([]);
 
   it("composes all three endpoints into one snapshot", async () => {
     const ranked = {
+      hero_id: 26,
+      player_slot: 1,
+      radiant_win: true,
       game_mode: 22,
       lobby_type: 7,
       duration: 2400,
@@ -378,17 +371,10 @@ describe("fetchPubStats", () => {
           { heroId: 14, games: 220, wins: 121 },
           { heroId: 74, games: 180, wins: 92 },
         ],
-        scout: {
-          ...NO_SCOUT,
-          games: 2,
-          ranked: 1,
-          turbo: 1,
-          support: 1,
-          lobbyMmr: 4235,
-          lobbyGames: 1,
-          regions: [{ region: 2, games: 1 }],
-          regionGames: 1,
-        },
+        scout: summarizePubMatches([
+          ranked,
+          { ...ranked, game_mode: 23, lobby_type: 0 },
+        ]),
       },
     });
   });
@@ -403,14 +389,7 @@ describe("fetchPubStats", () => {
       .map(([u]) => String(u))
       .find((u) => u.includes("/matches"));
     expect(url).toContain("/players/123/matches?limit=100&significant=0&");
-    for (const field of [
-      "game_mode",
-      "lobby_type",
-      "duration",
-      "last_hits",
-      "average_rank",
-      "cluster",
-    ]) {
+    for (const field of PUB_MATCH_FIELDS) {
       expect(url).toContain(`project=${field}`);
     }
   });
