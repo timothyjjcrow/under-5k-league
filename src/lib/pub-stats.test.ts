@@ -2,12 +2,15 @@ import { describe, expect, it } from "vitest";
 import {
   pickStaleAccounts,
   PUB_QUIET_DAYS,
+  PUB_SCOUT_MARKER,
   PUB_STATS_REFRESH_MS,
   parsePubStats,
   poolPubRecord,
   pubActivity,
   pubCheckedAgo,
+  pubHasWindow,
   pubLastPlayed,
+  pubStatsDue,
   pubStatsFresh,
   pubWinRate,
   type PubStats,
@@ -22,6 +25,21 @@ const good: PubStats = {
     { heroId: 14, games: 220, wins: 121 },
     { heroId: 74, games: 180, wins: 92 },
   ],
+  scout: {
+    games: 100,
+    ranked: 90,
+    unranked: 6,
+    turbo: 4,
+    core: 12,
+    support: 70,
+    lobbyMmr: 4150,
+    lobbyGames: 92,
+    regions: [
+      { region: 2, games: 80 },
+      { region: 1, games: 14 },
+    ],
+    regionGames: 94,
+  },
 };
 
 describe("parsePubStats", () => {
@@ -183,6 +201,7 @@ describe("poolPubRecord", () => {
       lastPlayedAt: 1_722_200_000,
       checkedAt: checked.getTime(),
       topHeroes: good.topHeroes, // fixture has 2; capped at 3
+      scout: good.scout,
     });
     expect(poolPubRecord(JSON.stringify(good), null)?.checkedAt).toBeNull();
     expect(rec && "totalGames" in rec).toBe(false);
@@ -202,12 +221,23 @@ describe("poolPubRecord", () => {
     ).toHaveLength(3);
   });
 
-  it("is null with nothing scoutable: no blob, garbage, or an empty recent window", () => {
+  it("is null with nothing scoutable: no blob, garbage, or an empty window and no games", () => {
     expect(poolPubRecord(null, null)).toBeNull();
     expect(poolPubRecord("garbage", null)).toBeNull();
     expect(
       poolPubRecord(
-        JSON.stringify({ ...good, recentWins: 0, recentLosses: 0 }),
+        JSON.stringify({ ...good, recentWins: 0, recentLosses: 0, scout: null }),
+        null,
+      ),
+    ).toBeNull();
+    expect(
+      poolPubRecord(
+        JSON.stringify({
+          ...good,
+          recentWins: 0,
+          recentLosses: 0,
+          scout: { ...good.scout, games: 0 },
+        }),
         null,
       ),
     ).toBeNull();
@@ -219,10 +249,10 @@ describe("pickStaleAccounts", () => {
   const day = 86_400_000;
   const at = (daysAgo: number) => new Date(now - daysAgo * day);
   const pick = (
-    rows: { id: string; pubStatsAt: Date | null }[],
+    rows: { id: string; pubStatsAt: Date | null; pubStats?: string | null }[],
     extra: Partial<{ signupIds: Set<string>; lastFailedId: string | null; limit: number }> = {},
   ) =>
-    pickStaleAccounts(rows, {
+    pickStaleAccounts(rows.map((r) => ({ pubStats: null, ...r })), {
       signupIds: extra.signupIds ?? new Set(),
       lastFailedId: extra.lastFailedId ?? null,
       nowMs: now,
@@ -265,5 +295,80 @@ describe("pickStaleAccounts", () => {
         { signupIds: new Set(["stuck"]), lastFailedId: "stuck" },
       ),
     ).toEqual(["next", "stuck"]);
+  });
+});
+
+describe("the scouting counts in a snapshot", () => {
+  const now = Date.UTC(2026, 9, 21);
+  const day = 86_400_000;
+
+  it("reads a snapshot from before the counts as not yet known", () => {
+    const old = { ...good } as Record<string, unknown>;
+    delete old.scout;
+    expect(parsePubStats(JSON.stringify(old))?.scout).toBeNull();
+    expect(
+      parsePubStats(JSON.stringify({ ...good, scout: "junk" }))?.scout,
+    ).toBeNull();
+  });
+
+  it("is due when missing, past the window, or taken before the counts", () => {
+    const current = JSON.stringify(good);
+    const before = JSON.stringify({ ...good, scout: undefined });
+    expect(current).toContain(PUB_SCOUT_MARKER);
+    expect(before).not.toContain(PUB_SCOUT_MARKER);
+    expect(
+      pubStatsDue({ pubStatsAt: new Date(now - day), pubStats: current }, now),
+    ).toBe(false);
+    expect(
+      pubStatsDue({ pubStatsAt: new Date(now - day), pubStats: before }, now),
+    ).toBe(true);
+    expect(
+      pubStatsDue(
+        { pubStatsAt: new Date(now - PUB_STATS_REFRESH_MS - day), pubStats: current },
+        now,
+      ),
+    ).toBe(true);
+    expect(pubStatsDue({ pubStatsAt: null, pubStats: null }, now)).toBe(true);
+    // A timestamp with no blob matches the SQL filter: not due.
+    expect(
+      pubStatsDue({ pubStatsAt: new Date(now - day), pubStats: null }, now),
+    ).toBe(false);
+  });
+
+  it("picks a fresh snapshot from before the counts, never a current one", () => {
+    const picked = pickStaleAccounts(
+      [
+        { id: "current", pubStatsAt: new Date(now - day), pubStats: JSON.stringify(good) },
+        {
+          id: "before",
+          pubStatsAt: new Date(now - day),
+          pubStats: JSON.stringify({ ...good, scout: undefined }),
+        },
+      ],
+      { signupIds: new Set(), lastFailedId: null, nowMs: now, limit: 10 },
+    ).map((u) => u.id);
+    expect(picked).toEqual(["before"]);
+  });
+
+  it("keeps a Turbo-only account scoutable with no W/L window", () => {
+    const turboOnly = {
+      ...good,
+      recentWins: 0,
+      recentLosses: 0,
+      scout: { ...good.scout!, ranked: 0, unranked: 0, turbo: 100 },
+    };
+    const rec = poolPubRecord(JSON.stringify(turboOnly), null);
+    expect(rec?.scout?.turbo).toBe(100);
+    expect(rec && pubHasWindow(rec)).toBe(false);
+    // Nothing at all: no window and no games.
+    expect(
+      poolPubRecord(
+        JSON.stringify({
+          ...turboOnly,
+          scout: { ...turboOnly.scout, games: 0, turbo: 0 },
+        }),
+        null,
+      ),
+    ).toBeNull();
   });
 });

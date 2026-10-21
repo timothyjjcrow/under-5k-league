@@ -73,7 +73,40 @@ async function main() {
   // Pub-scouting variety: most players carry a snapshot (recent W/L, lifetime
   // games, last-played), a few have none (private data / never synced), and
   // one in seven is a quiet account — the pool's "last played Nmo ago" flag.
+  // The scouting counts (pub-scout.ts) vary too: a core or support lean that
+  // follows the signup's position except every fourth player (the row's
+  // "not the side their signup lists" tint), lobbies near the signed-up MMR,
+  // a Turbo-heavy account, an EU West regular, and one in eleven snapshots
+  // from before the counts were stored (no scouting line yet).
   const nowSecs = Math.floor(Date.now() / 1000);
+  const scoutFor = (i: number) => {
+    const supportSide = i % 5 >= 3; // positions 4 and 5
+    const flipped = i % 4 === 1;
+    const leansSupport = supportSide !== flipped;
+    const turbo = i % 9 === 6 ? 62 : 4 + (i % 3) * 3;
+    const unranked = 6 + (i % 4) * 3;
+    const ranked = 100 - turbo - unranked - 2;
+    const matchmaking = ranked + unranked;
+    const judged = matchmaking - 9;
+    const lean = Math.round(judged * (0.72 + (i % 3) * 0.08));
+    const euWest = i % 8 === 5;
+    const main = Math.round(matchmaking * 0.8);
+    return {
+      games: 100,
+      ranked,
+      unranked,
+      turbo,
+      core: leansSupport ? judged - lean : lean,
+      support: leansSupport ? lean : judged - lean,
+      lobbyMmr: 1500 + i * 60 + (((i * 37) % 9) - 4) * 50,
+      lobbyGames: matchmaking - 2,
+      regions: [
+        { region: euWest ? 3 : 2, games: main },
+        { region: euWest ? 9 : 1, games: matchmaking - main - 1 },
+      ],
+      regionGames: matchmaking - 1,
+    };
+  };
   const pubStatsFor = (i: number): string | null => {
     if (i % 5 === 3) return null; // never synced / private
     const quiet = i % 7 === 2;
@@ -87,6 +120,7 @@ async function main() {
         { heroId: 1 + (i % 30), games: 120, wins: 60 },
         { heroId: 31 + (i % 30), games: 90, wins: 41 },
       ],
+      ...(i % 11 === 4 ? {} : { scout: scoutFor(i) }),
     });
   };
   const STATEMENTS = [

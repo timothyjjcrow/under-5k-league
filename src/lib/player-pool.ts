@@ -1,7 +1,17 @@
 // Pure filtering + sorting for the player-pool UI. Kept DB-free so it's
 // unit-testable and reusable on client and server.
 import { heroById } from "./heroes";
+import {
+  claimedRoleLean,
+  pubLobbyRead,
+  pubModeRead,
+  pubRegionRead,
+  pubRoleRead,
+  roleClaimDiffers,
+  type PubScout,
+} from "./pub-scout";
 import { pubCheckedAgo, pubLastPlayed, pubWinRate } from "./pub-stats";
+import { rankMedalName } from "./rank";
 import { parseRoles } from "./roles";
 import { seriesRecordText } from "./team-matches";
 
@@ -49,6 +59,9 @@ export type PoolPubRecord = {
   checkedAt: number | null;
   /** Most-played heroes across their whole pub history, top 3 by games. */
   topHeroes: { heroId: number; games: number; wins: number }[];
+  /** How they play, from their last ≤100 games of every mode; null on a
+   *  snapshot from before it was stored. */
+  scout: PubScout | null;
 };
 
 /** Everything the pool row knows about a player BEYOND the frozen PoolPlayer
@@ -175,6 +188,82 @@ export function pubTitle(pub: PoolPubRecord, nowMs: number): string {
     `Last ${window} pub games: ${pub.recentWins}W–${pub.recentLosses}L`,
     activity ? `last played ${activity.label}` : null,
     `checked ${checked ?? "at an unknown time"}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+const groupedNumber = new Intl.NumberFormat("en-US");
+
+/** One fact of the scouting line. `differs` marks a role read that
+ *  contradicts the side their signup claims, which the row tints. */
+export type PubScoutPart = { key: string; text: string; differs?: boolean };
+
+/**
+ * The pool row's line about how they play pubs: "82% support · lobbies
+ * ≈4,150 · 96% ranked · US East". Each fact only once it has enough games
+ * (pub-scout.ts); an empty list renders nothing. The mode names the biggest
+ * share, plus Turbo when it is a fifth of their games and not the biggest.
+ * `roles` is the signup's stored roles string, the claim the role is set
+ * against.
+ */
+export function pubScoutParts(
+  scout: PubScout,
+  roles: string,
+): PubScoutPart[] {
+  const parts: PubScoutPart[] = [];
+  const role = pubRoleRead(scout);
+  if (role) {
+    parts.push({
+      key: "role",
+      text:
+        role.lean === "both"
+          ? "core & support"
+          : `${role.percent}% ${role.lean}`,
+      differs: roleClaimDiffers(claimedRoleLean(parseRoles(roles)), role),
+    });
+  }
+  const lobby = pubLobbyRead(scout);
+  if (lobby) {
+    parts.push({
+      key: "lobby",
+      text: `lobbies ≈${groupedNumber.format(lobby.mmr)}`,
+    });
+  }
+  const modes = pubModeRead(scout);
+  if (modes && modes.length > 0) {
+    const [top] = modes;
+    parts.push({ key: "mode", text: `${top.percent}% ${top.label}` });
+    const turbo = modes.find((m) => m.key === "turbo");
+    if (turbo && turbo !== top && turbo.percent >= 20) {
+      parts.push({ key: "turbo", text: `${turbo.percent}% Turbo` });
+    }
+  }
+  const regions = pubRegionRead(scout);
+  if (regions) parts.push({ key: "region", text: regions[0].name });
+  return parts;
+}
+
+/** Hover detail for the scouting line: the counts behind every share. */
+export function pubScoutTitle(scout: PubScout, roles: string): string {
+  const role = pubRoleRead(scout);
+  const lobby = pubLobbyRead(scout);
+  const modes = pubModeRead(scout);
+  const regions = pubRegionRead(scout);
+  const differs =
+    role && roleClaimDiffers(claimedRoleLean(parseRoles(roles)), role);
+  return [
+    `Their last ${scout.games} public games, every mode`,
+    role
+      ? `played as a support in ${role.support}, a core in ${role.core} (last hits a minute)${differs ? ", not the side their signup lists" : ""}`
+      : null,
+    lobby
+      ? `lobbies averaged ${rankMedalName(lobby.rankTier)} (≈${groupedNumber.format(lobby.mmr)} MMR) over ${lobby.games} games`
+      : null,
+    modes ? modes.map((m) => `${m.games} ${m.label}`).join(", ") : null,
+    regions
+      ? `servers: ${regions.map((r) => `${r.name} ${r.percent}%`).join(", ")}`
+      : null,
   ]
     .filter(Boolean)
     .join(" · ");

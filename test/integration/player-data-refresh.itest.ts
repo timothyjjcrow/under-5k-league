@@ -41,6 +41,7 @@ const PUB: PubStats = {
   totalGames: 900,
   lastPlayedAt: 1_722_000_000,
   topHeroes: [{ heroId: 14, games: 50, wins: 30 }],
+  scout: null,
 };
 
 const rank = vi.mocked(fetchRankTier);
@@ -102,6 +103,37 @@ describe("the hourly player data refresh", () => {
     expect(
       await prisma.user.findUniqueOrThrow({ where: { id: signupA.id } }),
     ).toMatchObject({ rankTier: 55, pubStats: JSON.stringify(PUB) });
+  });
+
+  it("refreshes a snapshot from before the scouting counts, even inside the week", async () => {
+    const before = await makeUser("Checked Before Scouting");
+    const current = await makeUser("Checked Since");
+    const yesterday = new Date(Date.now() - 86_400_000);
+    const legacy = { ...PUB } as Record<string, unknown>;
+    delete legacy.scout;
+    await prisma.user.update({
+      where: { id: before.id },
+      data: { pubStats: JSON.stringify(legacy), pubStatsAt: yesterday },
+    });
+    await prisma.user.update({
+      where: { id: current.id },
+      data: { pubStats: JSON.stringify(PUB), pubStatsAt: yesterday },
+    });
+
+    expect(await refreshPlayerDataAutomatically()).toMatchObject({
+      ran: true,
+      accounts: 1,
+    });
+    expect(pub).toHaveBeenCalledTimes(1);
+    const after = await prisma.user.findUniqueOrThrow({
+      where: { id: before.id },
+    });
+    expect(after.pubStats).toContain('"scout":');
+    expect(after.pubStatsAt!.getTime()).toBeGreaterThan(yesterday.getTime());
+    expect(
+      (await prisma.user.findUniqueOrThrow({ where: { id: current.id } }))
+        .pubStatsAt,
+    ).toEqual(yesterday);
   });
 
   it("backfills a medal for someone who never signed up", async () => {

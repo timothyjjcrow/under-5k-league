@@ -4,6 +4,8 @@
 // this file owns the shape, so a malformed or legacy blob degrades to null
 // instead of crashing a page render. No DB here — testable.
 
+import { parsePubScout, type PubScout } from "./pub-scout";
+
 export type PubHero = { heroId: number; games: number; wins: number };
 
 export type PubStats = {
@@ -17,10 +19,17 @@ export type PubStats = {
   lastPlayedAt: number | null;
   /** Most-played heroes, games desc, at most 5. */
   topHeroes: PubHero[];
+  /** How they play, from their last ≤100 games of every mode (pub-scout.ts).
+   *  Null on a snapshot taken before these were stored. */
+  scout: PubScout | null;
 };
 
+/** The key every current snapshot's JSON carries. A snapshot without it is
+ *  refreshed early (`pubStatsDue`), the `"items":` probe's pattern. */
+export const PUB_SCOUT_MARKER = '"scout":';
+
 /** How long a stored snapshot stays fresh before the admin bulk sync spends
- *  two OpenDota calls refreshing it, and how long "last played" is shown for
+ *  three OpenDota calls refreshing it, and how long "last played" is shown for
  *  it (pubLastPlayed). Login deliberately does NOT read this — it fills
  *  missing snapshots only (the ensureRankTier rule), so a login never pays a
  *  recurring OpenDota round trip. */
@@ -73,7 +82,17 @@ export function parsePubStats(raw: string | null | undefined): PubStats | null {
     totalGames,
     lastPlayedAt: last && last > 0 ? last : null,
     topHeroes,
+    scout: parsePubScout(d.scout),
   };
+}
+
+/** True when OpenDota's W/L window has games (a Turbo-only account's is
+ *  empty), so the "Pubs 54% in last 100" token has something to say. */
+export function pubHasWindow(s: {
+  recentWins: number;
+  recentLosses: number;
+}): boolean {
+  return s.recentWins + s.recentLosses > 0;
 }
 
 /** Win rate 0..1 over the recent window, or null when it has no games. */
@@ -148,6 +167,19 @@ export function pubStatsFresh(
 }
 
 /**
+ * True when an account's snapshot should be refreshed: never taken, past the
+ * refresh window, or taken before the scouting counts were stored. A missing
+ * blob with a timestamp is not due (the SQL filter's NULL semantics agree).
+ */
+export function pubStatsDue(
+  u: { pubStatsAt: Date | null; pubStats: string | null },
+  nowMs: number,
+): boolean {
+  if (!pubStatsFresh(u.pubStatsAt, nowMs)) return true;
+  return u.pubStats != null && !u.pubStats.includes(PUB_SCOUT_MARKER);
+}
+
+/**
  * Which stale accounts the automatic pass refreshes, in order: this season's
  * signups first (the pool, the draft room and the teams show their data),
  * then everyone else; within each, never-refreshed accounts first, then the
@@ -156,7 +188,7 @@ export function pubStatsFresh(
  * Pure — the player data refresh passes in what it read.
  */
 export function pickStaleAccounts<
-  T extends { id: string; pubStatsAt: Date | null },
+  T extends { id: string; pubStatsAt: Date | null; pubStats: string | null },
 >(
   candidates: readonly T[],
   opts: {
@@ -169,7 +201,7 @@ export function pickStaleAccounts<
   const seen = new Set<string>();
   return candidates
     .filter((u) => {
-      if (seen.has(u.id) || pubStatsFresh(u.pubStatsAt, opts.nowMs)) {
+      if (seen.has(u.id) || !pubStatsDue(u, opts.nowMs)) {
         return false;
       }
       seen.add(u.id);
@@ -190,11 +222,13 @@ export function pickStaleAccounts<
 }
 
 /** What the player pool actually ships to the client: the recent-window W/L,
- *  the last-played stamp, and the top-3 most-played heroes. Deliberately NO
- *  lifetime games figure — a volume stat is the one number nobody should be
- *  judged (or farm a reputation) on. Null when there is nothing scoutable
- *  (no blob, garbage, or an account whose recent window is empty — private
- *  data or brand new). */
+ *  the last-played stamp, the top-3 most-played heroes and the scouting
+ *  counts. Deliberately NO lifetime games figure — a volume stat is the one
+ *  number nobody should be judged (or farm a reputation) on. Null when there
+ *  is nothing scoutable (no blob, garbage, or an account with no visible
+ *  games at all — private data or brand new). An empty W/L window with
+ *  scouting games is a Turbo-only account: `pubHasWindow` gates the W/L
+ *  token. */
 export type PoolPub = {
   recentWins: number;
   recentLosses: number;
@@ -202,6 +236,7 @@ export type PoolPub = {
   /** Epoch MS the snapshot was taken (`User.pubStatsAt`), or null. */
   checkedAt: number | null;
   topHeroes: PubHero[];
+  scout: PubScout | null;
 };
 
 export function poolPubRecord(
@@ -210,12 +245,20 @@ export function poolPubRecord(
 ): PoolPub | null {
   const stats = parsePubStats(raw);
   if (!stats) return null;
-  if (stats.recentWins + stats.recentLosses === 0) return null;
+  // Turbo never counts in OpenDota's W/L window, so a Turbo-only account has
+  // an empty window and still a scouting line worth showing.
+  if (
+    stats.recentWins + stats.recentLosses === 0 &&
+    !(stats.scout && stats.scout.games > 0)
+  ) {
+    return null;
+  }
   return {
     recentWins: stats.recentWins,
     recentLosses: stats.recentLosses,
     lastPlayedAt: stats.lastPlayedAt,
     checkedAt: checkedAt?.getTime() ?? null,
     topHeroes: stats.topHeroes.slice(0, 3),
+    scout: stats.scout,
   };
 }

@@ -13,9 +13,10 @@ import {
   effectiveDotaAccountId,
 } from "./dota-account";
 import {
+  PUB_SCOUT_MARKER,
   PUB_STATS_REFRESH_MS,
   pickStaleAccounts,
-  pubStatsFresh,
+  pubStatsDue,
 } from "./pub-stats";
 import { fetchSteamProfiles } from "./steam";
 import { enrichStoredGames } from "./match-import";
@@ -37,6 +38,8 @@ export type RefreshAccount = {
   dotaAccountIdV2: number | null;
   legacyDotaAccountId: number | null;
   pubStatsAt: Date | null;
+  /** The stored snapshot, read only for its scouting marker (`pubStatsDue`). */
+  pubStats: string | null;
 };
 
 /** Per-account outcome, kept small so a batch can tally without re-fetching.
@@ -126,13 +129,15 @@ async function syncOneRank(
 const RANK_SYNC_CONCURRENCY = 4;
 /** The on-demand refresh's whole time budget. */
 export const MANUAL_REFRESH_BUDGET_MS = 45_000;
-// The scouting snapshot costs TWO extra OpenDota calls per account, and the
-// free tier's bucket is ~60/min — a 31-account sweep at 3 calls each would
-// burn its own tail into 429s and could even read as a false outage. So each
-// press syncs medals for EVERYONE but refreshes pub snapshots only for the
-// stalest accounts up to this cap (fresh ones are skipped outright); the
-// automatic refresh keeps working through the rest every hour.
-const PUB_SYNC_MAX_PER_RUN = 12;
+// The scouting snapshot costs THREE extra OpenDota calls per account, and the
+// free tier's bucket is 60/min, shared by both leagues on the box — a
+// 31-account sweep at 4 calls each would burn its own tail into 429s and
+// could even read as a false outage. So each press syncs medals for EVERYONE
+// but refreshes pub snapshots only for the stalest accounts up to this cap
+// (current ones are skipped outright); the automatic refresh keeps working
+// through the rest every hour. 9 × 3 keeps a press near the 24 snapshot calls
+// it spent at 12 × 2.
+const PUB_SYNC_MAX_PER_RUN = 9;
 
 export type RankSyncResult = {
   ranked: number;
@@ -155,11 +160,12 @@ export async function syncRanksFor(
     .map((u) => ({ u, acc: effectiveDotaAccountId(u) }))
     .filter((t): t is { u: RefreshAccount; acc: number } => !!t.acc);
 
-  // Which accounts get the two extra pub calls this run — see
-  // PUB_SYNC_MAX_PER_RUN. Missing/stale snapshots only, stalest first.
+  // Which accounts get the three extra pub calls this run — see
+  // PUB_SYNC_MAX_PER_RUN. Due snapshots only (missing, stale, or from before
+  // the scouting counts), stalest first.
   const nowMs = Date.now();
   const staleCandidates = targets
-    .filter(({ u }) => !pubStatsFresh(u.pubStatsAt, nowMs))
+    .filter(({ u }) => pubStatsDue(u, nowMs))
     .sort(
       (a, b) =>
         (a.u.pubStatsAt?.getTime() ?? 0) - (b.u.pubStatsAt?.getTime() ?? 0),
@@ -313,6 +319,7 @@ const SELECT_ACCOUNT = {
   dotaAccountIdV2: true,
   legacyDotaAccountId: true,
   pubStatsAt: true,
+  pubStats: true,
 } as const;
 
 /**
@@ -369,8 +376,20 @@ export async function refreshPlayerDataAutomatically(
   let refused = false;
   if (profilesAllowed && timeLeft(options, ACCOUNT_START_BUDGET_MS)) {
     const staleBefore = new Date(nowMs - PUB_STATS_REFRESH_MS);
+    // `pubStatsDue` in SQL: never taken, past the window, or a stored blob
+    // from before the scouting counts (no marker). Spelled with an explicit
+    // non-null so a NULL blob never depends on how NOT treats NULL.
     const stale = {
-      OR: [{ pubStatsAt: null }, { pubStatsAt: { lt: staleBefore } }],
+      OR: [
+        { pubStatsAt: null },
+        { pubStatsAt: { lt: staleBefore } },
+        {
+          AND: [
+            { pubStats: { not: null } },
+            { NOT: { pubStats: { contains: PUB_SCOUT_MARKER } } },
+          ],
+        },
+      ],
     };
     const [signups, others, lastFailedId] = await Promise.all([
       season

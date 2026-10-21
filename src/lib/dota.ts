@@ -3,6 +3,7 @@
 // Set OPENDOTA_API_KEY for higher rate limits (optional).
 
 import type { PubStats } from "./pub-stats";
+import { PUB_MATCH_FIELDS, summarizePubMatches } from "./pub-scout";
 import { databaseDiagnostics } from "./db-observability";
 
 const BASE = "https://api.opendota.com/api";
@@ -312,18 +313,22 @@ export type PubStatsResult =
 
 /**
  * A player's pub-game scouting snapshot: W/L over their last ≤100 games
- * (/players/{id}/wl?limit=100) plus all-time games / most-played heroes /
- * last-played time (/players/{id}/heroes). Two calls, run in parallel — both
- * must answer or the whole fetch reports unreachable, so a half-answer never
- * masquerades as a snapshot. A player with match data private legitimately
- * returns all-zero figures; that is a real answer, stored as such (the UI
- * treats an empty recent window as "nothing scoutable").
+ * (/players/{id}/wl?limit=100), all-time games / most-played heroes /
+ * last-played time (/players/{id}/heroes), and how they play from their last
+ * ≤100 games of every mode (/players/{id}/matches with `significant=0`, so
+ * Turbo shows; folded into counts by `summarizePubMatches`). Three calls, run
+ * in parallel — all must answer or the whole fetch reports unreachable, so a
+ * half-answer never masquerades as a snapshot. A player with match data
+ * private legitimately returns all-zero figures and no rows; that is a real
+ * answer, stored as such (the UI treats an empty window as "nothing
+ * scoutable").
  */
 export async function fetchPubStats(
   accountId: number,
 ): Promise<PubStatsResult> {
   try {
-    const [wlRes, heroesRes] = await Promise.all([
+    const project = PUB_MATCH_FIELDS.map((f) => `project=${f}`).join("&");
+    const [wlRes, heroesRes, matchesRes] = await Promise.all([
       fetch(withKey(`${BASE}/players/${accountId}/wl?limit=100`), {
         cache: "no-store",
         signal: AbortSignal.timeout(8000),
@@ -332,16 +337,26 @@ export async function fetchPubStats(
         cache: "no-store",
         signal: AbortSignal.timeout(8000),
       }),
+      fetch(
+        withKey(
+          `${BASE}/players/${accountId}/matches?limit=100&significant=0&${project}`,
+        ),
+        { cache: "no-store", signal: AbortSignal.timeout(8000) },
+      ),
     ]);
-    if (!wlRes.ok || !heroesRes.ok) return { ok: false, stats: null };
+    if (!wlRes.ok || !heroesRes.ok || !matchesRes.ok) {
+      return { ok: false, stats: null };
+    }
     const wl = await wlRes.json();
     const heroes = await heroesRes.json();
+    const matches = await matchesRes.json();
     const wins = wl?.win;
     const losses = wl?.lose;
     if (
       typeof wins !== "number" ||
       typeof losses !== "number" ||
-      !Array.isArray(heroes)
+      !Array.isArray(heroes) ||
+      !Array.isArray(matches)
     ) {
       return { ok: false, stats: null };
     }
@@ -370,6 +385,7 @@ export async function fetchPubStats(
         totalGames,
         lastPlayedAt: lastPlayedAt > 0 ? lastPlayedAt : null,
         topHeroes,
+        scout: summarizePubMatches(matches),
       },
     };
   } catch {

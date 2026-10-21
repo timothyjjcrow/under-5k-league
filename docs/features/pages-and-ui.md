@@ -794,8 +794,12 @@ the league is already draftable and many visitors have joined. Write for both.
   [overflow-wrap:anywhere]`), so a long season name never widens the name
   row.
 - **A profile is two columns from `xl`:** form, match history and "How they
-  play" in the main column, and a 24rem rail with the hero pool, records,
-  achievements and seasons. A phone reads them in that order. Both columns
+  play" in the main column, and a 24rem rail with the pub scouting, hero
+  pool, records, achievements and seasons. A phone reads them in that order.
+  **With no league games the "Player profile" band (scouting, heroes,
+  records) moves into the main column** (`profileInMain` in
+  `profileSections`): the main column otherwise held one heading beside a
+  full rail, the biggest hole on a new signup's page. Both columns
   are `@container`s: the overview's stats and spotlight split at `@2xl`, a
   series row puts its games beside the opponent at `@2xl`, and the hero pool
   (`columns="container"`) and achievements step with the rail's width.

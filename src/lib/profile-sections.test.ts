@@ -6,6 +6,7 @@ const none: ProfileData = {
   economy: false,
   gradedGames: false,
   heroes: false,
+  pubScouting: false,
   records: false,
   recordWatch: false,
   achievements: false,
@@ -39,6 +40,7 @@ describe("profileSections", () => {
         economy: true,
         gradedGames: true,
         heroes: true,
+        pubScouting: true,
         records: true,
         recordWatch: true,
         achievements: true,
@@ -49,6 +51,7 @@ describe("profileSections", () => {
       { id: "player-overview", label: "Overview" },
       { id: "player-matches", label: "Matches" },
       { id: "player-performance", label: "Performance" },
+      { id: "player-scouting", label: "Scouting" },
       { id: "player-heroes", label: "Heroes" },
       { id: "player-records", label: "Records" },
       { id: "player-career", label: "Career" },
@@ -135,5 +138,20 @@ describe("profileSections", () => {
   it("opens the career band for achievements or seasons alone", () => {
     expect(profileSections({ ...none, achievements: true }).career).toBe(true);
     expect(profileSections({ ...none, seasons: true }).career).toBe(true);
+  });
+
+  it("moves the profile band into the main column without league games", () => {
+    expect(
+      profileSections({ ...none, pubScouting: true, heroes: true }),
+    ).toMatchObject({ profile: true, scouting: true, profileInMain: true });
+    expect(
+      profileSections({ ...none, leagueGames: true, heroes: true }),
+    ).toMatchObject({ profile: true, scouting: false, profileInMain: false });
+    expect(profileSections(none).profileInMain).toBe(false);
+    expect(navIds({ pubScouting: true, heroes: true })).toEqual([
+      "player-overview",
+      "player-scouting",
+      "player-heroes",
+    ]);
   });
 });

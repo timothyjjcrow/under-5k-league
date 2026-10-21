@@ -315,21 +315,47 @@ describe("fetchRankTier", () => {
 describe("fetchPubStats", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  // Route by URL: the fetcher fires /wl and /heroes in parallel.
+  const okJson = (body: unknown) => ({ ok: true, json: async () => body });
+
+  // Route by URL: the fetcher fires /wl, /heroes and /matches in parallel.
   const stubEndpoints = (
     wl: () => Promise<unknown> | unknown,
     heroes: () => Promise<unknown> | unknown,
-  ) =>
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string) =>
-        String(url).includes("/wl") ? wl() : heroes(),
-      ),
+    matches: () => Promise<unknown> | unknown = () => okJson([]),
+  ) => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).includes("/wl")
+        ? wl()
+        : String(url).includes("/matches")
+          ? matches()
+          : heroes(),
     );
+    vi.stubGlobal("fetch", fetchMock);
+    return fetchMock;
+  };
 
-  const okJson = (body: unknown) => ({ ok: true, json: async () => body });
+  const NO_SCOUT = {
+    games: 0,
+    ranked: 0,
+    unranked: 0,
+    turbo: 0,
+    core: 0,
+    support: 0,
+    lobbyMmr: null,
+    lobbyGames: 0,
+    regions: [],
+    regionGames: 0,
+  };
 
-  it("composes both endpoints into one snapshot", async () => {
+  it("composes all three endpoints into one snapshot", async () => {
+    const ranked = {
+      game_mode: 22,
+      lobby_type: 7,
+      duration: 2400,
+      last_hits: 60,
+      average_rank: 63,
+      cluster: 122,
+    };
     stubEndpoints(
       () => okJson({ win: 54, lose: 46 }),
       () =>
@@ -339,6 +365,7 @@ describe("fetchPubStats", () => {
           { hero_id: 74, games: 180, win: 92, last_played: 1_700_000_000 },
           { hero_id: 99, games: 0, win: 0, last_played: 0 },
         ]),
+      () => okJson([ranked, { ...ranked, game_mode: 23, lobby_type: 0 }]),
     );
     expect(await fetchPubStats(123)).toEqual({
       ok: true,
@@ -351,8 +378,41 @@ describe("fetchPubStats", () => {
           { heroId: 14, games: 220, wins: 121 },
           { heroId: 74, games: 180, wins: 92 },
         ],
+        scout: {
+          ...NO_SCOUT,
+          games: 2,
+          ranked: 1,
+          turbo: 1,
+          support: 1,
+          lobbyMmr: 4235,
+          lobbyGames: 1,
+          regions: [{ region: 2, games: 1 }],
+          regionGames: 1,
+        },
       },
     });
+  });
+
+  it("asks for every mode's last 100 games and only the fields it reads", async () => {
+    const fetchMock = stubEndpoints(
+      () => okJson({ win: 1, lose: 1 }),
+      () => okJson([]),
+    );
+    await fetchPubStats(123);
+    const url = fetchMock.mock.calls
+      .map(([u]) => String(u))
+      .find((u) => u.includes("/matches"));
+    expect(url).toContain("/players/123/matches?limit=100&significant=0&");
+    for (const field of [
+      "game_mode",
+      "lobby_type",
+      "duration",
+      "last_hits",
+      "average_rank",
+      "cluster",
+    ]) {
+      expect(url).toContain(`project=${field}`);
+    }
   });
 
   it("an all-zero answer is a REAL answer (private data), not a failure", async () => {
@@ -368,6 +428,7 @@ describe("fetchPubStats", () => {
         totalGames: 0,
         lastPlayedAt: null,
         topHeroes: [],
+        scout: NO_SCOUT,
       },
     });
   });
@@ -382,6 +443,20 @@ describe("fetchPubStats", () => {
     stubEndpoints(
       () => ({ ok: false, status: 500, json: async () => ({}) }),
       () => okJson([]),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+
+    stubEndpoints(
+      () => okJson({ win: 10, lose: 5 }),
+      () => okJson([]),
+      () => ({ ok: false, status: 429, json: async () => ({}) }),
+    );
+    expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
+
+    stubEndpoints(
+      () => okJson({ win: 10, lose: 5 }),
+      () => okJson([]),
+      () => okJson({ error: "rate limited" }),
     );
     expect(await fetchPubStats(123)).toEqual({ ok: false, stats: null });
   });

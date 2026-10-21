@@ -24,12 +24,13 @@ import { formatNetWorth, hasText } from "@/lib/utils";
 const HERO_RATE_MIN_GAMES = 3;
 
 /**
- * The "Player profile" band: the heroes they play (league games, public pubs
- * and their own favorites), any all-time league record they hold and the one
- * within reach. The page renders the band only when at least one of its
- * cards shows.
+ * The "Player profile" band: how they play their pubs (the scouting card the
+ * page builds), the heroes they play (league games, public pubs and their own
+ * favorites), any all-time league record they hold and the one within reach.
+ * The page renders the band only when at least one of its cards shows.
  */
 export function ProfileHeroesAndRecords({
+  scouting = null,
   showHeroes,
   showRecords,
   leagueHeroes,
@@ -39,6 +40,8 @@ export function ProfileHeroesAndRecords({
   heldRecords,
   recordWatch = null,
 }: {
+  /** The pub scouting card, first in the band; null renders none. */
+  scouting?: React.ReactNode;
   showHeroes: boolean;
   showRecords: boolean;
   leagueHeroes: HeroPoolRow[];
@@ -56,6 +59,7 @@ export function ProfileHeroesAndRecords({
     <section id="player-about" className="scroll-mt-40 space-y-3">
       <SectionTitle>Player profile</SectionTitle>
       <div className="space-y-5">
+        {scouting}
         {showHeroes ? (
           <Card id="player-heroes" className="min-w-0 scroll-mt-40">
             <CardHeader
