@@ -101,22 +101,29 @@ export function DotaLobbyRecovery() {
       : online === false
         ? "Bot offline"
         : "Bot connection unavailable";
+  // A row of the room's admin panel (InhouseAdminTools): the status and its
+  // line beside "Check bot connection", then a closed game's recovery.
   return (
-    <aside aria-label="Bot connection and recovery" className="mt-4 space-y-3">
-      <div>
-        <p role="status" className="flex items-center gap-2 text-sm font-medium">
-          <span aria-hidden="true" className={`h-2 w-2 rounded-full ${online === true ? "bg-emerald-400" : online === false ? "bg-amber-400" : "bg-muted"}`} />
-          {status}
-        </p>
-        {enabled !== null ? (
-          <p className="mt-1 text-xs text-muted">
-            {online === true
-              ? `Connected to Steam and Dota${steamId ? ` · Steam account ${steamId}` : ""}.`
-              : online === false
-                ? "Keep the bot host awake and online, then check again."
-                : "The site could not confirm the bot connection. Check again shortly."}
+    <aside aria-label="Bot connection and recovery" className="space-y-3 px-4 py-3">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <div className="min-w-0 flex-1">
+          <p role="status" className="flex items-center gap-2 text-sm font-medium">
+            <span aria-hidden="true" className={`h-2 w-2 shrink-0 rounded-full ${online === true ? "bg-success" : online === false ? "bg-accent" : "bg-muted"}`} />
+            {status}
           </p>
-        ) : null}
+          {enabled !== null ? (
+            <p className="mt-0.5 break-words text-xs text-muted">
+              {online === true
+                ? `Connected to Steam and Dota${steamId ? ` · Steam account ${steamId}` : ""}.`
+                : online === false
+                  ? "Keep the bot host awake and online, then check again."
+                  : "The site could not confirm the bot connection. Check again shortly."}
+            </p>
+          ) : null}
+        </div>
+        <button type="button" disabled={pending} className={buttonClasses("secondary", "sm")} onClick={() => void check(true)}>
+          {pending ? "Checking bot…" : "Check bot connection"}
+        </button>
       </div>
       {id ? (
         <>
@@ -130,10 +137,7 @@ export function DotaLobbyRecovery() {
           <DotaLobbyControls key={id} kind="inhouse" id={id} recoveryOnly />
         </>
       ) : null}
-      {error ? <p role="alert" className="text-sm text-red-400">{error}</p> : null}
-      <button type="button" disabled={pending} className={buttonClasses("secondary", "sm")} onClick={() => void check(true)}>
-        {pending ? "Checking bot…" : "Check bot connection"}
-      </button>
+      {error ? <p role="alert" className="text-sm text-danger">{error}</p> : null}
     </aside>
   );
 }

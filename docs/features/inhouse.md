@@ -602,8 +602,8 @@ Every transition is a guarded claim; keep it that way (general rules:
   "not in the queue any more" instead of a crash (raced tests in
   `inhouse.itest.ts`). An `AdminAction` is written only when it removed
   someone. Not a ban: they can join again, and the MMR cap still judges them.
-  The room shows admins one picker under the stage, in every stage
-  (`AdminQueueRemoval`), since a slot's button would miss the players no slot
+  The room shows admins one picker in its admin panel, in every stage
+  (`AdminQueueRemoval` in `InhouseAdminTools`, below), since a slot's button would miss the players no slot
   shows (away, "Also queued") and the whole queue while the admin is in a
   game: everyone queued in queue order, each with away, medal and MMR
   (`queueRemovalChoices`), and a confirm.
@@ -742,9 +742,9 @@ Every transition is a guarded claim; keep it that way (general rules:
   in one tap (the room's auto-join, under "The room" and in
   [discord](discord.md)). It is the link the Discord pings and the night's
   "Join the queue" already carried.
-  - **"Copy queue link" sits under the queue card** (`QueueInvite`,
-    `src/components/inhouse/queue-invite.tsx`) for anyone, signed in or
-    not: under the queue, and under a queued player's next-game queue
+  - **"Copy queue link" sits under the queue card** (the "Invite friends"
+    tile of `QueueTools`, `src/components/inhouse/queue-tools.tsx`) for
+    anyone, signed in or not: under the queue, and under a queued player's next-game queue
     beside a live game. It is below the card so the card keeps a phone's
     first screen. It copies the address on the viewer's own origin and
     says "Copied" only when the clipboard took it; otherwise the toast
@@ -1263,12 +1263,13 @@ Every transition is a guarded claim; keep it that way (general rules:
   permission, once given, lasts for the site, so unlike the bell it needs no
   click after a load: the one-tap joiner who goes straight back to Dota gets
   it.
-  - Opt-in and off by default, from `DesktopAlertsRow` under the queue card
-    (signed-in viewers; under the card, so the card keeps the first screen).
+  - Opt-in and off by default, from the "Desktop alerts" tile of
+    `QueueTools` under the queue card (signed-in viewers; under the card, so
+    the card keeps the first screen).
     The browser asks once, on that click, and a first alert ("Desktop alerts
     are on") shows what one looks like. The switch is `inhouseDesktopAlerts`
-    in localStorage. When the browser refuses the site, the row names its site
-    settings and offers no button.
+    in localStorage. When the browser refuses the site, the tile says
+    "Blocked", names its site settings and offers no button.
   - Desktop browsers only (`desktopAlertsSupported`): Android's Chrome throws
     on `new Notification()` and iPhone and iPad Safari show only a Home
     Screen app's, both through a service worker, so a phone gets no row.

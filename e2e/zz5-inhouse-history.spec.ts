@@ -229,7 +229,7 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     );
     await expect(ladder.getByText("101 games played")).toBeVisible();
     await page
-      .getByRole("button", { name: "Admin: void the last result", exact: true })
+      .getByRole("button", { name: "Void the last result", exact: true })
       .click();
     await expect(
       page.getByText("Result voided — Elo recalculated", { exact: true }),
