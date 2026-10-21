@@ -339,8 +339,8 @@ export default async function InhousePage({
               mmrHint={mmrHint}
               joinRefusal={joinRefusal}
               firstGame={firstGame}
+              botStatus={user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
             />
-            {user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
           </section>
         </div>
         {/* Players' own times in full, always under the room (a time's

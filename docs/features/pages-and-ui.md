@@ -897,9 +897,7 @@ the league is already draftable and many visitors have joined. Write for both.
     with an ellipsis (the toggles' ranks and names carry the order; a
     phone says "Tap your favorite first" and "from your signup"). "How your
     MMR is set" sits right under the card on a phone (in it from md), then
-    the invite row ("Copy queue link"; [inhouse](inhouse.md#queue)) and,
-    for a signed-in viewer on a desktop browser, the desktop alerts row
-    ("Turn on desktop alerts"; [inhouse](inhouse.md#the-room-client)). The
+    the queue tools panel (below). The
     slots are 32px rows (the name and MMR at 16px, then the slot, or "You"
     in your own, and 14px pills), and the positions count rides the
     "Who's playing" row. That row never wraps (a second line cost a phone
@@ -924,6 +922,26 @@ the league is already draftable and many visitors have joined. Write for both.
   States outside the target add height and may scroll: "Also queued", the
   away line, "Result on the way", the last result's banner, "Save
   positions", a status line, and an opened "How your MMR is set".
+- **Under the queue card, one panel; at the room's end, one admin panel**
+  (Tim, 2026-10-21: the centred rows stacked under the card, each with its
+  own button, and the admin rows right-aligned one by one with the bot's
+  status loose below them, looked sloppy beside the card).
+  - **Queue tools** (`QueueTools`, `src/components/inhouse/queue-tools.tsx`):
+    tiles side by side from md, stacked on a phone, each an icon, a title, a
+    one-line description and its control at the end: "Invite friends" ("Copy
+    queue link"; [inhouse](inhouse.md#queue)) and, for a signed-in viewer on
+    a desktop browser, "Desktop alerts" ("Turn on", or an "On" badge and
+    "Turn off", or "Blocked"; [inhouse](inhouse.md#the-room-client)); the
+    invite spans the panel without it. The footer says tab switching keeps
+    your spot, led on a queued phone by "Listen for the ready check". It is
+    under the card, so it costs the first screen nothing.
+  - **Admin tools** (`InhouseAdminTools`,
+    `src/components/inhouse/admin-tools.tsx`), for admins at the end of the
+    room in every stage: an "Admin" header linking "Players' medal & MMR",
+    then one row per tool: "Remove from the queue" while anyone is queued,
+    "Void the last result" between games, and the lobby bot's status with
+    "Check bot connection" (`DotaLobbyRecovery`, which the page mounts for
+    admins and passes in as `botStatus`).
 - **Two live games share the room** ([inhouse](inhouse.md#two-games-at-once)):
   a player sees their own game, with the other folded to one line under it; a
   spectator sees the next-game queue card, then each live game read-only,

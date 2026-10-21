@@ -18,8 +18,7 @@ import { roleCoverage } from "@/lib/pool-stats";
 import { parseRoleOrder } from "@/lib/roles";
 import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
-import { QueueInvite } from "@/components/inhouse/queue-invite";
-import { DesktopAlertsRow } from "@/components/inhouse/desktop-alerts-row";
+import { QueueTools } from "@/components/inhouse/queue-tools";
 import { RolePicker } from "@/components/inhouse/role-picker";
 
 /**
@@ -973,20 +972,12 @@ export function QueueView({
       {present.length > 0 && mmrHint ? (
         <QueueMmrHint mmrHint={mmrHint} dense className="px-1 text-center md:hidden" />
       ) : null}
-      {/* Under the card, so the card keeps a phone's first screen. */}
-      <QueueInvite />
-      {me.isLoggedIn ? <DesktopAlertsRow /> : null}
-      <p className="px-1 text-center text-xs text-muted">
-        {/* A queued phone player's ready-check reminder, which the card keeps
-            for screen readers only: here it costs no first-screen space. */}
-        {me.inQueue && !nextGame ? (
-          <span aria-hidden className="md:hidden">
-            Listen for the ready check ·{" "}
-          </span>
-        ) : null}
-        Tab switching keeps your spot · queue clears after{" "}
-        {INHOUSE.QUEUE_IDLE_HOURS}h without lobby activity
-      </p>
+      {/* Under the card, so the card keeps a phone's first screen: the
+          invite, desktop alerts and the tab-switching note, as one panel. A
+          queued phone player's ready-check reminder, which the card keeps for
+          screen readers only, leads its footer, where it costs no
+          first-screen space. */}
+      <QueueTools signedIn={me.isLoggedIn} readyCheckHint={me.inQueue && !nextGame} />
       {/* The page's ONE walkthrough of a game (the ladder card no longer
           repeats it). Open by default for a signed-in first-timer; gone once
           the viewer is queued, where "queue up" is advice they have already

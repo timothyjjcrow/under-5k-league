@@ -640,7 +640,8 @@ describe("live rooms delegate their alert triggers", () => {
     expect(src).toMatch(
       /const alerts = inhouseAlerts\(prev, snap\);[\s\S]{0,600}desktopAlertToShow\(\{[\s\S]{0,200}alerts,/,
     );
-    expect(src).toContain("<DesktopAlertsRow />");
+    expect(src).toContain("<QueueTools signedIn={me.isLoggedIn}");
+    expect(src).toContain("desktopAlertsRowState(");
     // The browser is spoken to in one module; which alert, and when, is the
     // tested lib's.
     expect(uiFilesWith("new Notification(")).toEqual([
@@ -845,13 +846,19 @@ describe("the admin's remove-from-queue control", () => {
   // the click is driven in e2e/zz4-inhouse.spec.ts.
   it("shows to admins whenever anyone is queued, in any stage", () => {
     const room = stripLineComments(sourceFile("src/components/inhouse-room.tsx").text);
-    expect(room).toContain(
-      "{me.isAdmin && state.queue.length > 0 ? (\n        <AdminQueueRemoval queue={state.queue} pending={pending} act={act} />",
+    // The room's admin panel gets the whole queue, for every admin...
+    expect(room).toMatch(
+      /\{me\.isAdmin \? \(\s*<InhouseAdminTools\s+queue=\{state\.queue\}/,
     );
-    // Outside the stage's own branches, so a live game doesn't hide it.
+    // ...outside the stage's own branches, so a live game doesn't hide it.
     const stageEnd = room.indexOf("{lobby && me.canCancel ? cancelButton(lobby) : null}");
     expect(stageEnd).toBeGreaterThan(-1);
-    expect(room.indexOf("<AdminQueueRemoval")).toBeGreaterThan(stageEnd);
+    expect(room.indexOf("<InhouseAdminTools")).toBeGreaterThan(stageEnd);
+    // ...and the panel shows the picker whenever anyone is queued.
+    const panel = stripLineComments(sourceFile("src/components/inhouse/admin-tools.tsx").text);
+    expect(panel).toMatch(
+      /\{queue\.length > 0 \? \(\s*<AdminQueueRemoval queue=\{queue\} pending=\{pending\} act=\{act\} \/>/,
+    );
   });
 
   it("offers everyone queued through the lib's choices, and confirms before it sends", () => {

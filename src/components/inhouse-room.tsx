@@ -12,10 +12,10 @@ import {
   useRef,
   useState,
   useSyncExternalStore,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import Link from "@/components/app-link";
-import { Badge, LinkArrow, buttonClasses, textLink } from "@/components/ui";
+import { Badge, buttonClasses, textLink } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
@@ -94,7 +94,7 @@ import { DraftView } from "@/components/inhouse/draft-view";
 import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
 import { PendingResultsView } from "@/components/inhouse/pending-results-view";
-import { AdminQueueRemoval } from "@/components/inhouse/admin-queue-removal";
+import { InhouseAdminTools } from "@/components/inhouse/admin-tools";
 
 /**
  * The lobby whose phase sets the poll rate: the viewer's own game, or the
@@ -110,6 +110,7 @@ export function InhouseRoom({
   mmrHint = null,
   joinRefusal = null,
   firstGame = false,
+  botStatus = null,
 }: {
   pollMs?: number;
   /**
@@ -131,6 +132,8 @@ export function InhouseRoom({
    * starts open, because it is the page's one walkthrough of what a game is.
    */
   firstGame?: boolean;
+  /** The lobby bot's status for an admin, shown in the room's admin panel. */
+  botStatus?: ReactNode;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -1394,22 +1397,6 @@ export function InhouseRoom({
 
       {lobby && me.canCancel ? cancelButton(lobby) : null}
 
-      {/* An admin takes a player out of the queue from any stage: the queue
-          may not be on screen (a live game), and away players have no slot. */}
-      {me.isAdmin && state.queue.length > 0 ? (
-        <AdminQueueRemoval queue={state.queue} pending={pending} act={act} />
-      ) : null}
-
-      {/* Any player's inhouse MMR and medal, queued or not and signed up for
-          the league or not, are set on their own admin page. */}
-      {me.isAdmin ? (
-        <p className="text-right text-xs">
-          <Link href="/admin/inhouse-players" className={textLink()}>
-            Admin: players&apos; medal &amp; MMR <LinkArrow />
-          </Link>
-        </p>
-      ) : null}
-
       {lobby ? (
         <PendingResultsView
           folded
@@ -1422,36 +1409,17 @@ export function InhouseRoom({
 
       {otherLobbies.map(otherGame)}
 
-      {/* A wrong result used to be permanent — the ladder and history both
-          filter on COMPLETED, so voiding the lobby removes it and every
-          player's Elo recomputes from the surviving games on the next read. */}
-      {me.isAdmin && !lobby && state.lastResult ? (
-        <div className="text-right">
-          <button
-            disabled={pending}
-            onClick={async () => {
-              if (
-                window.confirm(
-                  "Void the last inhouse result? It leaves the ladder and history, and everyone's Elo is recalculated without it.",
-                )
-              ) {
-                // Name the target: the banner's own lobby, never "whatever
-                // completed most recently at click time".
-                if (
-                  await act({
-                    action: "void",
-                    lobbyId: state.lastResult?.lobbyId,
-                  })
-                ) {
-                  pushToast("success", "Result voided — Elo recalculated");
-                }
-              }
-            }}
-            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-          >
-            Admin: void the last result
-          </button>
-        </div>
+      {/* Every admin control in one panel at the end of the room: taking a
+          player out of the queue, voiding the last result between games,
+          the players' medal and MMR page, and the lobby bot's status. */}
+      {me.isAdmin ? (
+        <InhouseAdminTools
+          queue={state.queue}
+          lastResult={lobby ? null : state.lastResult}
+          pending={pending}
+          act={act}
+          botStatus={botStatus}
+        />
       ) : null}
     </div>
   );
