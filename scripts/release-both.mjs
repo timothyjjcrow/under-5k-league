@@ -141,9 +141,24 @@ export async function requireReleaseCi(run, jobs, sha, gates, findCoverage) {
 // held two passes a minute apart and a healthy release rolled back.
 export const SCHEDULED_PASS_QUERY = Object.freeze(["--query", "/api/cron/automation"]);
 
-export function scheduledPasses(logs, since) {
+// The automation probe answers 503 on a healthy league until the pass after a
+// wake finishes (AUTOMATION_PROBE_ATTEMPTS below), so a release's verify
+// retries it until it answers healthy, and the box heartbeat
+// (ops/selfhost/backup/heartbeat.sh) may probe it, with its own retries, in
+// the same seconds. On 2026-10-21 Europe's probe answered 503 four times
+// in the 16 s after its promote, verify then read it healthy, and the error
+// scan rolled back both leagues for 703e4def. A caller passes the time verify
+// read it healthy as `automationHealthyAt`; only a 503 on that exact path at
+// or before it is skipped. Any other 5xx, any other status there, and a 503
+// there after the healthy answer still fail.
+const AUTOMATION_HEALTH_PATH = "/api/health/automation";
+const staleAutomationProbe = (log, automationHealthyAt) => Number.isFinite(automationHealthyAt) &&
+  log.requestPath === AUTOMATION_HEALTH_PATH && log.responseStatusCode === 503 && log.timestamp <= automationHealthyAt;
+
+export function scheduledPasses(logs, since, { automationHealthyAt = null } = {}) {
   const recent = logs.filter((log) => log.timestamp >= since);
-  if (recent.some((log) => log.level === "error" || log.level === "fatal" || log.responseStatusCode >= 500))
+  if (recent.some((log) => !staleAutomationProbe(log, automationHealthyAt) &&
+      (log.level === "error" || log.level === "fatal" || log.responseStatusCode >= 500)))
     throw new Error("Fresh runtime errors require release review");
   // Vercel's CLI can return the same request more than once. Count distinct
   // scheduler requests, while retaining every row in the error scan above.
