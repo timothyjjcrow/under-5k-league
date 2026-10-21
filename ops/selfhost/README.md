@@ -208,11 +208,12 @@ the backup hands it), `ggd2l-bot`.
   `fwupd-refresh.timer`. A droplet has no firmware for fwupd to update, and
   when `cdn.fwupd.org` stopped answering (2026-10-21) each hourly run failed
   and the heartbeat paged it as a failed unit. On a box provisioned before
-  that, once:
+  that, once (`ggd2l-1` had it on 2026-10-21 at 14:42 UTC); masking the
+  waiting timer fails it, so the second line clears both:
 
   ```bash
   sudo systemctl mask --now fwupd-refresh.timer
-  sudo systemctl reset-failed fwupd-refresh.service
+  sudo systemctl reset-failed fwupd-refresh.timer fwupd-refresh.service
   ```
 - **The 09:00 UTC reboot** (when an update needs one) brings back exactly the
   enabled (live) slots. The Workers' reboot window (10 failed passes before an

@@ -206,8 +206,13 @@ log "Firmware: no fwupd metadata refresh on a VM"
 # UTC) every run failed, and the heartbeat paged the failed unit, then its
 # recovery when the next run began, about once an hour. Masked, not just
 # disabled: nothing, a package script included, can start a masked unit.
+# Masking a waiting timer fails it in the reload ("Unit to trigger
+# vanished"), and the heartbeat would page that too, so both units are
+# cleared once masked (on ggd2l-1, 2026-10-21 14:42 UTC).
 systemctl mask --now fwupd-refresh.timer
-if systemctl is-failed --quiet fwupd-refresh.service; then systemctl reset-failed fwupd-refresh.service; fi
+for unit in fwupd-refresh.timer fwupd-refresh.service; do
+  if systemctl is-failed --quiet "${unit}"; then systemctl reset-failed "${unit}"; fi
+done
 
 log "Versions"
 node --version
