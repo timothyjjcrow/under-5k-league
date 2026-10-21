@@ -19,6 +19,7 @@ import { parseRoleOrder } from "@/lib/roles";
 import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { QueueInvite } from "@/components/inhouse/queue-invite";
+import { DesktopAlertsRow } from "@/components/inhouse/desktop-alerts-row";
 import { RolePicker } from "@/components/inhouse/role-picker";
 
 /**
@@ -974,6 +975,7 @@ export function QueueView({
       ) : null}
       {/* Under the card, so the card keeps a phone's first screen. */}
       <QueueInvite />
+      {me.isLoggedIn ? <DesktopAlertsRow /> : null}
       <p className="px-1 text-center text-xs text-muted">
         {/* A queued phone player's ready-check reminder, which the card keeps
             for screen readers only: here it costs no first-screen space. */}

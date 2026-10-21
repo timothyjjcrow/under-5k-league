@@ -75,7 +75,9 @@ async function checkRoomHeader(page: Page, stage: string) {
     await expect(strip.locator('li[aria-current="step"]')).toHaveText(
       new RegExp(`${stage}$`),
     );
-    const sound = page.getByRole("button", { name: /^(Sound on|Muted)$/ });
+    const sound = page.getByRole("button", {
+      name: /^(Sound on|Muted|Turn on sound)$/,
+    });
     await expect(sound).toBeVisible();
     const stripBox = (await strip.boundingBox())!;
     const soundBox = (await sound.boundingBox())!;

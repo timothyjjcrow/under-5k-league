@@ -1246,8 +1246,50 @@ Every transition is a guarded claim; keep it that way (general rules:
     COMPLETED and CANCELLED alike, so an admin cancel would ring a win.
   - The title is state-derived, ungated by the sound toggle, and each nag stops
     once the player accepted or voted.
-  - Prime audio on the first `pointerdown`: `?join=1` arrivals and reloads
-    haven't clicked yet.
+  - **Browsers hold a page's audio until a click, tap or key press on it,
+    after every load.** `armAudioUnlock` (`chime.ts`) unlocks on the first
+    pointerup, touchend, click or keydown anywhere on the page, until the
+    context runs, and at once on a page that already had a click where the
+    browser allows it. A `?join=1` arrival, a reload and a restored tab have
+    clicked nothing, and players on another tab missed "match found" that way
+    (2026-10-20): the poll brought it, the bell rang into a held context.
+    So until audio runs Sound reads "Turn on sound" in the accent colour
+    (`soundButtonState`, `src/lib/room-sound.ts`), a tap turns the bell on
+    and never mutes it (`soundToggleNext`, shared with the draft room), and
+    the one-tap join's toast says to click once (`autoJoinedToast`).
+- **Desktop alerts: the browser's own notification for a player away from
+  the tab** (Tim, 2026-10-20; rules in `src/lib/inhouse-desktop-alert.ts`,
+  the browser side in `src/components/desktop-alerts.ts`). A notification
+  permission, once given, lasts for the site, so unlike the bell it needs no
+  click after a load: the one-tap joiner who goes straight back to Dota gets
+  it.
+  - Opt-in and off by default, from `DesktopAlertsRow` under the queue card
+    (signed-in viewers; under the card, so the card keeps the first screen).
+    The browser asks once, on that click, and a first alert ("Desktop alerts
+    are on") shows what one looks like. The switch is `inhouseDesktopAlerts`
+    in localStorage. When the browser refuses the site, the row names its site
+    settings and offers no button.
+  - Desktop browsers only (`desktopAlertsSupported`): Android's Chrome throws
+    on `new Notification()` and iPhone and iPad Safari show only a Home
+    Screen app's, both through a service worker, so a phone gets no row.
+  - The room takes it from the SAME `inhouseAlerts` list as the bell, one per
+    poll: `inhouseDesktopAlert` picks the one to act on first and names the
+    stage the game is in now (a hidden tab can first see its game past the
+    ready check), and `desktopAlertToShow` shows it only while the viewer is
+    away (the tab hidden or its window unfocused). Accept, vote and pick stay
+    up until the player acts (`requireInteraction`); coming back to the tab
+    closes it (`armDesktopAlertDismiss`), and one tag means a newer alert
+    replaces the last. Only `desktop-alerts.ts` calls `new Notification(`
+    (`room-source-guards.test.ts`).
+  - It costs the box nothing: the room shows it from the poll it already
+    runs. A tab the browser has put to sleep (a phone's, or one Chrome
+    unloaded to save memory) gets neither alert nor bell; the Discord
+    match-found ping covers that. Web Push would reach it, but needs keys on
+    the box, a subscription table and a service worker (DECISIONS
+    2026-10-20).
+  - `e2e/zz4f-inhouse-desktop-alerts.spec.ts` fakes the browser's
+    notifications and an away tab: the locked toggle, turning alerts on, the
+    match-found alert while away, its close on return, and none on the tab.
 - **`avgKnownMmr` is the ONLY team-average MMR:** 0 is unknown and excluded.
   `mmrBalance` wraps it for the drafting chips and "X ahead by N avg MMR". A
   copy dividing by the whole roster flipped a side's strength when the last
@@ -1515,7 +1557,10 @@ file: `/api/calendar/inhouse-time?at=`. Tests: `inhouse-times.test.ts`,
   way);
   `e2e/zz4c-inhouse-game-over.spec.ts` (positions in the picker and the draft,
   "Game over — queue again", a player from that game joining at once, the
-  admin give-up); `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
+  admin give-up); `e2e/zz4f-inhouse-desktop-alerts.spec.ts` (the held
+  bell's "Turn on sound", and desktop alerts: the match-found alert while
+  away, closed on return, none on the tab);
+  `e2e/zz5-inhouse-history.spec.ts` (history and admin void).
   The bot-driven transitions are covered in
   `test/integration/inhouse-bot-lifecycle.itest.ts`: the auto-end at the
   bot's postgame by its seam tests (`inhouse.endInhouseGameFromBot.beforeClaim`)

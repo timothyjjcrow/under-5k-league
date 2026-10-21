@@ -317,7 +317,8 @@ In the Captains & draft card on `/admin` and inside the room
   one-time `pointerdown` is not an activation gesture, so on phones it never
   unlocked and a pool player never heard "you're on the block". Until audio
   runs the toggle reads "Tap to turn on alerts", and that tap turns the bell
-  on rather than muting it.
+  on rather than muting it (`soundToggleNext`, `src/lib/room-sound.ts`,
+  shared with the inhouse room).
 - **Phone order follows the viewer:** a captain or admin gets the pool
   first; everyone else gets Recent sales, then the rosters, then the pool (DOM
   order, so screen readers match). Desktop is fixed by grid placement. "next:

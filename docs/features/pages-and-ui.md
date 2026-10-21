@@ -876,7 +876,9 @@ the league is already draftable and many visitors have joined. Write for both.
   - **The room's header and its stage strip are ONE row** (the connection
     dot, the lobby badge, the stages, Sound; on a phone "Live room" and the
     Sound words are screen-reader text, "Reconnecting" always shows, and the
-    badge takes a line of its own). While the queue card shows a queued
+    badge takes a line of its own). Sound reads "Turn on sound" until the
+    page has had a click ([inhouse](inhouse.md#the-room-client)); desktop
+    alerts stay out of this row, in their own row under the card. While the queue card shows a queued
     player (no lobby of their own), a phone has no "You're queued" badge
     line: the card's context cell says it.
   - **Below md, a compact card on a four-column grid** (`PHONE_GRID` in
@@ -895,7 +897,9 @@ the league is already draftable and many visitors have joined. Write for both.
     with an ellipsis (the toggles' ranks and names carry the order; a
     phone says "Tap your favorite first" and "from your signup"). "How your
     MMR is set" sits right under the card on a phone (in it from md), then
-    the invite row ("Copy queue link"; [inhouse](inhouse.md#queue)). The
+    the invite row ("Copy queue link"; [inhouse](inhouse.md#queue)) and,
+    for a signed-in viewer on a desktop browser, the desktop alerts row
+    ("Turn on desktop alerts"; [inhouse](inhouse.md#the-room-client)). The
     slots are 32px rows (the name and MMR at 16px, then the slot, or "You"
     in your own, and 14px pills), and the positions count rides the
     "Who's playing" row. That row never wraps (a second line cost a phone

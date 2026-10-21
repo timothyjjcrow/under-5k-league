@@ -6,7 +6,13 @@
 // src/components/inhouse/; room-source-guards.test.ts reads the shell and that
 // folder together as one room.
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/app-link";
 import { Badge, LinkArrow, buttonClasses, textLink } from "@/components/ui";
@@ -55,7 +61,24 @@ import {
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
-import { armAudioUnlock, playChime, unlockAudio } from "@/components/chime";
+import {
+  armAudioUnlock,
+  audioReady,
+  playChime,
+  subscribeAudioReady,
+  unlockAudio,
+} from "@/components/chime";
+import {
+  armDesktopAlertDismiss,
+  lookingAtTab,
+  showDesktopAlert,
+  useDesktopAlerts,
+} from "@/components/desktop-alerts";
+import {
+  autoJoinedToast,
+  desktopAlertToShow,
+} from "@/lib/inhouse-desktop-alert";
+import { soundButtonState, soundToggleNext } from "@/lib/room-sound";
 import type { InhouseFixedMmr } from "@/lib/inhouse-mmr-cap";
 import type { InhouseState } from "@/lib/inhouse-service";
 import type { RoomLobby, RoomMe } from "@/components/inhouse/shared";
@@ -201,11 +224,27 @@ export function InhouseRoom({
     return armAudioUnlock();
   }, []);
 
+  // Whether the browser lets the bell ring yet. Until a gesture unlocks it,
+  // "Sound on" was a promise the room couldn't keep (players tabbed away and
+  // missed "match found"), and tapping it muted the bell.
+  const audioOn = useSyncExternalStore(subscribeAudioReady, audioReady, () => false);
+  const sound = soundButtonState(soundOn, audioOn);
   const toggleSound = useCallback(() => {
-    const next = !soundOn;
+    const next = soundToggleNext(soundOn, audioReady());
     setSoundOn(next);
     if (next) playChime(); // confirm + unlock audio on this gesture
   }, [soundOn, setSoundOn]);
+
+  // The browser's own notification for a viewer away from the tab, which,
+  // once allowed, needs no click after a load (inhouse-desktop-alert.ts).
+  const desktopAlerts = useDesktopAlerts();
+  useEffect(() => armDesktopAlertDismiss(), []);
+  // Read by the ?join=1 toast after its join lands, without making the
+  // join's effect re-run (and cancel its pending join) when these change.
+  const alertPrefsRef = useRef({ soundOn, desktopAlertsOn: desktopAlerts.active });
+  useEffect(() => {
+    alertPrefsRef.current = { soundOn, desktopAlertsOn: desktopAlerts.active };
+  }, [soundOn, desktopAlerts.active]);
 
   // Order poll and action responses by request START (the draft room's guard —
   // this loop needs it just as much). A `state` poll that left BEFORE a pick
@@ -671,12 +710,23 @@ export function InhouseRoom({
 
     // One ring however many transitions coincided — two playChime() calls in
     // one commit double-strike the same AudioContext.
-    if (soundOn && inhouseAlerts(prev, snap).length) playChime();
+    const alerts = inhouseAlerts(prev, snap);
+    if (soundOn && alerts.length) playChime();
+    // And one desktop alert, for a viewer away from the tab who turned them
+    // on: the bell can't reach someone who never clicked this page.
+    const desktop = desktopAlertToShow({
+      enabled: desktopAlerts.enabled,
+      permission: desktopAlerts.permission,
+      lookingAtTab: lookingAtTab(),
+      alerts,
+      status: snap.status,
+    });
+    if (desktop) showDesktopAlert(desktop);
     // ALWAYS advanced, outside the sound gate: a muted viewer who unmutes
     // mid-lobby must not be rung for a lobby they have been watching for five
     // minutes.
     prevAlertRef.current = snap;
-  }, [state, soundOn]);
+  }, [state, soundOn, desktopAlerts.enabled, desktopAlerts.permission]);
 
   // On a phone the page's title, links and the stage strip sit above the
   // room, so a member reaching a stage that needs them (accept, vote, pick,
@@ -850,7 +900,17 @@ export function InhouseRoom({
     // synchronously inside an effect cascades a render.
     const t = setTimeout(() => {
       void act({ action: "join", mmr }).then((ok) => {
-        if (ok) pushToast("success", "You're in the queue");
+        // This player has touched nothing on the page yet, so the bell is
+        // held: say what will reach them, or how to let it ring.
+        if (!ok) return;
+        const prefs = alertPrefsRef.current;
+        pushToast(
+          "success",
+          autoJoinedToast({
+            soundLocked: soundButtonState(prefs.soundOn, audioReady()) === "locked",
+            desktopAlertsOn: prefs.desktopAlertsOn,
+          }),
+        );
       });
     }, 0);
     return () => clearTimeout(t);
@@ -1154,21 +1214,30 @@ export function InhouseRoom({
         <button
           type="button"
           onClick={toggleSound}
-          aria-pressed={soundOn}
+          aria-pressed={sound === "on"}
           title={
-            soundOn
-              ? "Notification sound on — click to mute"
-              : "Notifications muted — click to enable a bell"
+            sound === "locked"
+              ? "Your browser holds sound until you click or tap this page — click to turn on the bell"
+              : sound === "on"
+                ? "Notification sound on — click to mute"
+                : "Notifications muted — click to enable a bell"
           }
           className={buttonClasses(
             "secondary",
             "sm",
-            "shrink-0 rounded-full bg-surface-2/40 px-3 text-xs text-muted hover:text-fg",
+            cn(
+              "shrink-0 rounded-full bg-surface-2/40 px-3 text-xs text-muted hover:text-fg",
+              sound === "locked" && "border-accent/50 text-accent",
+            ),
           )}
         >
           <span aria-hidden>{soundOn ? "🔔" : "🔕"}</span>
           <span className="sr-only sm:not-sr-only">
-            {soundOn ? "Sound on" : "Muted"}
+            {sound === "locked"
+              ? "Turn on sound"
+              : sound === "on"
+                ? "Sound on"
+                : "Muted"}
           </span>
         </button>
       </div>

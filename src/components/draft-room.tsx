@@ -33,6 +33,7 @@ import {
   subscribeAudioReady,
   unlockAudio,
 } from "@/components/chime";
+import { soundToggleNext } from "@/lib/room-sound";
 import {
   useBannerOffscreen,
   usePersistedFlag,
@@ -416,7 +417,7 @@ export function DraftRoom({
   const audioOn = useSyncExternalStore(subscribeAudioReady, audioReady, () => false);
   const toggleSound = useCallback(() => {
     // Locked audio with the bell on: this tap turns it on, not off.
-    const next = soundOn && !audioReady() ? true : !soundOn;
+    const next = soundToggleNext(soundOn, audioReady());
     setSoundOn(next);
     if (next) playChime(); // confirm + unlock audio on this gesture
   }, [soundOn, setSoundOn]);
