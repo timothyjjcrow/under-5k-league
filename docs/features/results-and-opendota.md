@@ -314,8 +314,9 @@ Tested in `test/integration/player-data-refresh.itest.ts`.
 - **Small and stalest first.** Steam names and avatars (batched, only changed
   rows written, no-op without `STEAM_API_KEY`), then
   `PLAYER_DATA_REFRESH_ACCOUNTS` accounts from pure `pickStaleAccounts`
-  (`pub-stats.ts`: this season's signups, never-fetched, then oldest; fresh
-  skipped via `pubStatsFresh`; last refused account last), then
+  (`pub-stats.ts`: this season's signups, never-fetched, then oldest; a
+  current snapshot skipped via `pubStatsDue`, which also counts one from
+  before the scouting counts as due; last refused account last), then
   `PLAYER_DATA_REFRESH_GAMES` games through `enrichStoredGames`.
 - **Back off at the first refusal.** No retry: the first refused call stops the
   pass, records the account in `playerDataRefreshFailedUser` and writes a

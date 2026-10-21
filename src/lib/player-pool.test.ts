@@ -8,6 +8,8 @@ import {
   lastSeasonToken,
   inhouseToken,
   pubHeroTitle,
+  pubScoutParts,
+  pubScoutTitle,
   pubTitle,
   pubToken,
   sortByInhouseRecord,
@@ -271,6 +273,7 @@ describe("scouting token copy", () => {
     lastPlayedAt: null,
     checkedAt: null,
     topHeroes: [{ heroId: 14, games: 220, wins: 121 }],
+    scout: null,
   };
 
   it("pubToken names the recent window — a win rate must never read as lifetime", () => {
@@ -479,6 +482,78 @@ describe("buildPoolLastSeasons (returning players' last league season)", () => {
     };
     expect(lastSeasonTitle(ls)).toBe(
       "Season 3: played for Dire Straits · series they played in: 4 won, 3 lost, 1 drawn · drafted for $12 · won the title",
+    );
+  });
+});
+
+describe("the pub scouting line", () => {
+  const scout = {
+    games: 100,
+    ranked: 90,
+    unranked: 6,
+    turbo: 4,
+    core: 10,
+    support: 70,
+    lobbyMmr: 4180,
+    lobbyGames: 90,
+    regions: [
+      { region: 2, games: 75 },
+      { region: 1, games: 20 },
+    ],
+    regionGames: 95,
+  };
+
+  it("reads role, lobby, mode and server, in that order", () => {
+    expect(pubScoutParts(scout, "4,5")).toEqual([
+      { key: "role", text: "88% support", differs: false },
+      { key: "lobby", text: "lobbies ≈4,200" },
+      { key: "mode", text: "90% ranked" },
+      { key: "region", text: "US East" },
+    ]);
+  });
+
+  it("flags a role on the other side from the signup", () => {
+    expect(pubScoutParts(scout, "1,2")[0]).toMatchObject({ differs: true });
+    expect(pubScoutParts(scout, "3,4")[0]).toMatchObject({ differs: false });
+    expect(pubScoutParts(scout, "")[0]).toMatchObject({ differs: false });
+  });
+
+  it("adds Turbo when it is a fifth of their games but not the most", () => {
+    const parts = pubScoutParts(
+      { ...scout, ranked: 55, unranked: 10, turbo: 35 },
+      "4",
+    ).map((p) => p.text);
+    expect(parts).toContain("55% ranked");
+    expect(parts).toContain("35% Turbo");
+    expect(
+      pubScoutParts({ ...scout, ranked: 20, unranked: 10, turbo: 70 }, "4")
+        .map((p) => p.text)
+        .filter((t) => t.includes("Turbo")),
+    ).toEqual(["70% Turbo"]);
+  });
+
+  it("drops a read that has too few games, and says nothing when none has", () => {
+    expect(
+      pubScoutParts({ ...scout, core: 3, support: 4 }, "4").map((p) => p.key),
+    ).toEqual(["lobby", "mode", "region"]);
+    expect(
+      pubScoutParts(
+        {
+          ...scout,
+          games: 5,
+          core: 1,
+          support: 2,
+          lobbyGames: 5,
+          regionGames: 5,
+        },
+        "4",
+      ),
+    ).toEqual([]);
+  });
+
+  it("the hover gives the counts behind each share", () => {
+    expect(pubScoutTitle(scout, "1")).toBe(
+      "Their last 100 public games, every mode · played as a support in 70, a core in 10 (last hits a minute), not the side their signup lists · lobbies averaged Ancient 3 (≈4,200 MMR) over 90 games · 90 ranked, 6 unranked, 4 Turbo · servers: US East 79%, US West 21%",
     );
   });
 });

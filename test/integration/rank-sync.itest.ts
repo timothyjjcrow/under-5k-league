@@ -67,6 +67,7 @@ const PUB_FIXTURE: PubStats = {
   totalGames: 1500,
   lastPlayedAt: 1_722_000_000,
   topHeroes: [{ heroId: 14, games: 120, wins: 66 }],
+  scout: null,
 };
 
 describe("identity actions — expired sessions", () => {

@@ -27,15 +27,18 @@ import {
   lastSeasonTitle,
   lastSeasonToken,
   pubHeroTitle,
+  pubScoutParts,
+  pubScoutTitle,
   pubTitle,
   pubToken,
   sortByInhouseRecord,
   type PoolPlayer,
   type PoolScoutInfo,
+  type PubScoutPart,
   type PoolSort,
   type PoolStatusFilter,
 } from "@/lib/player-pool";
-import { pubLastPlayed, type PubHero } from "@/lib/pub-stats";
+import { pubHasWindow, pubLastPlayed, type PubHero } from "@/lib/pub-stats";
 import { aboutText } from "@/lib/about-you";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
@@ -488,13 +491,19 @@ export function PlayerPool({
                             {inhouseToken(ih)}
                           </span>
                         ) : null}
-                        {pub ? (
+                        {pub && pubHasWindow(pub) ? (
                           <span
                             className="tabular-nums"
                             title={pubTitle(pub, nowMs)}
                           >
                             {pubToken(pub, nowMs)}
                           </span>
+                        ) : null}
+                        {pub?.scout ? (
+                          <PubScoutLine
+                            parts={pubScoutParts(pub.scout, p.roles)}
+                            title={pubScoutTitle(pub.scout, p.roles)}
+                          />
                         ) : null}
                         {pub && pub.topHeroes.length > 0 ? (
                           <PubHeroStrip heroes={pub.topHeroes} />
@@ -778,6 +787,35 @@ function StatusChip({
  * role="img" + a spoken label per the decorative-indicator convention; each
  * icon's title names the hero and its record.
  */
+/** How they play pubs, one plain-text fact after another (no tap targets:
+ *  the line already carries two). A role that contradicts the signup's side
+ *  is tinted, its hover saying why. */
+function PubScoutLine({
+  parts,
+  title,
+}: {
+  parts: PubScoutPart[];
+  title: string;
+}) {
+  if (parts.length === 0) return null;
+  return (
+    <span className="min-w-0 tabular-nums" title={title}>
+      {/* Each fact is unbreakable ("82% ranked" never splits on a phone);
+          the line wraps between them. */}
+      {parts.map((part, i) => (
+        <span key={part.key}>
+          {i > 0 ? " · " : null}
+          <span
+            className={cn("whitespace-nowrap", part.differs && "text-accent")}
+          >
+            {part.text}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
 function PubHeroStrip({ heroes }: { heroes: PubHero[] }) {
   return (
     <span className="flex items-center gap-1">

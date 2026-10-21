@@ -1164,7 +1164,8 @@ provider call and an outage cannot become a retry storm.
 per-player recent-match lists (8s; returns `null` for unreachable vs `[]` for
 genuinely empty — callers use the distinction to blame the right thing),
 league feeds (`/leagues/{id}/matchIds`, including amateur leagues), and rank medals (`rank_tier` +
-`fh_unavailable`), scouting (`/players/{id}/wl` + `/heroes`), and player
+`fh_unavailable`), scouting (`/players/{id}/wl` + `/heroes` + `/matches`, the last folded into
+counts by `pub-scout.ts`), and player
 profiles. These server-side requests send the relevant Dota account, match, or
 league id; there is no OpenDota login. Selected rank, visibility, and scouting
 fields plus imported match records persist locally. Optional

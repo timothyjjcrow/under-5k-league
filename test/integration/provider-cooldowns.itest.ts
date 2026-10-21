@@ -42,6 +42,7 @@ const PUB_STATS = {
   totalGames: 42,
   lastPlayedAt: 1_700_000_000,
   topHeroes: [],
+  scout: null,
 };
 
 function accountForm(accountId: string | number): FormData {

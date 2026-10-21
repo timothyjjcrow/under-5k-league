@@ -18,7 +18,11 @@ import {
   type PlayerCardFacts,
 } from "@/lib/player-card";
 import { pubTitle, pubToken } from "@/lib/player-pool";
-import type { PoolPub, PubActivity } from "@/lib/pub-stats";
+import {
+  pubHasWindow,
+  type PoolPub,
+  type PubActivity,
+} from "@/lib/pub-stats";
 import { roleLabels } from "@/lib/roles";
 
 /**
@@ -202,7 +206,7 @@ export function ProfileHeader({
             <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-muted">
               {/* Their MMR and medal are on their season card. */}
               {roles.length > 0 ? <RoleBadges roles={signup?.roles} /> : null}
-              {pubScout ? (
+              {pubScout && pubHasWindow(pubScout) ? (
                 <span
                   className="tabular-nums"
                   title={pubTitle(pubScout, nowMs)}

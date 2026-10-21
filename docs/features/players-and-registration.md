@@ -192,8 +192,42 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   gets a phantom control. `sortByInhouseRecord` orders by ladder rank, which
   carries the full tiebreak (rating alone shows #5 above #4).
 - **Pub snapshot:** `User.pubStats` (JSON; read only via `parsePubStats`) +
-  `pubStatsAt`. `fetchPubStats` needs both `/wl?limit=100` and `/heroes`, with
-  the `fetchRankTier` ok:false contract (unreachable is not "no games").
+  `pubStatsAt`. `fetchPubStats` needs all three of `/wl?limit=100`, `/heroes`
+  and `/matches?limit=100&significant=0` (projected to the six fields
+  `PUB_MATCH_FIELDS` reads), with the `fetchRankTier` ok:false contract
+  (unreachable is not "no games").
+- **How they play pubs is stored as counts, never rows** (`scout`,
+  `src/lib/pub-scout.ts`, Tim's ask on 2026-10-21 for captains): their last
+  100 games of every mode (`significant=0`, or Turbo never shows) folded by
+  `summarizePubMatches` into mode counts, core and support games, a lobby
+  MMR and server regions. Each read (`pubRoleRead`, `pubLobbyRead`,
+  `pubModeRead`, `pubRegionRead`) needs `PUB_READ_MIN_GAMES` games or shows
+  nothing.
+  - **Role** is last hits a minute in ranked or normal matchmaking games of
+    10+ minutes: 3.5+ core, under 2.5 support, between is neither. Lanes
+    would be better, but OpenDota has parsed only about a fifth of anyone's
+    pubs. Set it beside the signup's side (`claimedRoleLean`) and tint a
+    contradiction (`roleClaimDiffers`), never call it a verdict.
+  - **Lobby MMR is the mean of each game's average medal,** shown as "≈4,150"
+    with its medal. Never show OpenDota's own `computed_mmr`: across 13
+    league players it sat at 3,850–4,350 whatever the medal (3,915 for a
+    Guardian 1, 4,051 for a Herald 5, 4,038 for a Divine 1), while the
+    lobby mean tracked the medal and caught a stale one (that Herald 5's
+    lobbies average about 3,550).
+  - **Servers** map Valve's cluster through its tens
+    (`regionForCluster`), so a new cluster in a known decade still counts;
+    an unknown one never does.
+  - **A snapshot from before the counts is due at once** (`pubStatsDue`:
+    no `PUB_SCOUT_MARKER` in the blob), in the hourly pass's SQL and the
+    admin button, so the next passes upgrade signups first instead of
+    waiting out the week.
+  - **Shown where the W/L token is:** the pool row's "Scouting details"
+    line (`pubScoutParts`, each fact unbreakable, the hover giving the
+    counts) and the profile's "Pub scouting" card
+    (`profile-pub-scouting.tsx`), first in the "Player profile" band, for an
+    ACTIVE signup only. A Turbo-only account has an empty W/L window but
+    still a scouting line (`poolPubRecord`; `pubHasWindow` gates the W/L
+    token).
 - **Name the window and the snapshot age** ("Pubs 54% in last 100 · checked 3d
   ago"; the window is what OpenDota could see). Never show a lifetime games
   figure. An empty window renders nothing, never "0% of 0". Measure "last

@@ -10,6 +10,7 @@ import { ProfileHeroesAndRecords } from "@/components/profile-heroes-records";
 import { ProfileMatchHistory } from "@/components/profile-match-history";
 import { ProfileOverview } from "@/components/profile-overview";
 import { ProfilePerformance } from "@/components/profile-performance";
+import { ProfilePubScouting } from "@/components/profile-pub-scouting";
 import { profileMatch } from "@/lib/profile-match";
 import { profileSections } from "@/lib/profile-sections";
 import { prisma } from "@/lib/prisma";
@@ -47,6 +48,7 @@ import {
   pubCheckedAgo,
   pubLastPlayed,
 } from "@/lib/pub-stats";
+import { pubScoutHasReads } from "@/lib/pub-scout";
 import {
   INHOUSE_STATUS,
   MATCH_PHASE,
@@ -267,6 +269,9 @@ export default async function PlayerProfilePage({
     : null;
   const pubLast = pubScout ? pubLastPlayed(pubScout, nowMs) : null;
   const pubHeroes = parsePubStats(user.pubStats)?.topHeroes ?? [];
+  // How they play pubs, under the same active-signup rule as the W/L token.
+  const pubScouting =
+    pubScout?.scout && pubScoutHasReads(pubScout.scout) ? pubScout.scout : null;
   const pubCheckedLabel = pubCheckedAgo(
     user.pubStatsAt?.getTime() ?? null,
     nowMs,
@@ -522,6 +527,7 @@ export default async function PlayerProfilePage({
       leagueHeroes.length > 0 ||
       pubHeroes.length > 0 ||
       hasText(selfPickedHeroes),
+    pubScouting: pubScouting != null,
     records: heldRecords.length > 0,
     recordWatch: recordWatch != null,
     achievements: badges.length > 0,
@@ -530,9 +536,33 @@ export default async function PlayerProfilePage({
   });
 
   // From xl the profile is two columns: their league form, games and play on
-  // the left, and a rail with the hero pool, records, achievements and
-  // seasons. A phone reads them in the same order, one column.
-  const hasRail = sections.profile || sections.career;
+  // the left, and a rail with the scouting, hero pool, records, achievements
+  // and seasons. A phone reads them in the same order, one column. With no
+  // league games the "Player profile" band moves into the main column
+  // (`profileInMain`), which would otherwise hold only a heading.
+  const profileBand = sections.profile ? (
+    <ProfileHeroesAndRecords
+      scouting={
+        pubScouting ? (
+          <ProfilePubScouting
+            scout={pubScouting}
+            roles={activeReg?.roles}
+            checkedLabel={pubCheckedLabel}
+          />
+        ) : null
+      }
+      showHeroes={sections.heroes}
+      showRecords={sections.records}
+      leagueHeroes={leagueHeroes}
+      selfPickedHeroes={selfPickedHeroes}
+      pubHeroes={pubHeroes}
+      pubCheckedLabel={pubCheckedLabel}
+      heldRecords={heldRecords}
+      recordWatch={recordWatch}
+    />
+  ) : null;
+  const hasRail =
+    (sections.profile && !sections.profileInMain) || sections.career;
 
   return (
     <div className="space-y-5">
@@ -591,6 +621,8 @@ export default async function PlayerProfilePage({
             inhouseUserId={sections.inhouseInOverview ? user.id : null}
           />
 
+          {sections.profileInMain ? profileBand : null}
+
           {sections.matches ? (
             <ProfileMatchHistory
               playerId={id}
@@ -615,18 +647,7 @@ export default async function PlayerProfilePage({
         </div>
         {hasRail ? (
           <div className="@container min-w-0 space-y-5">
-            {sections.profile ? (
-              <ProfileHeroesAndRecords
-                showHeroes={sections.heroes}
-                showRecords={sections.records}
-                leagueHeroes={leagueHeroes}
-                selfPickedHeroes={selfPickedHeroes}
-                pubHeroes={pubHeroes}
-                pubCheckedLabel={pubCheckedLabel}
-                heldRecords={heldRecords}
-                recordWatch={recordWatch}
-              />
-            ) : null}
+            {sections.profileInMain ? null : profileBand}
 
             {sections.career ? (
               <ProfileCareer

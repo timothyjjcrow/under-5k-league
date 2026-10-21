@@ -12,6 +12,9 @@ export type ProfileData = {
   gradedGames: boolean;
   /** League heroes, pub most-played heroes, or self-picked favorites. */
   heroes: boolean;
+  /** A pub snapshot with a scouting read (`pubScoutHasReads`), shown for an
+   *  active signup. */
+  pubScouting: boolean;
   /** An all-time league record they hold. */
   records: boolean;
   /** A league record within reach (`recordWatchFor`): the records card
@@ -30,10 +33,14 @@ type ProfileSections = {
   performance: boolean;
   performanceCard: boolean;
   reportCard: boolean;
-  /** The "Player profile" band, and its two cards. */
+  /** The "Player profile" band, and its three cards. */
   profile: boolean;
+  scouting: boolean;
   heroes: boolean;
   records: boolean;
+  /** With no league games the band joins the main column, so a new player's
+   *  page never leaves its left column empty beside a full rail. */
+  profileInMain: boolean;
   /** With no league games the inhouse card leads the page (it is their one
    *  real record); otherwise it sits with the rest of their career. */
   inhouseInOverview: boolean;
@@ -46,7 +53,7 @@ type ProfileSections = {
 export function profileSections(data: ProfileData): ProfileSections {
   const performance = data.economy || data.gradedGames;
   const records = data.records || data.recordWatch;
-  const profile = data.heroes || records;
+  const profile = data.pubScouting || data.heroes || records;
   const inhouseInOverview = !data.leagueGames && data.inhouse;
   const inhouseInCareer = data.inhouse && !inhouseInOverview;
   const career = data.achievements || data.seasons || inhouseInCareer;
@@ -56,8 +63,10 @@ export function profileSections(data: ProfileData): ProfileSections {
     performanceCard: data.economy,
     reportCard: data.gradedGames,
     profile,
+    scouting: data.pubScouting,
     heroes: data.heroes,
     records,
+    profileInMain: profile && !data.leagueGames,
     inhouseInOverview,
     inhouseInCareer,
     career,
@@ -66,6 +75,9 @@ export function profileSections(data: ProfileData): ProfileSections {
       ...(data.leagueGames ? [{ id: "player-matches", label: "Matches" }] : []),
       ...(performance
         ? [{ id: "player-performance", label: "Performance" }]
+        : []),
+      ...(data.pubScouting
+        ? [{ id: "player-scouting", label: "Scouting" }]
         : []),
       ...(data.heroes ? [{ id: "player-heroes", label: "Heroes" }] : []),
       // Named for the card it jumps to. "About" is the player's own words
