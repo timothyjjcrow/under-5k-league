@@ -98,6 +98,7 @@ model User {
   newsPosts              NewsPost[]
   matchNightPolls        MatchNightPoll[]
   matchNightBallots      MatchNightBallot[]
+  rollCallAnswers        RollCallAnswer[]
   teamStaffRoles         TeamStaff[]
   createdScrims          Scrim[]              @relation("ScrimCreator")
   scrimParticipations    ScrimParticipant[]   @relation("ScrimParticipantUser")
@@ -194,6 +195,10 @@ model Season {
   // are tied to this revision so moving the draft automatically makes every
   // old confirmation stale — including the change-away-then-back edge case.
   draftRevision   Int       @default(0)
+  // When an admin opened the roll call (Home's "I'm in" for the season's
+  // match night; roll-call.ts), or null while it is closed. Closing keeps
+  // every answer, so reopening shows them again.
+  rollCallOpenedAt DateTime?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
@@ -209,6 +214,26 @@ model Season {
   importCandidates   ImportCandidate[]
   rosterTenures      RosterTenure[]
   draftRuns          DraftRun[]
+  rollCallAnswers    RollCallAnswer[]
+}
+
+// A player's "I'm in" on the season's roll call: they can play the match
+// night every week and will play for whichever team drafts them.
+// `matchNight` is the night as the card printed it when they answered, so
+// once the season's night moves the answer stops counting and the player is
+// asked again (sameMatchNight). One row per player, rewritten when they
+// answer again; deleted when they take it back.
+model RollCallAnswer {
+  seasonId   String
+  userId     String
+  matchNight String
+  answeredAt DateTime @default(now())
+
+  season Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([seasonId, userId])
+  @@index([userId])
 }
 
 // Deliberate exclusions survive retries and cannot overwrite one another.

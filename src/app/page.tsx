@@ -21,6 +21,7 @@ import {
   loadCurrentInhouseNight,
 } from "@/components/inhouse-night";
 import { MatchNightPollCard } from "@/components/home/match-night-poll";
+import { RollCallCard } from "@/components/home/roll-call";
 import { LeagueNews, PinnedNotices } from "@/components/home/news";
 import { OffseasonView } from "@/components/home/offseason-view";
 import {
@@ -370,6 +371,13 @@ export default async function Home() {
           placeholder. */}
       <Suspense fallback={null}>
         <PinnedNotices />
+      </Suspense>
+      {/* The roll call, while an admin has it open during signups or the
+          draft: every player signed up for the draft taps "I'm in" for the
+          season's match night, and the list shows who hasn't. It leads the
+          phase's own sections for the same reason the poll does. */}
+      <Suspense fallback={null}>
+        <RollCallCard user={user} />
       </Suspense>
       {/* Season-independent, like news: an open match-night poll (or one
           that closed this week) sits above the phase's own sections, since

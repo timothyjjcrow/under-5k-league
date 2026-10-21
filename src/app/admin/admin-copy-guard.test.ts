@@ -464,8 +464,8 @@ describe("admin copy names only controls that exist", () => {
     // Signups and the draft phase lead with setting up; later phases put
     // it after the season's working cards. Chips and cards branch on the
     // same flag.
-    inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
-    inOrder(season, "{setupFirst ? (", "{setupControls}", "{reachCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
+    inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem, ...rollCallItems] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem, ...rollCallItems])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
+    inOrder(season, "{setupFirst ? (", "{setupControls}", "{reachCard}", "{rollCallCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{setupFirst ? null : rollCallCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
     // The evergreen sections after the season's own.
     inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-poll"', 'id: "adm-news"', 'id: "adm-security"');
     inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminMatchNightPoll", "<AdminNews ", "<SecurityControls />");

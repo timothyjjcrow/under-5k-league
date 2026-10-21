@@ -23,6 +23,8 @@ import { redirect } from "next/navigation";
 import Link from "@/components/app-link";
 import { getSessionUser } from "@/lib/auth";
 import { completedSeasonArchiveReadiness, getActiveSeason } from "@/lib/season";
+import { rollCallCountLine, rollCallPhase } from "@/lib/roll-call";
+import { loadAdminRollCall } from "@/lib/roll-call-service";
 import { capacityInfo } from "@/lib/capacity";
 import { prisma } from "@/lib/prisma";
 import { parseRescheduleOptions } from "@/lib/reschedule-ready-check";
@@ -145,6 +147,7 @@ import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
+import { RollCallControls } from "@/components/admin/roll-call-controls";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
 import { teamCountSeasonNote } from "@/lib/season-format";
 import { playoffPlacesPhrase } from "@/lib/season-groups";
@@ -482,6 +485,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       </Suspense>
     </AdminAnchor>
   ) : null;
+  // The roll call runs during signups and the draft, and follows the reach
+  // card wherever that renders: both are about whether players will show.
+  const rollCallCard =
+    season && rollCallPhase(season.status) ? (
+      <Suspense fallback={<CardSkeleton rows={3} />}>
+        <AdminRollCall />
+      </Suspense>
+    ) : null;
   // The auto-sync card and the import review are spaced like every other
   // card, and the anchor hides when neither has anything to show (outside
   // the regular season and playoffs, with no import waiting) so it adds no
@@ -515,6 +526,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     { id: "adm-captains", label: "Captains & draft" },
   ];
   const reachItem = { id: "adm-reach", label: "Discord reach" };
+  // Its chip follows the reach chip, as its card follows the reach card.
+  const rollCallItems =
+    season && rollCallPhase(season.status)
+      ? [{ id: "adm-roll-call", label: "Roll call" }]
+      : [];
   const jumpItems: { id: string; label: string }[] = [
     ...(handoffFirst
       ? [
@@ -537,7 +553,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             : []),
           { id: "adm-attention", label: "Needs attention" },
           ...(showTiebreakers ? [{ id: "adm-tiebreakers", label: "Tiebreakers" }] : []),
-          ...(setupFirst ? [...setupItems, reachItem] : []),
+          ...(setupFirst ? [...setupItems, reachItem, ...rollCallItems] : []),
           ...(cards?.schedule
             ? [{ id: "adm-schedule", label: "Schedule & results" }]
             : []),
@@ -548,7 +564,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ...(cards?.standins
             ? [{ id: "adm-standins", label: "Standins" }]
             : []),
-          ...(setupFirst ? [] : [reachItem]),
+          ...(setupFirst ? [] : [reachItem, ...rollCallItems]),
           ...(autoSyncVisible(season)
             ? [{ id: "adm-sync", label: "Auto-sync" }]
             : []),
@@ -677,6 +693,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             <>
               {setupControls}
               {reachCard}
+              {rollCallCard}
             </>
           ) : null}
           {/* Each card only where it has work or data (adminSeasonCards):
@@ -704,6 +721,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             </AdminAnchor>
           ) : null}
           {setupFirst ? null : reachCard}
+          {setupFirst ? null : rollCallCard}
           {syncCards}
           {setupFirst ? null : setupControls}
           <LeagueControls season={season} />
@@ -7291,6 +7309,36 @@ function SecurityControls() {
           </ActionForm>
         </div>
       </CardBody>
+    </AdminSection>
+  );
+}
+
+/**
+ * The Roll call section: Home's "I'm in" for the season's match night,
+ * opened and closed here, with who is in and who hasn't answered. Opens
+ * itself while the roll call is open.
+ */
+async function AdminRollCall() {
+  // Async server component: rendered once per request.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
+  const rollCall = await loadAdminRollCall(nowMs);
+  if (!rollCall) return null;
+  const total = rollCall.view
+    ? rollCall.view.locked.length + rollCall.view.waiting.length
+    : 0;
+  return (
+    <AdminSection
+      id="adm-roll-call"
+      title="Roll call"
+      subtitle={
+        rollCall.open && rollCall.view
+          ? `Open on Home: ${rollCallCountLine(rollCall.view.locked.length, total)}. Players signed up for the draft tap "I'm in" for the match night.`
+          : 'Before the first match night, ask every player signed up for the draft to tap "I\'m in" on Home: they can play the match night every week and will play for whichever team drafts them.'
+      }
+      defaultOpen={rollCall.open}
+    >
+      <RollCallControls rollCall={rollCall} />
     </AdminSection>
   );
 }

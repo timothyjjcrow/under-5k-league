@@ -3,8 +3,8 @@
 // Admin actions for the season itself: create, archive, cancel, delete and
 // reactivate it, move its phase, and save the settings forms on its card
 // (name, MMR limit, draft settings, match night, series lengths, Valve league
-// id). Also the site-wide "sign out all users" switch, the next season's
-// signup date on Home and the league's stream link.
+// id) and the roll call's open switch. Also the site-wide "sign out all users"
+// switch, the next season's signup date on Home and the league's stream link.
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -73,6 +73,7 @@ import {
   isUniqueViolation,
 } from "@/lib/prisma-errors";
 import { retrySerializable } from "@/lib/serializable-retry";
+import { rollCallOpenRefusal } from "@/lib/roll-call-service";
 import {
   adminOrError,
   ActiveSeasonChangedError,
@@ -1304,6 +1305,65 @@ export async function setMatchSchedule(
       ? `Match-night schedule saved: ${value}`
       : "Match-night schedule cleared — the league default now applies",
   };
+}
+
+/**
+ * Open the season's roll call (Home's "I'm in" for the match night) from
+ * /admin's Roll call section. Refused while it can't run: outside signups
+ * and the draft, with no match night set, or while a match-night poll is
+ * still deciding it (rollCallCannotOpen). Answers given before a close count
+ * again, as long as the night hasn't moved.
+ */
+export async function openRollCall(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const claim = await renderedSeasonClaim(formData);
+  if ("error" in claim) return claim;
+  const refusal = await rollCallOpenRefusal();
+  if (refusal) return { error: refusal };
+  if (claim.season.rollCallOpenedAt) {
+    return { message: "The roll call is already open on Home." };
+  }
+  if (!(await updateRenderedSeason(claim, { rollCallOpenedAt: new Date() }))) {
+    return staleSeasonSettingsError;
+  }
+  await logAdminAction({
+    action: "openRollCall",
+    summary: "Opened the roll call on Home",
+    seasonId: claim.season.id,
+  });
+  refresh();
+  return {
+    message:
+      "Roll call open: every player signed up for the draft now sees \"I'm in\" on Home, with the list of who's in.",
+  };
+}
+
+/** Close the roll call: Home stops showing it, and every answer is kept. */
+export async function closeRollCall(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const claim = await renderedSeasonClaim(formData);
+  if ("error" in claim) return claim;
+  if (!claim.season.rollCallOpenedAt) {
+    return { message: "The roll call is already closed." };
+  }
+  if (!(await updateRenderedSeason(claim, { rollCallOpenedAt: null }))) {
+    return staleSeasonSettingsError;
+  }
+  await logAdminAction({
+    action: "closeRollCall",
+    summary: "Closed the roll call on Home",
+    seasonId: claim.season.id,
+  });
+  refresh();
+  return { message: "Roll call closed. Home no longer shows it; every answer is kept." };
 }
 
 /**
