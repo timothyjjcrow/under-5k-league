@@ -64,7 +64,7 @@ export function ProfileHeroesAndRecords({
           <Card id="player-heroes" className="min-w-0 scroll-mt-40">
             <CardHeader
               title="Hero pool"
-              subtitle="League games, public pubs, and their favorite heroes"
+              subtitle="Heroes in league games, the heroes they list as favorites, and their most-played pub heroes of all time"
             />
             <CardBody className="space-y-4">
               {leagueHeroes.length > 0 ? (
@@ -90,7 +90,7 @@ export function ProfileHeroesAndRecords({
               {pubHeroes.length > 0 ? (
                 <div className="space-y-2">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted">
-                    Most played (pubs)
+                    Most played in pubs, all time
                     {pubCheckedLabel ? (
                       <span className="font-normal normal-case tracking-normal">
                         {" "}

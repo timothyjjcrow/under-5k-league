@@ -1,31 +1,56 @@
 import { describe, expect, it } from "vitest";
 import {
   claimedRoleLean,
+  medalMidMmr,
   parsePubScout,
+  pubHeroRows,
   pubLobbyRead,
   pubModeRead,
+  pubPositionRead,
   pubRegionRead,
   pubRoleRead,
   pubScoutHasReads,
+  PUB_SCOUT_VERSION,
   regionForCluster,
   roleClaimDiffers,
+  scoutingFacts,
+  scoutingRowParts,
+  scoutingTitle,
   summarizePubMatches,
   type PubScout,
+  type ScoutContext,
 } from "./pub-scout";
 
-/** A matchmaking game: ranked All Pick, 40 minutes, on US East. */
+const NOW = 1_792_600_000; // epoch seconds
+
+/** A matchmaking game: ranked All Pick, 40 minutes, on US East, a win as a
+ *  support (1.5 last hits a minute) on Lion. */
 const game = (over: Record<string, unknown> = {}) => ({
+  hero_id: 26,
+  player_slot: 1,
+  radiant_win: true,
+  kills: 2,
+  deaths: 6,
+  assists: 14,
+  gold_per_min: 300,
+  last_hits: 60,
+  duration: 40 * 60,
   game_mode: 22,
   lobby_type: 7,
-  duration: 40 * 60,
-  last_hits: 60, // 1.5 a minute: a support
+  party_size: 1,
   average_rank: 63,
   cluster: 122,
+  leaver_status: 0,
+  start_time: NOW,
+  lane_role: null,
+  is_roaming: false,
   ...over,
 });
 
 const times = (n: number, over: Record<string, unknown> = {}) =>
-  Array.from({ length: n }, () => game(over));
+  Array.from({ length: n }, (_, i) =>
+    game({ start_time: NOW - i * 3_600, ...over }),
+  );
 
 describe("summarizePubMatches", () => {
   it("reads core and support from last hits a minute, leaving the middle out", () => {
@@ -36,6 +61,15 @@ describe("summarizePubMatches", () => {
       ...times(5, { last_hits: 120 }), // 3: neither
     ]);
     expect(s).toMatchObject({ core: 5, support: 4, games: 14 });
+    expect(s.coreAverages).toMatchObject({ games: 5 });
+    expect(s.supportAverages).toMatchObject({
+      games: 4,
+      lastHitsPerMin: 2.5,
+      gpm: 300,
+      kills: 2,
+      deaths: 6,
+      assists: 14,
+    });
   });
 
   it("judges only matchmaking games of ten minutes or more", () => {
@@ -48,6 +82,30 @@ describe("summarizePubMatches", () => {
     ]);
     expect(s.support).toBe(1);
     expect(s.core).toBe(0);
+  });
+
+  it("names positions from parsed lanes: a core's lane, a support's partner", () => {
+    const s = summarizePubMatches([
+      ...times(4, { last_hits: 280, lane_role: 3 }), // core offlane: pos 3
+      game({ last_hits: 280, lane_role: 2 }), // mid: pos 2
+      game({ lane_role: 1 }), // support safe lane: pos 5
+      game({ lane_role: 3 }), // support offlane: pos 4
+      game({ is_roaming: true, lane_role: 1 }), // a roamer: pos 4
+      game({ last_hits: 280 }), // no lane: no position
+      game({ last_hits: 120, lane_role: 1 }), // neither side: no position
+    ]);
+    expect(s.positions).toEqual([0, 1, 4, 2, 1]);
+  });
+
+  it("keeps their newest results: last 20 and a newest-first form of 10", () => {
+    const rows = [
+      ...times(3, { player_slot: 130 }), // newest: three losses
+      ...times(22),
+      game({ game_mode: 23, player_slot: 130 }), // Turbo never counts
+    ];
+    const s = summarizePubMatches(rows);
+    expect(s.form).toBe("LLLWWWWWWW");
+    expect(s).toMatchObject({ recentWins: 17, recentLosses: 3 });
   });
 
   it("splits every game in the window by mode", () => {
@@ -67,27 +125,42 @@ describe("summarizePubMatches", () => {
     ]);
   });
 
-  it("averages lobby medals as MMR over matchmaking games only", () => {
-    // Ancient 3's band is 4158–4311 and Legend 3's 3388–3541: their middles
-    // average to 3850. Turbo's lobby never counts.
-    const s = summarizePubMatches([
-      game({ average_rank: 63 }),
-      game({ average_rank: 53 }),
-      game({ average_rank: 80, game_mode: 23 }),
+  it("averages ranked lobbies when there are ten, else every matchmaking game", () => {
+    // Ancient 3's band middle is 4235, Legend 3's 3465.
+    const ranked = summarizePubMatches([
+      ...times(10, { average_rank: 63 }),
+      ...times(10, { average_rank: 53, lobby_type: 0 }),
+    ]);
+    expect(ranked).toMatchObject({
+      lobbyMmr: 4235,
+      lobbyGames: 10,
+      lobbyRanked: true,
+    });
+    const mixed = summarizePubMatches([
+      ...times(4, { average_rank: 63 }),
+      ...times(4, { average_rank: 53, lobby_type: 0 }),
+      game({ average_rank: 80, game_mode: 23 }), // Turbo's lobby never counts
       game({ average_rank: null }),
     ]);
-    expect(s.lobbyGames).toBe(2);
-    expect(s.lobbyMmr).toBe(Math.round((4158 + 77 + (3388 + 77)) / 2));
+    expect(mixed).toMatchObject({
+      lobbyMmr: 3850,
+      lobbyGames: 8,
+      lobbyRanked: false,
+    });
+    expect(medalMidMmr(63)).toBe(4235);
+    expect(medalMidMmr(80)).toBe(5720);
+    expect(medalMidMmr(null)).toBeNull();
   });
 
-  it("counts servers by region through the cluster's tens", () => {
+  it("counts party games, early leaves and servers by region", () => {
     const s = summarizePubMatches([
-      ...times(6, { cluster: 122 }),
+      ...times(6, { cluster: 122, party_size: 2 }),
       ...times(2, { cluster: 129 }), // a new US East cluster
-      ...times(3, { cluster: 111 }),
-      game({ cluster: 404 }), // unknown: never counted
+      ...times(3, { cluster: 111, leaver_status: 3 }),
+      game({ cluster: 404, party_size: null, leaver_status: 1 }),
       game({ cluster: 133, game_mode: 23 }), // Turbo: matchmaking games only
     ]);
+    expect(s).toMatchObject({ partyKnown: 12, party: 6, abandons: 3 });
     expect(s.regionGames).toBe(11);
     expect(s.regions).toEqual([
       { region: 2, games: 8 },
@@ -97,137 +170,275 @@ describe("summarizePubMatches", () => {
     expect(regionForCluster(275)).toBe(3);
   });
 
-  it("survives junk rows: they count toward the window and nothing else", () => {
+  it("lists heroes across ranked, unranked and Turbo, most played first", () => {
+    const s = summarizePubMatches([
+      ...times(3, { hero_id: 1, kills: 10, deaths: 2, assists: 4 }),
+      ...times(2, { hero_id: 2, game_mode: 23, player_slot: 130 }),
+      game({ hero_id: 3, game_mode: 18 }), // Ability Draft picks no hero
+      game({ hero_id: 0 }),
+    ]);
+    expect(s.heroCount).toBe(2);
+    expect(s.heroes.map((h) => [h.heroId, h.games, h.wins])).toEqual([
+      [1, 3, 3],
+      [2, 2, 0],
+    ]);
+    expect(pubHeroRows(s)[0]).toEqual({ heroId: 1, games: 3, wins: 3, kda: 7 });
+  });
+
+  it("dates the window and survives junk rows", () => {
     const s = summarizePubMatches([
       null,
       "x",
       { game_mode: "22", lobby_type: 7 },
-      game(),
+      game({ start_time: NOW }),
+      game({ start_time: NOW - 86_400 * 3 }),
     ]);
-    expect(s.games).toBe(4);
-    expect(s.ranked).toBe(1);
-    expect(s.support).toBe(1);
+    expect(s).toMatchObject({
+      v: PUB_SCOUT_VERSION,
+      games: 5,
+      ranked: 2,
+      firstAt: NOW - 86_400 * 3,
+      lastAt: NOW,
+    });
   });
 
   it("an empty window is all zeros", () => {
-    expect(summarizePubMatches([])).toEqual({
+    expect(summarizePubMatches([])).toMatchObject({
       games: 0,
-      ranked: 0,
-      unranked: 0,
-      turbo: 0,
       core: 0,
       support: 0,
       lobbyMmr: null,
-      lobbyGames: 0,
-      regions: [],
-      regionGames: 0,
+      heroes: [],
+      heroCount: 0,
+      positions: [0, 0, 0, 0, 0],
+      form: "",
+      firstAt: null,
     });
   });
 });
 
+/** A season's worth of a support who signs up honestly. */
 const scout = (over: Partial<PubScout> = {}): PubScout => ({
-  games: 100,
-  ranked: 90,
-  unranked: 6,
-  turbo: 4,
-  core: 10,
-  support: 70,
-  lobbyMmr: 4180,
-  lobbyGames: 90,
-  regions: [
-    { region: 2, games: 75 },
-    { region: 1, games: 20 },
-    { region: 3, games: 5 },
-  ],
-  regionGames: 100,
+  ...summarizePubMatches(times(100)),
+  ...over,
+});
+
+const ctx = (over: Partial<ScoutContext> = {}): ScoutContext => ({
+  roles: "4,5",
+  signupMmr: 4200,
+  rankTier: 63,
+  league: "us",
   ...over,
 });
 
 describe("the reads", () => {
   it("names the side they mostly play, or both", () => {
-    expect(pubRoleRead(scout())).toMatchObject({
+    expect(pubRoleRead(scout({ core: 10, support: 70 }))).toMatchObject({
       lean: "support",
-      label: "Mostly support",
       percent: 88,
     });
     expect(pubRoleRead(scout({ core: 70, support: 10 }))).toMatchObject({
       lean: "core",
       percent: 88,
     });
-    expect(pubRoleRead(scout({ core: 40, support: 40 }))).toMatchObject({
-      lean: "both",
-      label: "Core and support",
-    });
+    expect(pubRoleRead(scout({ core: 40, support: 40 }))?.lean).toBe("both");
   });
 
-  it("shows nothing below ten games", () => {
+  it("shows nothing below ten games, and positions from five", () => {
     const thin = scout({
       games: 9,
       core: 5,
       support: 4,
       lobbyGames: 9,
       regionGames: 9,
+      partyKnown: 9,
+      recentWins: 5,
+      recentLosses: 4,
+      heroes: [],
+      positions: [0, 0, 0, 4, 0],
     });
     expect(pubRoleRead(thin)).toBeNull();
     expect(pubLobbyRead(thin)).toBeNull();
     expect(pubModeRead(thin)).toBeNull();
     expect(pubRegionRead(thin)).toBeNull();
+    expect(pubPositionRead(thin)).toBeNull();
     expect(pubScoutHasReads(thin)).toBe(false);
-    expect(pubScoutHasReads(null)).toBe(false);
-    expect(pubScoutHasReads(scout())).toBe(true);
-  });
-
-  it("rounds the lobby to 50 MMR and names its medal", () => {
-    expect(pubLobbyRead(scout())).toEqual({
-      mmr: 4200,
-      rankTier: 63,
-      games: 90,
-    });
-    expect(pubLobbyRead(scout({ lobbyMmr: null, lobbyGames: 0 }))).toBeNull();
-  });
-
-  it("lists the main server and any with a fifth of games", () => {
-    expect(pubRegionRead(scout())).toEqual([
-      { region: 2, name: "US East", percent: 75 },
-      { region: 1, name: "US West", percent: 20 },
+    expect(scoutingFacts(thin, ctx())).toEqual([]);
+    expect(pubPositionRead(scout({ positions: [0, 0, 0, 3, 2] }))).toEqual([
+      { position: 4, games: 3 },
+      { position: 5, games: 2 },
     ]);
   });
 
-  it("sets the read beside the signup's side", () => {
+  it("rounds the lobby to 50 MMR and names its medal", () => {
+    expect(pubLobbyRead(scout({ lobbyMmr: 4180, lobbyGames: 90 }))).toEqual({
+      mmr: 4200,
+      rankTier: 63,
+      games: 90,
+      ranked: true,
+    });
+  });
+
+  it("sets a signup's side against what they play", () => {
     expect(claimedRoleLean(["4", "5"])).toBe("support");
     expect(claimedRoleLean(["1", "2"])).toBe("core");
     expect(claimedRoleLean(["3", "4"])).toBe("both");
     expect(claimedRoleLean([])).toBeNull();
     const support = pubRoleRead(scout());
-    const both = pubRoleRead(scout({ core: 40, support: 40 }));
     expect(roleClaimDiffers("core", support)).toBe(true);
     expect(roleClaimDiffers("support", support)).toBe(false);
     expect(roleClaimDiffers("both", support)).toBe(false);
-    expect(roleClaimDiffers("core", both)).toBe(false);
     expect(roleClaimDiffers(null, support)).toBe(false);
+  });
+});
+
+describe("scoutingFacts", () => {
+  const byKey = (s: PubScout, c: ScoutContext) =>
+    Object.fromEntries(scoutingFacts(s, c).map((f) => [f.key, f]));
+
+  it("reads an honest support plainly", () => {
+    const facts = byKey(scout(), ctx());
+    expect(facts.role).toMatchObject({
+      lead: "Support in 100 of 100 games",
+      detail: "Signed up for Pos 4 and Pos 5: matches",
+      tone: "good",
+    });
+    expect(facts.level).toMatchObject({
+      lead: "Ancient 3 games (≈4,250)",
+      tone: "good",
+    });
+    expect(facts.level.detail).toContain("close to their 4,200 signup MMR");
+    expect(facts.modes).toMatchObject({
+      lead: "Mostly ranked (100%)",
+      tone: "info",
+    });
+    expect(facts.queue).toMatchObject({ lead: "Solo", tone: "info" });
+    expect(facts.server).toMatchObject({
+      lead: "US East (100%)",
+      tone: "info",
+    });
+    expect(facts.form.lead).toBe("Won 20 of their last 20");
+    // 100 games over about 4 days.
+    expect(facts.activity.lead).toBe("About 24 games a day");
+    expect(facts.leaves).toBeUndefined();
+  });
+
+  it("flags a signup on the other side", () => {
+    expect(byKey(scout(), ctx({ roles: "1,2" })).role).toMatchObject({
+      detail: "Signed up for Pos 1 and Pos 2: the other side",
+      tone: "warn",
+    });
+  });
+
+  it("flags games well above or below the signup MMR, and a stale medal", () => {
+    const above = byKey(scout(), ctx({ signupMmr: 3500 })).level;
+    expect(above.tone).toBe("warn");
+    expect(above.detail).toContain("about 750 above their 3,500 signup MMR");
+    const below = byKey(scout(), ctx({ signupMmr: 4900 })).level;
+    expect(below.detail).toContain("about 650 below their 4,900 signup MMR");
+    const stale = byKey(scout(), ctx({ rankTier: 15 })).level;
+    expect(stale.tone).toBe("warn");
+    expect(stale.detail).toContain("Well above their Herald 5 medal");
+  });
+
+  it("flags Turbo, a server far from the league, and early leaves", () => {
+    const facts = byKey(
+      scout({ ranked: 40, unranked: 10, turbo: 50, abandons: 3 }),
+      ctx({ league: "eu" }),
+    );
+    expect(facts.modes).toMatchObject({
+      lead: "50% Turbo, 40% ranked",
+      tone: "warn",
+    });
+    expect(facts.server).toMatchObject({ tone: "warn" });
+    expect(facts.server.detail).toContain("far from the league's servers");
+    expect(facts.leaves).toMatchObject({
+      lead: "3 of their last 100 games",
+      tone: "warn",
+    });
+  });
+
+  it("names lanes when enough are known", () => {
+    const facts = byKey(scout({ positions: [0, 0, 0, 7, 2] }), ctx());
+    expect(facts.positions).toMatchObject({
+      lead: "Mostly Pos 4: 7 of 9 games with a known lane",
+      detail: "Pos 4 ×7 · Pos 5 ×2",
+    });
+    expect(
+      byKey(scout({ positions: [0, 0, 6, 0, 0] }), ctx()).positions.lead,
+    ).toBe("Pos 3 in all 6 games with a known lane");
+  });
+});
+
+describe("the pool row", () => {
+  it("reads role, level, queue and server, a position when lanes settle it", () => {
+    expect(scoutingRowParts(scout(), ctx())).toEqual([
+      { key: "role", text: "plays support (100%)", warn: false },
+      { key: "level", text: "in Ancient 3 games", warn: false },
+      { key: "queue", text: "solo", warn: false },
+      { key: "server", text: "US East", warn: false },
+    ]);
+    expect(
+      scoutingRowParts(scout({ positions: [0, 0, 0, 8, 1] }), ctx())[0].text,
+    ).toBe("plays Pos 4");
+  });
+
+  it("tints what is worth a second look and adds heavy Turbo", () => {
+    const parts = scoutingRowParts(
+      scout({ ranked: 40, unranked: 10, turbo: 50, abandons: 2 }),
+      ctx({ roles: "1", signupMmr: 3000, league: "eu" }),
+    );
+    expect(parts.filter((p) => p.warn).map((p) => p.key)).toEqual([
+      "role",
+      "level",
+      "turbo",
+      "server",
+      "leaves",
+    ]);
+    expect(parts.at(-1)?.text).toBe("left 2 early");
+    expect(parts.find((p) => p.key === "turbo")?.text).toBe("50% Turbo");
+  });
+
+  it("the hover gives every fact as a sentence", () => {
+    const title = scoutingTitle(scout(), ctx());
+    expect(title.split("\n")[0]).toBe("Their last 100 public games");
+    expect(title).toContain("Role: Support in 100 of 100 games");
   });
 });
 
 describe("parsePubScout", () => {
   it("round-trips the stored counts", () => {
-    const s = scout();
+    const s = summarizePubMatches([
+      ...times(30, { lane_role: 1, party_size: 3 }),
+      ...times(5, { game_mode: 23 }),
+    ]);
     expect(parsePubScout(JSON.parse(JSON.stringify(s)))).toEqual(s);
   });
 
-  it("reads junk as unknown and drops bad regions", () => {
+  it("reads an older shape or junk as unknown", () => {
     expect(parsePubScout(null)).toBeNull();
     expect(parsePubScout("x")).toBeNull();
-    expect(parsePubScout({ ranked: 3 })).toBeNull();
+    // The first shape had no version.
+    expect(
+      parsePubScout({ games: 100, ranked: 90, core: 10, support: 70 }),
+    ).toBeNull();
     expect(
       parsePubScout({
         ...scout(),
         lobbyMmr: -5,
+        form: "WXL<script>",
         regions: [{ region: 2, games: 3 }, { region: "x" }, null],
+        heroes: [
+          { heroId: 5, games: 2, wins: 9 },
+          { heroId: 0, games: 1 },
+        ],
       }),
     ).toMatchObject({
       lobbyMmr: null,
       lobbyGames: 0,
+      form: "WL",
       regions: [{ region: 2, games: 3 }],
+      heroes: [{ heroId: 5, games: 2, wins: 2 }],
     });
   });
 });

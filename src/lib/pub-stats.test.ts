@@ -15,6 +15,7 @@ import {
   pubWinRate,
   type PubStats,
 } from "./pub-stats";
+import { summarizePubMatches } from "./pub-scout";
 
 const good: PubStats = {
   recentWins: 54,
@@ -25,21 +26,19 @@ const good: PubStats = {
     { heroId: 14, games: 220, wins: 121 },
     { heroId: 74, games: 180, wins: 92 },
   ],
-  scout: {
-    games: 100,
-    ranked: 90,
-    unranked: 6,
-    turbo: 4,
-    core: 12,
-    support: 70,
-    lobbyMmr: 4150,
-    lobbyGames: 92,
-    regions: [
-      { region: 2, games: 80 },
-      { region: 1, games: 14 },
-    ],
-    regionGames: 94,
-  },
+  scout: summarizePubMatches(
+    Array.from({ length: 40 }, () => ({
+      hero_id: 14,
+      player_slot: 1,
+      radiant_win: true,
+      last_hits: 60,
+      duration: 2_400,
+      game_mode: 22,
+      lobby_type: 7,
+      average_rank: 63,
+      cluster: 122,
+    })),
+  ),
 };
 
 describe("parsePubStats", () => {
@@ -236,7 +235,7 @@ describe("poolPubRecord", () => {
           ...good,
           recentWins: 0,
           recentLosses: 0,
-          scout: { ...good.scout, games: 0 },
+          scout: { ...good.scout!, games: 0 },
         }),
         null,
       ),
@@ -322,6 +321,15 @@ describe("the scouting counts in a snapshot", () => {
     expect(
       pubStatsDue({ pubStatsAt: new Date(now - day), pubStats: before }, now),
     ).toBe(true);
+    // The first report shape had no version: due, and read as unknown.
+    const firstShape = JSON.stringify({
+      ...good,
+      scout: { games: 100, ranked: 90, core: 10, support: 70 },
+    });
+    expect(
+      pubStatsDue({ pubStatsAt: new Date(now - day), pubStats: firstShape }, now),
+    ).toBe(true);
+    expect(parsePubStats(firstShape)?.scout).toBeNull();
     expect(
       pubStatsDue(
         { pubStatsAt: new Date(now - PUB_STATS_REFRESH_MS - day), pubStats: current },
@@ -355,10 +363,10 @@ describe("the scouting counts in a snapshot", () => {
       ...good,
       recentWins: 0,
       recentLosses: 0,
-      scout: { ...good.scout!, ranked: 0, unranked: 0, turbo: 100 },
+      scout: { ...good.scout!, ranked: 0, unranked: 0, turbo: 40 },
     };
     const rec = poolPubRecord(JSON.stringify(turboOnly), null);
-    expect(rec?.scout?.turbo).toBe(100);
+    expect(rec?.scout?.turbo).toBe(40);
     expect(rec && pubHasWindow(rec)).toBe(false);
     // Nothing at all: no window and no games.
     expect(

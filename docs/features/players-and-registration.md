@@ -196,38 +196,52 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   and `/matches?limit=100&significant=0` (projected to the six fields
   `PUB_MATCH_FIELDS` reads), with the `fetchRankTier` ok:false contract
   (unreachable is not "no games").
-- **How they play pubs is stored as counts, never rows** (`scout`,
-  `src/lib/pub-scout.ts`, Tim's ask on 2026-10-21 for captains): their last
-  100 games of every mode (`significant=0`, or Turbo never shows) folded by
-  `summarizePubMatches` into mode counts, core and support games, a lobby
-  MMR and server regions. Each read (`pubRoleRead`, `pubLobbyRead`,
-  `pubModeRead`, `pubRegionRead`) needs `PUB_READ_MIN_GAMES` games or shows
-  nothing.
+- **The pub scouting report is stored as counts, never rows** (`scout`,
+  `src/lib/pub-scout.ts`; Tim asked on 2026-10-21 for something captains can
+  read, then for it to say more and say it plainly): their last 100 games of
+  every mode (`significant=0`, or Turbo never shows) with the fields in
+  `PUB_MATCH_FIELDS`, folded by `summarizePubMatches` into one versioned
+  object (`v`). Each read needs `PUB_READ_MIN_GAMES` games (positions
+  `PUB_POSITION_MIN_GAMES`) or shows nothing.
+  - **Say it as findings, not numbers** (`scoutingFacts`): each line is a
+    label, a plain lead ("Core in 79 of 92 games"), what it rests on or is
+    set against, and a tone: `good` agrees with the signup, `warn` is worth
+    a second look (tinted, never a verdict), `info` is context.
   - **Role** is last hits a minute in ranked or normal matchmaking games of
-    10+ minutes: 3.5+ core, under 2.5 support, between is neither. Lanes
-    would be better, but OpenDota has parsed only about a fifth of anyone's
-    pubs. Set it beside the signup's side (`claimedRoleLean`) and tint a
-    contradiction (`roleClaimDiffers`), never call it a verdict.
-  - **Lobby MMR is the mean of each game's average medal,** shown as "≈4,150"
-    with its medal. Never show OpenDota's own `computed_mmr`: across 13
+    10+ minutes: 3.5+ core, under 2.5 support, between is neither. It is set
+    beside the signup's side (`claimedRoleLean`, `roleClaimDiffers`).
+    **Lanes** name positions where OpenDota parsed the game (about a fifth of
+    pubs): a core's lane is 1, 2 or 3, a support's partner lane 5 or 4.
+  - **"Plays at" is the mean of each game's average medal,** ranked games
+    only once there are ten (unranked games with friends drag it down by
+    up to a medal), shown with its medal and set against the signup MMR
+    (`LOBBY_GAP_MMR`) and the medal (a full medal below the games: "may be
+    out of date"). Never show OpenDota's own `computed_mmr`: across 13
     league players it sat at 3,850–4,350 whatever the medal (3,915 for a
-    Guardian 1, 4,051 for a Herald 5, 4,038 for a Divine 1), while the
-    lobby mean tracked the medal and caught a stale one (that Herald 5's
-    lobbies average about 3,550).
-  - **Servers** map Valve's cluster through its tens
-    (`regionForCluster`), so a new cluster in a known decade still counts;
-    an unknown one never does.
-  - **A snapshot from before the counts is due at once** (`pubStatsDue`:
-    no `PUB_SCOUT_MARKER` in the blob), in the hourly pass's SQL and the
-    admin button, so the next passes upgrade signups first instead of
-    waiting out the week.
-  - **Shown where the W/L token is:** the pool row's "Scouting details"
-    line (`pubScoutParts`, each fact unbreakable, the hover giving the
-    counts) and the profile's "Pub scouting" card
-    (`profile-pub-scouting.tsx`), first in the "Player profile" band, for an
-    ACTIVE signup only. A Turbo-only account has an empty W/L window but
-    still a scouting line (`poolPubRecord`; `pubHasWindow` gates the W/L
-    token).
+    Guardian 1, 4,051 for a Herald 5, 4,038 for a Divine 1).
+  - **Habits:** modes (Turbo a third or more warns: the rest rests on few
+    real games), solo or party, main server (outside the league's home
+    regions warns: ask about ping; `regionForCluster` maps Valve's cluster
+    through its tens), form (last 20 and a last-10 strip), activity as a
+    pace ("About 2 games a day", never a total) and early leaves (two or
+    more warns).
+  - **Recent heroes and how they play:** the top heroes of the window with
+    W–L and KDA (`pubHeroRows`), and per-role averages (last hits a minute,
+    GPM, K/D/A) for a role with five or more games.
+  - **A snapshot without the current version is due at once**
+    (`pubStatsDue`: no `PUB_SCOUT_MARKER` in the blob, which carries the
+    version), in the hourly pass's SQL and the admin button, so the next
+    passes upgrade signups first. `parsePubScout` reads an older version as
+    unknown, so nothing half-shaped renders meanwhile.
+  - **Shown where the W/L token is,** for an ACTIVE signup only: the pool
+    row's line (`scoutingRowParts`: "plays Pos 3 · in Ancient 5 games ·
+    solo · US East", warnings tinted, each fact unbreakable, every finding
+    in the hover) with "Recent pubs" heroes from the window in place of the
+    all-time strip, and the profile's "Pub scouting report"
+    (`profile-pub-scouting.tsx`), first in the "Player profile" band. The
+    hero pool's all-time list says "all time". A Turbo-only account has an
+    empty W/L window but still a scouting line (`poolPubRecord`;
+    `pubHasWindow` gates the W/L token).
 - **Name the window and the snapshot age** ("Pubs 54% in last 100 · checked 3d
   ago"; the window is what OpenDota could see). Never show a lifetime games
   figure. An empty window renders nothing, never "0% of 0". Measure "last
@@ -235,12 +249,14 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   `PUB_QUIET_DAYS`. Profiles reuse the token, and their heroes card shows the
   top-5 pub heroes even with no league games.
 - **Keep pub heroes apart from favorite heroes.** Pool rows show the top 3
-  most-played pub heroes from OpenDota's `/heroes` (`poolPubRecord` slices
-  `topHeroes`; `PubHeroStrip` in `player-pool.tsx`); the self-typed favorite
+  heroes of their last 100 games ("Recent pubs", from the scouting report),
+  or the all-time most-played from OpenDota's `/heroes` until the snapshot
+  has a report (`poolPubRecord` slices `topHeroes`; `PubHeroStrip` in
+  `player-pool.tsx`); the self-typed favorite
   heroes keep their own column. One is what a player plays, the other what
   they claim, so never merge or substitute them. On a phone both icon strips
-  share one row, so keep the visible "Most played (pubs)" label: it is the only
-  thing that tells them apart.
+  share one row, so keep the visible "Recent pubs" (or "Most played (pubs)")
+  label: it is the only thing that tells them apart.
 - **Last league season** (`loadPoolLastSeasons`): team, record, price, title
   from seasons created before the active one, from the Seasons card's facts.
   The appearances come from the Hall of Fame's cached career facts

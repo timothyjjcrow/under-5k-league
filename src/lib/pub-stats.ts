@@ -4,7 +4,11 @@
 // this file owns the shape, so a malformed or legacy blob degrades to null
 // instead of crashing a page render. No DB here — testable.
 
-import { parsePubScout, type PubScout } from "./pub-scout";
+import {
+  parsePubScout,
+  PUB_SCOUT_VERSION,
+  type PubScout,
+} from "./pub-scout";
 
 export type PubHero = { heroId: number; games: number; wins: number };
 
@@ -24,9 +28,11 @@ export type PubStats = {
   scout: PubScout | null;
 };
 
-/** The key every current snapshot's JSON carries. A snapshot without it is
- *  refreshed early (`pubStatsDue`), the `"items":` probe's pattern. */
-export const PUB_SCOUT_MARKER = '"scout":';
+/** The prefix every current snapshot's JSON carries (`summarizePubMatches`
+ *  writes `v` first). A snapshot without it, from before the scouting counts
+ *  or from an older shape of them, is refreshed early (`pubStatsDue`), the
+ *  `"items":` probe's pattern. */
+export const PUB_SCOUT_MARKER = `"scout":{"v":${PUB_SCOUT_VERSION},`;
 
 /** How long a stored snapshot stays fresh before the admin bulk sync spends
  *  three OpenDota calls refreshing it, and how long "last played" is shown for
