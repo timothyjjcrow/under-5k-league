@@ -262,6 +262,15 @@ async function setQueue(present: number, nowMs: number) {
  */
 async function viewerContext(browser: Browser, baseURL: string, timezoneId: string) {
   const context = await browser.newContext({ baseURL, timezoneId });
+  // A fresh load in a real browser: nothing clicked yet, so the room's Sound
+  // button reads "Turn on sound", its widest. Headless Chromium says every
+  // page was already clicked, and the room would show "Sound on" instead.
+  await context.addInitScript(() => {
+    Object.defineProperty(navigator, "userActivation", {
+      configurable: true,
+      value: { hasBeenActive: false, isActive: false },
+    });
+  });
   const font = process.env.FIT_FONT;
   if (font) {
     await context.addInitScript((family: string) => {

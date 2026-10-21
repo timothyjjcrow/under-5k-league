@@ -67,6 +67,11 @@ const UNLOCK_EVENTS = ["pointerup", "touchend", "click", "keydown"] as const;
  */
 export function armAudioUnlock(): () => void {
   if (typeof document === "undefined") return () => {};
+  // A page that already had a click (the viewer came by a link inside the
+  // site) may start audio now: Chrome and Firefox allow it, Safari waits for
+  // the next gesture below. Without this the rooms' toggles said the bell
+  // was held when it could already ring.
+  if (navigator.userActivation?.hasBeenActive) unlockAudio();
   const stop = () => {
     for (const type of UNLOCK_EVENTS) {
       document.removeEventListener(type, onGesture, true);

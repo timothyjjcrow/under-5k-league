@@ -283,7 +283,7 @@ test("inhouse cold-start failure becomes an accessible retry state and recovers"
   // sticky failure panel behind. The sound control only mounts after state.
   await expect(alert).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: /Sound on|Muted/ }),
+    page.getByRole("button", { name: /Sound on|Muted|Turn on sound/ }),
   ).toBeVisible();
 });
 

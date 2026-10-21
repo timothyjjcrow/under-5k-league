@@ -627,6 +627,34 @@ describe("live rooms delegate their alert triggers", () => {
     }
   });
 
+  it("inhouse-room says the bell is held and alerts an away player through the lib", () => {
+    const src = roomText(INHOUSE_ROOM);
+    // "Sound on" over a context the browser still holds was the bug players
+    // reported (2026-10-20): the bell rang into a locked AudioContext while
+    // they were on another tab, and tapping the button muted it.
+    expect(src).toContain("soundButtonState(soundOn, audioOn)");
+    expect(src).toContain("soundToggleNext(");
+    expect(src).toContain("autoJoinedToast(");
+    // The desktop alert comes from the SAME alerts list as the bell, so the
+    // two can never disagree about what just happened.
+    expect(src).toMatch(
+      /const alerts = inhouseAlerts\(prev, snap\);[\s\S]{0,600}desktopAlertToShow\(\{[\s\S]{0,200}alerts,/,
+    );
+    expect(src).toContain("<DesktopAlertsRow />");
+    // The browser is spoken to in one module; which alert, and when, is the
+    // tested lib's.
+    expect(uiFilesWith("new Notification(")).toEqual([
+      "src/components/desktop-alerts.ts",
+    ]);
+    for (const literal of ['"Match found — accept now"', '"Your pick"']) {
+      expect(
+        uiFilesWith(literal),
+        `${literal} is back in UI code — inhouseDesktopAlert owns which ` +
+          `notification a poll's alerts make.`,
+      ).toEqual([]);
+    }
+  });
+
   it("draft-room computes its title flag through the lib, strip included", () => {
     const src = code("draft-room.tsx");
     expect(src).toContain("draftTitleFlag(");
