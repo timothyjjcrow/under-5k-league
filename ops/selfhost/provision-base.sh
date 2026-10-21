@@ -199,6 +199,21 @@ RandomizedDelaySec=10m
 EOF
 systemctl daemon-reload
 
+log "Firmware: no fwupd metadata refresh on a VM"
+# Stock Ubuntu's fwupd-refresh.timer fetches firmware metadata from
+# cdn.fwupd.org about once an hour, but a droplet has no firmware for fwupd
+# to update. When that CDN stopped answering the box (2026-10-21, from 11:00
+# UTC) every run failed, and the heartbeat paged the failed unit, then its
+# recovery when the next run began, about once an hour. Masked, not just
+# disabled: nothing, a package script included, can start a masked unit.
+# Masking a waiting timer fails it in the reload ("Unit to trigger
+# vanished"), and the heartbeat would page that too, so both units are
+# cleared once masked (on ggd2l-1, 2026-10-21 14:42 UTC).
+systemctl mask --now fwupd-refresh.timer
+for unit in fwupd-refresh.timer fwupd-refresh.service; do
+  if systemctl is-failed --quiet "${unit}"; then systemctl reset-failed "${unit}"; fi
+done
+
 log "Versions"
 node --version
 npm --version

@@ -495,6 +495,23 @@ test("unattended upgrades install at 08:00 UTC and end before the 09:00 reboot; 
     "the README's one-time step writes the same drop-in");
 });
 
+// 2026-10-21: cdn.fwupd.org stopped answering the box, and stock Ubuntu's
+// hourly fwupd-refresh.timer failed every run, so the heartbeat paged a
+// failed unit about once an hour. A droplet has no firmware to update.
+test("provision-base.sh masks the firmware metadata refresh, and the README masks it on an older box", () => {
+  const code = read("provision-base.sh").replace(/^\s*#.*$/gm, "");
+  assert.match(code, /^systemctl mask --now fwupd-refresh\.timer$/m);
+  // Masking the waiting timer fails it, so the timer is cleared as well as the service.
+  const clear = /\nfor unit in ([^;\n]+); do\n {2}if systemctl is-failed --quiet "\$\{unit\}"; then systemctl reset-failed "\$\{unit\}"; fi\ndone\n/.exec(code);
+  assert.ok(clear, "a reset-failed loop follows the mask");
+  assert.deepEqual(clear[1].split(" ").sort(), ["fwupd-refresh.service", "fwupd-refresh.timer"]);
+  assert.ok(code.indexOf(clear[0]) > code.indexOf("systemctl mask --now fwupd-refresh.timer"), "it clears them after masking");
+  assert.doesNotMatch(code, /systemctl (?:enable|unmask|start|restart)\b[^\n]*fwupd/, "nothing turns it back on");
+  const readme = read("README.md");
+  assert.ok(readme.includes("sudo systemctl mask --now fwupd-refresh.timer\n  sudo systemctl reset-failed fwupd-refresh.timer fwupd-refresh.service\n"),
+    "the README's one-time step for an older box");
+});
+
 test("exactly one clock: no unit calls the automation endpoint (§9.2)", () => {
   for (const file of [...UNIT_FILES, ...DROP_INS])
     assert.doesNotMatch(read(`systemd/${file}`).replace(/^#.*$/gm, ""), /cron\/automation/, file);
