@@ -4,6 +4,7 @@ import {
   NO_PLAYER_ITEMS,
   finishedItemIds,
   normalizedPlayerItems,
+  openDotaItemFields,
   playerItemsFromOpenDota,
 } from "./player-items";
 
@@ -72,6 +73,43 @@ describe("playerItemsFromOpenDota", () => {
     expect(items.items).toEqual([1, 0, 0, 0, 0, 0]);
     expect(items.backpack).toBeNull();
     expect(items.neutral).toBeNull();
+  });
+});
+
+describe("openDotaItemFields", () => {
+  it("keeps every item field and nothing else", () => {
+    const items = {
+      item_0: 1,
+      item_1: 0,
+      item_2: 206,
+      item_3: 610,
+      item_4: 0,
+      item_5: 48,
+      backpack_0: 0,
+      backpack_1: 37,
+      backpack_2: 0,
+      item_neutral: 1604,
+      item_neutral2: 1583,
+    };
+    expect(openDotaItemFields(odPlayer({ ...items, kills: 9 }))).toEqual(items);
+  });
+
+  it("reads back exactly as the payload it came from", () => {
+    const weird = [
+      {},
+      { item_0: 0 },
+      { item_0: 1, item_1: -4, item_2: 1.5, item_3: Number.NaN, item_4: 10_000_000 },
+      { item_0: -1, item_1: -1, item_2: -1, item_3: -1, item_4: -1, item_5: -1 },
+      { item_0: 1, backpack_1: 37, item_neutral: -1, item_neutral2: 0 },
+      { item_0: "1", item_neutral: "359" } as unknown as Partial<OpenDotaPlayer>,
+    ];
+    for (const fields of weird) {
+      const sent = odPlayer(fields);
+      const saved = JSON.parse(JSON.stringify(openDotaItemFields(sent)));
+      expect(playerItemsFromOpenDota(odPlayer(saved))).toEqual(
+        playerItemsFromOpenDota(sent),
+      );
+    }
   });
 });
 

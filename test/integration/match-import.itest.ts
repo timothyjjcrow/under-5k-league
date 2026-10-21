@@ -1054,6 +1054,101 @@ describe("enrichStoredGames", () => {
     expect(line).toMatchObject({ ...stored, benchmarks: { gold_per_min: { raw: 480, pct: 0.66 } } });
   });
 
+  // What an import from saved evidence stored while that evidence dropped
+  // the item fields: a full report card and no build.
+  const NO_BUILD = { items: null, backpack: null, neutral: null, neutralEnchantment: null };
+
+  it("re-checks a null build once and fills it from OpenDota", async () => {
+    const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
+    const game = await legacyGame("9014", [{ ...LEGACY_LINE, xpm: 600, benchmarks, ...NO_BUILD }]);
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9014,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        {
+          account_id: 111,
+          player_slot: 0,
+          hero_id: 7,
+          isRadiant: true,
+          kills: 3,
+          deaths: 1,
+          assists: 9,
+          xp_per_min: 999,
+          benchmarks: null,
+          ...OD_ITEMS,
+        },
+      ],
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toEqual({
+      ...LEGACY_LINE,
+      xpm: 600,
+      benchmarks,
+      denies: null,
+      level: null,
+      heroDamage: null,
+      towerDamage: null,
+      heroHealing: null,
+      items: [1, 63, 0, 116, 0, 0],
+      backpack: [36, 0, 0],
+      neutral: 359,
+      neutralEnchantment: 1583,
+    });
+
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, remaining: 0 });
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it("asks about a null build only once when OpenDota has none", async () => {
+    const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
+    const game = await legacyGame("9015", [{ ...LEGACY_LINE, benchmarks, ...NO_BUILD }]);
+    vi.mocked(fetchOpenDotaMatch).mockResolvedValue({
+      match_id: 9015,
+      radiant_win: true,
+      duration: 2000,
+      start_time: 1,
+      players: [
+        { account_id: 111, player_slot: 0, hero_id: 7, isRadiant: true, kills: 3, deaths: 1, assists: 9 },
+      ],
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toMatchObject({ ...NO_BUILD, benchmarks, itemsChecked: true });
+
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    expect(await enrichStoredGames()).toMatchObject({ enriched: 0, remaining: 0 });
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
+  it("asks about a null build only once when OpenDota no longer has the game", async () => {
+    const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
+    const game = await legacyGame("9016", [{ ...LEGACY_LINE, benchmarks, ...NO_BUILD }]);
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (_id, _o, report) => {
+      if (report) report.missing = true;
+      return null;
+    });
+
+    expect(await enrichStoredGames()).toMatchObject({ failed: 1, remaining: 0 });
+    const [line] = JSON.parse(
+      (await prisma.game.findUniqueOrThrow({ where: { id: game.id } })).players,
+    );
+    expect(line).toEqual({ ...LEGACY_LINE, benchmarks, ...NO_BUILD, itemsChecked: true });
+
+    vi.mocked(fetchOpenDotaMatch).mockClear();
+    expect(await enrichStoredGames()).toMatchObject({ failed: 0, remaining: 0 });
+    expect(vi.mocked(fetchOpenDotaMatch)).not.toHaveBeenCalled();
+  });
+
   it("keeps a stored report card when OpenDota no longer has the game", async () => {
     const benchmarks = { gold_per_min: { raw: 480, pct: 0.5 } };
     const game = await legacyGame("9013", [{ ...LEGACY_LINE, benchmarks }]);
@@ -1073,6 +1168,7 @@ describe("enrichStoredGames", () => {
       backpack: null,
       neutral: null,
       neutralEnchantment: null,
+      itemsChecked: true,
     });
   });
 
@@ -1156,6 +1252,7 @@ describe("enrichStoredGames", () => {
       backpack: null,
       neutral: null,
       neutralEnchantment: null,
+      itemsChecked: true,
     });
 
     vi.mocked(fetchOpenDotaMatch).mockClear();

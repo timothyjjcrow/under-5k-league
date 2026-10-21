@@ -660,6 +660,9 @@ export function buildPlayers(
 }
 
 export type PlayerStat = ReturnType<typeof buildPlayers>[number] & {
+  /** Set by the backfill on a line whose items OpenDota still had none of
+   *  when asked directly, so `items: null` is re-checked only once. */
+  itemsChecked?: true;
   providerPlayerSlot?: number;
   plannedPosition?: number;
   playedPosition?: number;
@@ -1731,6 +1734,11 @@ export type EnrichOptions = OpenDotaFetchOptions & {
   stopOnFailure?: boolean;
 };
 
+/** Mark a backfilled line that still has no items as asked about. */
+function itemsCheckedLine<T extends { items?: unknown }>(line: T): T & { itemsChecked?: true } {
+  return line.items == null ? { ...line, itemsChecked: true } : line;
+}
+
 /**
  * Backfill report-card fields (benchmarks, XPM, damage numbers…) and
  * end-of-game items onto games imported before those fields were stored.
@@ -1744,6 +1752,11 @@ export type EnrichOptions = OpenDotaFetchOptions & {
  * would be fetched, and fail, on every hourly pass forever. Bounded per run
  * so one click can't burn the API budget; run again to continue where it
  * left off.
+ *
+ * `items: null` is due once more: an import from saved evidence stored it
+ * when that evidence dropped the item fields, so it may not be OpenDota's
+ * answer. The re-check fills the items it finds and marks a line still
+ * without any `itemsChecked`, which takes it out of the queue for good.
  */
 export async function enrichStoredGames(
   limit = 12,
@@ -1752,13 +1765,20 @@ export async function enrichStoredGames(
   // The `"benchmarks":` and `"items":` keys only ever appear as a line's own
   // fields — a player whose persona name is literally `benchmarks` serializes
   // with a comma after it, and a quote inside a name is escaped, so the colon
-  // keeps the marker probes honest. A game is due while it lacks either.
+  // keeps the marker probes honest. A game is due while it lacks either, or
+  // has a null `items` no direct fetch has confirmed yet.
   // Fetch only this batch. Count remaining work afterward so a concurrent
   // correction/deletion is reflected accurately without reading its JSON.
   const unenriched = {
     OR: [
       { NOT: { players: { contains: '"benchmarks":' } } },
       { NOT: { players: { contains: '"items":' } } },
+      {
+        AND: [
+          { players: { contains: '"items":null' } },
+          { NOT: { players: { contains: '"itemsChecked":' } } },
+        ],
+      },
     ],
   };
   const batch = await prisma.game.findMany({
@@ -1819,7 +1839,7 @@ export async function enrichStoredGames(
         // refresh, carry on.
         await writeIfUnchanged(game, {
           players: JSON.stringify(
-            lines.map((line) => ({
+            lines.map((line) => itemsCheckedLine({
               ...line,
               benchmarks: line.benchmarks ?? null,
               ...("items" in line ? {} : NO_PLAYER_ITEMS),
@@ -1846,7 +1866,7 @@ export async function enrichStoredGames(
           : od.players.find(
               (p) => bySlot(p) === line.isRadiant && p.hero_id === line.heroId,
             );
-      return {
+      return itemsCheckedLine({
         ...line,
         xpm: line.xpm ?? odPlayer?.xp_per_min ?? null,
         denies: line.denies ?? odPlayer?.denies ?? null,
@@ -1856,9 +1876,10 @@ export async function enrichStoredGames(
         heroHealing: line.heroHealing ?? odPlayer?.hero_healing ?? null,
         benchmarks: line.benchmarks ?? sanitizeBenchmarks(odPlayer?.benchmarks),
         // A line that already has its items keeps them; one imported before
-        // items were stored takes them now (null when OpenDota has none).
-        ...("items" in line ? {} : playerItemsFromOpenDota(odPlayer)),
-      };
+        // items were stored, or stored with none, takes them now (null when
+        // OpenDota has none).
+        ...(line.items != null ? {} : playerItemsFromOpenDota(odPlayer)),
+      });
     });
 
     // Provider IO happened outside the transaction. A newer identity repair,

@@ -19,7 +19,7 @@ import { runResultSync } from "@/lib/result-sync-service";
 import { loadAutomationGateSnapshot } from "@/lib/automation-gate";
 import { parseLeagueFeedWait } from "@/lib/league-feed-wait";
 import { nominatePlayer } from "@/lib/draft-service";
-import { importGameForMatch, loadImportSkips, rememberImportSkip, syncLeagueGames } from "@/lib/match-import";
+import { autoDetectGamesForMatch, importGameForMatch, loadImportSkips, rememberImportSkip, syncLeagueGames } from "@/lib/match-import";
 import { importScrimGame } from "@/lib/scrim-result-service";
 import { SETTING_KEYS, weekReminderKey } from "@/lib/settings";
 import {
@@ -242,6 +242,40 @@ function odGame(
       ...direFillers,
     ],
   };
+}
+
+/** End-of-game items on every player, as a plain /matches/{id} payload has them. */
+const OD_ITEMS = {
+  item_0: 1,
+  item_1: 63,
+  item_2: 0,
+  item_3: 116,
+  item_4: 0,
+  item_5: 0,
+  backpack_0: 36,
+  backpack_1: 0,
+  backpack_2: 0,
+  item_neutral: 359,
+  item_neutral2: 1583,
+};
+
+function withItems<T extends { players: object[] }>(game: T): T {
+  return { ...game, players: game.players.map((p) => ({ ...p, ...OD_ITEMS })) };
+}
+
+/** Every stored line of a game carries the build its payload had. */
+async function expectStoredItems(dotaMatchId: string) {
+  const game = await prisma.game.findUniqueOrThrow({ where: { dotaMatchId } });
+  const lines = JSON.parse(game.players);
+  expect(lines).toHaveLength(10);
+  for (const line of lines) {
+    expect(line).toMatchObject({
+      items: [1, 63, 0, 116, 0, 0],
+      backpack: [36, 0, 0],
+      neutral: 359,
+      neutralEnchantment: 1583,
+    });
+  }
 }
 
 async function makeBookedScrim(opts: {
@@ -1932,6 +1966,29 @@ describe("durable import reliability", () => {
     expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(1);
     expect((await prisma.game.findMany()).map((row) => row.dotaMatchId)).toEqual(["991501"]);
     expect(mockMatch).toHaveBeenCalledTimes(2); // cached earlier game was reclassified, not refetched
+  });
+
+  it("keeps end-of-game items when the league feed imports from saved evidence", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: 30 * 24 * HOUR });
+    await prisma.season.update({ where: { id: season.id }, data: { dotaLeagueId: "19194" } });
+    const kickoff = Date.now() - 2 * HOUR;
+    mockLeague.mockResolvedValue([991511]);
+    mockMatch.mockResolvedValue(withItems(odGame(991511, homeAccts, awayAccts, kickoff)));
+    // No fixture fits yet: the payload is saved and the game set aside.
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(0);
+    await prisma.match.update({ where: { id: match.id }, data: { scheduledAt: new Date(kickoff) } });
+    expect((await syncLeagueGames(season.id, { auto: true })).imported).toBe(1);
+    expect(mockMatch).toHaveBeenCalledTimes(1); // the import read the saved copy
+    await expectStoredItems("991511");
+  });
+
+  it("keeps end-of-game items when the roster scan imports from saved evidence", async () => {
+    const { season, match, homeAccts, awayAccts } = await setupNight({ offsetMs: -HOUR });
+    await saveImportEvidence(season.id, withItems(odGame(991512, homeAccts, awayAccts, match.scheduledAt!.getTime())));
+    mockRecent.mockResolvedValue([991512]);
+    expect((await autoDetectGamesForMatch(match.id)).imported).toBe(1);
+    expect(mockMatch).not.toHaveBeenCalled();
+    await expectStoredItems("991512");
   });
 
   it("fences stale decisions and late provider success against administrator recovery", async () => {
