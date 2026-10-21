@@ -127,11 +127,18 @@ In order, this:
    point at it and reloads Caddy. After each, the release reads
    `/api/health/release` through Cloudflare until three answers in a row show
    the new commit, and `/api/health/automation` must be healthy unless the
-   scheduler is paused.
+   scheduler is paused. That probe can answer 503 on a healthy league until
+   the next scheduled pass finishes (after a wake, or when the promote lands
+   mid-pass), so it is retried 30 s apart (`AUTOMATION_PROBE_ATTEMPTS` in
+   `scripts/release-both.mjs`).
 4. **Watches** the Caddy log through the agent for two scheduled
    `/api/cron/automation` passes answered 200, 30 to 90 seconds apart, and no
-   5xx. At least 90 seconds after each promote it retires the old slot (stopped
-   and disabled, its release kept for rollback) and prunes old releases.
+   5xx since the promote. The one exception is `/api/health/automation`
+   answering 503 before step 3 read it healthy (step 3's own tries and the
+   box heartbeat's); a 503 there afterwards, or any other 5xx, fails the
+   release. At least 90 seconds after each promote it retires the old slot
+   (stopped and disabled, its release kept for rollback) and prunes old
+   releases.
 
 The evidence folder then holds the plan, the report (the previous and new
 release of each league, the classifications, the CI run and every promotion),
@@ -146,7 +153,9 @@ that every release fills in.
 On `https://us.ggd2l.com` and `https://eu.ggd2l.com`, look at the pages you
 changed, and scan the error rows since the release:
 `box_agent logs us <epoch ms>` (a 5xx row reads `level: "error"`; a Next
-error in the journal reads `warn`). [Every release](PRODUCTION-OPERATIONS.md#every-release)
+error in the journal reads `warn`). `/api/health/automation` 503s in the
+first seconds after a promote, before the release read it healthy, are the
+stale window step 3 waits out, not a fault. [Every release](PRODUCTION-OPERATIONS.md#every-release)
 step 6 lists what to check.
 
 ### If it fails

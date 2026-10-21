@@ -98,6 +98,32 @@ test("scheduler verification requires two consecutive successful minute slots an
   assert.equal(scheduledPasses([log(60_000), log(120_000)], 0).length, 2);
   assert.throws(() => scheduledPasses([log(60_000), log(120_000, 500)], 0));
 });
+test("the automation probe's 503s until verify read it healthy are not runtime errors; anything else still is", () => {
+  // 2026-10-21: Europe's promote returned at 09:19:57Z, its pass ran until
+  // about 09:20:18, the probe answered 503 at 09:19:58, 09:20:02, 09:20:08 and
+  // 09:20:13, and verify read it healthy at about 09:20:29.
+  const healthyAt = 32_000;
+  const pass = (timestamp) => ({ id: `cron-${timestamp}`, timestamp, responseStatusCode: 200, requestPath: "/api/cron/automation", level: "info" });
+  const probe = (timestamp, responseStatusCode = 503) => ({ id: `probe-${timestamp}-${responseStatusCode}`, timestamp, responseStatusCode,
+    requestPath: "/api/health/automation", level: responseStatusCode >= 500 ? "error" : "info" });
+  const passes = [pass(21_000), pass(81_000)];
+  const stale = [probe(1_000), probe(5_000), probe(11_000), probe(16_000), probe(healthyAt), probe(healthyAt + 1, 200)];
+  const opts = { automationHealthyAt: healthyAt };
+  assert.deepEqual(scheduledPasses([...stale, ...passes], 0, opts), [new Date(21_000).toISOString(), new Date(81_000).toISOString()]);
+  // A caller that read no healthy answer skips nothing.
+  assert.throws(() => scheduledPasses([...stale, ...passes], 0), /runtime errors/);
+  assert.throws(() => scheduledPasses([...stale, ...passes], 0, { automationHealthyAt: undefined }), /runtime errors/);
+  // A 503 there after the healthy answer is a fault that came back.
+  assert.throws(() => scheduledPasses([...stale, probe(healthyAt + 1), ...passes], 0, opts), /runtime errors/);
+  // Inside the window: another 5xx on that path, a 503 on another path, an
+  // app 5xx, or an error row with no request.
+  for (const row of [probe(5_000, 500), probe(5_000, 502), { ...probe(5_000), requestPath: "/api/health/ready" },
+    { ...probe(5_000), requestPath: "/schedule" }, { id: "journal", timestamp: 5_000, responseStatusCode: null, requestPath: null, level: "error" },
+    { ...probe(5_000, 200), level: "fatal" }])
+    assert.throws(() => scheduledPasses([...stale, row, ...passes], 0, opts), /runtime errors/, JSON.stringify(row));
+  // Skipped rows never stand in for a missing pass.
+  assert.equal(scheduledPasses([...stale, pass(21_000)], 0, opts), null);
+});
 test("only the automation probe is retried, and a fault that persists still fails", async () => {
   const replies = (...answers) => {
     const calls = { reads: 0, waits: 0 };

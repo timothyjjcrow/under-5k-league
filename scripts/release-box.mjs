@@ -433,6 +433,9 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
 
     report.status = "promoting"; await save();
     const promotedAt = {};
+    // When each league's verify read /api/health/automation healthy: the
+    // probe's 503s up to then are the stale window it retried through.
+    const automationHealthyAt = {};
     await promotePair({
       targets: changed, bases: report.bases, candidates: report.candidates, readLive, record,
       promote: async (target, id) => {
@@ -449,12 +452,15 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
       verify: async (target, candidate) => {
         if ((await readLive(target)).id !== candidate.id) throw new Error(`${target.region}: the box's live release is not the candidate`);
         await requireCanonicalRelease(readRelease(target, sha), target, sha, { wait: () => sleep(CANONICAL_RELEASE_WAIT_MS) });
-        for (const kind of ["live", "ready", ...(paused(target) ? [] : ["automation"])])
+        for (const kind of ["live", "ready", ...(paused(target) ? [] : ["automation"])]) {
           await requireHealthy(() => fetchText(`${target.origin}/api/health/${kind}`), kind, `${target.region}: ${kind} health failed`,
             { wait: () => sleep(AUTOMATION_PROBE_WAIT_MS) });
+          if (kind === "automation") automationHealthyAt[target.region] = now();
+        }
       },
       // Two scheduled passes answered 200 through Caddy, 30-90 s apart, and no
-      // error row (a 5xx anywhere on the host) since this league's promote.
+      // error row (a 5xx anywhere on the host) since this league's promote,
+      // except the automation probe's 503s before verify read it healthy.
       finalize: async () => {
         for (const target of changed) {
           if (paused(target)) continue;
@@ -462,7 +468,8 @@ export async function runBoxRelease(argv = process.argv.slice(2), {
           const since = promotedAt[target.region];
           let passes = null;
           for (let attempt = 0; attempt < SCHEDULED_PASS_ATTEMPTS && !passes; attempt++) {
-            passes = scheduledPasses(logRows(target, await agent("logs", target.region, String(since))), since);
+            passes = scheduledPasses(logRows(target, await agent("logs", target.region, String(since))), since,
+              { automationHealthyAt: automationHealthyAt[target.region] });
             if (!passes) await sleep(SCHEDULED_PASS_WAIT_MS);
           }
           if (!passes) throw new Error(`${target.region}: two consecutive scheduled successes were not observed`);

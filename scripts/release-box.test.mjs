@@ -9,7 +9,7 @@ import { LEAGUE_TARGETS } from "./league-targets.mjs";
 import { BOX_TARGETS, RELEASE_ID, releaseIdMatches } from "./box-targets.mjs";
 import {
   AGENT, AGENT_VERBS, DEFAULT_BOX_SSH, agentArgv, assertBoxRelease, boxSshAlias, createEvidenceDirectory,
-  parseAgentOutput, releaseWindowOpen, runBoxRelease,
+  parseAgentOutput, releaseWindowOpen, runBoxRelease, SCHEDULED_PASS_ATTEMPTS,
 } from "./release-box.mjs";
 
 const sha = "c".repeat(40);
@@ -546,6 +546,44 @@ test("a failure after both promotions rolls back both leagues, Europe first", as
     assert.deepEqual(saved.cleanupProblems, []);
     assert.deepEqual(runningUnits(box), ["eu:a", "us:a"]);
     assertArgvContract(box);
+  }
+});
+
+test("the automation probe's stale 503s after a promote pass the watch; a fault in or after them still rolls back", async () => {
+  // As on 2026-10-21: Europe's promote lands while a pass is running, so its
+  // first automation read is stale. The canonical reads take 6 s, and verify
+  // reads the probe healthy on its second try, 36 s after the promote.
+  const staleOnce = () => {
+    let reads = 0;
+    return { eu: (kind, live) => (kind === "automation" && live.sha === sha && reads++ === 0 ? { ok: false, status: "stale" } : undefined) };
+  };
+  const row = (since, ms, requestPath, responseStatusCode) => ({ id: `${requestPath}-${ms}`, timestamp: since + ms, responseStatusCode,
+    requestPath, level: responseStatusCode >= 500 ? "error" : "info" });
+  const euRows = (...extra) => (since) => [
+    ...[1_000, 5_000, 11_000, 16_000].map((ms) => row(since, ms, "/api/health/automation", 503)),
+    row(since, 21_000, "/api/cron/automation", 200), row(since, 81_000, "/api/cron/automation", 200),
+    ...extra.map(([ms, requestPath, status]) => row(since, ms, requestPath, status)),
+  ].sort((a, b) => a.timestamp - b.timestamp);
+  const euLogReads = (box) => box.verbsCalled().filter((call) => call === "logs eu").length;
+
+  const replay = world({ health: staleOnce(), logs: { eu: euRows() } });
+  const { report } = await released(replay);
+  assert.equal(report?.status, "verified");
+  assert.deepEqual(promotes(replay), [`us ${usId}`, `eu ${euId}`]);
+  assert.equal(replay.live.eu.id, euId);
+
+  for (const [name, logs, reads] of [
+    ["a 503 there after verify read it healthy", euRows([40_000, "/api/health/automation", 503]), 1],
+    ["an app 5xx while verify was still retrying", euRows([10_000, "/schedule", 502]), 1],
+    ["a 502 on the probe itself", euRows([10_000, "/api/health/automation", 502]), 1],
+    ["one scheduled pass", (since) => euRows()(since).filter((r) => r.timestamp !== since + 81_000), SCHEDULED_PASS_ATTEMPTS],
+  ]) {
+    const box = world({ health: staleOnce(), logs: { eu: logs } });
+    const { error } = await released(box);
+    assert.equal(error?.message, "Paired promotion failed. eu: previous deployment restored; us: previous deployment restored", name);
+    // The error scan stops at its first read; a missing pass reads until the watch gives up.
+    assert.equal(euLogReads(box), reads, name);
+    assert.equal(box.live.eu.id, baseId("eu"), name);
   }
 });
 
