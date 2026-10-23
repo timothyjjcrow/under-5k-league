@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { LEAGUE_CONFIG } from "../src/lib/league-config";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "./helpers";
 
 // The match-night poll end to end: an admin opens it from /admin (the grid
 // fills itself: every day over the league's window, noon to 6 PM Pacific or
@@ -29,6 +29,9 @@ async function openPollSection(page: Page) {
     .getByRole("link", { name: "Match night poll", exact: true })
     .click();
   await expect(section).toHaveAttribute("open", "");
+  // The anchor jump opens the card before React reaches it: wait, or the
+  // first click lands on the server HTML and is lost.
+  await untilHydrated(page, section.getByRole("button").first());
   return section;
 }
 
