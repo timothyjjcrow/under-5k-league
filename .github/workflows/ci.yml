@@ -538,14 +538,21 @@ jobs:
       - run: npm ci
       - run: npx prisma generate
       - name: Install Playwright browser
+        id: browser
         run: npx playwright install --with-deps chromium
       - name: Run e2e (seeds the DB + boots next dev)
         run: npm run test:e2e
       - name: Run mid-season e2e (fixture DB, own port)
         # Sequential on purpose — Next allows one dev server per build
-        # folder and all three suites build into .next.
+        # folder and all three suites build into .next. A suite still runs
+        # after an earlier one failed (the job fails all the same), so one
+        # red run reports all three; in CI each suite keeps its own report
+        # and traces (playwright*.config.ts), so a later one can't clean
+        # them away.
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: npm run test:e2e:mid
       - name: Run postseason e2e (fixture DB, own port)
+        if: ${{ !cancelled() && steps.browser.outcome == 'success' }}
         run: npm run test:e2e:postseason
 
       # Without this a failure leaves only log text, which needs repo auth to

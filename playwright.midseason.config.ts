@@ -40,8 +40,11 @@ export default defineConfig({
   // failing test, file, line and error, which show on the run summary WITHOUT
   // signing in — the only failure detail visible to someone without repo auth.
   reporter: process.env.CI
-    ? [["github"], ["list"], ["html", { open: "never" }]]
+    ? [["github"], ["list"], ["html", { open: "never", outputFolder: "playwright-report/mid" }]]
     : "list",
+  // One folder per suite in CI: ci.yml runs every suite even after one
+  // fails, and each run cleans its outputDir and rewrites its report.
+  ...(process.env.CI ? { outputDir: "test-results/mid" } : {}),
   use: {
     baseURL: `http://localhost:${MID_PORT}`,
     trace: process.env.CI ? "retain-on-failure" : "on-first-retry",

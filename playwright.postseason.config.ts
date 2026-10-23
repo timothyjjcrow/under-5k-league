@@ -24,8 +24,11 @@ export default defineConfig({
   timeout: 45_000,
   expect: { timeout: 10_000 },
   reporter: process.env.CI
-    ? [["github"], ["list"], ["html", { open: "never" }]]
+    ? [["github"], ["list"], ["html", { open: "never", outputFolder: "playwright-report/postseason" }]]
     : "list",
+  // One folder per suite in CI: ci.yml runs every suite even after one
+  // fails, and each run cleans its outputDir and rewrites its report.
+  ...(process.env.CI ? { outputDir: "test-results/postseason" } : {}),
   use: {
     baseURL: `http://localhost:${POSTSEASON_PORT}`,
     trace: process.env.CI ? "retain-on-failure" : "on-first-retry",
