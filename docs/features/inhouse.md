@@ -185,7 +185,10 @@ file per stage in `src/components/inhouse/`. Lifecycle overview:
     connections until it exits, at the ladder's rate, within
     `TimeoutStopSec`.
   - **The waiter registry is one per process, on `globalThis`**
-    (`src/lib/inhouse-room-wait.ts`, a leaf), with the snapshot's publish
+    (`src/lib/inhouse-room-wait.ts`, a leaf: the inhouse binding of the
+    mechanism in `room-wait.ts`, which the draft room's long-poll shares
+    under its own key; the version publish is `room-version.ts` the same
+    way), with the snapshot's publish
     count: a `next start` process loads `src/lib` twice (route handlers in
     one module instance, pages and server actions in another), so a
     module-scope registry would never hear the signup save or the admin

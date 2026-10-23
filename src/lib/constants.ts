@@ -172,6 +172,20 @@ export const INHOUSE_SCAN_ACTIONS = ["detect", "record"] as const;
 export const ROOM_POLL_FAIL_THRESHOLD = 3;
 
 export const DRAFT_ROOM = {
+  // The draft room (/api/draft/tick, src/lib/draft-room-wait.ts) LONG-POLLS
+  // over plain HTTP, as the inhouse room does: a tick carries the room
+  // version of the last reply it showed, and the server holds it until the
+  // room changes (a publish in this process, or the version moving in the
+  // database), the room's next clock or the hold's end, then answers from
+  // one shared copy of the room per server instance. So a bid reaches a
+  // captain's tab in well under a second, and a watcher's within its gap
+  // (LONG_POLL_WATCH_GAP_MS, backing off to POLL_WATCH_MS while bids keep
+  // coming), at no more than about one request per change plus one per hold.
+  // The POLL_* rates below are the FALLBACK ladder: a reply
+  // with no room version (an old slot during a release ignores `since`), and
+  // the requests that must answer at once (the first, a resync, a retry, the
+  // one after an action or a clock at zero), poll on these instead.
+  //
   /** Waiting room / finished draft — nothing here is second-sensitive. */
   POLL_IDLE_MS: 3000,
   /** Hidden tab belonging to someone with stake (captain, admin, or a player
@@ -194,6 +208,58 @@ export const DRAFT_ROOM = {
   /** A HIDDEN tab of a pool player (a stake, but no controls): still well in
    *  time for "you're on the block" on a 30s lot clock. */
   POLL_WATCH_KEEPALIVE_MS: 10000,
+  // The longest hold the server grants. It bounds how late a change that
+  // published nowhere shows (a renamed team, a refreshed avatar), and stays
+  // far under Cloudflare's ~100s wait for a response.
+  LONG_POLL_HOLD_MS: 25_000,
+  // The hold a captain or an admin asks for while the auction is live or
+  // paused. The client gives a held request its hold plus
+  // ROOM_POLL_TIMEOUT_MS, so a held request that silently died is given up
+  // on, and the fast retries begin, 15s sooner than at the full hold: the
+  // room locks bidding ("Connection lost") after three failures in a row.
+  LONG_POLL_ACTOR_HOLD_MS: 10_000,
+  // A captain's or an admin's held request wakes this long after a lot's
+  // bid clock or a nomination clock runs out, so the signed-in request that
+  // wakes finds the lot due and settles it under the 2s claim, as their tab's
+  // poll at zero always did.
+  LONG_POLL_CLOCK_GRACE_MS: 250,
+  // Every other signed-in viewer's held request wakes this long after such a
+  // clock, and a signed-in request that finds a clock already run out
+  // (another request holds the 2s claim) is held at most this long. A
+  // captain's or an admin's request settles the lot first and its publish
+  // wakes everyone, so these only fire when no captain or admin is in the
+  // room: then a pool player's request settles it, as the old 5s poll did,
+  // instead of every tab asking at zero.
+  LONG_POLL_DUE_RETRY_MS: 2_250,
+  // After a publish in this process, held requests wait this long and then
+  // re-check the version once (an admin action can publish twice).
+  LONG_POLL_COALESCE_MS: 100,
+  // Each woken request waits up to this much more, at random, so a full
+  // room (15 captains and fifty-odd viewers) waking at once is spread out
+  // instead of queueing on the database together.
+  LONG_POLL_JITTER_MS: 250,
+  // While any request is held, one timer per process re-reads the version
+  // this often: it catches the other slot's publishes during a release's 90s
+  // overlap, and writes made outside this process.
+  LONG_POLL_WATCH_MS: 2_000,
+  // The client never starts two state requests closer together than this,
+  // so a version that keeps moving can't turn the long-poll into a hot loop.
+  LONG_POLL_MIN_GAP_MS: 1_000,
+  // …and a viewer who can't act on a lot (a spectator, a player in the pool,
+  // a drafted player) never closer than this while the auction is live or
+  // paused. In a bidding war every bid wakes every held tab, and fifty-odd
+  // watchers asking once a second cost the box more than the auction needs:
+  // a bid still reaches them at once when the room was quiet, and within
+  // this long in a war (the old poll: POLL_WATCH_MS, 5s). Captains and admins
+  // keep LONG_POLL_MIN_GAP_MS.
+  LONG_POLL_WATCH_GAP_MS: 3_000,
+  // A server instance's room snapshot (draft-room-state.ts) is rebuilt at
+  // least this often even when no publish moved the room version: the bound
+  // on writers that never publish (a refreshed name or avatar) and on a
+  // publish lost between commit and statement. Far under the 90s away
+  // cutoff, so a captain's "in the room" judged from a snapshot is never
+  // wrong for longer than this.
+  ROOM_SNAPSHOT_MAX_AGE_MS: 15_000,
 } as const;
 
 // ---------- Fantasy ----------

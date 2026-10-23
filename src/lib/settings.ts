@@ -41,6 +41,10 @@ export const SETTING_KEYS = {
   // Same boundary for draft deadline recovery. The key is global because the
   // data model permits exactly one active season/draft at a time.
   DRAFT_ROOM_MAINTENANCE_AT: "draftRoomMaintenanceAt",
+  // The draft room's change stamp, like INHOUSE_ROOM_VERSION: an opaque random
+  // UUID that publishDraftRoomChange (draft-room-version.ts) replaces after
+  // every commit the room shows. Global for the same one-active-season reason.
+  DRAFT_ROOM_VERSION: "draftRoomVersion",
   // ISO timestamp of the last league-id OpenDota sync (result-sync-service's
   // atomic global throttle for the /leagues/{id}/matchIds path).
   LEAGUE_AUTO_SYNC_AT: "leagueAutoSyncAt",

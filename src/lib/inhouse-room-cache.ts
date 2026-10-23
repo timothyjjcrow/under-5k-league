@@ -1,10 +1,11 @@
 import { raceHook } from "./race-hook";
 
-// One server instance's copy of the inhouse room's viewer-independent rows
-// (loadInhouseRoomRows), labelled with the room version (inhouse-room-
-// version.ts). Generic over the rows and with every dependency injected, so
-// it imports nothing of the engine: test/integration/setup.ts resets it
-// without loading inhouse-service ahead of a test file's own vi.mock calls.
+// One server instance's copy of a live room's viewer-independent rows (the
+// inhouse room's loadInhouseRoomRows, the draft room's loadDraftRoomRows),
+// labelled with the room version (room-version.ts). Generic over the rows and
+// with every dependency injected, so it imports nothing of either engine:
+// test/integration/setup.ts resets it without loading inhouse-service or
+// draft-service ahead of a test file's own vi.mock calls.
 //
 // Freshness is decided by the DATABASE version, read on every poll and read
 // BEFORE the rows of any load: a poll serves only an entry whose label equals
@@ -46,6 +47,11 @@ export type RoomCacheDeps<R> = {
   maxAgeMs: number;
   /** Deep-freeze stored rows (outside production) to catch a mutation. */
   freeze: boolean;
+  /**
+   * The race-hook label of the seam between a load's read and its store
+   * (absent: the inhouse room's, "inhouse.roomCache.beforeStore").
+   */
+  beforeStoreHook?: string;
 };
 
 export type RoomCache<R> = {
@@ -58,6 +64,12 @@ export type RoomCache<R> = {
   get(version?: string | null): Promise<RoomCacheEntry<R>>;
   /** Test-only: forget the entry and any load in flight. */
   reset(): void;
+  /**
+   * Forget the entry, and stop tracking this cache for the test reset: its
+   * owner has replaced it (the draft room's copy when another season
+   * becomes active).
+   */
+  retire(): void;
 };
 
 /** Freeze an object graph in place (plain objects and arrays; Dates too). */
@@ -103,7 +115,7 @@ export function createRoomCache<R>(deps: RoomCacheDeps<R>): RoomCache<R> {
     // Seam: the rows are read and nothing is stored. A rival commit and
     // publish landing here must keep these rows from ever serving a poll
     // that starts after that publish.
-    await raceHook("inhouse.roomCache.beforeStore");
+    await raceHook(deps.beforeStoreHook ?? "inhouse.roomCache.beforeStore");
     if (
       deps.localGen() === localGen &&
       (entry === null || gen > entry.gen)
@@ -132,6 +144,10 @@ export function createRoomCache<R>(deps: RoomCacheDeps<R>): RoomCache<R> {
     reset() {
       entry = null;
       inflight.clear();
+    },
+    retire() {
+      cache.reset();
+      caches.delete(cache);
     },
   };
   caches.add(cache);

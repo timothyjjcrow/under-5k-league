@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { draftRoomNeedsRefresh, type DraftRoomPhase } from "./draft-room-refresh";
+import {
+  DRAFT_ROOM_REFRESH_SPREAD_MS,
+  draftRoomNeedsRefresh,
+  draftRoomRefreshDelayMs,
+  type DraftRoomPhase,
+} from "./draft-room-refresh";
 
 const phase = (seasonStatus: string, draftStatus: string): DraftRoomPhase => ({
   seasonStatus,
@@ -53,5 +58,24 @@ describe("draftRoomNeedsRefresh", () => {
     expect(draftRoomNeedsRefresh(null, phase("DRAFT", "IN_PROGRESS"))).toBe(
       false,
     );
+  });
+});
+
+describe("draftRoomRefreshDelayMs", () => {
+  it("refreshes a captain's or an admin's tab at once", () => {
+    expect(draftRoomRefreshDelayMs(true, () => 0.99)).toBe(0);
+  });
+
+  it("spreads everyone else's refresh over up to five seconds", () => {
+    expect(draftRoomRefreshDelayMs(false, () => 0)).toBe(0);
+    expect(draftRoomRefreshDelayMs(false, () => 0.5)).toBe(2_500);
+    expect(draftRoomRefreshDelayMs(false, () => 0.9999)).toBeLessThanOrEqual(
+      DRAFT_ROOM_REFRESH_SPREAD_MS,
+    );
+    // Out-of-contract randoms are clamped, never negative or past the spread.
+    expect(draftRoomRefreshDelayMs(false, () => -1)).toBe(0);
+    expect(draftRoomRefreshDelayMs(false, () => 7)).toBe(DRAFT_ROOM_REFRESH_SPREAD_MS);
+    // Well inside the e2e's 15s wait for a parked tab's header.
+    expect(DRAFT_ROOM_REFRESH_SPREAD_MS).toBeLessThanOrEqual(5_000);
   });
 });

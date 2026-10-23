@@ -11,7 +11,11 @@ const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(),
   clientIp: vi.fn(),
   claimThrottle: vi.fn(),
-  recordCaptainPresence: vi.fn(),
+  pollDraftRoomState: vi.fn(),
+  holdDraftRoomPoll: vi.fn(),
+  readDraftRoomVersion: vi.fn(),
+  draftRoomHoldMark: vi.fn(),
+  draftRoomShuttingDown: vi.fn(() => false),
 }));
 
 vi.mock("next/cache", () => ({ revalidateTag: mocks.revalidateTag }));
@@ -22,8 +26,19 @@ vi.mock("@/lib/draft-service", () => ({
   placeBid: mocks.placeBid,
   nominatePlayer: mocks.nominatePlayer,
 }));
-vi.mock("@/lib/draft-presence-service", () => ({
-  recordCaptainPresence: mocks.recordCaptainPresence,
+vi.mock("@/lib/draft-room-state", () => ({
+  pollDraftRoomState: mocks.pollDraftRoomState,
+  holdDraftRoomPoll: mocks.holdDraftRoomPoll,
+}));
+vi.mock("@/lib/draft-room-wait", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/draft-room-wait")>()),
+  draftRoomShuttingDown: mocks.draftRoomShuttingDown,
+}));
+vi.mock("@/lib/draft-room-version", () => ({
+  readDraftRoomVersion: mocks.readDraftRoomVersion,
+  draftRoomHoldMark: mocks.draftRoomHoldMark,
+  // The real token rule: a missing row is "none".
+  draftRoomVersionToken: (version: string | null) => version ?? "none",
 }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: mocks.rateLimit,
@@ -44,6 +59,7 @@ import { POST as nominate } from "./nominate/route";
 import { POST as adminNominate } from "./admin-nominate/route";
 
 const user = { id: "captain-1", name: "Captain", role: "USER" };
+const VERSION = "draft-room-version-1";
 const admin = { id: "admin-1", name: "Admin", role: "ADMIN" };
 const season = { id: "season-1", name: "Season One" };
 const state = {
@@ -98,33 +114,55 @@ beforeEach(() => {
   mocks.nominatePlayer.mockResolvedValue({ ok: true });
   mocks.rateLimit.mockReturnValue({ allowed: true });
   mocks.claimThrottle.mockResolvedValue(true);
-  mocks.recordCaptainPresence.mockResolvedValue(undefined);
+  // The tick labels its reply with the version it read its rows under.
+  mocks.pollDraftRoomState.mockImplementation(
+    async (_viewer: unknown, _seasonId: string, version: string | null) => ({
+      state,
+      version,
+      invalidateGate: false,
+    }),
+  );
+  mocks.holdDraftRoomPoll.mockResolvedValue("changed");
+  mocks.readDraftRoomVersion.mockResolvedValue(VERSION);
+  mocks.draftRoomHoldMark.mockReturnValue(0);
+  mocks.draftRoomShuttingDown.mockReturnValue(false);
   mocks.clientIp.mockReturnValue("203.0.113.10");
 });
 
 describe("POST /api/draft/tick", () => {
-  it("returns a no-store snapshot only for the room's expected season", async () => {
+  it("returns a no-store reply for the room's expected season, naming its version", async () => {
+    mocks.pollDraftRoomState.mockResolvedValue({ state, version: VERSION, invalidateGate: true });
+
     const response = await tick(request("tick", { seasonId: season.id }));
 
     expect(response.status).toBe(200);
     expect(response.headers.get("cache-control")).toContain("no-store");
-    expect(await response.json()).toEqual(state);
-    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user, {
-      resolveDeadlines: true,
+    expect(await response.json()).toEqual({
+      ...state,
+      roomVersion: VERSION,
+      held: false,
     });
-    expect(mocks.claimThrottle).toHaveBeenCalledWith(
-      "draftRoomMaintenanceAt",
-      2,
-      expect.any(Number),
-    );
+    // Settling a clock is the tick's call (draft-room-state.ts), never the
+    // route's own.
+    expect(mocks.pollDraftRoomState).toHaveBeenCalledWith(user, season.id, VERSION);
+    expect(mocks.getDraftState).not.toHaveBeenCalled();
+    expect(mocks.claimThrottle).not.toHaveBeenCalled();
     expect(mocks.rateLimit).toHaveBeenCalledWith(
       `draft:user:${user.id}`,
       expect.objectContaining({ limit: 300 }),
       expect.any(Number),
     );
+    // The tick won the claim and settled a clock: the gate is expired.
     expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
       expire: 0,
     });
+  });
+
+  it("leaves the gate alone when the tick settled nothing", async () => {
+    const response = await tick(request("tick", { seasonId: season.id }));
+
+    expect(response.status).toBe(200);
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
   it("rejects a parked tab after the active season changes", async () => {
@@ -132,17 +170,34 @@ describe("POST /api/draft/tick", () => {
 
     expect(response.status).toBe(409);
     expect((await response.json()).error).toMatch(/active season changed/i);
-    expect(mocks.getDraftState).not.toHaveBeenCalled();
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
+    expect(mocks.holdDraftRoomPoll).not.toHaveBeenCalled();
   });
 
   it("rejects a missing season claim instead of attaching an old tab implicitly", async () => {
-    const response = await tick(request("tick", {}));
+    const response = await tick(request("tick", { since: VERSION }));
 
     expect(response.status).toBe(409);
     expect((await response.json()).error).toMatch(
       /active season changed|out of date/i,
     );
-    expect(mocks.getDraftState).not.toHaveBeenCalled();
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
+    expect(mocks.holdDraftRoomPoll).not.toHaveBeenCalled();
+  });
+
+  it("answers 404 with no active season, and when the season's row went away", async () => {
+    mocks.getActiveSeason.mockResolvedValueOnce(null);
+    const none = await tick(request("tick", { seasonId: season.id }));
+    expect(none.status).toBe(404);
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
+
+    mocks.pollDraftRoomState.mockResolvedValueOnce({
+      state: null,
+      version: VERSION,
+      invalidateGate: false,
+    });
+    const gone = await tick(request("tick", { seasonId: season.id }));
+    expect(gone.status).toBe(404);
   });
 
   it("gives anonymous spectators the bounded IP allowance", async () => {
@@ -156,67 +211,191 @@ describe("POST /api/draft/tick", () => {
       expect.objectContaining({ limit: 1200 }),
       expect.any(Number),
     );
-    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, null, {
-      resolveDeadlines: false,
-    });
-    expect(mocks.claimThrottle).not.toHaveBeenCalled();
+    expect(mocks.pollDraftRoomState).toHaveBeenCalledWith(null, season.id, VERSION);
     expect(mocks.revalidateTag).not.toHaveBeenCalled();
   });
 
-  it("keeps a signed-in viewer personalized when another poll owns deadline recovery", async () => {
-    mocks.claimThrottle.mockResolvedValue(false);
-
-    const response = await tick(request("tick", { seasonId: season.id }));
-
-    expect(response.status).toBe(200);
-    expect(mocks.getDraftState).toHaveBeenCalledWith(season.id, user, {
-      resolveDeadlines: false,
-    });
-    expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  it("answers a tick without `since` at once, as every tick was before", async () => {
+    for (const extra of [
+      {},
+      { since: 7 },
+      { since: "" },
+      { since: "x".repeat(65) },
+    ]) {
+      vi.clearAllMocks();
+      mocks.pollDraftRoomState.mockResolvedValue({ state, version: VERSION, invalidateGate: false });
+      mocks.readDraftRoomVersion.mockResolvedValue(VERSION);
+      mocks.rateLimit.mockReturnValue({ allowed: true });
+      const response = await tick(
+        request("tick", { seasonId: season.id, ...extra }),
+      );
+      expect(response.status).toBe(200);
+      expect(mocks.holdDraftRoomPoll).not.toHaveBeenCalled();
+      expect(mocks.getSessionUser).toHaveBeenCalledOnce();
+      expect(mocks.pollDraftRoomState).toHaveBeenCalledOnce();
+    }
   });
 
-  it("records a captain's poll as their presence in the draft room", async () => {
-    mocks.getDraftState.mockResolvedValue({
-      ...state,
-      me: { myTeamId: "team-1" },
-    });
-
-    const response = await tick(request("tick", { seasonId: season.id }));
-
-    expect(response.status).toBe(200);
-    expect(mocks.recordCaptainPresence).toHaveBeenCalledWith(
-      season.id,
-      user.id,
+  it("answers at once when the client is behind the room, and says it was not held", async () => {
+    const response = await tick(
+      request("tick", {
+        seasonId: season.id,
+        since: "an-older-version",
+        holdMs: 25_000,
+      }),
     );
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdDraftRoomPoll).not.toHaveBeenCalled();
+    const json = await response.json();
+    expect(json.roomVersion).toBe(VERSION);
+    // The client counts these to back off from a version that keeps moving
+    // (roomUnheldStreak, draftLongPollGapMs).
+    expect(json.held).toBe(false);
   });
 
-  it("records presence in the waiting room before Start, not once the draft is over", async () => {
-    mocks.getDraftState.mockResolvedValue({
-      ...state,
-      seasonStatus: "SIGNUPS",
-      status: "NOT_STARTED",
-      me: { myTeamId: "team-1" },
+  it("holds a tick whose client shows the version, then authorizes and reads again", async () => {
+    const order: string[] = [];
+    mocks.draftRoomHoldMark.mockImplementation(() => {
+      order.push("mark");
+      return 7;
     });
-    await tick(request("tick", { seasonId: season.id }));
-    expect(mocks.recordCaptainPresence).toHaveBeenCalledOnce();
+    mocks.readDraftRoomVersion
+      .mockImplementationOnce(async () => {
+        order.push("version");
+        return VERSION;
+      })
+      .mockImplementationOnce(async () => {
+        order.push("version again");
+        return "draft-room-version-2";
+      });
+    const later = { ...user, role: "ADMIN" };
+    mocks.getSessionUser
+      .mockImplementationOnce(async () => user)
+      .mockImplementationOnce(async () => later);
+    mocks.holdDraftRoomPoll.mockImplementation(async () => {
+      order.push("hold");
+      return "changed";
+    });
+    mocks.pollDraftRoomState.mockImplementation(async () => {
+      order.push("poll");
+      return { state, version: "draft-room-version-2", invalidateGate: false };
+    });
 
-    mocks.recordCaptainPresence.mockClear();
-    mocks.getDraftState.mockResolvedValue({
-      ...state,
-      status: "COMPLETE",
-      me: { myTeamId: "team-1" },
+    const shownAt = Date.now() - 4_000;
+    const req = request("tick", {
+      seasonId: season.id,
+      since: VERSION,
+      sinceNow: shownAt,
+      holdMs: 10_000,
     });
-    await tick(request("tick", { seasonId: season.id }));
-    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
+    const response = await tick(req);
+
+    expect(response.status).toBe(200);
+    expect(order).toEqual(["mark", "version", "hold", "version again", "poll"]);
+    expect(mocks.getActiveSeason).toHaveBeenCalledTimes(2);
+    expect(mocks.holdDraftRoomPoll).toHaveBeenCalledWith({
+      viewer: user,
+      seasonId: season.id,
+      version: VERSION,
+      // The shown reply's clock goes to the hold, which answers at once for a
+      // lot whose clock ran out since (draftRoomWakeAt's fromMs).
+      hold: { since: VERSION, holdMs: 10_000, sinceNowMs: shownAt },
+      mark: 7,
+      signal: req.signal,
+    });
+    // The tick runs as the session and on the version read AFTER the hold,
+    // and the reply names that version, and that it was held.
+    expect(mocks.getSessionUser).toHaveBeenCalledTimes(2);
+    expect(mocks.pollDraftRoomState).toHaveBeenCalledWith(
+      later,
+      season.id,
+      "draft-room-version-2",
+    );
+    expect(await response.json()).toEqual({
+      ...state,
+      roomVersion: "draft-room-version-2",
+      held: true,
+    });
   });
 
-  it("records no presence for viewers who aren't captains", async () => {
-    await tick(request("tick", { seasonId: season.id }));
-    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
+  it("answers 409 when another season became active during the hold, and 404 when none is", async () => {
+    mocks.getActiveSeason
+      .mockResolvedValueOnce(season)
+      .mockResolvedValueOnce({ id: "season-2", name: "Season Two" });
+    const moved = await tick(request("tick", { seasonId: season.id, since: VERSION }));
+    expect(moved.status).toBe(409);
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
 
+    mocks.getActiveSeason.mockResolvedValueOnce(season).mockResolvedValueOnce(null);
+    const gone = await tick(request("tick", { seasonId: season.id, since: VERSION }));
+    expect(gone.status).toBe(404);
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
+  });
+
+  it("names the version its tick read the rows under, after the tick's own publish", async () => {
+    // A captain's return or a settled clock publishes: the reply carries the
+    // copy's newer version, so the client's next tick holds.
+    mocks.pollDraftRoomState.mockResolvedValue({ state, version: "after-publish", invalidateGate: true });
+    const response = await tick(request("tick", { seasonId: season.id }));
+    expect((await response.json()).roomVersion).toBe("after-publish");
+  });
+
+  it("holds a signed-out spectator too, for at most the longest hold", async () => {
     mocks.getSessionUser.mockResolvedValue(null);
-    await tick(request("tick", { seasonId: season.id }));
-    expect(mocks.recordCaptainPresence).not.toHaveBeenCalled();
+
+    const response = await tick(
+      request("tick", { seasonId: season.id, since: VERSION, holdMs: 600_000 }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdDraftRoomPoll).toHaveBeenCalledWith(
+      expect.objectContaining({
+        viewer: null,
+        hold: { since: VERSION, holdMs: 25_000, sinceNowMs: expect.any(Number) },
+      }),
+    );
+    expect(mocks.pollDraftRoomState).toHaveBeenCalledWith(null, season.id, VERSION);
+    expect(mocks.revalidateTag).not.toHaveBeenCalled();
+  });
+
+  it("holds on a database with no version yet, under its token", async () => {
+    mocks.readDraftRoomVersion.mockResolvedValue(null);
+
+    const response = await tick(
+      request("tick", { seasonId: season.id, since: "none" }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdDraftRoomPoll).toHaveBeenCalledOnce();
+    expect((await response.json()).roomVersion).toBe("none");
+  });
+
+  it("does no tick for a client that went away during the hold", async () => {
+    mocks.holdDraftRoomPoll.mockResolvedValue("aborted");
+
+    const response = await tick(
+      request("tick", { seasonId: season.id, since: VERSION }),
+    );
+
+    expect(response.status).toBe(204);
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
+    expect(mocks.readDraftRoomVersion).toHaveBeenCalledOnce();
+  });
+
+  it("answers a current `since` at once while the process stops, and says it was not held", async () => {
+    // SIGTERM answers every hold at once, but Caddy keeps sending a slot it
+    // still routes to new requests on open connections: those must read as
+    // unheld, or every tab re-polls once a second until the slot exits.
+    mocks.draftRoomShuttingDown.mockReturnValue(true);
+
+    const response = await tick(
+      request("tick", { seasonId: season.id, since: VERSION, holdMs: 25_000 }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.holdDraftRoomPoll).not.toHaveBeenCalled();
+    expect((await response.json()).held).toBe(false);
   });
 
   it("rejects an oversized body after the IP preflight but before auth or database work", async () => {
@@ -231,7 +410,8 @@ describe("POST /api/draft/tick", () => {
     expect(mocks.rateLimit).toHaveBeenCalledOnce();
     expect(mocks.getSessionUser).not.toHaveBeenCalled();
     expect(mocks.getActiveSeason).not.toHaveBeenCalled();
-    expect(mocks.getDraftState).not.toHaveBeenCalled();
+    expect(mocks.readDraftRoomVersion).not.toHaveBeenCalled();
+    expect(mocks.pollDraftRoomState).not.toHaveBeenCalled();
   });
 });
 

@@ -86,12 +86,17 @@ import {
   type FeedLine,
 } from "@/lib/draft-feed";
 import {
+  draftLongPoll,
   draftPollCadence,
+  draftPollDelay,
   draftPollsAtClockZero,
+  roomRefocusResync,
+  roomUnheldStreak,
   withDeadline,
 } from "@/lib/room-poll";
 import {
   draftRoomNeedsRefresh,
+  draftRoomRefreshDelayMs,
   type DraftRoomPhase,
 } from "@/lib/draft-room-refresh";
 import { DRAFT_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
@@ -435,11 +440,15 @@ export function DraftRoom({
   // layer; it must never be the payload that re-enables live actions.
   const connectivityEpochRef = useRef(0);
   const hadIdentityRef = useRef(false);
+  // The reply the room shows, for the poll loop's long-poll decision (its
+  // auction status and its `now`), read without resubscribing the loop.
+  const latestStateRef = useRef<DraftState | null>(null);
 
   const apply = useCallback((s: DraftState, seq: number) => {
     const { accept, next } = acceptSequence(seqRef.current, seq);
     seqRef.current = next;
     if (!accept) return false; // lost the response race — stale
+    latestStateRef.current = s;
     if (s.me.userId) {
       hadIdentityRef.current = true;
       setSessionExpired(false);
@@ -489,10 +498,15 @@ export function DraftRoom({
   // Seeded from the page's own render, so a Start between that render and
   // the first poll still refreshes; after that, each poll's phase. An admin's
   // own action already re-rendered the page, so their tab may refresh twice.
+  // A viewer who can't act refreshes after a random wait
+  // (draftRoomRefreshDelayMs): the long-poll tells every tab within a
+  // second, and fifty renders of a Start or a resume landing together would
+  // queue the captains' bids behind them on the box.
   const router = useRouter();
   const renderedPhaseRef = useRef<DraftRoomPhase | null>(
     renderedPhase ?? null,
   );
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     if (!state) return;
     const polled: DraftRoomPhase = {
@@ -500,22 +514,71 @@ export function DraftRoom({
       draftStatus: state.status,
     };
     if (draftRoomNeedsRefresh(renderedPhaseRef.current, polled)) {
-      router.refresh();
+      // One refresh for transitions close together (a pause, then a resume).
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+      refreshTimerRef.current = setTimeout(
+        () => {
+          refreshTimerRef.current = null;
+          router.refresh();
+        },
+        draftRoomRefreshDelayMs(state.me.isAdmin || !!state.me.myTeamId),
+      );
     }
     renderedPhaseRef.current = polled;
   }, [state, router]);
+  useEffect(
+    () => () => {
+      if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    },
+    [],
+  );
 
-  // Self-scheduling poll (not setInterval): the cadence has to react to the
-  // draft's phase and the tab's visibility, and a fixed interval also stacks
-  // requests when one is slow. Mirrors <InhouseRoom>'s loop.
+  // The poll loop. It LONG-POLLS, as <InhouseRoom>'s does: each tick sends
+  // back the `roomVersion` of the last reply it applied, the server holds it
+  // until the room changes (or the auction's clock wakes this viewer, or the
+  // hold's end), and the next tick leaves from the reply's own continuation,
+  // with no timer for a hidden tab to clamp. So a bid reaches a captain's tab
+  // in well under a second, and a watcher's within its gap, at no more than
+  // about one request per change (draftLongPoll / draftLongPollGapMs /
+  // draftPollDelay, room-poll.ts).
+  //
+  // A tick that must answer at once (the first of each run of this effect:
+  // a pollKick from an action, a clock at zero or Retry re-runs it; a
+  // resync; an action awaiting reconciliation; a retry; a refocus after a
+  // long hide) and every reply without a version (an old slot during a
+  // release) fall back to the self-scheduling ladder (draftPollCadence),
+  // which reacts to the draft's phase and the tab's visibility.
   useEffect(() => {
     let alive = true;
     let inFlight = false;
     let consecutiveFailures = 0;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    // The tick in flight, if any, so the loop's cleanup can release it.
-    let current: { controller: AbortController; released: boolean } | null =
-      null;
+    // The `roomVersion` of the last tick reply apply() took; null before the
+    // first, and after a reply that carried none (an old slot).
+    let roomVersion: string | null = null;
+    // An offline/online change waits on a fresh answer, not a held one.
+    let resyncPending = false;
+    // Back after a long hide: the next tick is unheld, once (cleared by the
+    // next reply apply() takes).
+    let refocusPending = false;
+    // A refocus after a long hide released the tick in flight: one tick
+    // straight after it settles.
+    let rerunRequested = false;
+    // When the tab was last seen going hidden (null while visible).
+    let hiddenAt: number | null =
+      document.visibilityState === "hidden" ? Date.now() : null;
+    // Long-poll replies in a row the server answered unheld because the room
+    // had already moved on (roomUnheldStreak); it lengthens the gap between
+    // ticks while a version never stops moving.
+    let unheldStreak = 0;
+    // The tick in flight, if any. A connectivity change or a refocus releases
+    // it only when it is held (its reply would be stale, or come too late);
+    // the loop's cleanup releases it either way (releaseInFlight).
+    let current: {
+      controller: AbortController;
+      held: boolean;
+      released: boolean;
+    } | null = null;
 
     const markFailure = () => {
       consecutiveFailures += 1;
@@ -524,11 +587,18 @@ export function DraftRoom({
 
     // The loop is being cleaned up: an unmount, a pollKick (a bid, a clock at
     // zero, Retry) or season change, which re-runs this effect, or React's
-    // development double mount. Nobody will read its tick. Left running, it
-    // lands beside the next loop's first one; the server can read the two in
-    // either order, so request-start ordering could keep the older lot.
+    // development double mount. Nobody will read its tick, held or not. Left
+    // running, it lands beside the next loop's first one; the server can read
+    // the two in either order, so request-start ordering could keep the older
+    // lot.
     const releaseInFlight = () => {
       if (!current) return;
+      current.released = true;
+      current.controller.abort();
+    };
+
+    const releaseHold = () => {
+      if (!current?.held) return;
       current.released = true;
       current.controller.abort();
     };
@@ -539,10 +609,40 @@ export function DraftRoom({
       timer = setTimeout(tick, ms);
     };
 
+    // The long-poll's next tick, straight from the settled one: a hidden tab
+    // clamps timers, but not this.
+    const reissue = () => {
+      if (!alive) return;
+      if (timer) clearTimeout(timer);
+      timer = null;
+      void tick();
+    };
+
+    // Something is waiting on an answer now, so the next tick must not be
+    // held: a resync, an action whose outcome is unknown (its controls stay
+    // locked until a newer tick lands), or a tab back from a long hide whose
+    // room may be old.
+    const urgent = () =>
+      resyncPending ||
+      actionReconcileSeqRef.current !== null ||
+      refocusPending;
+
+    /** The long-poll for the next tick, from the reply the room shows. */
+    const nextLongPollFor = (shown: DraftState | null) =>
+      draftLongPoll({
+        version: roomVersion,
+        urgent: urgent(),
+        failureCount: consecutiveFailures,
+        canAct: canActRef.current,
+        live: shown?.status === "IN_PROGRESS" || shown?.status === "PAUSED",
+        serverNow: shown?.now ?? null,
+      });
+
     const tick = async () => {
       // inFlight also guards a visibilitychange firing mid-request — the active
       // call reschedules when it settles.
       if (!alive || inFlight) return;
+      rerunRequested = false;
       // Hidden with nothing at stake: don't fetch at all. The visibility
       // listener wakes us the instant it's refocused. Rules + reasoning in
       // draftPollCadence, where they're unit-tested.
@@ -561,28 +661,49 @@ export function DraftRoom({
         schedule(pre.delayMs);
         return;
       }
+      // Held by the server, or answered at once (null): rules in
+      // draftLongPoll, where they're unit-tested.
+      const longPoll = nextLongPollFor(latestStateRef.current);
       inFlight = true;
       // Minted HERE, before the await — ordering is by request START (see
       // room-sequence.ts).
       const { seq, next: seqNext } = issueSequence(seqRef.current);
       seqRef.current = seqNext;
       const pollConnectivityEpoch = connectivityEpochRef.current;
+      const startedAt = Date.now();
       let live = false;
       let reached = false;
       let rateLimited = false;
       let supersededByConnectivityChange = false;
-      const request = { controller: new AbortController(), released: false };
+      const request = {
+        controller: new AbortController(),
+        held: longPoll !== null,
+        released: false,
+      };
       current = request;
       try {
         const res = await fetch("/api/draft/tick", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ seasonId }),
+          body: JSON.stringify(
+            longPoll
+              ? {
+                  seasonId,
+                  since: longPoll.since,
+                  sinceNow: longPoll.sinceNow,
+                  holdMs: longPoll.holdMs,
+                }
+              : { seasonId },
+          ),
           // See ROOM_POLL_TIMEOUT_MS: without a deadline a request that never
           // answers freezes this loop for good, with `disconnected` false and
-          // every bid control still live on stale state. The controller lets
-          // the loop's cleanup release it.
-          signal: withDeadline(request.controller, ROOM_POLL_TIMEOUT_MS),
+          // every bid control still live on stale state. A held tick gets its
+          // hold on top (longPoll.timeoutMs); the controller also lets a
+          // connectivity change, a refocus or the loop's cleanup release it.
+          signal: withDeadline(
+            request.controller,
+            longPoll ? longPoll.timeoutMs : ROOM_POLL_TIMEOUT_MS,
+          ),
         });
         // Cleaned up while the reply was on its way: a newer loop owns the
         // room, and this reply must never touch it.
@@ -590,27 +711,43 @@ export function DraftRoom({
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
         } else if (res.ok) {
-          const next = (await res.json()) as DraftState;
+          const payload = (await res.json()) as DraftState & {
+            roomVersion?: unknown;
+            held?: unknown;
+          };
           if (!alive) return;
           if (pollConnectivityEpoch !== connectivityEpochRef.current) {
             supersededByConnectivityChange = true;
-          } else if (next.seasonId !== seasonId) {
+          } else if (payload.seasonId !== seasonId) {
             setSeasonChanged(true);
             return;
           } else {
-            const applied = apply(next, seq);
+            const applied = apply(payload, seq);
+            if (applied) {
+              roomVersion =
+                typeof payload.roomVersion === "string"
+                  ? payload.roomVersion
+                  : null;
+              refocusPending = false;
+            }
+            unheldStreak = roomUnheldStreak(unheldStreak, {
+              askedHold: longPoll !== null,
+              held: payload.held,
+            });
             const actionSeq = actionReconcileSeqRef.current;
             if (applied && actionSeq !== null && seq > actionSeq) {
               actionReconcileSeqRef.current = null;
               setActionReconciling(false);
             }
             consecutiveFailures = 0;
+            resyncPending = false;
             pollOk();
             setConnectivity(navigator.onLine === false ? "offline" : "online");
             setInitialError(false);
             setSyncDelayed(false);
             reached = true;
-            live = next.status === "IN_PROGRESS" || next.status === "PAUSED";
+            live =
+              payload.status === "IN_PROGRESS" || payload.status === "PAUSED";
           }
         } else if (res.status === 404) {
           setNoSeason(true); // season deactivated under us — stop pretending
@@ -633,7 +770,8 @@ export function DraftRoom({
         if (pollConnectivityEpoch !== connectivityEpochRef.current) {
           supersededByConnectivityChange = true;
         } else if (request.released) {
-          // The loop was cleaned up: not a failure, and nothing to show.
+          // Released on purpose (a refocus, a connectivity change, or the
+          // loop was cleaned up): not a failure, and nothing to show.
         } else {
           setInitialError(true);
           markFailure(); // network blip; next poll retries
@@ -643,39 +781,70 @@ export function DraftRoom({
         if (current === request) current = null;
       }
       if (supersededByConnectivityChange) {
+        resyncPending = true;
         setConnectivity(navigator.onLine === false ? "offline" : "resyncing");
+        schedule(0);
+        return;
+      }
+      if (rerunRequested) {
+        rerunRequested = false;
         schedule(0);
         return;
       }
       // Recompute visibility HERE, not from a pre-fetch snapshot: a tab
       // refocused mid-request reschedules at the active rate straight away.
-      schedule(
-        draftPollCadence({
-          offline: navigator.onLine === false,
-          hidden: document.visibilityState === "hidden",
-          hasStake: hasStakeRef.current,
-          canAct: canActRef.current,
-          live,
-          reached,
-          rateLimited,
-          failureCount: consecutiveFailures,
-          activeMs: pollMs,
-        }).delayMs,
-      );
+      const nextLongPoll = nextLongPollFor(latestStateRef.current);
+      const delayMs = draftPollDelay({
+        offline: navigator.onLine === false,
+        hidden: document.visibilityState === "hidden",
+        hasStake: hasStakeRef.current,
+        canAct: canActRef.current,
+        live,
+        reached,
+        rateLimited,
+        failureCount: consecutiveFailures,
+        activeMs: pollMs,
+        longPoll: nextLongPoll !== null,
+        startedAgoMs: Date.now() - startedAt,
+        unheldStreak,
+      });
+      if (delayMs === 0 && nextLongPoll !== null) {
+        reissue();
+        return;
+      }
+      schedule(delayMs);
     };
 
     const onVisibility = () => {
-      if (document.visibilityState === "visible") tick();
+      if (document.visibilityState !== "visible") {
+        hiddenAt ??= Date.now();
+        return;
+      }
+      const hiddenForMs = hiddenAt === null ? null : Date.now() - hiddenAt;
+      hiddenAt = null;
+      if (roomRefocusResync(hiddenForMs)) {
+        // A held tick may have died silently with the connection while the
+        // device slept: release it, and ask afresh, unheld.
+        refocusPending = true;
+        rerunRequested = true;
+        releaseHold();
+      }
+      tick();
     };
     const onOffline = () => {
       connectivityEpochRef.current += 1;
+      resyncPending = true;
       setConnectivity("offline");
+      releaseHold();
     };
     const onOnline = () => {
       // Keep actions disabled until a fresh authoritative payload arrives.
-      // Merely regaining a network interface does not make the old lot safe.
+      // Merely regaining a network interface does not make the old lot safe,
+      // and a held tick may predate the outage: release it and ask afresh.
       connectivityEpochRef.current += 1;
+      resyncPending = true;
       setConnectivity("resyncing");
+      releaseHold();
       tick();
     };
     document.addEventListener("visibilitychange", onVisibility);
@@ -689,6 +858,8 @@ export function DraftRoom({
       window.removeEventListener("offline", onOffline);
       window.removeEventListener("online", onOnline);
       if (timer) clearTimeout(timer);
+      // Held or not, nobody reads this loop's tick any more (the server would
+      // hold a held one for up to its hold).
       releaseInFlight();
     };
   }, [apply, pollKick, pollOk, pollFail, pollMs, seasonId]);

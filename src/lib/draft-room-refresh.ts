@@ -35,3 +35,27 @@ export function draftRoomNeedsRefresh(
     rendered.draftStatus !== polled.draftStatus
   );
 }
+
+/**
+ * The longest a viewer who can't act waits before that refresh
+ * (draftRoomRefreshDelayMs).
+ */
+export const DRAFT_ROOM_REFRESH_SPREAD_MS = 5_000;
+
+/**
+ * How long a tab waits before that refresh. A captain or an admin refreshes
+ * at once: their controls and header matter now. Everyone else waits a
+ * random 0 to DRAFT_ROOM_REFRESH_SPREAD_MS, because the long-poll tells every
+ * tab of a Start, a pause or a resume within a second, and fifty renders of
+ * the layout and the page landing together on the box would queue the
+ * captains' bids behind them; the old 5s poll spread them about that much.
+ * `random` is Math.random's contract; anything outside [0, 1) is clamped.
+ */
+export function draftRoomRefreshDelayMs(
+  canAct: boolean,
+  random: () => number = Math.random,
+): number {
+  if (canAct) return 0;
+  const r = Math.min(1, Math.max(0, random()));
+  return Math.round(r * DRAFT_ROOM_REFRESH_SPREAD_MS);
+}
