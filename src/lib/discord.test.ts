@@ -54,7 +54,7 @@ import {
   standinRemovedMessage,
   teamWithdrewMessage,
   teamIdentityChangedMessage,
-  weekReminderAnnouncement,
+  weekReminderAnnouncements,
   weekReminderMessage,
   weeklyHonorsMessage,
   materializeAllowedMentions,
@@ -1811,7 +1811,9 @@ describe("weekReminderMessage", () => {
     expect(msg).not.toContain("Still waiting");
   });
 
-  it("caps a long list rather than posting a wall of mentions", () => {
+  it("names every player a side still owes, not the first eight", () => {
+    // The reminder is the week's first nudge, when a whole side may not have
+    // answered yet; a cap of eight left two of them unpinged.
     const msg = weekReminderMessage({
       week: 3,
       isPlayoff: false,
@@ -1832,12 +1834,13 @@ describe("weekReminderMessage", () => {
         },
       ],
     });
-    expect(msg).toContain("+2 more");
-    expect(msg).not.toContain("P8");
+    for (let i = 0; i < 10; i += 1) expect(msg).toContain(`P${i}`);
+    expect(msg).not.toMatch(/\+\d+ more/);
   });
 
-  it("bounds a realistic 32-team slate and allowlists only visible waiters", () => {
-    const fixtures = Array.from({ length: 16 }, (_, fixtureIndex) => ({
+  /** One kickoff's fixtures, every seat unanswered and linked. */
+  const slate = (count: number, waiting = 10) =>
+    Array.from({ length: count }, (_, fixtureIndex) => ({
       matchId: `match-${fixtureIndex + 1}`,
       homeName: `Long Radiant Team Name ${fixtureIndex * 2 + 1}`,
       awayName: `Long Dire Team Name ${fixtureIndex * 2 + 2}`,
@@ -1846,55 +1849,155 @@ describe("weekReminderMessage", () => {
       homeSize: 5,
       awayIn: 0,
       awaySize: 5,
-      waitingOn: Array.from({ length: 10 }, (_, playerIndex) => ({
+      waitingOn: Array.from({ length: waiting }, (_, playerIndex) => ({
         name: `Player ${fixtureIndex + 1}-${playerIndex + 1}`,
         discordId: (
-          BigInt("800000000000000000") + BigInt(fixtureIndex * 10 + playerIndex)
+          BigInt("800000000000000000") + BigInt(fixtureIndex * 100 + playerIndex)
         ).toString(),
       })),
     }));
 
-    const announcement = weekReminderAnnouncement({
+  /** Every post deliverable on its own, every fixture listed once, every
+   *  waiter allowlisted in exactly the one post that shows them. */
+  function expectWholeSlate(
+    fixtures: ReturnType<typeof slate>,
+    posts: ReturnType<typeof weekReminderAnnouncements>,
+  ) {
+    for (const post of posts) {
+      const delivered = materializeAllowedMentions(post.content, {
+        users: post.mentionUserIds,
+      });
+      // Every allowed id already appears in its own post, so the transport
+      // cannot prepend a hidden mention.
+      expect(delivered).toBe(post.content);
+      expect(delivered.length).toBeLessThanOrEqual(2_000);
+      expect(post.mentionUserIds.length).toBeLessThanOrEqual(100);
+      const visible = [...post.content.matchAll(/<@(\d{17,20})>/g)].map(
+        (match) => match[1],
+      );
+      expect(new Set(post.mentionUserIds)).toEqual(new Set(visible));
+      // A phone notification shows one post: each carries the kickoff.
+      expect(post.content.split("\n")[1]).toBe(
+        "Kickoff: <t:1800000000:F> (<t:1800000000:R>)",
+      );
+    }
+    const all = posts.map((post) => post.content).join("\n");
+    for (const fixture of fixtures) {
+      expect(all.split(`/matches/${fixture.matchId}>`).length - 1).toBe(1);
+      for (const waiter of fixture.waitingOn) {
+        expect(
+          posts.filter((post) => post.mentionUserIds.includes(waiter.discordId!)),
+        ).toHaveLength(1);
+      }
+    }
+    expect(all).not.toMatch(/more fixtures?|\+\d+ more/);
+  }
+
+  // Two groups: 7+6 teams is 3+3 fixtures a night, 7+7 the same, 8+7 is
+  // 4+3, 8+8 is 4+4; an odd group rests one team. One post used to carry
+  // four fixtures and summarize the rest without a ping.
+  it.each([
+    { teams: 13, fixtures: 6, byes: 1 },
+    { teams: 14, fixtures: 6, byes: 2 },
+    { teams: 15, fixtures: 7, byes: 1 },
+    { teams: 16, fixtures: 8, byes: 0 },
+  ])(
+    "a $teams-team night ($fixtures fixtures at one kickoff) pings every waiting player",
+    ({ fixtures: count, byes }) => {
+      const fixtures = slate(count);
+      const posts = weekReminderAnnouncements({
+        week: 4,
+        isPlayoff: false,
+        fixtures,
+        byeTeamNames: Array.from({ length: byes }, (_, i) => `Resting ${i + 1}`),
+        pickemOpen: true,
+      });
+      expect(posts.length).toBeGreaterThan(1);
+      expectWholeSlate(fixtures, posts);
+      posts.forEach((post, index) => {
+        expect(post.content.split("\n")[0]).toBe(
+          index === 0
+            ? `⏰ **Week 4 matches coming up — check in!** (1/${posts.length})`
+            : `⏰ **Week 4 matches, continued** (${index + 1}/${posts.length})`,
+        );
+      });
+      // The bye line, the RSVP ask and pick'em close the last post only.
+      const last = posts.at(-1)!.content;
+      expect(last).toContain("RSVP on your match page");
+      expect(last).toMatch(/Pick'em closes at kickoff: <.*\/pickem>$/);
+      if (byes > 0) expect(last).toContain("💤 Bye: **Resting 1**");
+      for (const post of posts.slice(0, -1)) {
+        expect(post.content).not.toContain("RSVP on your match page");
+        expect(post.content).not.toContain("💤 Bye");
+      }
+    },
+  );
+
+  it("splits a 32-team slate (16 fixtures, 160 waiters) without dropping anyone", () => {
+    const fixtures = slate(16);
+    const posts = weekReminderAnnouncements({ week: 4, isPlayoff: false, fixtures });
+    expect(posts.length).toBeGreaterThan(2);
+    expectWholeSlate(fixtures, posts);
+  });
+
+  it("keeps a small night to one unnumbered post", () => {
+    const posts = weekReminderAnnouncements({
       week: 4,
       isPlayoff: false,
-      fixtures,
+      fixtures: slate(2),
     });
-    const delivered = materializeAllowedMentions(announcement.content, {
-      users: announcement.mentionUserIds,
+    expect(posts).toHaveLength(1);
+    expect(posts[0].content.split("\n")[0]).toBe(
+      "⏰ **Week 4 matches coming up — check in!**",
+    );
+    expect(posts[0].content).toContain("RSVP on your match page");
+  });
+
+  it("gives each row its own time when a caller mixes kickoffs", () => {
+    const fixtures = slate(8).map((fixture, index) => ({
+      ...fixture,
+      scheduledAt: 1_800_000_000_000 + (index % 2) * 3_600_000,
+    }));
+    const posts = weekReminderAnnouncements({ week: 4, isPlayoff: false, fixtures });
+    expect(posts.length).toBeGreaterThan(1);
+    for (const post of posts) {
+      expect(post.content.length).toBeLessThanOrEqual(2_000);
+      expect(post.content).not.toContain("Kickoff:");
+      for (const row of post.content.split("\n").filter((line) => line.startsWith("🆚"))) {
+        expect(row).toMatch(/<t:\d+:F>/);
+      }
+    }
+  });
+
+  it("names fewer waiters, and counts the rest, only for a fixture too long for a post", () => {
+    const [fixture] = slate(1);
+    const posts = weekReminderAnnouncements({
+      week: 4,
+      isPlayoff: false,
+      fixtures: [{ ...fixture, homeName: "H".repeat(780), awayName: "A".repeat(780) }],
     });
+    expect(posts).toHaveLength(1);
+    const [post] = posts;
+    expect(post.content.length).toBeLessThanOrEqual(2_000);
+    const more = post.content.match(/\+(\d+) more/);
+    expect(more).not.toBeNull();
+    expect(post.mentionUserIds.length + Number(more![1])).toBe(10);
+    expect(
+      materializeAllowedMentions(post.content, { users: post.mentionUserIds }),
+    ).toBe(post.content);
+  });
 
-    // Every allowed id already appears in a visible waiter row, so central
-    // transport materialization cannot prepend hidden/omitted users.
-    expect(delivered).toBe(announcement.content);
-    expect(delivered.length).toBeLessThanOrEqual(2_000);
-    // The clock time is part of the packed body, not added after it.
-    expect(delivered.split("\n")[1]).toBe(
-      "Kickoff: <t:1800000000:F> (<t:1800000000:R>)",
-    );
-    const visibleMentions = [...delivered.matchAll(/<@(\d{17,20})>/g)].map(
-      (match) => match[1],
-    );
-    expect(new Set(announcement.mentionUserIds)).toEqual(
-      new Set(visibleMentions),
-    );
-
-    const shownFixtures = delivered
-      .split("\n")
-      .filter((line) => line.startsWith("🆚")).length;
-    const summary = delivered.match(
-      /…and (\d+) more fixtures? at this kickoff/,
-    );
-    expect(shownFixtures).toBeGreaterThan(0);
-    expect(shownFixtures).toBeLessThan(fixtures.length);
-    expect(summary).not.toBeNull();
-    expect(shownFixtures + Number(summary?.[1])).toBe(fixtures.length);
-    expect(delivered).toContain("/schedule>");
-
-    // A player from the final summarized fixture is neither rendered nor
-    // allowlisted; they cannot be materialized anonymously ahead of the body.
-    const hiddenId = fixtures.at(-1)!.waitingOn[0].discordId!;
-    expect(delivered).not.toContain(`<@${hiddenId}>`);
-    expect(announcement.mentionUserIds).not.toContain(hiddenId);
+  it("falls back to one plain post when a fixture can't fit at all", () => {
+    const [fixture] = slate(1);
+    const posts = weekReminderAnnouncements({
+      week: 4,
+      isPlayoff: false,
+      fixtures: [{ ...fixture, homeName: "H".repeat(1_000), awayName: "A".repeat(1_000) }],
+    });
+    expect(posts).toHaveLength(1);
+    expect(posts[0].content).toMatch(/^⏰ \*\*Match night is coming up — check in!\*\*/);
+    expect(posts[0].content.length).toBeLessThanOrEqual(2_000);
+    expect(posts[0].mentionUserIds).toEqual([]);
   });
 });
 

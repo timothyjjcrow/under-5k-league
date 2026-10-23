@@ -313,7 +313,7 @@ describe("week reminder — reaching the people who owe an answer", () => {
     expect(content).not.toContain("<@null>");
   });
 
-  it("keeps a 32-team kickoff deliverable and never allowlists hidden waiters", async () => {
+  it("splits a 32-team kickoff into parts that list every fixture and ping every waiter", async () => {
     const { season, home, away, match } = await setupWeek(4);
     const kickoff = match.scheduledAt!;
     const teams = [home, away];
@@ -365,35 +365,40 @@ describe("week reminder — reaching the people who owe an answer", () => {
     }
 
     expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
-    const [content, mentions, options] = mockSend.mock.calls[0];
-    const delivered = materializeAllowedMentions(content, mentions);
-    expect(delivered).toBe(content);
-    expect(delivered.length).toBeLessThanOrEqual(2_000);
-
-    const visibleIds = [...content.matchAll(/<@(\d{17,20})>/g)].map(
-      (item) => item[1],
-    );
-    expect(new Set(mentions?.users ?? [])).toEqual(new Set(visibleIds));
-    const shownFixtures = content
-      .split("\n")
-      .filter((line) => line.startsWith("🆚")).length;
-    const summary = content.match(/…and (\d+) more fixtures? at this kickoff/);
-    expect(summary).not.toBeNull();
-    expect(shownFixtures + Number(summary?.[1])).toBe(16);
-    expect(content).toContain("/schedule>");
-    // Equal kickoff timestamps do not imply creation order on PostgreSQL.
-    // Check every waiter whose fixture was actually omitted from the body.
-    const hiddenIds = fixtures
-      .filter((fixture) => !content.includes(`/matches/${fixture.matchId}>`))
-      .flatMap((fixture) => fixture.teamIndexes.map((index) => discordIds[index]));
-    expect(hiddenIds).toHaveLength(Number(summary?.[1]) * 2);
-    for (const id of hiddenIds) {
-      expect(mentions?.users ?? []).not.toContain(id);
-    }
-    expect(options?.marker).toEqual({
-      key: expect.stringMatching(`^weekReminder:${season.id}:1:`),
-      eventId: expect.any(String),
+    const calls = mockSend.mock.calls;
+    // One post used to carry part of the slate and summarize the rest.
+    expect(calls.length).toBeGreaterThan(1);
+    const [, , firstOptions] = calls[0];
+    calls.forEach(([content, mentions, options], index) => {
+      const delivered = materializeAllowedMentions(content, mentions);
+      // Each part allowlists exactly the waiters it shows, within the limits.
+      expect(delivered).toBe(content);
+      expect(delivered.length).toBeLessThanOrEqual(2_000);
+      const visibleIds = [...content.matchAll(/<@(\d{17,20})>/g)].map(
+        (item) => item[1],
+      );
+      expect(new Set(mentions?.users ?? [])).toEqual(new Set(visibleIds));
+      // One claim for every part; each part its own dedupe key.
+      expect(options?.marker).toEqual({
+        key: expect.stringMatching(`^weekReminder:${season.id}:1:`),
+        eventId: expect.any(String),
+      });
+      expect(options?.marker).toEqual(firstOptions?.marker);
+      expect(options?.expiresAt).toEqual(firstOptions?.expiresAt);
+      expect(options?.dedupeKey).toBe(
+        index === 0
+          ? firstOptions?.dedupeKey
+          : `${firstOptions?.dedupeKey}:${index + 1}`,
+      );
     });
+    const all = calls.map(([content]) => content).join("\n");
+    expect(all).not.toMatch(/more fixtures?/);
+    for (const fixture of fixtures) {
+      expect(all.split(`/matches/${fixture.matchId}>`).length - 1).toBe(1);
+    }
+    const pinged = calls.flatMap(([, mentions]) => mentions?.users ?? []);
+    expect(pinged).toHaveLength(discordIds.length);
+    expect(new Set(pinged)).toEqual(new Set(discordIds));
   });
 });
 
