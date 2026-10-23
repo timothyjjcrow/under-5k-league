@@ -104,8 +104,11 @@ type Tab = Awaited<ReturnType<typeof roomTab>>;
 /** How long a tick must have been in flight to count as held. */
 const HELD_MS = 500;
 
-/** Until the tab has a tick held: sent with `since`, unanswered, for HELD_MS. */
-async function untilHeld(tab: Tab) {
+/**
+ * Until the tab has a tick held: sent with `since`, unanswered, for HELD_MS,
+ * and started at or after `startedAfter`.
+ */
+async function untilHeld(tab: Tab, startedAfter = 0) {
   await expect
     .poll(
       () =>
@@ -114,6 +117,7 @@ async function untilHeld(tab: Tab) {
             r.since !== null &&
             r.end === null &&
             !r.failed &&
+            r.start >= startedAfter &&
             Date.now() - r.start >= HELD_MS,
         ),
       { timeout: 30_000 },
@@ -227,6 +231,13 @@ test("a bid reaches every open tab, signed in or out, within about a second", as
   ];
   for (const tab of [spectator, watcher]) await untilHeld(tab);
   const seasonId = spectator.log.find((r) => r.seasonId)!.seasonId!;
+  // A captain's first tick puts them back in the room, which publishes and
+  // wakes every held tab. Do it before the holds this test measures: a wake
+  // just ahead of the bid sends a watcher into its 3s gap
+  // (LONG_POLL_WATCH_GAP_MS), and the bid then waits for its next tick.
+  for (const cap of captains) await post(cap, "/api/draft/tick", { seasonId });
+  const inTheRoom = Date.now();
+  for (const tab of [spectator, watcher]) await untilHeld(tab, inTheRoom);
 
   const moved = await moveTheAuction(seasonId, captains);
   for (const tab of [spectator, watcher]) {
