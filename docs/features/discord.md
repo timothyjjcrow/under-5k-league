@@ -135,7 +135,8 @@ actions: `src/app/actions/admin-discord.ts`.
   "I'm in" on the site with a linked Discord, at most
   `INHOUSE_NIGHT_START_PINGS_MAX` and only what fits the post; the rest are
   counted (Tim's call, 2026-10-08). Week reminder: unanswered players only
-  (`unansweredUserIds`). Free-agent signing or release: that player. Draft
+  (`unansweredUserIds`), every one of them, across as many numbered posts as
+  the limits need ([rosters-and-standins](rosters-and-standins.md)). Free-agent signing or release: that player. Draft
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a
   captain who misses the start loses turns to auto-nomination, while everyone

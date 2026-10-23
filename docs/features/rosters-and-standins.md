@@ -220,6 +220,17 @@ standin cover, and match-night check-ins. Main files:
   unanswered players only. One claim per kickoff cluster
   (`claimAnnouncementMarker` on `weekReminderKey(season, week, kickoffMs)`), so an
   early fixture can't burn the week; a failed send stays retryable. Await the send.
+  A kickoff goes out in as many posts as Discord's limits need
+  (`weekReminderAnnouncements`, `discord.ts`): whole fixtures in input order,
+  each post within 2,000 characters and 100 mentions, numbered ("2/3") and
+  carrying the heading and the kickoff, with the bye line and the RSVP ask on
+  the last. Every unanswered player is named and every linked one mentioned,
+  with no cap: it is the week's first nudge, when a whole side may not have
+  answered (Tim's call, 2026-10-23; a 15-team night is seven fixtures and up to
+  seventy players). Each part is its own outbox row under the cluster's claim:
+  part 1 keeps the claim's dedupe key and later parts add `:2`, `:3`, so a
+  retry under the same event id adds only the parts that never queued
+  (`week-reminder-posts.itest.ts`).
   Retiming one fixture releases only its old kickoff's marker, once nothing
   else kicks off there (`releaseRetimedReminderMarker`), so the fixtures that
   didn't move are never reminded, and pinged, twice

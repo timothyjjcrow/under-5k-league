@@ -1,6 +1,6 @@
 /** Discord ids are unsigned snowflakes; current values are 17–20 digits. */
 const DISCORD_SNOWFLAKE = /^\d{17,20}$/;
-const MAX_EXPLICIT_MENTIONS = 100;
+export const MAX_EXPLICIT_MENTIONS = 100;
 
 export const DISCORD_CONTENT_MAX = 2_000;
 

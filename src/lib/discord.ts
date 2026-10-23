@@ -8,6 +8,7 @@ import { escapeDiscordText } from "./discord-escape";
 import {
   DISCORD_CONTENT_MAX,
   isValidDiscordContent,
+  MAX_EXPLICIT_MENTIONS,
   materializeAllowedMentions,
   normalizeMentionAllowlist,
   type MentionAllowlist,
@@ -1222,9 +1223,12 @@ export function rescheduleDeclinedMessage(m: {
   return `⏳ **${name(m.declinerName)}** ${what} — the original kickoff stands.${link}`;
 }
 
-/** Cap the ping list so one badly-organised team can't produce a wall of
- *  mentions; a captain chasing eleven people needs the match page, not a
- *  longer Discord line. */
+/** Cap a captain's check-in nudge so one badly-organised team can't produce
+ *  a wall of mentions; a captain chasing eleven people needs the match page,
+ *  not a longer Discord line. The week reminder names everyone who owes an
+ *  answer instead: it is the week's first nudge, when a whole side may not
+ *  have answered yet, and it splits across posts rather than truncating
+ *  (weekReminderAnnouncements). */
 const WAITING_SHOWN = 8;
 
 export type WeekReminderFixture = {
@@ -1292,17 +1296,22 @@ function reminderFixtureBlock(
   site: string,
   /** The header already carries the shared kickoff, so the row skips it. */
   showKickoff: boolean,
+  /** How many waiters to name; the reminder names all of them unless a
+   *  fixture alone can't fit a post (see weekReminderAnnouncements). */
+  waitingShown = f.waitingOn.length,
 ): {
-  lines: string[];
+  text: string;
   mentionUserIds: string[];
 } {
   const when = showKickoff ? ` — ${kickoffStamp(f.scheduledAt)}` : "";
   const lines = [
     `🆚 **${name(f.homeName)}** vs **${name(f.awayName)}**${when} · check-ins ${f.homeIn}/${f.homeSize} vs ${f.awayIn}/${f.awaySize} · <${site}/matches/${f.matchId}>`,
   ];
-  if (f.waitingOn.length === 0) return { lines, mentionUserIds: [] };
+  if (f.waitingOn.length === 0) {
+    return { text: lines.join("\n"), mentionUserIds: [] };
+  }
 
-  const shown = f.waitingOn.slice(0, WAITING_SHOWN);
+  const shown = f.waitingOn.slice(0, waitingShown);
   const validIds = new Set(
     normalizeMentionAllowlist({
       users: shown.flatMap((p) => (p.discordId ? [p.discordId] : [])),
@@ -1320,40 +1329,32 @@ function reminderFixtureBlock(
     })
     .join(", ");
   const extra = f.waitingOn.length - shown.length;
-  lines.push(`　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`);
-  return { lines, mentionUserIds };
-}
-
-function reminderFixtureSummary(
-  omitted: number,
-  shown: number,
-  withLink: boolean,
-  site: string,
-): string {
-  const count = `${omitted} more fixture${omitted === 1 ? "" : "s"}`;
-  const lead =
-    shown > 0
-      ? `…and ${count} at this kickoff.`
-      : `${omitted} fixture${omitted === 1 ? " is" : "s are"} scheduled at this kickoff.`;
-  return withLink
-    ? `${lead} Full slate: <${site}/schedule>`
-    : `${lead} View the full schedule on the league site.`;
+  lines.push(
+    shown.length === 0
+      ? `　Still waiting on ${extra} player${extra === 1 ? "" : "s"}`
+      : `　Still waiting on: ${who}${extra > 0 ? ` +${extra} more` : ""}`,
+  );
+  return { text: lines.join("\n"), mentionUserIds };
 }
 
 /**
- * Build the reminder body and its mention allowlist together.
+ * The week reminder for one kickoff, in as many posts as Discord's limits
+ * need, so every fixture is listed and every player who owes a check-in is
+ * named, and mentioned when linked.
  *
- * Discord rejects webhook content above 2,000 characters. A 32-team league
- * can put 16 fixtures (and scores of unanswered players) at one kickoff, so a
- * formatter that simply maps every row can poison the durable queue forever.
- * Keep complete fixture blocks in their stable input order while they fit,
- * then account for every remaining fixture in one actionable summary. Because
- * the allowlist is derived only from blocks that survived packing, the
- * transport never materializes an invisible/omitted player's mention.
+ * Discord refuses webhook content above 2,000 characters and allowlists at
+ * most 100 users per post. A 15-team night is seven fixtures and up to
+ * seventy unanswered players: one post used to carry four fixtures and
+ * summarize the rest, and nobody in those three got a ping. Fixtures keep
+ * their input order and are never split across posts. Every post repeats the
+ * heading and the shared kickoff, so a phone notification reads on its own,
+ * and numbers itself ("2/3") when there is more than one; the bye line, the
+ * RSVP ask and the pick'em link close the last. Each post's allowlist holds
+ * exactly the ids it shows, so the transport never prepends a hidden mention.
  */
-export function weekReminderAnnouncement(
+export function weekReminderAnnouncements(
   m: WeekReminderInput,
-): WeekReminderAnnouncement {
+): WeekReminderAnnouncement[] {
   const site = resolveSiteUrl();
   const label = m.isTiebreaker
     ? `Tiebreaker week ${m.week} matches`
@@ -1380,70 +1381,93 @@ export function weekReminderAnnouncement(
     m.fixtures.map((f) => Math.floor(f.scheduledAt / 1000)),
   );
   const sharedKickoff = kickoffs.size === 1 ? m.fixtures[0].scheduledAt : null;
-  const lines = [`⏰ **${label} coming up — check in!**`];
-  if (sharedKickoff != null) lines.push(`Kickoff: ${kickoffStamp(sharedKickoff)}`);
-  const includedMentions: string[] = [];
-  let shownFixtures = 0;
+  const kickoffLine =
+    sharedKickoff != null ? `Kickoff: ${kickoffStamp(sharedKickoff)}` : null;
+  const heading = (part: number, total: number) =>
+    part === 1
+      ? `⏰ **${label} coming up — check in!**${total > 1 ? ` (1/${total})` : ""}`
+      : `⏰ **${label}, continued** (${part}/${total})`;
 
-  const packedContent = (
-    body: string[],
-    omitted: number,
-    shown: number,
-  ): string | null => {
-    const summaries =
-      omitted > 0
-        ? [
-            reminderFixtureSummary(omitted, shown, true, site),
-            reminderFixtureSummary(omitted, shown, false, site),
-          ]
-        : [null];
-    for (const summary of summaries) {
-      const content = [...body, ...(summary ? [summary] : []), footer].join(
-        "\n",
-      );
-      if (content.length <= DISCORD_CONTENT_MAX) return content;
+  // Packing reserves the longest heading any post could get, so numbering
+  // the posts afterwards never pushes one over the limit.
+  const headLength =
+    Math.max(heading(1, 99).length, heading(99, 99).length) +
+    (kickoffLine ? 1 + kickoffLine.length : 0);
+  type Block = ReturnType<typeof reminderFixtureBlock>;
+  const fits = (blocks: Block[], withFooter: boolean) =>
+    headLength +
+      blocks.reduce((sum, block) => sum + 1 + block.text.length, 0) +
+      (withFooter ? 1 + footer.length : 0) <=
+    DISCORD_CONTENT_MAX;
+  const mentionCount = (blocks: Block[]) =>
+    blocks.reduce((sum, block) => sum + block.mentionUserIds.length, 0);
+
+  const posts: Block[][] = [[]];
+  for (const fixture of m.fixtures) {
+    // A fixture that can't share a post with the footer on its own (names or
+    // a site address far past anything real) names fewer waiters, counting
+    // the rest, rather than costing the reminder.
+    let block = reminderFixtureBlock(fixture, site, sharedKickoff == null);
+    for (
+      let shown = fixture.waitingOn.length - 1;
+      shown >= 0 && !fits([block], true);
+      shown -= 1
+    ) {
+      block = reminderFixtureBlock(fixture, site, sharedKickoff == null, shown);
     }
-    return null;
-  };
-
-  for (let index = 0; index < m.fixtures.length; index += 1) {
-    const block = reminderFixtureBlock(
-      m.fixtures[index],
-      site,
-      sharedKickoff == null,
-    );
-    const candidate = [...lines, ...block.lines];
-    const omitted = m.fixtures.length - index - 1;
-    if (!packedContent(candidate, omitted, index + 1)) break;
-    lines.push(...block.lines);
-    includedMentions.push(...block.mentionUserIds);
-    shownFixtures += 1;
+    if (!fits([block], true)) return [compactWeekReminder(m, footer)];
+    const post = posts[posts.length - 1];
+    if (
+      post.length > 0 &&
+      (!fits([...post, block], false) ||
+        mentionCount(post) + block.mentionUserIds.length > MAX_EXPLICIT_MENTIONS)
+    ) {
+      posts.push([block]);
+    } else {
+      post.push(block);
+    }
   }
+  // The footer closes the last post. Every fixture fits beside it alone, so
+  // when the last post is too full, its final fixture moves to a post of its
+  // own.
+  const last = posts[posts.length - 1];
+  if (!fits(last, true)) posts.push([last.pop()!]);
 
-  const omitted = m.fixtures.length - shownFixtures;
-  const content = packedContent(lines, omitted, shownFixtures);
-  if (!content) {
-    // Defensive last resort for corrupted/unbounded input (for example an
-    // absurd environment URL). Keep the reminder deliverable and explicit;
-    // no user is allowlisted because this compact form displays no user.
-    return {
-      content:
-        "⏰ **Match night is coming up — check in!**\n" +
-        `${m.fixtures.length} fixture${m.fixtures.length === 1 ? " is" : "s are"} scheduled. View the full schedule on the league site.\n` +
-        footer,
-      mentionUserIds: [],
-    };
-  }
-
-  const mentionUserIds = [...new Set(includedMentions)].filter((id) =>
-    content.includes(`<@${id}>`),
-  );
-  return { content, mentionUserIds };
+  return posts.map((blocks, index) => {
+    const content = [
+      heading(index + 1, posts.length),
+      ...(kickoffLine ? [kickoffLine] : []),
+      ...blocks.map((block) => block.text),
+      ...(index === posts.length - 1 ? [footer] : []),
+    ].join("\n");
+    const mentionUserIds = [
+      ...new Set(blocks.flatMap((block) => block.mentionUserIds)),
+    ].filter((id) => content.includes(`<@${id}>`));
+    return { content, mentionUserIds };
+  });
 }
 
-/** Backward-compatible pure formatter for surfaces/tests that need only text. */
+/** Defensive last resort for corrupted or unbounded input (for example an
+ *  absurd environment URL): deliverable and explicit, and it allowlists
+ *  nobody because it shows nobody. */
+function compactWeekReminder(
+  m: WeekReminderInput,
+  footer: string,
+): WeekReminderAnnouncement {
+  return {
+    content:
+      "⏰ **Match night is coming up — check in!**\n" +
+      `${m.fixtures.length} fixture${m.fixtures.length === 1 ? " is" : "s are"} scheduled. View the full schedule on the league site.\n` +
+      footer,
+    mentionUserIds: [],
+  };
+}
+
+/** The reminder's text alone, its posts joined, for tests and previews. */
 export function weekReminderMessage(m: WeekReminderInput): string {
-  return weekReminderAnnouncement(m).content;
+  return weekReminderAnnouncements(m)
+    .map((post) => post.content)
+    .join("\n\n");
 }
 
 export type CheckinNudgeInput = {

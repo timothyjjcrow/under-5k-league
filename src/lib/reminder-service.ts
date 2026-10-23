@@ -14,7 +14,7 @@ import {
   draftReminderAnnouncement,
   getWebhookUrl,
   sendDiscordMessage,
-  weekReminderAnnouncement,
+  weekReminderAnnouncements,
 } from "./discord";
 import {
   expectedSideSize,
@@ -320,7 +320,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     roundLabel = roundGroupLabel(matches, depth);
   }
 
-  const announcement = weekReminderAnnouncement({
+  const posts = weekReminderAnnouncements({
     week: next.week,
     isPlayoff,
     roundLabel,
@@ -332,29 +332,38 @@ export async function maybeAnnounceUpcomingWeek(season: {
         ? await weekByeTeamNames(season.id, next.week)
         : [],
   });
-  const sent = await sendDiscordMessage(
-    announcement.content,
-    // Only these exact ids may ring a phone — parse:[] still blocks everything
-    // else, so a team name or persona in the same message stays inert. The
-    // builder omits these ids whenever their fixture/waiter line cannot fit in
-    // Discord's 2,000-character body limit.
-    mentionsOf(announcement.mentionUserIds),
-    {
-      dedupeKey: announcementDedupeKey("reminder", claim),
-      marker: { key: claim.key, eventId: claim.eventId },
-      // Stuck behind a webhook outage, it is dropped at kickoff (a catch-up
-      // queued after kickoff keeps its BEHIND_HOURS window) instead of being
-      // posted once the games it announces are over.
-      expiresAt: weekReminderExpiresAt(
-        next.scheduledAt!.getTime(),
-        now,
-        WEEK_REMINDER.BEHIND_HOURS,
-      ),
-    },
+  // Stuck behind a webhook outage, it is dropped at kickoff (a catch-up
+  // queued after kickoff keeps its BEHIND_HOURS window) instead of being
+  // posted once the games it announces are over.
+  const expiresAt = weekReminderExpiresAt(
+    next.scheduledAt!.getTime(),
+    now,
+    WEEK_REMINDER.BEHIND_HOURS,
   );
-  if (!sent) {
-    await markAnnouncementFailed(claim);
-    return false;
+  const dedupeKey = announcementDedupeKey("reminder", claim);
+  // One post per part, in order: the outbox drains in creation order and an
+  // unsent earlier row holds every later one, so the parts arrive in
+  // sequence. Every part carries the claim's marker (a superseded claim
+  // cancels them all) and its own dedupe key. A retry re-claims with the
+  // same event id, so it finds the parts already queued and adds only the
+  // missing ones; part 1 keeps the key a one-post reminder always had.
+  for (const [index, post] of posts.entries()) {
+    const sent = await sendDiscordMessage(
+      post.content,
+      // Only these exact ids may ring a phone — parse:[] still blocks
+      // everything else, so a team name or persona in the same message stays
+      // inert. Each part allowlists exactly the waiters it shows.
+      mentionsOf(post.mentionUserIds),
+      {
+        dedupeKey: index === 0 ? dedupeKey : `${dedupeKey}:${index + 1}`,
+        marker: { key: claim.key, eventId: claim.eventId },
+        expiresAt,
+      },
+    );
+    if (!sent) {
+      await markAnnouncementFailed(claim);
+      return false;
+    }
   }
   return markAnnouncementSent(claim);
 }
