@@ -43,6 +43,7 @@ import {
   undoLastSale,
   voidCurrentLot,
 } from "@/lib/draft-service";
+import { publishDraftRoomChange } from "@/lib/draft-room-version";
 import { enrichStoredGames } from "@/lib/match-import";
 import {
   MANUAL_REFRESH_BUDGET_MS,
@@ -280,6 +281,8 @@ export async function addCaptain(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "addCaptain",
     summary: `Designated ${added.name} as captain of "${added.teamName}"${added.carriedNote ? " (kept from their last team)" : ""}`,
@@ -475,6 +478,8 @@ export async function removeCaptain(
     }
     throw e;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "removeCaptain",
     summary:
@@ -762,6 +767,8 @@ export async function changeCaptain(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "changeCaptain",
     summary:
@@ -1002,6 +1009,8 @@ export async function transferCaptaincy(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "transferCaptaincy",
     summary: `Transferred "${transferred.teamName}" from ${transferred.outgoingName} to ${transferred.incomingName}`,
@@ -1107,6 +1116,8 @@ export async function randomizeDraftOrder(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "randomizeDraftOrder",
     summary: `Randomized the draft order for ${count} teams`,
@@ -1410,6 +1421,8 @@ export async function startDraft(
     }
     throw e;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   // Mention the captains (linked ones only): an absent captain's nomination
   // clock runs out and the site nominates for them. Read after the commit,
   // outside the Serializable start, and best-effort: a failed read only
@@ -1836,6 +1849,8 @@ export async function refreshPlayerData(
       ? ` · ${enrich.enriched} older game${enrich.enriched === 1 ? "" : "s"} given report-card stats and items${enrich.remaining ? ` (${enrich.remaining} to go)` : ""}`
       : "";
   const summary = `${regs.length} signup${regs.length === 1 ? "" : "s"} checked · ${ranked} ranked${stats > 0 ? ` · ${stats} scouting profile${stats === 1 ? "" : "s"}` : ""}${deferred > 0 ? ` (${deferred} more in the hourly refresh)` : ""}${steamPart}${gamesPart}`;
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "refreshPlayerData",
     summary: `Refreshed player data: ${summary}`,
@@ -1967,6 +1982,8 @@ export async function setDraftNight(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the waiting room counts down to it.
+  if (changed) await publishDraftRoomChange();
   // Best-effort announcement — the countdown surfaces update either way.
   if (changed) {
     if (when) {

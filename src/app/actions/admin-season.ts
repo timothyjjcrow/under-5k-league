@@ -62,6 +62,7 @@ import {
   setSetting,
   stampResultChange,
 } from "@/lib/settings";
+import { publishDraftRoomChange } from "@/lib/draft-room-version";
 import { bumpSessionEpoch } from "@/lib/session-epoch";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -313,6 +314,8 @@ export async function createSeason(
   } catch (error) {
     console.error("createSeason: could not unpin last season's news", error);
   }
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "createSeason",
     summary:
@@ -346,6 +349,8 @@ export async function archiveCompletedSeasonAction(
     str(formData, "expectedActiveSeasonId").trim(),
   );
   if (!result.ok) return { error: result.error };
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "archiveCompletedSeason",
     summary: `Closed completed season "${result.name}" and entered the offseason`,
@@ -458,6 +463,8 @@ export async function archiveIncompleteSeasonAction(
           "A Complete season is not a cancellation. Reconcile its champion, then use the normal Season handoff.",
       };
     }
+    // Rule P (draft-room-version.ts): the draft room shows the active season.
+    await publishDraftRoomChange();
     await logAdminAction({
       action: "archiveIncompleteSeason",
       summary: `Cancelled unfinished season "${result.name}" from ${result.status} and entered the offseason; all saved data was preserved${result.draftParked ? " and its live auction was paused" : ""}`,
@@ -585,6 +592,8 @@ export async function deleteSeason(
   // relation to Season (seasonId is a bare string), precisely so the record of
   // a deletion outlives the thing deleted. A cascading FK here would erase the
   // one line explaining where the season went.
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "deleteSeason",
     summary: `PERMANENTLY DELETED season "${season.name}" and all of its matches, games, rosters and registrations`,
@@ -609,6 +618,8 @@ export async function reactivateSeasonAction(
     new Date(str(formData, "expectedTargetUpdatedAt").trim()),
   );
   if (!res.ok) return { error: res.error };
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "reactivateSeason",
     summary: `Reactivated archived season "${res.name}" from the offseason in ${res.status}; no other season was archived${res.draftParked ? " and its auction remained paused" : ""}`,
@@ -859,6 +870,8 @@ export async function setSeasonPhase(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "setSeasonPhase",
     summary: `Season phase ${PHASE_LABELS[season.status as SeasonStatus]} → ${PHASE_LABELS[target]}`,
@@ -900,6 +913,8 @@ export async function renameSeason(
   if (!(await updateRenderedSeason(claim, { name }))) {
     return staleSeasonSettingsError;
   }
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "renameSeason",
     summary: `Renamed season "${claim.season.name}" → "${name}"`,
@@ -1055,6 +1070,8 @@ export async function setDraftSettings(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows the active season.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "setDraftSettings",
     summary: `Set draft configuration to teams of ${teamSize}, target ${minTeams}, $${draftBudget}, MMR weight ${budgetMmrWeight}%`,

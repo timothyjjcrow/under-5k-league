@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "./prisma";
+import { publishDraftRoomChange } from "./draft-room-version";
 import { SEASON_STATUS } from "./constants";
 import {
   CAPTAIN_LOGO_HOST_ERROR,
@@ -66,7 +67,7 @@ export async function saveTeamIdentity(input: {
 
   await raceHook("teamIdentity.save.beforeTx");
   try {
-    return await prisma.$transaction(
+    const saved = await prisma.$transaction(
       async (tx): Promise<SavedTeamIdentity> => {
         const team = await tx.team.findUnique({
           where: { id: input.teamId },
@@ -168,6 +169,10 @@ export async function saveTeamIdentity(input: {
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+    // Rule P (draft-room-version.ts): the draft room shows team names and
+    // logos.
+    if (saved.nameChanged || saved.logoChanged) await publishDraftRoomChange();
+    return saved;
   } catch (error) {
     if (error instanceof TeamIdentityRefused) {
       return { ok: false, error: error.message };

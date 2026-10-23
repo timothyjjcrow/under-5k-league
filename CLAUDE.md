@@ -50,10 +50,11 @@ note before changing that area: it is required reading, not background.
 - **Pages, navigation and Home render per phase** so unused features hide.
 - **Inhouse is season-independent:** no `seasonId`, no phase gate. It shares
   identity, the latest `Registration.mmr`, Settings, Discord and OpenDota.
-- **There are no websockets.** The rooms poll over HTTP; the inhouse room
-  long-polls (the server holds its plain HTTP request until the room version
-  moves, its next clock or 25s). Scheduled work runs in one authenticated
-  worker once a minute.
+- **There are no websockets.** The rooms poll over HTTP; the inhouse and
+  draft rooms long-poll (the server holds a plain HTTP request until the room
+  version moves, its next clock or 25s, and answers from one shared copy of
+  the room per process). Scheduled work runs in one authenticated worker
+  once a minute.
 
 ## Where things live
 
@@ -351,10 +352,10 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   `src/lib/room-poll.ts`; a request costs ~15-25 ms of box CPU), and count a
   new background request's database work before adding one. Every poll,
   prefetch and page view of both leagues lands on the same CPU and the same
-  database. The inhouse room asks once per change instead: a state request
-  that sends back its reply's `roomVersion` is held (`holdInhouseRoomPoll`),
-  and only a reply with no version or a request that must answer at once
-  falls back to the ladder.
+  database. The inhouse and draft rooms ask once per change instead: a state
+  request that sends back its reply's `roomVersion` is held
+  (`holdInhouseRoomPoll`, `holdDraftRoomPoll`), and only a reply with no
+  version or a request that must answer at once falls back to the ladder.
 - **Put state that route handlers and server actions must both see on
   `globalThis`** under a `Symbol.for` key: a `next start` process loads
   `src/lib` twice (route handlers; pages and server actions), so a
@@ -366,8 +367,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Only the bearer-authenticated worker runs scheduled work.** Public pages and
   anonymous polls never advance state, call OpenDota or edit Discord; a
   signed-in room poll runs maintenance only when it wins a `claimThrottle`,
-  and the inhouse room's only when its snapshot shows work due
-  (`inhouseRoomDue`). `GET /api/sync` is a read-only snapshot, never a
+  and only when its snapshot shows work due (`inhouseRoomDue`, the draft
+  room's `draftRoomDue`). `GET /api/sync` is a read-only snapshot, never a
   scheduler or health signal.
 - **After any commit the inhouse room shows, call `publishInhouseRoomChange()`
   before any provider call or response,** never inside a transaction. Each
@@ -376,7 +377,10 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   skips it shows stale rows for up to 15s, and to a long-polling tab for up
   to about 40s (its 25s hold, then a snapshot up to 15s old)
   (`inhouse-room-publish.test.ts` guards the sites;
-  [inhouse](docs/features/inhouse.md#scope-and-where-it-runs)).
+  [inhouse](docs/features/inhouse.md#scope-and-where-it-runs)). The draft
+  room's rule is the same with `publishDraftRoomChange()` after any commit
+  it shows (`draft-room-version.ts`; `draft-room-publish.test.ts` guards the
+  sites; [draft](docs/features/draft.md#the-tick-one-shared-copy-of-the-room-and-the-long-poll)).
 - **Give every new server-side clock or deadline a wake-up in
   `src/lib/automation-gate.ts`,** and after a mutation that creates or moves
   automated work, expire `AUTOMATION_GATE_TAG` (`updateTag` in an action,

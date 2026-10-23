@@ -20,8 +20,8 @@ import {
 } from "./draft";
 import { draftBudgetsForDisplay } from "./draft-budgets";
 import { undoSaleTarget, type UndoTarget } from "./draft-admin";
-import { draftPresenceTracked } from "./draft-presence";
-import { readCaptainPresence } from "./draft-presence-service";
+import { captainInRoom, draftPresenceTracked } from "./draft-presence";
+import { readCaptainLastSeen } from "./draft-presence-service";
 import type { SessionUser } from "./auth";
 import { raceHook } from "./race-hook";
 import { draftRecap } from "./draft-recap";
@@ -47,6 +47,7 @@ import {
   undoDraftSaleHistory, voidDraftLot,
 } from "./draft-history";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
+import { publishDraftRoomChange } from "./draft-room-version";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
@@ -242,6 +243,9 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
     }
     return true;
   });
+  // Rule P (draft-room-version.ts): announce the commit to the held ticks
+  // before the completion posts, which can take seconds.
+  if (resolved) await publishDraftRoomChange();
   if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
 }
@@ -554,6 +558,9 @@ export async function resolveStalledNomination(
     await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return true;
   });
+  // Rule P (draft-room-version.ts): announce the commit to the held ticks
+  // before the completion posts, which can take seconds.
+  if (resolved) await publishDraftRoomChange();
   if (completed) await announceDraftComplete(seasonId, completed);
   return resolved;
 }
@@ -573,7 +580,7 @@ export async function pauseDraft(
   // gated; after they run, the claim parks whichever clock is now current.
   await resolveExpiredNomination(seasonId);
   await resolveStalledNomination(seasonId);
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const season = await tx.season.findUnique({ where: { id: seasonId } });
     if (!season?.isActive || season.status !== SEASON_STATUS.DRAFT) {
       return { ok: false as const, error: "The auction is not in the Draft phase" };
@@ -590,6 +597,8 @@ export async function pauseDraft(
       return { ok: false as const, error: "The draft isn't live" };
     return { ok: true as const };
   });
+  if (result.ok) await publishDraftRoomChange();
+  return result;
 }
 
 /**
@@ -601,7 +610,7 @@ export async function resumeDraft(
   viewer: SessionUser,
 ): Promise<DraftActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const [season, draft] = await Promise.all([
       tx.season.findUnique({ where: { id: seasonId } }),
       tx.draft.findUnique({ where: { seasonId } }),
@@ -645,6 +654,8 @@ export async function resumeDraft(
       return { ok: false as const, error: "The draft just changed — reload" };
     return { ok: true as const };
   });
+  if (result.ok) await publishDraftRoomChange();
+  return result;
 }
 
 export type VoidLotSummary = {
@@ -667,7 +678,7 @@ export async function voidCurrentLot(
   viewer: SessionUser,
 ): Promise<VoidLotSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
-  return prisma.$transaction(
+  const result = await prisma.$transaction(
     async (tx) => {
       const [season, draft] = await Promise.all([
         tx.season.findUnique({ where: { id: seasonId } }),
@@ -728,6 +739,8 @@ export async function voidCurrentLot(
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
+  if (result.ok) await publishDraftRoomChange();
+  return result;
 }
 
 /** Which purchase an undo actually reverted, so the toast can name it. */
@@ -771,7 +784,7 @@ export async function undoLastSale(
 ): Promise<UndoSaleSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   try {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
     const [season, draft] = await Promise.all([
       tx.season.findUnique({ where: { id: seasonId } }),
       tx.draft.findUnique({ where: { seasonId } }),
@@ -943,6 +956,8 @@ export async function undoLastSale(
       paused: wasPaused,
     };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (result.ok) await publishDraftRoomChange();
+    return result;
   } catch (e) {
     // Outside the callback on purpose — catching inside would resolve the
     // transaction and commit the very writes the throw exists to roll back.
@@ -1010,7 +1025,7 @@ export async function abortDraft(
 ): Promise<AbortDraftSummary | { ok: false; error: string }> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   try {
-    return await prisma.$transaction(
+    const result = await prisma.$transaction(
       async (tx) => {
         const [season, draft] = await Promise.all([
           tx.season.findUnique({ where: { id: seasonId } }),
@@ -1219,6 +1234,8 @@ export async function abortDraft(
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
+    if (result.ok) await publishDraftRoomChange();
+    return result;
   } catch (error) {
     if (
       error instanceof AbortRaceError ||
@@ -1234,25 +1251,24 @@ export async function abortDraft(
   }
 }
 
-/** Everything the draft room client needs, tailored to the viewing user. */
-export async function getDraftState(
-  seasonId: string,
-  viewer: SessionUser | null,
-  /** Anonymous spectators get a read-only snapshot. The leased worker and
-   * authenticated room participants remain responsible for clock recovery. */
-  { resolveDeadlines = true }: { resolveDeadlines?: boolean } = {},
-) {
-  if (resolveDeadlines) {
-    await resolveExpiredNomination(seasonId);
-    await resolveStalledNomination(seasonId);
-  }
+/**
+ * The draft room's viewer-independent rows: one repeatable snapshot of the
+ * season, the auction, the rosters, the pool, the live lot and the sales,
+ * plus the captains' last-seen times. A server instance reads them once per
+ * change and builds every viewer's reply from the same copy
+ * (buildDraftState, draft-room-state.ts), so they hold what the gating there
+ * decides about: the nominee's contact and the list of active registrants
+ * stay in server memory, never serialized, returned or logged as they are.
+ * Null when the season doesn't exist.
+ */
+export async function loadDraftRoomRows(seasonId: string) {
   // One repeatable snapshot. The old Promise.all ran independent queries, so
   // a sale between them could return a new roster with an old budget, or a new
   // lot with the previous lot's Bid trail. SERIALIZABLE is the only isolation
   // level shared by this repository's SQLite dev/test DB and PostgreSQL.
-  const state = await prisma.$transaction(
+  const rows = await prisma.$transaction(
     async (tx) => {
-      const [season, draft, teams, playerRegs, viewerRegistration] =
+      const [season, draft, teams, playerRegs, activeRegistrations] =
         await Promise.all([
           tx.season.findUnique({ where: { id: seasonId } }),
           tx.draft.findUnique({
@@ -1316,114 +1332,18 @@ export async function getDraftState(
               },
             },
           }),
-          viewer
-            ? tx.registration.findUnique({
-                where: {
-                  seasonId_userId: { seasonId, userId: viewer.id },
-                },
-                select: { status: true },
-              })
-            : null,
+          // Who may see the nominee's Discord (canViewLeagueContact): every
+          // active registrant, standins included. Ids only, so one copy
+          // serves every viewer's reply instead of a read per viewer.
+          tx.registration.findMany({
+            where: { seasonId, status: "ACTIVE" },
+            select: { userId: true },
+          }),
         ]);
       if (!season) return null;
 
-      const members = teams.flatMap((team) => team.members);
-      const draftedIds = new Set(members.map((member) => member.userId));
-      const available = playerRegs
-        .filter((registration) => !draftedIds.has(registration.userId))
-        .map((registration) => ({
-          userId: registration.userId,
-          name: registration.user.name,
-          avatar: registration.user.avatar,
-          mmr: registration.mmr,
-          rankTier: registration.user.rankTier,
-          roles: registration.roles,
-        }));
-
-      const displayBudgets = draftBudgetsForDisplay({
-        seasonIsActive: season.isActive,
-        seasonStatus: season.status,
-        draftStatus: draft?.status,
-        baseBudget: season.draftBudget,
-        budgetMmrWeight: season.budgetMmrWeight,
-        teamSize: season.teamSize,
-        teams,
-        captainMmrs: playerRegs,
-      });
-      // Members' self-declared roles, for the captain's "roles to cover"
-      // hint. Already selected for the pool, so this costs no query.
-      const rolesByUser = new Map(
-        playerRegs.map((registration) => [
-          registration.userId,
-          registration.roles,
-        ]),
-      );
-      const teamViews = teams.map((team) => ({
-        id: team.id,
-        name: team.name,
-        logoUrl: team.logoUrl,
-        budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
-        draftOrder: team.draftOrder,
-        captainId: team.captainId,
-        // Filled in below, outside the snapshot.
-        captainInRoom: null as boolean | null,
-        need: teamNeed(season.teamSize, team.members.length),
-        members: team.members.map((member) => ({
-          userId: member.userId,
-          name: member.user.name,
-          avatar: member.user.avatar,
-          price: member.price,
-          isCaptain: member.isCaptain,
-          rankTier: member.user.rankTier,
-          roles: rolesByUser.get(member.userId) ?? "",
-        })),
-      }));
-
-      const myTeam = viewer
-        ? teams.find((team) => team.captainId === viewer.id)
-        : undefined;
-      const rosterTeam = viewer
-        ? teams.find((team) =>
-            team.members.some((member) => member.userId === viewer.id),
-          )
-        : undefined;
-      const rosterSeat = rosterTeam?.members.find(
-        (member) => member.userId === viewer?.id,
-      );
-      const now = Date.now();
-      const bidOpen =
-        season.status === SEASON_STATUS.DRAFT &&
-        !!draft?.nominatedUserId &&
-        !!draft.bidEndsAt &&
-        draft.bidEndsAt.getTime() > now;
-      const myBudget = myTeam
-        ? (displayBudgets.byTeam.get(myTeam.id) ?? myTeam.budget)
-        : 0;
-      const myDraftTeam: DraftTeam | undefined = myTeam
-        ? {
-            id: myTeam.id,
-            budget: myBudget,
-            rosterCount: myTeam.members.length,
-          }
-        : undefined;
-
       const historyRun = draft?.activeRunId
         ? await tx.draftRun.findUniqueOrThrow({ where: { id: draft.activeRunId }, select: { id: true, provenance: true } }) : null;
-      const observedSales = teams
-        .flatMap((team) =>
-          team.members
-            .filter((member) => !member.isCaptain && member.price > 0)
-            .map((member) => ({
-              name: member.user.name,
-              teamName: team.name,
-              price: member.price,
-              at: member.createdAt.getTime(),
-              // Legacy observation: how the lot opened was never recorded.
-              auto: false,
-            })),
-        )
-        .sort((a, b) => b.at - a.at)
-        .slice(0, 8);
       // A live room shows the last 8 sales; the finished room's recap reads
       // them all.
       const commandSales = historyRun?.provenance === "COMMAND"
@@ -1433,49 +1353,11 @@ export async function getDraftState(
             draft?.status === DRAFT_STATUS.COMPLETE ? undefined : 8,
           )
         : null;
-      const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
-      // What the admin bar's Undo last sale would revert, from the rosters
-      // already read (no extra query): the newest auction purchase still on a
-      // roster, by undoLastSale's own rule. Not `recentSales[0]`: a released
-      // player's lot stays SOLD there, and the confirm named their sale while
-      // Undo reverted the one before it. Admins only; the form posts its id.
-      const undoRow =
-        viewer?.role === "ADMIN"
-          ? undoSaleTarget(
-              teams.flatMap((team) =>
-                team.members.map((member) => ({ ...member, teamName: team.name })),
-              ),
-            )
-          : null;
-      const undoSale: UndoTarget | null = undoRow
-        ? {
-            membershipId: undoRow.id,
-            name: undoRow.user.name,
-            teamName: undoRow.teamName,
-            price: undoRow.price,
-          }
-        : null;
-      // The finished room's recap: the same draftRecap math over the same
-      // auction records as the /teams "Draft night" card and the Discord
-      // recap. Only once the auction is over, and only from a recorded run
-      // (a draft that predates auction records has no original prices or
-      // MMR to recap; its rosters still show what each player cost).
-      const recap =
-        draft?.status === DRAFT_STATUS.COMPLETE && commandSales
-          ? draftRecap(commandSales)
-          : null;
-      const nominatedPlayer = draft?.nominatedUserId
+      const nominatedRegistration = draft?.nominatedUserId
         ? (playerRegs.find(
             (registration) => registration.userId === draft.nominatedUserId,
           ) ?? null)
         : null;
-      const canSeeNominatedContact = nominatedPlayer
-        ? canViewLeagueContact(
-            viewer,
-            nominatedPlayer.userId,
-            viewerRegistration?.status === "ACTIVE",
-          )
-        : false;
       const [lotBidRows, nomineeProfile] = await Promise.all([
         draft?.nominatedUserId != null
           ? tx.bid.findMany({
@@ -1489,10 +1371,13 @@ export async function getDraftState(
             })
           : [],
         // The nominee's scouting profile and contact, for the lot card.
-        nominatedPlayer
+        nominatedRegistration
           ? tx.registration.findUnique({
               where: {
-                seasonId_userId: { seasonId, userId: nominatedPlayer.userId },
+                seasonId_userId: {
+                  seasonId,
+                  userId: nominatedRegistration.userId,
+                },
               },
               select: {
                 favoriteHeroes: true,
@@ -1511,114 +1396,304 @@ export async function getDraftState(
             })
           : null,
       ]);
-
       return {
-        seasonId: season.id,
-        seasonName: season.name,
-        seasonStatus: season.status,
-        draftAtMs: season.draftAt?.getTime() ?? null,
-        draftRevision: season.draftRevision,
-        draftVersion: draft?.updatedAt.getTime() ?? null,
-        currentLotId: draft?.currentLotId ?? null,
-        historyProvenance: historyRun?.provenance ?? "LEGACY_OBSERVATION",
-        status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
-        budgetsProjected: displayBudgets.isProjected,
-        teamSize: season.teamSize,
-        minBid: DEFAULTS.MIN_BID,
-        now,
-        bidEndsAt: draft?.bidEndsAt?.getTime() ?? null,
-        nominationEndsAt: draft?.nominationEndsAt?.getTime() ?? null,
-        nominatorTeamId: draft?.nominatorTeamId ?? null,
-        nominatedUserId: draft?.nominatedUserId ?? null,
-        currentBid: draft?.currentBid ?? 0,
-        currentBidTeamId: draft?.currentBidTeamId ?? null,
-        // The live lot was opened by resolveStalledNomination because the
-        // nominator's clock ran out — not a player that captain chose.
-        lotAutoNominated:
-          !!draft?.nominatedUserId &&
-          draft.currentLot?.openingKind === "AUTOMATIC" &&
-          draft.currentLot.nominatedUserId === draft.nominatedUserId,
-        lotBids: lotBidRows.slice(0, 8).map((bid) => ({
-          teamId: bid.teamId,
-          amount: bid.amount,
-          at: bid.createdAt.getTime(),
-        })),
-        lotBidsTruncated: lotBidRows.length > 8,
-        recentSales,
-        undoSale,
-        recap,
-        nominatedPlayer: nominatedPlayer && nomineeProfile
-          ? {
-              userId: nominatedPlayer.userId,
-              name: nominatedPlayer.user.name,
-              avatar: nominatedPlayer.user.avatar,
-              mmr: nominatedPlayer.mmr,
-              rankTier: nominatedPlayer.user.rankTier,
-              roles: nominatedPlayer.roles,
-              favoriteHeroes: nomineeProfile.favoriteHeroes,
-              statement: nomineeProfile.statement,
-              captainNote: nomineeProfile.captainNote,
-              accountId: effectiveDotaAccountId(nomineeProfile.user),
-              discordName: canSeeNominatedContact
-                ? nomineeProfile.user.discordName
-                : "",
-              discordVerified:
-                canSeeNominatedContact && !!nomineeProfile.user.discordId,
-            }
-          : null,
-        teams: teamViews,
-        available,
-        me: {
-          userId: viewer?.id ?? null,
-          isAdmin: viewer?.role === "ADMIN",
-          myTeamId: myTeam?.id ?? null,
-          rosterTeamId: rosterTeam?.id ?? null,
-          rosterTeamName: rosterTeam?.name ?? null,
-          rosterPrice: rosterSeat?.price ?? null,
-          rosterIsCaptain: rosterSeat?.isCaptain ?? false,
-          isMyTurn: !!myTeam && draft?.nominatorTeamId === myTeam.id,
-          canNominate:
-            season.status === SEASON_STATUS.DRAFT &&
-            draft?.status === DRAFT_STATUS.IN_PROGRESS &&
-            !draft.nominatedUserId &&
-            !!myDraftTeam &&
-            draft.nominatorTeamId === myTeam?.id &&
-            teamNeed(season.teamSize, myDraftTeam.rosterCount) > 0,
-          canBid:
-            bidOpen &&
-            !!myDraftTeam &&
-            draft?.currentBidTeamId !== myTeam?.id &&
-            maxBid(myDraftTeam, season.teamSize) > (draft?.currentBid ?? 0),
-          myMaxBid: myDraftTeam ? maxBid(myDraftTeam, season.teamSize) : 0,
-          myBudget,
-        },
+        season,
+        draft,
+        teams,
+        playerRegs,
+        activeRegistrantIds: activeRegistrations.map((r) => r.userId),
+        historyRun,
+        commandSales,
+        lotBidRows,
+        nomineeProfile,
       };
     },
     { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
   );
-  // Which captains have the room open (their own polls record it), in the
-  // waiting room and while the auction runs. Read after the snapshot on
+  if (!rows) return null;
+  // When each captain last had the room open (their own polls record it), in
+  // the waiting room and while the auction runs. Read after the snapshot on
   // purpose: it is a label, not part of what must agree with the rosters and
   // the lot, and keeping the heartbeat rows out of the serializable read set
-  // means a captain's poll can never cost anyone else's a retry.
-  if (!state || !draftPresenceTracked(state.seasonStatus, state.status)) {
-    return state;
-  }
-  const captainsHere = await readCaptainPresence(
-    prisma,
-    seasonId,
-    state.teams.map((team) => team.captainId),
+  // means a captain's poll can never cost anyone else's a retry. Kept as
+  // times, so each reply judges "in the room" on its own clock.
+  const captainLastSeen = draftPresenceTracked(
+    rows.season.status,
+    rows.draft?.status,
+  )
+    ? await readCaptainLastSeen(
+        prisma,
+        seasonId,
+        rows.teams.map((team) => team.captainId),
+      )
+    : null;
+  return { ...rows, captainLastSeen };
+}
+
+export type DraftRoomRows = NonNullable<
+  Awaited<ReturnType<typeof loadDraftRoomRows>>
+>;
+
+/**
+ * Everything the draft room client needs, tailored to the viewing user, from
+ * the room's shared rows. Pure: no read, no write, no clock but `nowMs`,
+ * which the reply carries as `now`. The only place the rows' gated fields
+ * (the nominee's contact, the admin's Undo target) turn into a reply.
+ */
+export function buildDraftState(
+  viewer: SessionUser | null,
+  rows: DraftRoomRows,
+  nowMs: number,
+) {
+  const { season, draft, teams, playerRegs, historyRun, commandSales } = rows;
+  const members = teams.flatMap((team) => team.members);
+  const draftedIds = new Set(members.map((member) => member.userId));
+  const available = playerRegs
+    .filter((registration) => !draftedIds.has(registration.userId))
+    .map((registration) => ({
+      userId: registration.userId,
+      name: registration.user.name,
+      avatar: registration.user.avatar,
+      mmr: registration.mmr,
+      rankTier: registration.user.rankTier,
+      roles: registration.roles,
+    }));
+
+  const displayBudgets = draftBudgetsForDisplay({
+    seasonIsActive: season.isActive,
+    seasonStatus: season.status,
+    draftStatus: draft?.status,
+    baseBudget: season.draftBudget,
+    budgetMmrWeight: season.budgetMmrWeight,
+    teamSize: season.teamSize,
+    teams,
+    captainMmrs: playerRegs,
+  });
+  // Members' self-declared roles, for the captain's "roles to cover"
+  // hint. Already selected for the pool, so this costs no query.
+  const rolesByUser = new Map(
+    playerRegs.map((registration) => [
+      registration.userId,
+      registration.roles,
+    ]),
   );
-  return {
-    ...state,
-    teams: state.teams.map((team) => ({
-      ...team,
-      captainInRoom: captainsHere.has(team.captainId),
+  // Which captains have the room open, judged on this reply's clock. Null
+  // while presence isn't tracked (draftPresenceTracked).
+  const lastSeen = rows.captainLastSeen;
+  const teamViews = teams.map((team) => ({
+    id: team.id,
+    name: team.name,
+    logoUrl: team.logoUrl,
+    budget: displayBudgets.byTeam.get(team.id) ?? team.budget,
+    draftOrder: team.draftOrder,
+    captainId: team.captainId,
+    captainInRoom:
+      lastSeen === null ? null : captainInRoom(lastSeen[team.captainId], nowMs),
+    need: teamNeed(season.teamSize, team.members.length),
+    members: team.members.map((member) => ({
+      userId: member.userId,
+      name: member.user.name,
+      avatar: member.user.avatar,
+      price: member.price,
+      isCaptain: member.isCaptain,
+      rankTier: member.user.rankTier,
+      roles: rolesByUser.get(member.userId) ?? "",
     })),
+  }));
+
+  const myTeam = viewer
+    ? teams.find((team) => team.captainId === viewer.id)
+    : undefined;
+  const rosterTeam = viewer
+    ? teams.find((team) =>
+        team.members.some((member) => member.userId === viewer.id),
+      )
+    : undefined;
+  const rosterSeat = rosterTeam?.members.find(
+    (member) => member.userId === viewer?.id,
+  );
+  const now = nowMs;
+  const bidOpen =
+    season.status === SEASON_STATUS.DRAFT &&
+    !!draft?.nominatedUserId &&
+    !!draft.bidEndsAt &&
+    draft.bidEndsAt.getTime() > now;
+  const myBudget = myTeam
+    ? (displayBudgets.byTeam.get(myTeam.id) ?? myTeam.budget)
+    : 0;
+  const myDraftTeam: DraftTeam | undefined = myTeam
+    ? {
+        id: myTeam.id,
+        budget: myBudget,
+        rosterCount: myTeam.members.length,
+      }
+    : undefined;
+
+  const observedSales = teams
+    .flatMap((team) =>
+      team.members
+        .filter((member) => !member.isCaptain && member.price > 0)
+        .map((member) => ({
+          name: member.user.name,
+          teamName: team.name,
+          price: member.price,
+          at: member.createdAt.getTime(),
+          // Legacy observation: how the lot opened was never recorded.
+          auto: false,
+        })),
+    )
+    .sort((a, b) => b.at - a.at)
+    .slice(0, 8);
+  const recentSales = commandSales ? commandSales.slice(0, 8) : observedSales;
+  // What the admin bar's Undo last sale would revert, from the rosters
+  // already read (no extra query): the newest auction purchase still on a
+  // roster, by undoLastSale's own rule. Not `recentSales[0]`: a released
+  // player's lot stays SOLD there, and the confirm named their sale while
+  // Undo reverted the one before it. Admins only; the form posts its id.
+  const undoRow =
+    viewer?.role === "ADMIN"
+      ? undoSaleTarget(
+          teams.flatMap((team) =>
+            team.members.map((member) => ({ ...member, teamName: team.name })),
+          ),
+        )
+      : null;
+  const undoSale: UndoTarget | null = undoRow
+    ? {
+        membershipId: undoRow.id,
+        name: undoRow.user.name,
+        teamName: undoRow.teamName,
+        price: undoRow.price,
+      }
+    : null;
+  // The finished room's recap: the same draftRecap math over the same
+  // auction records as the /teams "Draft night" card and the Discord
+  // recap. Only once the auction is over, and only from a recorded run
+  // (a draft that predates auction records has no original prices or
+  // MMR to recap; its rosters still show what each player cost).
+  const recap =
+    draft?.status === DRAFT_STATUS.COMPLETE && commandSales
+      ? draftRecap(commandSales)
+      : null;
+  const nominatedPlayer = draft?.nominatedUserId
+    ? (playerRegs.find(
+        (registration) => registration.userId === draft.nominatedUserId,
+      ) ?? null)
+    : null;
+  const canSeeNominatedContact = nominatedPlayer
+    ? canViewLeagueContact(
+        viewer,
+        nominatedPlayer.userId,
+        !!viewer && rows.activeRegistrantIds.includes(viewer.id),
+      )
+    : false;
+  const nomineeProfile = rows.nomineeProfile;
+
+  return {
+    seasonId: season.id,
+    seasonName: season.name,
+    seasonStatus: season.status,
+    draftAtMs: season.draftAt?.getTime() ?? null,
+    draftRevision: season.draftRevision,
+    draftVersion: draft?.updatedAt.getTime() ?? null,
+    currentLotId: draft?.currentLotId ?? null,
+    historyProvenance: historyRun?.provenance ?? "LEGACY_OBSERVATION",
+    status: draft?.status ?? DRAFT_STATUS.NOT_STARTED,
+    budgetsProjected: displayBudgets.isProjected,
+    teamSize: season.teamSize,
+    minBid: DEFAULTS.MIN_BID,
+    now,
+    bidEndsAt: draft?.bidEndsAt?.getTime() ?? null,
+    nominationEndsAt: draft?.nominationEndsAt?.getTime() ?? null,
+    nominatorTeamId: draft?.nominatorTeamId ?? null,
+    nominatedUserId: draft?.nominatedUserId ?? null,
+    currentBid: draft?.currentBid ?? 0,
+    currentBidTeamId: draft?.currentBidTeamId ?? null,
+    // The live lot was opened by resolveStalledNomination because the
+    // nominator's clock ran out — not a player that captain chose.
+    lotAutoNominated:
+      !!draft?.nominatedUserId &&
+      draft.currentLot?.openingKind === "AUTOMATIC" &&
+      draft.currentLot.nominatedUserId === draft.nominatedUserId,
+    lotBids: rows.lotBidRows.slice(0, 8).map((bid) => ({
+      teamId: bid.teamId,
+      amount: bid.amount,
+      at: bid.createdAt.getTime(),
+    })),
+    lotBidsTruncated: rows.lotBidRows.length > 8,
+    recentSales,
+    undoSale,
+    recap,
+    nominatedPlayer: nominatedPlayer && nomineeProfile
+      ? {
+          userId: nominatedPlayer.userId,
+          name: nominatedPlayer.user.name,
+          avatar: nominatedPlayer.user.avatar,
+          mmr: nominatedPlayer.mmr,
+          rankTier: nominatedPlayer.user.rankTier,
+          roles: nominatedPlayer.roles,
+          favoriteHeroes: nomineeProfile.favoriteHeroes,
+          statement: nomineeProfile.statement,
+          captainNote: nomineeProfile.captainNote,
+          accountId: effectiveDotaAccountId(nomineeProfile.user),
+          discordName: canSeeNominatedContact
+            ? nomineeProfile.user.discordName
+            : "",
+          discordVerified:
+            canSeeNominatedContact && !!nomineeProfile.user.discordId,
+        }
+      : null,
+    teams: teamViews,
+    available,
+    me: {
+      userId: viewer?.id ?? null,
+      isAdmin: viewer?.role === "ADMIN",
+      myTeamId: myTeam?.id ?? null,
+      rosterTeamId: rosterTeam?.id ?? null,
+      rosterTeamName: rosterTeam?.name ?? null,
+      rosterPrice: rosterSeat?.price ?? null,
+      rosterIsCaptain: rosterSeat?.isCaptain ?? false,
+      isMyTurn: !!myTeam && draft?.nominatorTeamId === myTeam.id,
+      canNominate:
+        season.status === SEASON_STATUS.DRAFT &&
+        draft?.status === DRAFT_STATUS.IN_PROGRESS &&
+        !draft.nominatedUserId &&
+        !!myDraftTeam &&
+        draft.nominatorTeamId === myTeam?.id &&
+        teamNeed(season.teamSize, myDraftTeam.rosterCount) > 0,
+      canBid:
+        bidOpen &&
+        !!myDraftTeam &&
+        draft?.currentBidTeamId !== myTeam?.id &&
+        maxBid(myDraftTeam, season.teamSize) > (draft?.currentBid ?? 0),
+      myMaxBid: myDraftTeam ? maxBid(myDraftTeam, season.teamSize) : 0,
+      myBudget,
+    },
   };
 }
 
-export type DraftState = NonNullable<Awaited<ReturnType<typeof getDraftState>>>;
+/**
+ * Everything the draft room client needs, tailored to the viewing user, read
+ * fresh: the action routes' reply, the throttle winner's settle, scripts and
+ * tests. The room's polls read the same rows from their server instance's
+ * shared copy instead (pollDraftRoomState, draft-room-state.ts).
+ */
+export async function getDraftState(
+  seasonId: string,
+  viewer: SessionUser | null,
+  /** Anonymous spectators get a read-only snapshot. The leased worker and
+   * authenticated room participants remain responsible for clock recovery. */
+  { resolveDeadlines = true }: { resolveDeadlines?: boolean } = {},
+) {
+  if (resolveDeadlines) {
+    await resolveExpiredNomination(seasonId);
+    await resolveStalledNomination(seasonId);
+  }
+  const rows = await loadDraftRoomRows(seasonId);
+  return rows ? buildDraftState(viewer, rows, Date.now()) : null;
+}
+
+export type DraftState = ReturnType<typeof buildDraftState>;
 
 /** A captain (or admin, on their behalf) nominates a player with an opening bid. */
 export async function nominatePlayer(
@@ -1631,7 +1706,7 @@ export async function nominatePlayer(
   await resolveExpiredNomination(seasonId);
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    const result = await prisma.$transaction(async (tx) => {
     const [season, draft] = await Promise.all([
       tx.season.findUnique({ where: { id: seasonId } }),
       tx.draft.findUnique({ where: { seasonId } }),
@@ -1761,6 +1836,8 @@ export async function nominatePlayer(
     await appendAcceptedDraftBid(tx, lot, bid, nominator.name);
     return { ok: true as const };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    if (result.ok) await publishDraftRoomChange();
+    return result;
   } catch (error) {
     if (isSerializationConflict(error)) {
       return {
@@ -1781,7 +1858,7 @@ export async function placeBid(
 ): Promise<DraftActionResult> {
   await resolveExpiredNomination(seasonId);
 
-  return prisma.$transaction(async (tx) => {
+  const result = await prisma.$transaction(async (tx) => {
     const [season, draft] = await Promise.all([
       tx.season.findUnique({ where: { id: seasonId } }),
       tx.draft.findUnique({ where: { seasonId } }),
@@ -1882,4 +1959,6 @@ export async function placeBid(
     await appendAcceptedDraftBid(tx, lot, bid, myTeam.name);
     return { ok: true as const };
   });
+  if (result.ok) await publishDraftRoomChange();
+  return result;
 }

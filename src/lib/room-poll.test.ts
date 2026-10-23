@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  draftLongPoll,
+  draftLongPollGapMs,
   draftPollCadence,
+  draftPollDelay,
   draftPollsAtClockZero,
   inhouseLongPoll,
   inhouseLongPollGapMs,
@@ -8,6 +11,8 @@ import {
   inhousePollDelay,
   inhouseRefocusResync,
   inhouseUnheldStreak,
+  roomRefocusResync,
+  roomUnheldStreak,
   withDeadline,
 } from "./room-poll";
 import {
@@ -917,6 +922,181 @@ describe("where the two rooms deliberately differ", () => {
     expect(DRAFT_ROOM.POLL_KEEPALIVE_MS).toBeLessThan(
       INHOUSE.POLL_KEEPALIVE_MS,
     );
+  });
+});
+
+describe("draftLongPoll", () => {
+  const shown = { urgent: false, failureCount: 0, serverNow: 1_800_000_000_000 };
+
+  it("holds a tick that sends back the shown reply's version and clock", () => {
+    expect(
+      draftLongPoll({ ...shown, version: "v1", canAct: false, live: true }),
+    ).toEqual({
+      since: "v1",
+      sinceNow: 1_800_000_000_000,
+      holdMs: DRAFT_ROOM.LONG_POLL_HOLD_MS,
+      timeoutMs: DRAFT_ROOM.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS,
+    });
+  });
+
+  it("answers at once with no version, something urgent, or after a failure", () => {
+    for (const version of [null, undefined, ""]) {
+      expect(draftLongPoll({ ...shown, version, live: true })).toBeNull();
+    }
+    expect(draftLongPoll({ ...shown, version: "v1", urgent: true, live: true })).toBeNull();
+    expect(
+      draftLongPoll({ ...shown, version: "v1", failureCount: 1, live: true }),
+    ).toBeNull();
+  });
+
+  it("gives captains and admins the shorter hold while the auction is live or paused", () => {
+    // Their bidding locks after three failures in a row, and the first held
+    // one takes its hold plus the timeout: 15s sooner at the shorter hold.
+    const actor = draftLongPoll({ ...shown, version: "v1", canAct: true, live: true });
+    expect(actor?.holdMs).toBe(DRAFT_ROOM.LONG_POLL_ACTOR_HOLD_MS);
+    expect(actor?.timeoutMs).toBe(DRAFT_ROOM.LONG_POLL_ACTOR_HOLD_MS + ROOM_POLL_TIMEOUT_MS);
+    // Unknown (no payload yet) counts as acting, as the ladder does.
+    expect(draftLongPoll({ ...shown, version: "v1", live: true })?.holdMs).toBe(
+      DRAFT_ROOM.LONG_POLL_ACTOR_HOLD_MS,
+    );
+    // Nothing to bid on in the waiting room or a finished draft.
+    expect(
+      draftLongPoll({ ...shown, version: "v1", canAct: true, live: false })?.holdMs,
+    ).toBe(DRAFT_ROOM.LONG_POLL_HOLD_MS);
+    expect(
+      DRAFT_ROOM.LONG_POLL_HOLD_MS - DRAFT_ROOM.LONG_POLL_ACTOR_HOLD_MS,
+    ).toBe(15_000);
+  });
+
+  it("sends no clock it doesn't have", () => {
+    for (const serverNow of [null, undefined, Number.NaN]) {
+      expect(
+        draftLongPoll({ ...shown, serverNow, version: "v1", live: true })?.sinceNow,
+      ).toBeNull();
+    }
+  });
+
+  it("never holds a tick longer than the server grants or Cloudflare waits", () => {
+    expect(DRAFT_ROOM.LONG_POLL_HOLD_MS).toBeLessThanOrEqual(25_000);
+    expect(DRAFT_ROOM.LONG_POLL_HOLD_MS + ROOM_POLL_TIMEOUT_MS).toBeLessThan(100_000);
+  });
+});
+
+describe("draftPollDelay", () => {
+  const watcher = {
+    activeMs: 2000,
+    reached: true,
+    hidden: false,
+    hasStake: false,
+    canAct: false,
+    live: true,
+  };
+
+  it("re-issues a long-poll straight away once its tick has run the gap", () => {
+    for (const startedAgoMs of [DRAFT_ROOM.LONG_POLL_WATCH_GAP_MS, 25_000]) {
+      expect(draftPollDelay({ ...watcher, longPoll: true, startedAgoMs })).toBe(0);
+    }
+    // A hidden tab with a stake (a pool player, a captain) long-polls too:
+    // "you're on the block" arrives with the change, no clamped timer between.
+    expect(
+      draftPollDelay({
+        ...watcher,
+        hidden: true,
+        hasStake: true,
+        longPoll: true,
+        startedAgoMs: 5_000,
+      }),
+    ).toBe(0);
+  });
+
+  it("never starts two ticks closer than the gap, so it can't hot-loop", () => {
+    for (const startedAgoMs of [-50, 0, 1, 40, 999]) {
+      // A captain in a live auction: 1s.
+      const captain = { ...watcher, canAct: true, hasStake: true };
+      const delay = draftPollDelay({ ...captain, longPoll: true, startedAgoMs });
+      expect(delay).toBeGreaterThan(0);
+      expect(Math.max(0, startedAgoMs) + delay).toBe(DRAFT_ROOM.LONG_POLL_MIN_GAP_MS);
+    }
+  });
+
+  it("spaces a watcher's ticks 3s apart while the auction runs, 1s outside it", () => {
+    // Every bid wakes every held tab: fifty-odd watchers asking once a second
+    // in a bidding war cost more than they need; they still see a bid at once
+    // when the room was quiet (the held tick answers), and within 3s in a war.
+    for (const startedAgoMs of [0, 400, 2_999]) {
+      expect(startedAgoMs + draftPollDelay({ ...watcher, longPoll: true, startedAgoMs })).toBe(
+        DRAFT_ROOM.LONG_POLL_WATCH_GAP_MS,
+      );
+    }
+    expect(draftPollDelay({ ...watcher, longPoll: true, startedAgoMs: 3_000 })).toBe(0);
+    expect(draftLongPollGapMs({ ...watcher, live: false })).toBe(DRAFT_ROOM.LONG_POLL_MIN_GAP_MS);
+    expect(DRAFT_ROOM.LONG_POLL_WATCH_GAP_MS).toBeLessThan(DRAFT_ROOM.POLL_WATCH_MS);
+  });
+
+  it("falls back to the ladder whenever the next tick can't be held", () => {
+    for (const extra of [
+      {},
+      { canAct: true },
+      { live: false },
+      { hidden: true, hasStake: true },
+      { reached: false, failureCount: 2 },
+      { rateLimited: true },
+      { offline: true },
+    ]) {
+      const o = { ...watcher, ...extra };
+      expect(draftPollDelay({ ...o, longPoll: false, startedAgoMs: 30_000 })).toBe(
+        draftPollCadence(o).delayMs,
+      );
+    }
+  });
+
+  it("uses the ladder after a 429, a failure, offline or a hidden spectator, even mid long-poll", () => {
+    for (const extra of [
+      { rateLimited: true },
+      { reached: false },
+      { offline: true },
+      { hidden: true, hasStake: false },
+    ]) {
+      const o = { ...watcher, ...extra };
+      expect(draftPollDelay({ ...o, longPoll: true, startedAgoMs: 30_000 })).toBe(
+        draftPollCadence(o).delayMs,
+      );
+    }
+  });
+
+  it("backs a watcher off a version that never stops moving, up to the ladder", () => {
+    const GAP = DRAFT_ROOM.LONG_POLL_WATCH_GAP_MS;
+    const ladder = draftPollCadence(watcher).delayMs;
+    expect(draftLongPollGapMs({ ...watcher, unheldStreak: 0 })).toBe(GAP);
+    expect(draftLongPollGapMs({ ...watcher, unheldStreak: 1 })).toBe(GAP);
+    expect(draftLongPollGapMs({ ...watcher, unheldStreak: 2 })).toBe(Math.min(ladder, 2 * GAP));
+    expect(draftLongPollGapMs({ ...watcher, unheldStreak: 40 })).toBe(ladder);
+    // Outside the auction a watcher starts from 1s and doubles from there.
+    const idle = { ...watcher, live: false };
+    const MIN = DRAFT_ROOM.LONG_POLL_MIN_GAP_MS;
+    expect(draftLongPollGapMs({ ...idle, unheldStreak: 2 })).toBe(2 * MIN);
+    expect(draftLongPollGapMs({ ...idle, unheldStreak: 40 })).toBe(draftPollCadence(idle).delayMs);
+    // A held reply puts it back (roomUnheldStreak resets the count).
+    expect(roomUnheldStreak(9, { askedHold: true, held: true })).toBe(0);
+  });
+
+  it("keeps a captain's and an admin's gap at 1s through a bidding war", () => {
+    for (const unheldStreak of [2, 5, 40]) {
+      expect(
+        draftLongPollGapMs({ ...watcher, canAct: true, unheldStreak }),
+      ).toBe(DRAFT_ROOM.LONG_POLL_MIN_GAP_MS);
+    }
+    // Outside the auction they back off like anyone else.
+    expect(
+      draftLongPollGapMs({ ...watcher, canAct: true, live: false, unheldStreak: 5 }),
+    ).toBeGreaterThan(DRAFT_ROOM.LONG_POLL_MIN_GAP_MS);
+  });
+});
+
+describe("the rooms' shared long-poll rules", () => {
+  it("are the same functions under both rooms' names", () => {
+    expect(inhouseUnheldStreak).toBe(roomUnheldStreak);
+    expect(inhouseRefocusResync).toBe(roomRefocusResync);
   });
 });
 

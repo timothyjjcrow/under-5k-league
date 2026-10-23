@@ -152,7 +152,8 @@ the whole setup capability, including DRAFT/NOT_STARTED.
 rotation, not a snake); the
 transactional engine in `src/lib/draft-service.ts` (`nominatePlayer`,
 `placeBid`, `resolveExpiredNomination`, `resolveStalledNomination`,
-`getDraftState`). Every state response is one Serializable snapshot containing
+`getDraftState`, now the resolvers plus `loadDraftRoomRows` and the pure
+`buildDraftState`). Every state response is built from one Serializable snapshot containing
 the season id/phase, mutable optimistic version token (`draftVersion`, derived
 from `Draft.updatedAt`), lot expectation (`nominatedUserId`), bounded
 bids/sales, rosters, budgets, and the
@@ -163,14 +164,18 @@ state.
 
 Clocks (30s bid, 90s nomination — `DEFAULTS` in `src/lib/constants.ts`) are
 server-authoritative and resolve **lazily**: `getDraftState` runs both
-resolvers before every read, every route
-(`/api/draft/tick|bid|nominate|admin-nominate`) funnels through it, and the
+resolvers before every read and the action routes
+(`/api/draft/bid|nominate|admin-nominate`) funnel through it; the room's
+`/api/draft/tick` long-polls on a draft room version and answers from one
+shared copy of the rows per process (`src/lib/draft-room-state.ts`), settling
+a clock only when the copy shows one run out, under the 2s claim. The
 authenticated maintenance worker also calls the two resolvers after a cheap
 due-clock preflight. A visible site tab discovers activity from the read-only
 `GET /api/sync` snapshot on its up-to-300s idle poll, then stays on the 30s
 watch cadence while an auction clock remains live; those browser reads refresh
 the UI but never advance the clock themselves.
-The client is `src/components/draft-room.tsx`, a ~1.2s poll loop whose cadence,
+The client is `src/components/draft-room.tsx`, a long-poll loop (a 2s/5s ladder
+as its fallback) whose cadence,
 sequence ordering, expiry observation, outbid latch, feed recovery, and title
 flags are extracted into tested pure modules (`src/lib/room-poll.ts`,
 `room-sequence.ts`, `draft-feed.ts`, `draft.ts`). A lost response is presented
@@ -627,8 +632,8 @@ Rules that follow from the layering:
 - **One authenticated worker, public observation only.** `getDraftState` and
   `getInhouseState` retain guarded resolvers so a fleet-throttled authenticated
   room poll can respond immediately without multiplying writes or provider
-  calls across every tab; the inhouse poll runs them only when its snapshot
-  shows one due. Anonymous room snapshots never run them. Sitewide
+  calls across every tab; the inhouse and draft polls run them only when
+  their snapshot shows one due. Anonymous room snapshots never run them. Sitewide
   work is different: the private Cloudflare Worker in
   `ops/cloudflare-automation-worker` owns the repository's only one-minute Cron
   Trigger and calls `GET /api/cron/automation` with `Authorization: Bearer

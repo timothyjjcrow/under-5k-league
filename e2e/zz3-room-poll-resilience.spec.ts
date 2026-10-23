@@ -104,10 +104,11 @@ function deferred() {
 }
 
 /**
- * Answer a route with the origin's reply minus the inhouse room's
- * `roomVersion`, as an old slot during a release answers: the room then
- * never long-polls and keeps to its fallback ladder, the loop these tests
- * were written for. (Long-poll specifics: e2e/zz4e-inhouse-long-poll.spec.ts.)
+ * Answer a route with the origin's reply minus the room's `roomVersion`
+ * (both rooms long-poll), as an old slot during a release answers: the room
+ * then never long-polls and keeps to its fallback ladder, the loop these
+ * tests were written for. (Long-poll specifics:
+ * e2e/zz3b-draft-long-poll.spec.ts and e2e/zz4e-inhouse-long-poll.spec.ts.)
  */
 async function fulfillOnTheLadder(
   route: Route,
@@ -339,7 +340,11 @@ test("draft rejects a pre-outage response and waits for a post-reconnect poll", 
 }) => {
   await ensureLiveDraftFixture(page);
   await installSyntheticConnectivity(page);
-  const held = await holdOldAndFreshPoll(page, "**/api/draft/tick");
+  // On the ladder: a held long-poll is released by the outage itself, so the
+  // pre-outage response this test delivers late only exists on the ladder.
+  const held = await holdOldAndFreshPoll(page, "**/api/draft/tick", {
+    ladder: true,
+  });
   await page.goto(
     "/api/auth/dev?name=Held+Draft+Admin&steamId=76561190000009005&admin=1&redirect=/draft",
   );

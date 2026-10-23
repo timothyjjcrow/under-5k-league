@@ -6,6 +6,7 @@
 
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
+import { publishDraftRoomChange } from "@/lib/draft-room-version";
 import { raceHook } from "@/lib/race-hook";
 import { captureRosterTenure, closeRosterTenure } from "@/lib/roster-history";
 import { getActiveSeason } from "@/lib/season";
@@ -337,6 +338,8 @@ export async function withdrawSignup(
       return { error: "That signup just changed — reload and try again." };
     throw e;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "withdrawSignup",
     summary: `Removed ${reg.user.name}'s ${reg.type.toLowerCase()} signup`,
@@ -457,6 +460,8 @@ export async function reinstateSignup(
   const warn = medalProvesIneligible(reg.user.rankTier)
     ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
     : "";
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "reinstateSignup",
     summary: `Reinstated ${reg.user.name}'s ${reg.type.toLowerCase()} signup`,
@@ -564,6 +569,8 @@ export async function setRegistrationMmr(
     check.adjusted && check.range
       ? ` (heads up: their ${rankMedalName(reg.user.rankTier)} medal suggests ${formatMmrRange(check.range)})`
       : "";
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "setRegistrationMmr",
     summary: `Set ${reg.user.name}'s signup MMR to ${mmr}`,
@@ -678,6 +685,8 @@ export async function setPlayerRank(
     }
     throw error;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   refresh();
   await logAdminAction({
     action: "setPlayerRank",
@@ -1022,6 +1031,8 @@ export async function signFreeAgent(
     }
     throw e;
   }
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "signFreeAgent",
     summary: `Signed ${registration.user.name} to ${team.name}; cancelled ${coverCleanup.cancelled} redundant open-seat cover booking(s)`,
@@ -1304,6 +1315,8 @@ export async function releasePlayer(
   }
   const { cancelled, kept, standDowns, teamName } = releaseResult;
 
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "releasePlayer",
     summary: `Released ${member.user.name} from ${member.team.name}; refunded $${member.price} and cancelled ${cancelled} standin assignment(s)`,
@@ -1938,6 +1951,8 @@ export async function promoteStandinToPlayer(
   }
   if (!outcome.ok) return { error: outcome.error };
 
+  // Rule P (draft-room-version.ts): the draft room shows this commit.
+  await publishDraftRoomChange();
   await logAdminAction({
     action: "promoteStandinToPlayer",
     summary: `Promoted ${outcome.name} from standin to full player`,

@@ -1,11 +1,10 @@
-import { randomUUID } from "node:crypto";
 import {
   bumpInhouseRoomGeneration,
   inhouseRoomGeneration,
   inhouseRoomPublishMark,
   wakeInhouseRoomWaiters,
 } from "./inhouse-room-wait";
-import { prisma } from "./prisma";
+import { createRoomVersion } from "./room-version";
 import { SETTING_KEYS } from "./settings";
 
 // The inhouse room's version token (a leaf: nothing here imports the inhouse
@@ -28,6 +27,18 @@ import { SETTING_KEYS } from "./settings";
 // moves (inhouse-room-wait.ts), and a publish wakes the requests held in this
 // process once its statement has run.
 
+const version = createRoomVersion({
+  settingKey: () => SETTING_KEYS.INHOUSE_ROOM_VERSION,
+  logTag: "inhouse-room-version",
+  // This module instance's view of the registry (inhouse-room-wait.ts).
+  wait: {
+    generation: inhouseRoomGeneration,
+    bumpGeneration: bumpInhouseRoomGeneration,
+    publishMark: inhouseRoomPublishMark,
+    wakeWaiters: wakeInhouseRoomWaiters,
+  },
+});
+
 /**
  * This process's publish count (the cache's local fence), bumped by every
  * publish before its statement runs. A snapshot load that started before a
@@ -37,7 +48,7 @@ import { SETTING_KEYS } from "./settings";
  * handlers' snapshot too.
  */
 export function inhouseRoomLocalGeneration(): number {
-  return inhouseRoomGeneration();
+  return version.localGeneration();
 }
 
 /**
@@ -47,11 +58,8 @@ export function inhouseRoomLocalGeneration(): number {
  * racing that read re-checks the hold instead of waiting for the watch.
  */
 export function inhouseRoomHoldMark(): number {
-  return inhouseRoomPublishMark();
+  return version.holdMark();
 }
-
-/** No version row yet: what a reply carries and a client sends back. */
-const NO_ROOM_VERSION = "none";
 
 /**
  * The version as the client sees it: the opaque token a state reply carries
@@ -59,17 +67,13 @@ const NO_ROOM_VERSION = "none";
  * (nothing ever published) has a token too, so a fresh database long-polls
  * and its first publish moves it.
  */
-export function inhouseRoomVersionToken(version: string | null): string {
-  return version ?? NO_ROOM_VERSION;
+export function inhouseRoomVersionToken(stored: string | null): string {
+  return version.token(stored);
 }
 
 /** The room's current version, or null when nothing ever published. */
 export async function readInhouseRoomVersion(): Promise<string | null> {
-  const row = await prisma.setting.findUnique({
-    where: { key: SETTING_KEYS.INHOUSE_ROOM_VERSION },
-    select: { value: true },
-  });
-  return row?.value ?? null;
+  return version.read();
 }
 
 /**
@@ -82,28 +86,5 @@ export async function readInhouseRoomVersion(): Promise<string | null> {
  * the version (the commit happened either way).
  */
 export async function publishInhouseRoomChange(): Promise<void> {
-  bumpInhouseRoomGeneration();
-  try {
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        await prisma.$executeRaw`
-          INSERT INTO "Setting" ("key", "value")
-          VALUES (${SETTING_KEYS.INHOUSE_ROOM_VERSION}, ${randomUUID()})
-          ON CONFLICT ("key") DO UPDATE SET "value" = excluded."value"
-        `;
-        return;
-      } catch (error) {
-        if (attempt === 1) {
-          const code = (error as { code?: unknown } | null)?.code;
-          console.error(
-            `[inhouse-room-version] publish failed (${
-              typeof code === "string" ? code : "unknown"
-            })`,
-          );
-        }
-      }
-    }
-  } finally {
-    wakeInhouseRoomWaiters();
-  }
+  await version.publish();
 }

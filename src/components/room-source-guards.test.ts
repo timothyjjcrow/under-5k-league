@@ -481,6 +481,92 @@ describe("live rooms delegate their poll policy", () => {
     }
   });
 
+  it("draft-room long-polls only through draftLongPoll and draftPollDelay", () => {
+    // The hold, its deadline and the re-issue are the long-poll's whole
+    // contract with the server: a `since` sent outside draftLongPoll would
+    // hold a tick the rules said must answer at once (a resync, an action
+    // awaiting reconciliation), and a re-issue outside draftPollDelay is a
+    // hot loop against an old slot that answers at once.
+    const src = code("draft-room.tsx");
+    expect(src).toMatch(
+      /seasonId,\s*since:\s*longPoll\.since,\s*sinceNow:\s*longPoll\.sinceNow,\s*holdMs:\s*longPoll\.holdMs/,
+    );
+    expect(src).toMatch(/longPoll \? longPoll\.timeoutMs : ROOM_POLL_TIMEOUT_MS/);
+    expect([...src.matchAll(/\bsince:/g)]).toHaveLength(1);
+    // Urgent ticks answer at once: a resync, an action whose outcome is
+    // unknown, and a refocus after a long hide.
+    expect(src).toMatch(
+      /const urgent = \(\) =>\s*resyncPending \|\|\s*actionReconcileSeqRef\.current !== null \|\|\s*refocusPending;/,
+    );
+    const calls = callArgs(src, "draftLongPoll");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).toMatch(/\bversion:\s*roomVersion\b/);
+    expect(calls[0]).toMatch(/\burgent:\s*urgent\(\)/);
+    expect(calls[0]).toMatch(/\bfailureCount:\s*consecutiveFailures\b/);
+    expect(calls[0]).toMatch(/\bcanAct:\s*canActRef\.current\b/);
+    // Both decisions read the reply the room shows.
+    expect([...src.matchAll(/nextLongPollFor\(latestStateRef\.current\)/g)]).toHaveLength(2);
+    // The version comes only from a tick reply apply() took.
+    expect(src).toMatch(
+      /if \(applied\) \{\s*roomVersion =\s*typeof payload\.roomVersion === "string"/,
+    );
+    expect([...src.matchAll(/\broomVersion =\s/g)]).toHaveLength(1);
+    // The next tick leaves from the reply's continuation, not a timer, and
+    // only when the delay is 0 for a tick that can be held.
+    expect(src).toMatch(
+      /if \(delayMs === 0 && nextLongPoll !== null\) \{\s*reissue\(\);\s*return;\s*\}\s*schedule\(delayMs\);/,
+    );
+    const delays = callArgs(src, "draftPollDelay");
+    expect(delays).toHaveLength(1);
+    expect(delays[0]).toMatch(
+      /longPoll:\s*nextLongPoll !== null,\s*startedAgoMs:\s*Date\.now\(\) - startedAt,\s*unheldStreak,/,
+    );
+    // The gap backs off while replies keep coming back unheld: the streak is
+    // counted only by roomUnheldStreak, from every reply the room reads.
+    expect(src).toMatch(
+      /unheldStreak = roomUnheldStreak\(unheldStreak, \{\s*askedHold: longPoll !== null,\s*held: payload\.held,\s*\}\);/,
+    );
+    expect([...src.matchAll(/(?<!let )\bunheldStreak =\s/g)]).toHaveLength(1);
+    // A connectivity change releases a held tick and asks afresh.
+    expect(src).toMatch(/const onOffline = \(\) => \{[\s\S]*?resyncPending = true;[\s\S]*?releaseHold\(\);\s*\};/);
+    expect(src).toMatch(/const onOnline = \(\) => \{[\s\S]*?releaseHold\(\);\s*tick\(\);/);
+    // A released tick is not a failure.
+    expect(src).toMatch(/\} else if \(request\.released\) \{\s*\} else \{\s*setInitialError\(true\);\s*markFailure\(\);/);
+    // Only a held tick is released by a connectivity change or a refocus (an
+    // unheld one answers at once); the cleanup releases either.
+    expect(src).toMatch(
+      /const releaseHold = \(\) => \{\s*if \(!current\?\.held\) return;\s*current\.released = true;\s*current\.controller\.abort\(\);\s*\};/,
+    );
+  });
+
+  it("draft-room asks afresh, unheld, when a tab comes back from a long hide", () => {
+    // A held tick may have died with its connection while the device slept,
+    // and its own deadline is its hold plus ROOM_POLL_TIMEOUT_MS away:
+    // refocus releases it and the next tick is unheld, once.
+    const src = code("draft-room.tsx");
+    const visibility = src.slice(
+      src.indexOf("const onVisibility = () => {"),
+      src.indexOf("const onOffline = () => {"),
+    );
+    expect(visibility.length).toBeGreaterThan(0);
+    expect(visibility).toMatch(
+      /if \(document\.visibilityState !== "visible"\) \{\s*hiddenAt \?\?= Date\.now\(\);\s*return;\s*\}/,
+    );
+    expect(visibility).toMatch(
+      /if \(roomRefocusResync\(hiddenForMs\)\) \{\s*refocusPending = true;\s*rerunRequested = true;\s*releaseHold\(\);\s*\}\s*tick\(\);/,
+    );
+    expect(visibility).not.toContain("ROOM_POLL_TIMEOUT_MS");
+    // One-shot: cleared only by a reply apply() took.
+    expect([...src.matchAll(/(?<!let )\brefocusPending = false;/g)]).toHaveLength(1);
+    expect(src).toMatch(
+      /if \(applied\) \{\s*roomVersion =[^;]*;\s*refocusPending = false;\s*\}/,
+    );
+    // The released tick is followed by one straight after it settles.
+    expect(src).toMatch(
+      /if \(rerunRequested\) \{\s*rerunRequested = false;\s*schedule\(0\);\s*return;\s*\}/,
+    );
+  });
+
   it("draft-room's captains and admins poll every 2s, well inside the bid clock", () => {
     // Their rate is the room's `pollMs` default (draftPollCadence takes it as
     // activeMs). Slower for the hosting budget than the old 1.2s; a bid still
@@ -677,9 +763,11 @@ describe("live rooms delegate their alert triggers", () => {
     // the one box both leagues share. One refresh, behind the tested rule.
     const src = code("draft-room.tsx");
     expect(src).toMatch(
-      /if \(draftRoomNeedsRefresh\(renderedPhaseRef\.current, polled\)\) \{\s*router\.refresh\(\);\s*\}\s*renderedPhaseRef\.current = polled;/,
+      /if \(draftRoomNeedsRefresh\(renderedPhaseRef\.current, polled\)\) \{[\s\S]*?router\.refresh\(\);[\s\S]*?draftRoomRefreshDelayMs\(state\.me\.isAdmin \|\| !!state\.me\.myTeamId\),\s*\);\s*\}\s*renderedPhaseRef\.current = polled;/,
     );
     expect(src.split("router.refresh()").length - 1).toBe(1);
+    // A pending refresh is cleared on unmount, never left to fire later.
+    expect(src).toMatch(/if \(refreshTimerRef\.current\) clearTimeout\(refreshTimerRef\.current\);\s*\},\s*\[\],/);
     // Seeded from the page's render, so a Start before the first poll counts.
     expect(src).toMatch(/useRef<DraftRoomPhase \| null>\(\s*renderedPhase \?\? null,?\s*\)/);
     expect(appCode("draft/page.tsx")).toMatch(

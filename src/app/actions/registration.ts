@@ -68,6 +68,7 @@ import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { isSerializationConflict, isUniqueViolation } from "@/lib/prisma-errors";
 import { waitBeforeSerializableRetry } from "@/lib/serializable-retry";
 import { publishInhouseRoomChange } from "@/lib/inhouse-room-version";
+import { publishDraftRoomChange } from "@/lib/draft-room-version";
 
 function refresh() {
   updateTag(AUTOMATION_GATE_TAG);
@@ -760,6 +761,8 @@ export async function saveRegistration(
   // Rule P: the inhouse room shows a player's signup positions when they
   // never chose inhouse ones. Publish before the Discord announcement below.
   await publishInhouseRoomChange();
+  // …and the draft room's pool shows the signup (draft-room-version.ts).
+  await publishDraftRoomChange();
 
   // A new signup consumes this browser's invite tag, credited or not, so the
   // first link is the last word (invite-credit.ts).
@@ -996,6 +999,8 @@ export async function leaveLeague(
       return { error: "Your signup just changed — reload and try again." };
     throw e;
   }
+  // Rule P (draft-room-version.ts): the draft room's pool drops them.
+  await publishDraftRoomChange();
   refresh();
   return { message: "Withdrawn from this season" };
 }
@@ -1170,6 +1175,9 @@ export async function updateDotaAccount(
     }
   }
 
+  // Rule P (draft-room-version.ts): the draft room's lot card links the
+  // nominee's Dota account. Before the OpenDota calls below.
+  await publishDraftRoomChange();
   const linkMessage =
     expectedOverride == null
       ? raw
@@ -1519,6 +1527,8 @@ export async function updateDiscordName(
         "Your Discord is linked, so the handle comes from Discord — unlink it first to edit manually.",
     };
   }
+  // Rule P (draft-room-version.ts): the draft room shows a nominee's handle.
+  await publishDraftRoomChange();
   refresh();
   return {
     message: normalized
@@ -1549,6 +1559,9 @@ export async function unlinkDiscord(
     select: { discordId: true },
   });
   await unlinkDiscordAccount(prisma, user.id);
+  // Rule P (draft-room-version.ts): the draft room shows a nominee's handle;
+  // before the role call below.
+  await publishDraftRoomChange();
 
   let roleLeft = false;
   const previewReadOnly = !discordMutationsAllowed();

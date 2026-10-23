@@ -323,15 +323,18 @@ export function inhouseLongPoll(
  * (the reply's `held` is false). A reply that was held resets it to 0. A
  * request that sent no `since` (`askedHold` false: the first, a retry, an
  * urgent one), or a reply that doesn't say (an old slot), leaves it as it
- * was: neither is news about how fast the room moves.
+ * was: neither is news about how fast the room moves. Both rooms count it.
  */
-export function inhouseUnheldStreak(
+export function roomUnheldStreak(
   prev: number,
   o: { askedHold: boolean; held: unknown },
 ): number {
   if (!o.askedHold || typeof o.held !== "boolean") return prev;
   return o.held ? 0 : prev + 1;
 }
+
+/** The inhouse room's name for roomUnheldStreak. */
+export const inhouseUnheldStreak = roomUnheldStreak;
 
 /**
  * The shortest wait between the starts of two long-poll requests. Normally
@@ -397,7 +400,8 @@ export function inhousePollDelay(
 }
 
 /**
- * Whether a tab coming back into view must ask afresh, unheld: after a hide
+ * Whether a tab coming back into view must ask afresh, unheld (both rooms):
+ * after a hide
  * of ROOM_POLL_TIMEOUT_MS or more (a sleep, a phone in a pocket), a held
  * request may have died with its connection and given no sign (no `offline`
  * event, no reset), and its own deadline is up to its hold plus
@@ -406,9 +410,12 @@ export function inhousePollDelay(
  * quick alt-tab out of Dota costs nothing. `hiddenForMs` null: the tab
  * wasn't seen hidden.
  */
-export function inhouseRefocusResync(hiddenForMs: number | null): boolean {
+export function roomRefocusResync(hiddenForMs: number | null): boolean {
   return hiddenForMs !== null && hiddenForMs >= ROOM_POLL_TIMEOUT_MS;
 }
+
+/** The inhouse room's name for roomRefocusResync. */
+export const inhouseRefocusResync = roomRefocusResync;
 
 /**
  * `controller`'s signal, which also aborts at `timeoutMs`
@@ -448,8 +455,10 @@ export function draftPollsAtClockZero(viewer: {
 }
 
 /**
- * The draft room's binding. Its "active" is the AUCTION's phase (PAUSED counts
- * as live, so a resume is caught at once), and its RATE is the viewer's role:
+ * The draft room's FALLBACK ladder (the long-poll is draftLongPoll, below):
+ * what a tick that can't be held waits before the next one. Its "active" is
+ * the AUCTION's phase (PAUSED counts as live, so a resume is caught at
+ * once), and its RATE is the viewer's role:
  * captains and admins, who act on a live lot, poll at the room's 2s; every
  * other viewer (a spectator, a player in the pool, a drafted player) at
  * POLL_WATCH_MS (5s). Every poll is a function call on the hosting budget
@@ -490,4 +499,131 @@ export function draftPollCadence(
       maxRetryMs: 30_000,
     },
   );
+}
+
+/** A draft tick the server may hold: what it sends, and its deadline. */
+export type DraftLongPoll = {
+  /** The `roomVersion` of the last tick reply the room applied. */
+  since: string;
+  /**
+   * The server clock of the reply the room shows (`serverNow`), or null.
+   * The server answers at once when the auction's clock ran out after it
+   * (parseDraftHold, draftRoomWakeAt's `fromMs`), so a reply from before a
+   * lot closed never sits out a hold.
+   */
+  sinceNow: number | null;
+  /** How long the server may hold it (it caps this at LONG_POLL_HOLD_MS). */
+  holdMs: number;
+  /** The request's own deadline: the hold plus ROOM_POLL_TIMEOUT_MS. */
+  timeoutMs: number;
+};
+
+/**
+ * Whether the draft room's next tick is a LONG-POLL, and for how long. The
+ * server holds a tick that sends back the version of the reply the room
+ * shows until the room changes, so a bid reaches a captain's tab in well
+ * under a second, and a watcher's within its gap (draftLongPollGapMs), at no
+ * more than about one request per change.
+ *
+ * Null, and the tick answers at once on the fallback ladder
+ * (draftPollCadence), when:
+ * - the last applied reply carried no `version` (the first tick of a loop,
+ *   or an old slot during a release, which doesn't know `since`): never
+ *   hot-loop on a server that answers at once;
+ * - something waits on an answer now (`urgent`: a resync after going
+ *   offline, an action whose outcome is unknown, or a refocus after a long
+ *   hide, roomRefocusResync);
+ * - the last tick failed: a retry must be quick to diagnose.
+ *
+ * A captain or an admin asks for the shorter LONG_POLL_ACTOR_HOLD_MS while
+ * the auction is live or paused (`live`), so a held tick that silently died
+ * is given up on, and the fast retries begin, 15s sooner: the room locks
+ * their bidding ("Connection lost") only at ROOM_POLL_FAIL_THRESHOLD
+ * failures in a row, and the first held one takes its hold plus
+ * ROOM_POLL_TIMEOUT_MS. Everyone else asks for LONG_POLL_HOLD_MS.
+ */
+export function draftLongPoll(o: {
+  version: string | null | undefined;
+  urgent: boolean;
+  failureCount?: number;
+  /** A captain or an admin; unknown (no payload yet) counts as acting. */
+  canAct?: boolean;
+  /** The auction is IN_PROGRESS or PAUSED in the reply the room shows. */
+  live: boolean;
+  /** The `now` of the reply the room shows. */
+  serverNow?: number | null;
+}): DraftLongPoll | null {
+  if (typeof o.version !== "string" || o.version.length === 0) return null;
+  if (o.urgent || (o.failureCount ?? 0) > 0) return null;
+  const holdMs =
+    (o.canAct ?? true) && o.live
+      ? DRAFT_ROOM.LONG_POLL_ACTOR_HOLD_MS
+      : DRAFT_ROOM.LONG_POLL_HOLD_MS;
+  return {
+    since: o.version,
+    sinceNow:
+      typeof o.serverNow === "number" && Number.isFinite(o.serverNow)
+        ? o.serverNow
+        : null,
+    holdMs,
+    timeoutMs: holdMs + ROOM_POLL_TIMEOUT_MS,
+  };
+}
+
+/**
+ * The shortest wait between the starts of two long-poll ticks. A captain or
+ * an admin in a live auction keeps LONG_POLL_MIN_GAP_MS (1s): a bidding war
+ * moves the room every second or two, and every change is a bid they may
+ * answer. Every other viewer waits LONG_POLL_WATCH_GAP_MS (3s) while the
+ * auction is live or paused, since every bid wakes every held tab and they
+ * have nothing to answer; outside it (the waiting room, a finished draft)
+ * 1s. A version that keeps moving faster than the gap comes back unheld:
+ * from the second unheld reply in a row (`unheldStreak`, roomUnheldStreak)
+ * a watcher's gap doubles per reply, up to the ladder rate
+ * (draftPollCadence); a held reply puts it back.
+ */
+export function draftLongPollGapMs(
+  o: Parameters<typeof draftPollCadence>[0] & { unheldStreak?: number },
+): number {
+  const acts = (o.canAct ?? true) && o.live;
+  const min =
+    o.live && !acts
+      ? DRAFT_ROOM.LONG_POLL_WATCH_GAP_MS
+      : DRAFT_ROOM.LONG_POLL_MIN_GAP_MS;
+  const streak = Math.max(0, Math.floor(o.unheldStreak ?? 0));
+  if (streak < 2 || acts) return min;
+  const ladder = draftPollCadence(o).delayMs;
+  const doubled = min * 2 ** Math.min(10, streak - 1);
+  return Math.max(min, Math.min(ladder, doubled));
+}
+
+/**
+ * How long the draft room waits after a tick settles before the next one. A
+ * tick that can long-poll next (`longPoll`: draftLongPoll was not null) goes
+ * straight away, 0, which the room issues from the reply's own continuation
+ * rather than a timer (hidden tabs clamp timers): no more often than the
+ * long-poll gap (draftLongPollGapMs) after the previous one started
+ * (`startedAgoMs`), so a version that keeps moving can't hot-loop. Every
+ * other case, and every tick that didn't land, a 429, offline and a hidden
+ * tab with nothing at stake, waits on the ladder (draftPollCadence).
+ */
+export function draftPollDelay(
+  o: Parameters<typeof draftPollCadence>[0] & {
+    longPoll: boolean;
+    startedAgoMs: number;
+    /** roomUnheldStreak's count; absent, 0. */
+    unheldStreak?: number;
+  },
+): number {
+  const ladder = draftPollCadence(o).delayMs;
+  if (
+    !o.longPoll ||
+    o.rateLimited ||
+    o.reached === false ||
+    o.offline ||
+    (o.hidden && !o.hasStake)
+  ) {
+    return ladder;
+  }
+  return Math.max(0, draftLongPollGapMs(o) - Math.max(0, o.startedAgoMs));
 }

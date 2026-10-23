@@ -16,10 +16,11 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
   worker's `syncDraftClocks` (`result-sync-service.ts`), so the auction moves
   with nobody watching. `nominatePlayer` and `placeBid` run only
   `resolveExpiredNomination`: a nominate or bid never settles a stalled
-  nominator clock. Signed-in polls resolve at most once per
-  `draftRoomMaintenanceAt` window; anonymous polls are read-only. Timers are
-  `DEFAULTS` in `constants.ts`; a lot nobody can outbid gets the short clock
-  (`bidClockSeconds`).
+  nominator clock. A signed-in room tick resolves only when the room's copy
+  shows the running clock run out (`draftRoomDue`), and then only the
+  winner of the `draftRoomMaintenanceAt` 2s claim; anonymous ticks are
+  read-only (the tick, below). Timers are `DEFAULTS` in `constants.ts`; a
+  lot nobody can outbid gets the short clock (`bidClockSeconds`).
 - **Phase is the outer gate.** Resolvers and draft mutations no-op unless the
   season is active and in DRAFT, so a live Draft row stranded outside DRAFT
   never auto-sells before an admin repairs it.
@@ -216,33 +217,164 @@ In the Captains & draft card on `/admin` and inside the room
   and a per-user bucket; bid, nominate and admin-nominate share one per-user
   mutation bucket. Limits are in each `route.ts` (`rateLimit` keys `draft:*`).
 
+## The tick: one shared copy of the room, and the long-poll
+
+`POST /api/draft/tick` (`src/app/api/draft/tick/route.ts`) over
+`src/lib/draft-room-state.ts`, with the mechanism shared with the inhouse
+room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
+`createRoomCache`) and the draft's own bindings (`draft-room-wait.ts`,
+`draft-room-version.ts`, the pure `draft-room-wake.ts`).
+
+- **Each server instance builds every viewer's reply from one copy of the
+  room, checked against the draft room version on every tick.** The copy is
+  `loadDraftRoomRows`: the same Serializable snapshot `getDraftState` reads
+  (season, auction, rosters, pool, lot, sales, the nominee's profile and
+  contact, the active registrants' ids) plus the captains' last-seen times.
+  `buildDraftState(viewer, rows, nowMs)` is pure and the only place the gated
+  fields (the nominee's Discord, the admin's Undo target) become a reply;
+  `getDraftState` is now the resolvers plus a fresh load plus the same
+  builder, for the action routes, the claim winner, scripts and tests.
+  Fifty viewers asking about one change cost one read per instance, not
+  fifty. `draft-room-longpoll.itest.ts` pins that every kind of viewer gets
+  exactly the fresh read's reply from the copy (sabotage-verified on the
+  contact gating).
+  - **The copy serves only while its label equals the version just read**
+    (`DRAFT_ROOM_VERSION`, an opaque UUID like the inhouse room's), this
+    instance has not published since the load began, and it is younger than
+    `ROOM_SNAPSHOT_MAX_AGE_MS` (15s). No version row means uncached: every
+    tick reads fresh and nothing is stored. One active season, one copy.
+  - **"In the room" is judged per reply** from the stored last-seen times,
+    so a captain who left reads away 90s later without a write. A captain's
+    tick writes their heartbeat (`recordCaptainPresence`, at most every 20s)
+    and, when the copy showed them away and the write landed, publishes, so
+    every tab shows them back at once.
+- **Rule P (draft): after any commit the draft room shows, call
+  `publishDraftRoomChange()` before any Discord call and before the
+  response, never inside a transaction** (`draft-room-version.ts`). The
+  engine's writers publish their own commits, and only commits: the two
+  resolvers when they resolved (before the completion posts), and pause,
+  resume, void, undo, abort, nominate and bid on `ok`. Every other writer of
+  the room's tables publishes after its commit: the captain and draft
+  actions (add, remove, change, transfer, order, Start, the draft night,
+  refreshed player data), the roster actions (withdraw, reinstate, MMR,
+  medal, sign, release, promote), the season actions (create, archive,
+  cancel, delete, reactivate, phase, rename, draft settings), the signup
+  save and withdrawal, and a changed team name or logo
+  (`saveTeamIdentity`). `src/lib/draft-room-publish.test.ts` finds every
+  writer of the room's tables, requires the publish (or a listed reason the
+  room doesn't show the write), pins the engine's order and that no publish
+  sits in a `$transaction`. Writers of display-only fields (a refreshed name
+  or avatar) don't publish and show within the copy's max age; a player's
+  own Discord handle and Dota link do (`updateDiscordName`, `unlinkDiscord`,
+  `updateDotaAccount`), since the lot card shows them.
+  - **Release outside a live auction** (the draft-night rule already). A
+    slot built before 2026-10-23 writes without publishing, so during the
+    first release's 90s overlap (or a rollback past it) the new slot's copy
+    can lag a bid on the old slot by up to the copy's 15s.
+- **The hold (`holdDraftRoomPoll`) reads only this instance's copy and
+  writes nothing.** A tick whose `since` is the version the route just read
+  (`parseDraftHold`, clamped to `LONG_POLL_HOLD_MS`) waits, with no database
+  connection, until the version moves (a publish in this process, rechecked
+  after `LONG_POLL_COALESCE_MS` and woken with up to `LONG_POLL_JITTER_MS` of
+  jitter, or the 2s watch for the other release slot), the auction's clock
+  as it wakes this viewer, its hold, the process stopping, or the client
+  leaving (204, no tick). Then the route re-reads the session, the active
+  season (a season archived or opened during the hold answers 404 or 409,
+  never the old room) and the version, and ticks as an unheld request would.
+  A signed-out hold never wakes on a clock, so it loads no copy. Every reply
+  carries `held` and `roomVersion`, the version its rows were read under
+  (read BEFORE them): the one read beside the session, or the copy's after
+  the tick's own publish (a captain back in the room, a settled clock), so
+  that client holds next instead of asking again.
+- **Who wakes at a clock decides how many tabs ask at once**
+  (`draftRoomWakeAt`). A captain's or an admin's held tick wakes
+  `LONG_POLL_CLOCK_GRACE_MS` after the running clock (the lot's bid clock,
+  or the nominator's clock) and settles it under the 2s claim; that settle's
+  publish wakes everyone else. Any other signed-in viewer wakes only at the
+  clock plus `LONG_POLL_DUE_RETRY_MS` (2.25s), so with no captain or admin
+  in the room a pool player's tick settles the lot, as the old 5s poll did.
+  A signed-out tick never wakes on a clock and never settles. A clock that
+  ran out after the reply the client shows (`sinceNow`) answers at once; one
+  the client has already seen at zero with the version unchanged is retried
+  at the due retry. `draftRoomDue` mirrors both resolvers' act conditions,
+  source-guarded against their early returns.
+- **The registry is one per process per room, on `globalThis`**
+  (`ggd2l.draftRoomWait.v1`): a `next start` process loads `src/lib` twice,
+  and the admin's pause (a server action) must wake the route's held ticks.
+  A draft publish never wakes an inhouse hold, nor the reverse. A stopping
+  process answers every hold at once and reports new ones unheld.
+- **Tests:** `draft-room-wake.test.ts` (the clocks), `room-poll.test.ts`
+  (the client's rules), `src/app/api/draft/routes.test.ts` (hold, re-read,
+  abort, `held`, the season checks, a stopping process),
+  `draft-room-publish.test.ts` (rule P) and
+  `test/integration/draft-room-longpoll.itest.ts` (through the real route: a
+  bid, a server action in another module instance and a version moved
+  elsewhere each answering a held tick; the captain's settle at zero and
+  everyone woken by it; a pool player's fallback settle; a signed-out tick
+  that never settles; a clock run out since the shown reply; a captain's
+  return; the copy's parity per viewer; an abort; and about one request per
+  change plus one per hold).
+
 ## The draft room client
 
-- **The cadence comes only from `draftPollCadence`** (`src/lib/room-poll.ts`,
-  the draft binding of `roomPollCadence`). Whether it is fast keys on the
-  AUCTION (IN_PROGRESS or PAUSED; PAUSED counts as live so a resume shows at
-  once); how fast keys on the VIEWER (`canAct`: a captain or an admin). Those
-  who act poll at the room's `pollMs` (2s, source-guarded); everyone else
-  (spectators, players in the pool, drafted players) at
-  `DRAFT_ROOM.POLL_WATCH_MS` (5s) live and `POLL_WATCH_IDLE_MS` in the
-  waiting room. Every poll is a request to the one box both leagues share,
-  with database reads behind it. The rates were set on Vercel's Hobby plan,
-  where a two-hour auction with 10 captains and admins and 25 watchers was
-  ~130,000 calls at the old 1.2s/2.5s, about 40 minutes of its four CPU hours
-  a month; these rates roughly halve that load, and stay until Tim asks. A bid
-  resets a 30s clock, so a captain sees it with most of the clock left and a
-  watcher a few seconds on (`room-poll.test.ts` keeps the watch rate inside
-  the clock). A hidden tab keeps polling only
-  for `draftViewerStake` (captains and admins at `POLL_KEEPALIVE_MS`, a pool
-  player at `POLL_WATCH_KEEPALIVE_MS`). A failed poll in a live auction
-  retries at the viewer's live rate, never the waiting-room rate, so
-  `disconnected` trips promptly. At a clock's zero only a captain's or an
-  admin's tab polls at once (`draftPollsAtClockZero`): they have controls
-  waiting on the settled lot, and only a signed-in poll can settle it. Every
-  other tab (signed out, a spectator, a pool player) sees the sale on its next
-  poll, at most `POLL_WATCH_MS` later. When every signed-in tab polled at zero,
-  a full US room sent about 63 polls at once per sale, about 2.2 s of the
-  box's one vCPU each time (measured 2026-10-17).
+- **The room long-polls (Tim's call, 2026-10-23; still plain HTTP, no
+  websockets, as the inhouse room since 2026-10-18).** Each tick sends back
+  the `roomVersion` of the last reply it applied as `since` (with `sinceNow`,
+  that reply's `now`, and the `holdMs` it can wait), the server holds it
+  until the room changes, and the next tick leaves from the reply's own
+  continuation, so a bid reaches a captain's or an admin's tab in well under
+  a second, and a watcher's within its gap (below), at no more than about
+  one request per change, plus one per hold. The rules are pure in
+  `room-poll.ts` (`draftLongPoll`, `draftLongPollGapMs`, `draftPollDelay`,
+  with `roomUnheldStreak` and `roomRefocusResync` shared with the inhouse
+  room) and `room-source-guards.test.ts` pins how the room calls them.
+  - **Captains and admins hold 10s while the auction is live or paused
+    (`LONG_POLL_ACTOR_HOLD_MS`), everyone else 25s.** A held tick's deadline
+    is its hold plus `ROOM_POLL_TIMEOUT_MS`, and the room locks bidding after
+    `ROOM_POLL_FAIL_THRESHOLD` failures in a row, so a captain's dead
+    connection shows about 15s sooner than at the full hold.
+  - **A tick that must answer at once is never held** (`urgent`): the first
+    of each run of the loop (a `pollKick` from an action error, a clock at
+    zero or Retry re-runs it, and its cleanup releases the tick in flight),
+    a resync after going offline, an action whose outcome is unknown, a
+    retry, and a refocus after a hide of `ROOM_POLL_TIMEOUT_MS` or more,
+    which releases the held tick (it may have died with the connection).
+  - **A reply with no version (an old slot during a release) falls back to
+    the ladder,** never a hot loop. The cadence of the ladder comes only from
+    `draftPollCadence` (`src/lib/room-poll.ts`): whether it is fast keys on
+    the AUCTION (IN_PROGRESS or PAUSED; PAUSED counts as live so a resume
+    shows at once); how fast keys on the VIEWER (`canAct`: a captain or an
+    admin). Those who act poll at the room's `pollMs` (2s, source-guarded);
+    everyone else (spectators, players in the pool, drafted players) at
+    `DRAFT_ROOM.POLL_WATCH_MS` (5s) live and `POLL_WATCH_IDLE_MS` in the
+    waiting room. A bid resets a 30s clock, so even on the ladder a captain
+    sees it with most of the clock left (`room-poll.test.ts` keeps the watch
+    rate inside the clock).
+  - **Two ticks never start closer than the gap** (`draftLongPollGapMs`): 1s
+    (`LONG_POLL_MIN_GAP_MS`) for a captain or an admin, and outside the
+    auction; 3s (`LONG_POLL_WATCH_GAP_MS`) for everyone else while it is live
+    or paused. Every publish wakes every held tab, and in a bidding war fifty
+    watchers asking once a second cost the box more than the auction needs
+    (Tim's call, 2026-10-23: viewers who can't bid may update slower). A bid
+    still reaches a watcher at once when the room was quiet, and within 3s as
+    a war starts. A version that keeps moving comes back unheld: from the
+    second unheld reply in a row a watcher's gap doubles up to the ladder
+    rate (5s, the old poll's), while a captain or an admin in a live auction
+    keeps 1s. A 15-captain bot rehearsal (2026-10-23; bots bid faster than
+    people) measured bids reaching captains at a median of 0.23s (p90 0.66s,
+    at most 1s) and watchers at 0.4s (p90 3.4s, at most 5s).
+  - **A hidden tab** long-polls only for `draftViewerStake` (captains,
+    admins and players still in the pool: the chime and the tab title arrive
+    with the change); anyone else's hidden tab doesn't fetch. A failed tick
+    in a live auction retries at the viewer's live rate, never the
+    waiting-room rate, so `disconnected` trips promptly.
+  - **At a clock's zero only a captain's or an admin's tab asks at once**
+    (`draftPollsAtClockZero`, which re-runs the loop), and on the server only
+    their held ticks wake at the clock (below): they have controls waiting
+    on the settled lot. Every other tab sees the sale when the settle
+    publishes. When every signed-in tab polled at zero, a full US room sent
+    about 63 polls at once per sale, about 2.2 s of the box's one vCPU each
+    time (measured 2026-10-17).
 - **The poll reads only what the room shows:** the pool's display fields,
   the nominee's profile and contact in one extra read, the run's id and
   provenance, and the last 8 sales while the auction runs (`readDraftSales`
@@ -264,7 +396,8 @@ In the Captains & draft card on `/admin` and inside the room
   ([inhouse](inhouse.md)); `room-source-guards.test.ts` keeps the shape,
   and `e2e/zz-admin-draft.spec.ts` checks each captain's room has one tick
   in flight at a time (`recordRoomPolls`, on the page's own clock).
-- **Refresh the layout's render once per phase move.** The header's status
+- **Refresh the layout's render once per phase move, a watcher's after a
+  random wait.** The header's status
   chip and the phase nav come from the root layout, which a poll never
   repeats: a captain who parked on `/draft` before Start read "Signups open"
   through the whole auction. The room remembers the season and auction
@@ -278,6 +411,10 @@ In the Captains & draft card on `/admin` and inside the room
   already re-rendered their page, so their tab may refresh twice. Once the
   season leaves the Draft phase with the auction finished, the refresh lands
   on `/teams`, as any load of `/draft` would.
+  A viewer who can't act refreshes after a random 0-5s
+  (`draftRoomRefreshDelayMs`): the long-poll tells every tab of a Start, a
+  pause or a resume within a second, and fifty renders landing together
+  would queue the captains' bids behind them on the box.
   `room-source-guards.test.ts` pins the one call site;
   `e2e/zz-admin-draft.spec.ts` checks a tab parked before Start shows "Draft
   live" in its header without a reload.
