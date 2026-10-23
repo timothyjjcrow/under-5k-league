@@ -117,23 +117,33 @@ export function ScheduleWeeks({
   heading?: ReactNode;
 }) {
   const params = useSearchParams();
-  const urlTeam = scheduleFilterTeamId(
-    params.get("team"),
+  const paramTeam = params.get("team");
+  // The address's ?team as this tab last saw it, the filter's source of
+  // truth. The filter writes it with history.pushState and the select
+  // follows at once (waiting on the router, which applies a pushState in a
+  // transition, flickered the pick to "All teams" first). Back and Forward
+  // over those entries move the address without a new useSearchParams in
+  // Next 16.4, so the tab reads them itself (popstate); a router navigation
+  // that changes ?team still lands through useSearchParams.
+  const [addressTeam, setAddressTeam] = useState(paramTeam);
+  const [seenParamTeam, setSeenParamTeam] = useState(paramTeam);
+  if (paramTeam !== seenParamTeam) {
+    setSeenParamTeam(paramTeam);
+    setAddressTeam(paramTeam);
+  }
+  useEffect(() => {
+    const onPopState = () =>
+      setAddressTeam(new URLSearchParams(window.location.search).get("team"));
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+  const filterTeam = scheduleFilterTeamId(
+    addressTeam,
     initialTeamId,
     teams.map((team) => team.id),
   );
-  // The URL is the source of truth, but the router applies a pushState in a
-  // transition, and a controlled <select> snaps back to its old value until
-  // then: the pick flickered to "All teams" first. Hold the pick until the
-  // URL moves off the value it was made from (it caught up, or Back).
-  const [picked, setPicked] = useState<{
-    team: string | null;
-    from: string | null;
-  } | null>(null);
-  if (picked && picked.from !== urlTeam) setPicked(null);
-  const filterTeam = picked ? picked.team : urlTeam;
   const setFilterTeam = (team: string | null) => {
-    setPicked({ team, from: urlTeam });
+    setAddressTeam(team ?? "all");
     const url = new URL(window.location.href);
     url.searchParams.set("team", team ?? "all");
     window.history.pushState(null, "", url.pathname + url.search + url.hash);

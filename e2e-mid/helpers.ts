@@ -1,4 +1,25 @@
-import { expect, type BrowserContext, type Page } from "@playwright/test";
+import { expect, type BrowserContext, type Locator, type Page } from "@playwright/test";
+
+/**
+ * Wait until React has hydrated `target` and the main thread is idle
+ * (hydration is time-sliced and can restart). A click that lands on the
+ * server HTML first is lost: its form still carries React's pre-hydration
+ * placeholder, and nothing replays it. Next 16.4's dev server answers a page
+ * sooner than it hydrates, so a click straight after an anchor jump missed
+ * (zz-match-night-poll.spec.ts).
+ */
+export async function untilHydrated(page: Page, target: Locator): Promise<void> {
+  await expect
+    .poll(() =>
+      target.evaluate((el) =>
+        Object.keys(el).some((key) => key.startsWith("__reactFiber")),
+      ),
+    )
+    .toBe(true);
+  await page.evaluate(
+    () => new Promise((resolve) => requestIdleCallback(() => resolve(null))),
+  );
+}
 
 /**
  * Tripwire for the exact failure class this suite exists to catch: a client
