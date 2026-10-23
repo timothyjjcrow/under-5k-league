@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -453,6 +454,78 @@ describe("release classifier policy", () => {
   });
 });
 
+describe("release classifier executable files", () => {
+  const executableEdit = (file: string) => ({
+    status: "M",
+    code: "M",
+    oldPath: null,
+    path: file,
+    oldMode: "100755",
+    newMode: "100755",
+  });
+
+  it("judges an edit that keeps a box-kit script executable by its path", () => {
+    // #103's one-line edit to provision-base.sh made the next release a
+    // maintenance release; the path makes it strict for review, no more.
+    const result = classifyEntries([
+      executableEdit("ops/selfhost/provision-base.sh"),
+    ]);
+    expect(result).toMatchObject({
+      lane: "strict",
+      needs_postgres: true,
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+    expect(result.reasons.join(" ")).toMatch(/production-sensitive path/);
+    expect(result.reasons.join(" ")).not.toMatch(/file type or mode/);
+  });
+
+  it("keeps a scheduler path's own controls for an executable there", () => {
+    expect(
+      classifyEntries([
+        executableEdit("ops/cloudflare-automation-worker/deploy.sh"),
+      ]),
+    ).toMatchObject({
+      lane: "strict",
+      needs_db_release: false,
+      needs_scheduler_pause: true,
+    });
+  });
+
+  it.each([
+    "src/components/site-footer.tsx",
+    "public/logo.png",
+    "src/app/page.tsx",
+  ])("still fails closed for an executable outside the strict paths: %s", (file) => {
+    expect(classifyEntries([executableEdit(file)])).toMatchObject({
+      lane: "strict",
+      needs_mutation: true,
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
+  });
+
+  it.each([
+    { status: "A", code: "A", oldMode: "000000", newMode: "100755" },
+    { status: "D", code: "D", oldMode: "100755", newMode: "000000" },
+    { status: "M", code: "M", oldMode: "100644", newMode: "100755" },
+    { status: "M", code: "M", oldMode: "100755", newMode: "100644" },
+  ])(
+    "still fails closed for a new, deleted or flipped executable: $status $oldMode -> $newMode",
+    (change) => {
+      expect(
+        classifyEntries([
+          { ...executableEdit("ops/selfhost/provision-base.sh"), ...change },
+        ]),
+      ).toMatchObject({
+        lane: "strict",
+        needs_db_release: true,
+        needs_scheduler_pause: true,
+      });
+    },
+  );
+});
+
 describe("release classifier deletions", () => {
   const deleted = (file: string) => ({
     status: "D",
@@ -860,6 +933,34 @@ export function Footer() {
 
     const result = classifyRelease({ base, head, cwd });
     expect(result.lane).toBe("strict");
+    expect(result.reasons.join(" ")).toMatch(/file type or mode/i);
+  });
+
+  it("reads a box-kit script's executable bit from git", () => {
+    const cwd = createRepository();
+    const script = path.join(cwd, "ops", "selfhost", "provision-base.sh");
+    write(cwd, "ops/selfhost/provision-base.sh", "#!/bin/sh\necho base\n");
+    chmodSync(script, 0o755);
+    const base = commitAll(cwd, "base");
+
+    // An edit keeps the file's mode: judged by its path.
+    write(cwd, "ops/selfhost/provision-base.sh", "#!/bin/sh\necho edited\n");
+    const edited = commitAll(cwd, "edit, still executable");
+    expect(classifyRelease({ base, head: edited, cwd })).toMatchObject({
+      lane: "strict",
+      needs_db_release: false,
+      needs_scheduler_pause: false,
+    });
+
+    // Dropping the executable bit is a mode change: every control.
+    chmodSync(script, 0o644);
+    const flipped = commitAll(cwd, "no longer executable");
+    const result = classifyRelease({ base: edited, head: flipped, cwd });
+    expect(result).toMatchObject({
+      lane: "strict",
+      needs_db_release: true,
+      needs_scheduler_pause: true,
+    });
     expect(result.reasons.join(" ")).toMatch(/file type or mode/i);
   });
 

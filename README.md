@@ -596,7 +596,11 @@ used by every CI job.
    removing a stale doc or dead component needs no maintenance procedure.
    Deleting anything under `prisma/`, `ops/`, the cron or automation-health
    routes, or the scheduler libraries still selects both flags; renames,
-   copies, and file-type or mode changes select both everywhere. Everything
+   copies, and file-type or mode changes select both everywhere. An edit that
+   keeps an executable file executable (mode 100755; each one is a box-kit
+   script under `ops/selfhost/`) is judged by its path like any edit, but a
+   new or deleted executable, or one outside the production-sensitive paths,
+   still selects both. Everything
    under `ops/` counts as scheduler plumbing except the independently hosted
    or installed parts: the lobby bot and relay (`ops/dota-lobby-bot/`,
    `ops/dota-lobby-relay/`), the box kit (`ops/selfhost/`) and the redirect
