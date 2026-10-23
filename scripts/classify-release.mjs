@@ -5,6 +5,9 @@ import { pathToFileURL } from "node:url";
 
 const FULL_SHA = /^[0-9a-f]{40}$/;
 const REGULAR_FILE_MODE = "100644";
+// An executable regular file. Every one in the tree is a box-kit script under
+// ops/selfhost/; see entryModeIsSafe.
+const EXECUTABLE_FILE_MODE = "100755";
 
 const UI_STYLE_FILES = new Set(["src/app/globals.css"]);
 const UI_PRESENTATION_COMPONENTS = new Set([
@@ -418,11 +421,16 @@ function entryModeIsSafe(entry) {
       entry.oldMode === REGULAR_FILE_MODE && entry.newMode === DELETED_FILE_MODE
     );
   }
-  return (
-    entry.code === "M" &&
-    entry.oldMode === REGULAR_FILE_MODE &&
-    entry.newMode === REGULAR_FILE_MODE
-  );
+  if (entry.code !== "M" || entry.oldMode !== entry.newMode) return false;
+  if (entry.newMode === REGULAR_FILE_MODE) return true;
+  // An edit that keeps an executable file executable is judged by its path,
+  // like any edit, where that path is production-sensitive anyway (the box
+  // kit's scripts). It used to select every control: #103's one-line edit to
+  // ops/selfhost/provision-base.sh made the next release a maintenance
+  // release. A new or deleted executable, a mode change, a symlink and a
+  // submodule stay fail-closed, and so does an executable outside the strict
+  // paths, which could otherwise reach the UI-only or application lanes.
+  return entry.newMode === EXECUTABLE_FILE_MODE && isStrictPath(entry.path);
 }
 
 function resultFor(
@@ -491,7 +499,7 @@ export function classifyEntries(entries) {
       needsSchedulerPause = true;
       needsMutation = true;
       reasons.push(
-        `${entry.status} ${label}: file type or mode is not an unchanged regular 100644 file`,
+        `${entry.status} ${label}: file type or mode is not an unchanged regular 100644 file (or an unchanged 100755 one on a production-sensitive path)`,
       );
       continue;
     }
