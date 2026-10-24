@@ -242,7 +242,7 @@ type GroupPlan =
 
 /**
  * Replace the season's regular-season fixtures with the team count's format
- * (`seasonFormat`): one table, or two groups. The groups are the ones the
+ * (`plannedSeasonFormat`): one table, or two groups. The groups are the ones the
  * teams already carry when they still fit the format (`AUTO`), else a fresh
  * draw by roster MMR (`AUTO` with none that fit, or `DRAW`), or the current
  * groups with two teams swapped (`SWAP`). `firstNight` null keeps the

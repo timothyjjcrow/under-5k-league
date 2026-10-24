@@ -87,9 +87,10 @@ export type FormatKnobs = {
  *   5–9:       one table, the top 4 play the semifinals.
  *   10+:       two groups, the top 4 of each play the quarterfinals.
  *
- * Every season that stores no format plays this rule, archived ones
- * included, so it never changes: season-format-golden.test.ts pins what it
- * makes. A new recommendation is a new rule beside it.
+ * Every season plays this rule, archived ones included (a table of ten or
+ * more generated before groups excepted, `resolveSeasonFormat`), so it never
+ * changes: season-format-golden.test.ts pins what it makes. A new
+ * recommendation is a new rule beside it.
  */
 export function recommendedKnobs(teamCount: number): FormatKnobs | null {
   if (!Number.isInteger(teamCount) || teamCount < 2) return null;

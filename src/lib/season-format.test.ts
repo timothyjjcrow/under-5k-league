@@ -316,10 +316,14 @@ describe("playoffSteps", () => {
 });
 
 describe("buildSeasonFormat", () => {
-  it("builds the Recommended format from its settings", () => {
-    for (let count = 2; count <= 32; count++) {
-      expect(buildSeasonFormat(recommendedKnobs(count)!, count)).toEqual(seasonFormat(count));
-    }
+  it("recommends the 2026-10-19 settings at every boundary", () => {
+    expect(recommendedKnobs(2)).toEqual({ groups: 1, meet: 2, playoffs: 2 });
+    expect(recommendedKnobs(3)).toEqual({ groups: 1, meet: 2, playoffs: 2 });
+    expect(recommendedKnobs(4)).toEqual({ groups: 1, meet: 2, playoffs: 4 });
+    expect(recommendedKnobs(5)).toEqual({ groups: 1, meet: 1, playoffs: 4 });
+    expect(recommendedKnobs(9)).toEqual({ groups: 1, meet: 1, playoffs: 4 });
+    expect(recommendedKnobs(10)).toEqual({ groups: 2, meet: 1, playoffs: 8 });
+    expect(recommendedKnobs(17)).toEqual({ groups: 2, meet: 1, playoffs: 8 });
     expect(recommendedKnobs(1)).toBeNull();
     expect(recommendedKnobs(2.5)).toBeNull();
   });

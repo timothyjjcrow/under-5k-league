@@ -19,10 +19,10 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   4 of each group. `buildSeasonFormat` turns those settings into the season,
   and `seasonFormat(n)` is the two together.
 - **The Recommended format is frozen.** `season-format-golden.test.ts` pins
-  everything it makes for 2–32 teams (formats, copy, plans, fixtures, bracket
-  sizes), captured before the resolver existed. Every season that stores no
-  format plays it, archived ones included, so a new recommendation is a new
-  rule beside it, never an edit to this one.
+  its formats, copy, plans and bracket sizes for 2–32 teams and its fixtures
+  for 2–17, captured before the resolver existed. Every season plays it,
+  archived ones included (the one-table exception is below), so a new
+  recommendation is a new rule beside it, never an edit to this one.
 - **Read the format through the resolver, never from a count.**
   `plannedSeasonFormat(teamCount)` is what a schedule generated now would
   build (generation, the fixture seeder). `resolveSeasonFormat(teams,
