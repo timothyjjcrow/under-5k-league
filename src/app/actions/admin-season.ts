@@ -27,9 +27,10 @@ import {
   type SeasonStatus,
 } from "@/lib/constants";
 import {
-  SEASON_GROUP_KEYS,
   formatName,
-  seasonFormat,
+  playoffEntrantsPhrase,
+  resolveSeasonFormat,
+  seasonGroupKeys,
   seasonPlan,
 } from "@/lib/season-format";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
@@ -654,9 +655,9 @@ async function seasonOpeningSlate(seasonId: string) {
       },
     }),
     prisma.team.findMany({
-      where: { seasonId, withdrawn: false },
+      where: { seasonId },
       orderBy: { draftOrder: "asc" },
-      select: { id: true, name: true, groupKey: true },
+      select: { id: true, name: true, groupKey: true, withdrawn: true },
     }),
     prisma.season.findUnique({
       where: { id: seasonId },
@@ -665,9 +666,12 @@ async function seasonOpeningSlate(seasonId: string) {
   ]);
   if (fixtures.length === 0) return undefined;
   // The season's shape and calendar: its groups, and when the reserved
-  // tiebreaker week and the playoffs fall (season-format.ts).
-  const format = seasonFormat(teams.length);
-  const grouped = teams.length > 0 && teams.every((team) => team.groupKey);
+  // tiebreaker week and the playoffs fall (season-format.ts). The format
+  // counts the whole field, as every page does; byes and the group lists
+  // name only the teams still in.
+  const format = resolveSeasonFormat(teams, true);
+  const groupKeys = seasonGroupKeys(teams);
+  const stillIn = teams.filter((team) => !team.withdrawn);
   const plan =
     format && season?.firstMatchNight
       ? seasonPlan(
@@ -697,13 +701,13 @@ async function seasonOpeningSlate(seasonId: string) {
       away: fixture.awayTeam.name,
       whenMs: fixture.scheduledAt?.getTime() ?? null,
     })),
-    byes: teams.filter((team) => !playing.has(team.id)).map((team) => team.name),
-    ...(grouped && format
+    byes: stillIn.filter((team) => !playing.has(team.id)).map((team) => team.name),
+    ...(groupKeys && format
       ? {
-          format: `${formatName(format)}: the top ${format.qualifiersPerGroup} of each group make the playoffs.`,
-          groups: SEASON_GROUP_KEYS.map((key) => ({
+          format: `${formatName(format)}: ${playoffEntrantsPhrase(format)} make the playoffs.`,
+          groups: groupKeys.map((key) => ({
             key,
-            teams: teams.filter((team) => team.groupKey === key).map((team) => team.name),
+            teams: stillIn.filter((team) => team.groupKey === key).map((team) => team.name),
           })),
         }
       : {}),

@@ -35,6 +35,7 @@ import { MAX_RESCHEDULE_OPTIONS } from "./reschedule-ready-check";
 import { projectPlayoffField } from "./playoff-field";
 import { registrationGate } from "./registration";
 import { nextRoundPairings } from "./schedule";
+import { seasonFormat } from "./season-format";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
 
@@ -327,9 +328,9 @@ describe("leagueRules", () => {
     );
     expect(format).toContain("The week after the regular season is kept for tiebreakers");
     // A withdrawal leaves the format as the schedule made it.
-    expect(section(build({ teamCount: 9, formatTeamCount: 10 }), "playoffs")).toContain(
-      "This season plays two groups",
-    );
+    expect(
+      section(build({ teamCount: 9, format: seasonFormat(10) }), "playoffs"),
+    ).toContain("This season plays two groups");
   });
 
   it("writes durations and clocks in words", () => {

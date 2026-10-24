@@ -68,46 +68,141 @@ function tablePlayoffSpots(teamCount: number): number {
     : pickBracketSize(teamCount);
 }
 
+/** The settings a season's format is built from. */
+export type FormatKnobs = {
+  /** 1 plays one table; more split the teams into groups A, B… */
+  groups: number;
+  /** How often teams meet in their table or group: once (1) or twice (2). */
+  meet: number;
+  /** Teams in the playoff bracket, a power of two. */
+  playoffs: number;
+};
+
 /**
- * The season's shape for `teamCount` teams, or null below two teams.
+ * The settings the site recommends for `teamCount` teams, or null below two
+ * teams (Tim's call, 2026-10-19):
  *
  *   2–3 teams: one table played twice, the top 2 play the final.
  *   4 teams:   one table played twice, all 4 play the semifinals.
  *   5–9:       one table, the top 4 play the semifinals.
- *   10+:       two groups split as evenly as possible, each a round robin on
- *              the same weeks; the top 4 of each group play the
- *              quarterfinals.
+ *   10+:       two groups, the top 4 of each play the quarterfinals.
  *
- * One week after the regular season is kept for tiebreakers, so the playoff
- * dates are known the day the schedule is made.
+ * Every season that stores no format plays this rule, archived ones
+ * included, so it never changes: season-format-golden.test.ts pins what it
+ * makes. A new recommendation is a new rule beside it.
  */
-export function seasonFormat(teamCount: number): SeasonFormat | null {
+export function recommendedKnobs(teamCount: number): FormatKnobs | null {
   if (!Number.isInteger(teamCount) || teamCount < 2) return null;
   const groups = teamCount >= GROUP_STAGE_MIN_TEAMS;
-  const groupSizes = groups
-    ? [Math.ceil(teamCount / 2), Math.floor(teamCount / 2)]
-    : [teamCount];
-  const doubleRound = !groups && teamCount <= DOUBLE_ROUND_MAX_TEAMS;
+  return {
+    groups: groups ? SEASON_GROUP_KEYS.length : 1,
+    meet: !groups && teamCount <= DOUBLE_ROUND_MAX_TEAMS ? 2 : 1,
+    playoffs: groups ? GROUP_PLAYOFF_SPOTS : tablePlayoffSpots(teamCount),
+  };
+}
+
+/**
+ * The season `knobs` make for `teamCount` teams, or null below two teams:
+ * groups split as evenly as possible, largest first, each a round robin on
+ * the same match nights, and one week after the regular season kept for
+ * tiebreakers, so the playoff dates are known the day the schedule is made.
+ * It doesn't judge the knobs; the caller passes settings that fit.
+ */
+export function buildSeasonFormat(
+  knobs: FormatKnobs,
+  teamCount: number,
+): SeasonFormat | null {
+  if (!Number.isInteger(teamCount) || teamCount < 2) return null;
+  const groupSizes = Array.from(
+    { length: knobs.groups },
+    (_, index) =>
+      Math.floor(teamCount / knobs.groups) + (index < teamCount % knobs.groups ? 1 : 0),
+  );
+  const doubleRound = knobs.meet === 2;
   const regularWeeks = Math.max(
     ...groupSizes.map((size) => roundsFor(size, doubleRound)),
   );
-  const matches = groupSizes.map((size) => (size - 1) * (doubleRound ? 2 : 1));
-  const playoffSpots = groups ? GROUP_PLAYOFF_SPOTS : tablePlayoffSpots(teamCount);
-  const playoffRounds = Math.round(Math.log2(playoffSpots));
+  const matches = groupSizes.map((size) => (size - 1) * knobs.meet);
+  const playoffRounds = Math.round(Math.log2(knobs.playoffs));
   return {
     teamCount,
-    kind: groups ? "GROUPS" : "TABLE",
+    kind: groupSizes.length > 1 ? "GROUPS" : "TABLE",
     groupSizes,
     doubleRound,
     regularWeeks,
     matchesPerTeam: { min: Math.min(...matches), max: Math.max(...matches) },
-    playoffSpots,
-    qualifiersPerGroup: playoffSpots / groupSizes.length,
+    playoffSpots: knobs.playoffs,
+    qualifiersPerGroup: knobs.playoffs / groupSizes.length,
     playoffRounds,
     tiebreakerWeek: regularWeeks + 1,
     firstPlayoffWeek: regularWeeks + 2,
     totalWeeks: regularWeeks + 1 + playoffRounds,
   };
+}
+
+/**
+ * The Recommended season for `teamCount` teams (`recommendedKnobs`), or null
+ * below two teams. Pages and actions read a season's format through
+ * `plannedSeasonFormat` and `resolveSeasonFormat`, never this
+ * (season-format-guards.test.ts).
+ */
+export function seasonFormat(teamCount: number): SeasonFormat | null {
+  const knobs = recommendedKnobs(teamCount);
+  return knobs ? buildSeasonFormat(knobs, teamCount) : null;
+}
+
+/**
+ * The format a schedule generated now would build for `teamCount` teams.
+ * Schedule generation and the fixture seeder read it.
+ */
+export function plannedSeasonFormat(teamCount: number): SeasonFormat | null {
+  return seasonFormat(teamCount);
+}
+
+/**
+ * The season's groups, or null when it plays one table: every team must
+ * carry a group and there must be two or more, else the season renders (and
+ * seeds) as one table. Schedule generation writes every team's group in one
+ * transaction, so a half-grouped season is a leftover the admin regenerates.
+ */
+export function seasonGroupKeys(
+  teams: readonly { groupKey: string | null }[],
+): string[] | null {
+  if (teams.length === 0 || teams.some((team) => !team.groupKey)) return null;
+  const keys = [...new Set(teams.map((team) => team.groupKey!))].sort();
+  return keys.length >= 2 ? keys : null;
+}
+
+/**
+ * The format a season plays, which every page and post prints. Pass its
+ * whole field, withdrawn teams included, so a withdrawal never changes it,
+ * and whether its regular-season fixtures exist. Before they do it is the
+ * planned format. Once they do, a season whose teams carry no groups is one
+ * table, as its standings and bracket are (`seasonGroupKeys`), whatever the
+ * count says: a table of ten or more generated before groups existed keeps
+ * the bracket it was built for.
+ */
+export function resolveSeasonFormat(
+  teams: readonly { groupKey: string | null }[],
+  regularFixturesExist: boolean,
+): SeasonFormat | null {
+  const planned = plannedSeasonFormat(teams.length);
+  if (
+    !planned ||
+    !regularFixturesExist ||
+    planned.kind === "TABLE" ||
+    seasonGroupKeys(teams)
+  ) {
+    return planned;
+  }
+  return buildSeasonFormat(
+    {
+      groups: 1,
+      meet: teams.length <= DOUBLE_ROUND_MAX_TEAMS ? 2 : 1,
+      playoffs: tablePlayoffSpots(teams.length),
+    },
+    teams.length,
+  );
 }
 
 /**
@@ -346,24 +441,41 @@ export function seasonPlan(
 
 const COUNT_WORDS = ["No", "One", "Two", "Three", "Four"];
 
-/** "Two groups of 6", "Two groups of 6 and 5", "One table", "One table, played twice". */
+/**
+ * "Two groups of 6", "Two groups of 6 and 5, each played twice", "One
+ * table", "One table, played twice".
+ */
 export function formatName(format: SeasonFormat): string {
   if (format.kind === "GROUPS") {
     const sizes = format.groupSizes;
     const count = COUNT_WORDS[sizes.length] ?? String(sizes.length);
-    return sizes.every((size) => size === sizes[0])
+    const groups = sizes.every((size) => size === sizes[0])
       ? `${count} groups of ${sizes[0]}`
       : `${count} groups of ${sizes.join(" and ")}`;
+    return format.doubleRound ? `${groups}, each played twice` : groups;
   }
   return format.doubleRound ? "One table, played twice" : "One table";
 }
 
-/** "The top 4 of each group", "The top 4", "The top 2". */
+/** "The top 4 of each group", "The group winners", "The top 4", "All 4 teams". */
 function playoffEntrants(format: SeasonFormat): string {
-  if (format.kind === "GROUPS") return `The top ${format.qualifiersPerGroup} of each group`;
+  if (format.kind === "GROUPS") {
+    return format.qualifiersPerGroup === 1
+      ? "The group winners"
+      : `The top ${format.qualifiersPerGroup} of each group`;
+  }
   return format.playoffSpots >= format.teamCount
     ? `All ${format.teamCount} teams`
     : `The top ${format.playoffSpots}`;
+}
+
+/**
+ * Who makes the playoffs, to follow a colon or start a clause: "the top 4 of
+ * each group", "the group winners", "the top 4", "all 4 teams".
+ */
+export function playoffEntrantsPhrase(format: SeasonFormat): string {
+  const entrants = playoffEntrants(format);
+  return `${entrants.charAt(0).toLowerCase()}${entrants.slice(1)}`;
 }
 
 /** The playoff rounds as a phrase: "the semifinals and the grand final". */
@@ -385,12 +497,13 @@ export function describeSeasonFormat(format: SeasonFormat): string {
   const weeks = `${format.regularWeeks} week${format.regularWeeks === 1 ? "" : "s"}`;
   const play =
     format.kind === "GROUPS"
-      ? `Each group plays a round robin over ${weeks}`
+      ? format.doubleRound
+        ? `Each group plays everyone in it twice over ${weeks}`
+        : `Each group plays a round robin over ${weeks}`
       : format.doubleRound
         ? `Everyone plays everyone twice over ${weeks}`
         : `Everyone plays everyone once over ${weeks}`;
-  const entrants = playoffEntrants(format);
-  return `${formatName(format)}. ${play}, then ${entrants.charAt(0).toLowerCase()}${entrants.slice(1)} play ${playoffRoundsPhrase(format)}.`;
+  return `${formatName(format)}. ${play}, then ${playoffEntrantsPhrase(format)} play ${playoffRoundsPhrase(format)}.`;
 }
 
 /** "9 weeks in all: 5 group weeks, the tiebreaker week and 3 playoff weeks". */

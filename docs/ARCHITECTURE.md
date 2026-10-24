@@ -216,7 +216,8 @@ roster command.
 **Schedule generation.** `generateSchedule`
 (`src/app/actions/admin-schedule-results.ts`, over `replaceRegularSchedule`,
 shared with `swapGroupTeams`) takes the season's format from its team count
-(`seasonFormat`, `src/lib/season-format.ts`: one table up to nine teams,
+(`plannedSeasonFormat`, `src/lib/season-format.ts`, which every reader's
+`resolveSeasonFormat` agrees with: one table up to nine teams,
 played twice up to four; two groups from ten, drawn by roster MMR and stored
 on `Team.groupKey`), runs the pure circle-method round robin per group
 (`regularSeasonFixtures` over `roundRobin` in `src/lib/schedule.ts`,

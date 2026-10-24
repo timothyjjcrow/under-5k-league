@@ -1,15 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSeasonFormat,
   describeSeasonFormat,
   drawGroups,
   firstPlayoffWeek,
   formatName,
   formatSteps,
+  playoffEntrantsPhrase,
   playoffSteps,
   playoffBracketSize,
+  recommendedKnobs,
   regularSeasonFixtures,
+  resolveSeasonFormat,
   rosterAverageMmr,
   seasonFormat,
+  seasonGroupKeys,
   seasonLengthPhrase,
   seasonPlan,
   seedGroups,
@@ -307,5 +312,93 @@ describe("playoffSteps", () => {
     expect(playoffSteps()).toBe(
       "the top 2 of a table of 2–3 teams, the top 4 of a table of 4–9 teams and the top 4 of each group from 10 teams",
     );
+  });
+});
+
+describe("buildSeasonFormat", () => {
+  it("builds the Recommended format from its settings", () => {
+    for (let count = 2; count <= 32; count++) {
+      expect(buildSeasonFormat(recommendedKnobs(count)!, count)).toEqual(seasonFormat(count));
+    }
+    expect(recommendedKnobs(1)).toBeNull();
+    expect(recommendedKnobs(2.5)).toBeNull();
+  });
+
+  it("splits groups evenly, largest first, and plays them once or twice", () => {
+    const twice = buildSeasonFormat({ groups: 2, meet: 2, playoffs: 4 }, 9)!;
+    expect(twice).toMatchObject({
+      kind: "GROUPS",
+      groupSizes: [5, 4],
+      doubleRound: true,
+      regularWeeks: 10,
+      matchesPerTeam: { min: 6, max: 8 },
+      qualifiersPerGroup: 2,
+      playoffRounds: 2,
+      tiebreakerWeek: 11,
+      firstPlayoffWeek: 12,
+      totalWeeks: 13,
+    });
+    expect(formatName(twice)).toBe("Two groups of 5 and 4, each played twice");
+    expect(describeSeasonFormat(twice)).toBe(
+      "Two groups of 5 and 4, each played twice. Each group plays everyone in it twice over 10 weeks, then the top 2 of each group play the semifinals and the grand final.",
+    );
+  });
+
+  it("names a final between the two group winners", () => {
+    const winners = buildSeasonFormat({ groups: 2, meet: 1, playoffs: 2 }, 13)!;
+    expect(winners.qualifiersPerGroup).toBe(1);
+    expect(winners.totalWeeks).toBe(9);
+    expect(describeSeasonFormat(winners)).toBe(
+      "Two groups of 7 and 6. Each group plays a round robin over 7 weeks, then the group winners play the grand final.",
+    );
+    expect(playoffEntrantsPhrase(winners)).toBe("the group winners");
+    expect(playoffEntrantsPhrase(seasonFormat(12)!)).toBe("the top 4 of each group");
+    expect(playoffEntrantsPhrase(seasonFormat(4)!)).toBe("all 4 teams");
+  });
+});
+
+describe("seasonGroupKeys", () => {
+  const team = (groupKey: string | null) => ({ groupKey });
+
+  it("needs every team in a group, and two groups or more", () => {
+    expect(seasonGroupKeys([team("B"), team("A"), team("B")])).toEqual(["A", "B"]);
+    expect(seasonGroupKeys([team("A"), team(null)])).toBeNull();
+    expect(seasonGroupKeys([team("A"), team("A")])).toBeNull();
+    expect(seasonGroupKeys([])).toBeNull();
+  });
+});
+
+describe("resolveSeasonFormat", () => {
+  const teams = (count: number, groupKey: (index: number) => string | null) =>
+    Array.from({ length: count }, (_, index) => ({ groupKey: groupKey(index) }));
+
+  it("is the planned format until the schedule exists", () => {
+    expect(resolveSeasonFormat(teams(12, () => null), false)).toEqual(seasonFormat(12));
+    expect(resolveSeasonFormat(teams(6, () => null), false)).toEqual(seasonFormat(6));
+    expect(resolveSeasonFormat(teams(1, () => null), false)).toBeNull();
+  });
+
+  it("keeps the groups a generated schedule drew", () => {
+    const grouped = teams(12, (index) => (index % 2 === 0 ? "A" : "B"));
+    expect(resolveSeasonFormat(grouped, true)).toEqual(seasonFormat(12));
+  });
+
+  it("shows a table of ten or more generated before groups as the table it is", () => {
+    const legacy = resolveSeasonFormat(teams(12, () => null), true)!;
+    expect(legacy).toMatchObject({
+      kind: "TABLE",
+      groupSizes: [12],
+      doubleRound: false,
+      regularWeeks: 11,
+      playoffSpots: 8,
+      totalWeeks: 15,
+    });
+    expect(formatName(legacy)).toBe("One table");
+    // The bracket matches what the field seeds for it.
+    expect(legacy.playoffSpots).toBe(playoffBracketSize("TABLE", 12, 12));
+    // A half-grouped season renders as one table too, as its standings do.
+    expect(
+      resolveSeasonFormat(teams(10, (index) => (index < 9 ? "A" : null)), true)!.kind,
+    ).toBe("TABLE");
   });
 });

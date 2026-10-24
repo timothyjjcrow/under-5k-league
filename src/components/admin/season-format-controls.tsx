@@ -9,7 +9,7 @@ import { SeasonPlanList } from "@/components/season-plan";
 import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
-  seasonFormat,
+  resolveSeasonFormat,
   seasonPlan,
 } from "@/lib/season-format";
 
@@ -37,7 +37,7 @@ export function SeasonFormatControls({
   /** What a regenerate destroys, for the swap's confirm. */
   regenerateConsequences: string[];
 }) {
-  const format = seasonFormat(teams.length);
+  const format = resolveSeasonFormat(teams, lastRegularWeek > 0);
   if (!format) return null;
   const plan = seasonPlan(format, firstMatchNight, lastRegularWeek || format.regularWeeks);
   const groups =

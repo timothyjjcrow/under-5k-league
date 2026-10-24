@@ -96,7 +96,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   (`TIEBREAKER_SUMMARY`, `TIEBREAKER_RULES`).
 - **Every sentence is derived or left out.** Points come from probing
   `computeStandings`, the season format and who makes the playoffs from
-  `seasonFormat` (`formatSteps`, `playoffSteps`, `describeSeasonFormat`), the
+  the format the season plays (`rulesSeasonFormat` over `resolveSeasonFormat`;
+  `formatSteps`, `playoffSteps`, `describeSeasonFormat`), the
   bracket size from `playoffBracketSize`, round one from
   `playoffFirstRound` (crossed between groups in a group season), the withdrawal forfeit score from
   `withdrawalForfeitScore` (which the withdraw action uses too), the import

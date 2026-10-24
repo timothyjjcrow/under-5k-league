@@ -57,9 +57,9 @@ import {
   SEASON_GROUP_KEYS,
   drawGroups,
   formatName,
+  plannedSeasonFormat,
   regularSeasonFixtures,
   rosterAverageMmr,
-  seasonFormat,
   seasonPlan,
   type SeasonFormat,
 } from "@/lib/season-format";
@@ -346,7 +346,7 @@ async function replaceRegularSchedule(input: {
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
         }
-        const format = seasonFormat(teams.length);
+        const format = plannedSeasonFormat(teams.length);
         if (!format) throw new ScheduleNeedsTeamsError();
         const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
         if (!firstNight || firstNight.getTime() < Date.now()) {
