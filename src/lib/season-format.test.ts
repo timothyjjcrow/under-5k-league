@@ -6,6 +6,9 @@ import {
   firstPlayoffWeek,
   formatName,
   formatSteps,
+  formatBracketSize,
+  parseFormatConfig,
+  plannedSeasonFormat,
   playoffEntrantsPhrase,
   playoffSteps,
   playoffBracketSize,
@@ -13,14 +16,19 @@ import {
   regularSeasonFixtures,
   resolveSeasonFormat,
   rosterAverageMmr,
+  seasonBracketSize,
   seasonFormat,
   seasonGroupKeys,
+  serializeFormatConfig,
   seasonLengthPhrase,
   seasonPlan,
   seedGroups,
   teamCountSeasonNote,
 } from "./season-format";
 import { playoffFirstRound } from "./schedule";
+
+/** A season that stores no format: it plays the Recommended one. */
+const RECOMMENDED = { formatConfig: null };
 
 describe("seasonFormat", () => {
   // Tim's table (2026-10-19): one table up to nine teams, two groups from ten,
@@ -278,16 +286,16 @@ describe("firstPlayoffWeek", () => {
 
 describe("teamCountSeasonNote", () => {
   it("names the season this many teams make and the counts either side", () => {
-    expect(teamCountSeasonNote(12)).toBe(
+    expect(teamCountSeasonNote(RECOMMENDED, 12)).toBe(
       "12 teams: two groups of 6, 9 weeks in all: 5 group weeks, the tiebreaker week and 3 playoff weeks. 11 teams: 9 weeks · 13 teams: 11 weeks.",
     );
-    expect(teamCountSeasonNote(9)).toBe(
+    expect(teamCountSeasonNote(RECOMMENDED, 9)).toBe(
       "9 teams: one table, 12 weeks in all: 9 regular weeks, the tiebreaker week and 2 playoff weeks. 8 teams: 10 weeks · 10 teams: 9 weeks.",
     );
-    expect(teamCountSeasonNote(2)).toBe(
+    expect(teamCountSeasonNote(RECOMMENDED, 2)).toBe(
       "2 teams: one table, played twice, 4 weeks in all: 2 regular weeks, the tiebreaker week and 1 playoff week. 3 teams: 8 weeks.",
     );
-    expect(teamCountSeasonNote(1)).toBeNull();
+    expect(teamCountSeasonNote(RECOMMENDED, 1)).toBeNull();
   });
 
   it("says a single week in the singular", () => {
@@ -377,18 +385,18 @@ describe("resolveSeasonFormat", () => {
     Array.from({ length: count }, (_, index) => ({ groupKey: groupKey(index) }));
 
   it("is the planned format until the schedule exists", () => {
-    expect(resolveSeasonFormat(teams(12, () => null), false)).toEqual(seasonFormat(12));
-    expect(resolveSeasonFormat(teams(6, () => null), false)).toEqual(seasonFormat(6));
-    expect(resolveSeasonFormat(teams(1, () => null), false)).toBeNull();
+    expect(resolveSeasonFormat(RECOMMENDED, teams(12, () => null), false)).toEqual(seasonFormat(12));
+    expect(resolveSeasonFormat(RECOMMENDED, teams(6, () => null), false)).toEqual(seasonFormat(6));
+    expect(resolveSeasonFormat(RECOMMENDED, teams(1, () => null), false)).toBeNull();
   });
 
   it("keeps the groups a generated schedule drew", () => {
     const grouped = teams(12, (index) => (index % 2 === 0 ? "A" : "B"));
-    expect(resolveSeasonFormat(grouped, true)).toEqual(seasonFormat(12));
+    expect(resolveSeasonFormat(RECOMMENDED, grouped, true)).toEqual(seasonFormat(12));
   });
 
   it("shows a table of ten or more generated before groups as the table it is", () => {
-    const legacy = resolveSeasonFormat(teams(12, () => null), true)!;
+    const legacy = resolveSeasonFormat(RECOMMENDED, teams(12, () => null), true)!;
     expect(legacy).toMatchObject({
       kind: "TABLE",
       groupSizes: [12],
@@ -402,7 +410,86 @@ describe("resolveSeasonFormat", () => {
     expect(legacy.playoffSpots).toBe(playoffBracketSize("TABLE", 12, 12));
     // A half-grouped season renders as one table too, as its standings do.
     expect(
-      resolveSeasonFormat(teams(10, (index) => (index < 9 ? "A" : null)), true)!.kind,
+      resolveSeasonFormat(RECOMMENDED, teams(10, (index) => (index < 9 ? "A" : null)), true)!.kind,
     ).toBe("TABLE");
+  });
+});
+
+describe("a stored season format", () => {
+  const winners = serializeFormatConfig({ groups: 2, meet: 1, playoffs: 2 });
+  const stored = (formatConfig: string | null) => ({ formatConfig });
+
+  it("round-trips through one canonical string", () => {
+    expect(winners).toBe('{"v":1,"groups":2,"meet":1,"playoffs":2}');
+    expect(parseFormatConfig(winners)).toEqual({
+      kind: "CUSTOM",
+      knobs: { groups: 2, meet: 1, playoffs: 2 },
+    });
+    expect(serializeFormatConfig(null)).toBeNull();
+    expect(parseFormatConfig(null)).toEqual({ kind: "RECOMMENDED" });
+  });
+
+  it("reads anything else as unreadable, never as Recommended", () => {
+    for (const raw of [
+      "",
+      "not json",
+      "[]",
+      "null",
+      '{"v":2,"groups":2,"meet":1,"playoffs":2}',
+      '{"v":1,"groups":3,"meet":1,"playoffs":2}',
+      '{"v":1,"groups":2,"meet":3,"playoffs":2}',
+      '{"v":1,"groups":2,"meet":1,"playoffs":6}',
+      '{"v":1,"groups":"2","meet":1,"playoffs":2}',
+      '{"v":1,"groups":2,"meet":1}',
+      '{"v":1,"groups":2,"meet":1,"playoffs":2,"breaks":[]}',
+    ]) {
+      expect(parseFormatConfig(raw), raw).toEqual({ kind: "UNREADABLE" });
+    }
+  });
+
+  it("plans and plays the stored format, whatever the team count recommends", () => {
+    // Thirteen teams in two groups whose winners play the final: 9 weeks.
+    const planned = plannedSeasonFormat(stored(winners), 13)!;
+    expect(planned).toMatchObject({
+      kind: "GROUPS",
+      groupSizes: [7, 6],
+      playoffSpots: 2,
+      totalWeeks: 9,
+    });
+    expect(planned).not.toEqual(seasonFormat(13));
+    const teams = Array.from({ length: 13 }, (_, index) => ({
+      groupKey: index < 7 ? "A" : "B",
+    }));
+    expect(resolveSeasonFormat(stored(winners), teams, true)).toEqual(planned);
+    // Nine teams in one table sending eight: the Recommended rule sends 4.
+    const eight = stored(serializeFormatConfig({ groups: 1, meet: 1, playoffs: 8 }));
+    const table = Array.from({ length: 9 }, () => ({ groupKey: null }));
+    expect(resolveSeasonFormat(eight, table, true)).toMatchObject({
+      kind: "TABLE",
+      playoffSpots: 8,
+      totalWeeks: 13,
+    });
+    // Unreadable shows as Recommended; commands refuse it before building.
+    expect(plannedSeasonFormat(stored("junk"), 13)).toEqual(seasonFormat(13));
+  });
+
+  it("follows the stored format in the captain-count note", () => {
+    expect(teamCountSeasonNote(stored(winners), 13)).toBe(
+      "13 teams: two groups of 7 and 6, 9 weeks in all: 7 group weeks, the tiebreaker week and 1 playoff week. 12 teams: 7 weeks · 14 teams: 9 weeks.",
+    );
+  });
+
+  it("sizes the bracket from the stored places, shrunk to the eligible teams", () => {
+    const eight = stored(serializeFormatConfig({ groups: 1, meet: 1, playoffs: 8 }));
+    expect(seasonBracketSize(eight, "TABLE", 9, 9)).toBe(8);
+    expect(seasonBracketSize(eight, "TABLE", 9, 7)).toBe(4);
+    expect(seasonBracketSize(eight, "TABLE", 9, 1)).toBe(0);
+    expect(seasonBracketSize(stored(winners), "GROUPS", 13, 13)).toBe(2);
+    // No stored format: the Recommended spots.
+    expect(seasonBracketSize(RECOMMENDED, "TABLE", 9, 9)).toBe(
+      playoffBracketSize("TABLE", 9, 9),
+    );
+    expect(seasonBracketSize(stored("junk"), "GROUPS", 12, 12)).toBe(8);
+    expect(formatBracketSize(plannedSeasonFormat(stored(winners), 13)!, 13)).toBe(2);
   });
 });

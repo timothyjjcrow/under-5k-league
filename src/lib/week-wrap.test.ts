@@ -78,7 +78,7 @@ describe("weekWrapTables", () => {
     teams: { id: string; groupKey: string | null }[],
     matches: M[],
     week: number,
-  ) => weekWrapTables(standingsSections(projectPlayoffField(teams, matches)), matches, week);
+  ) => weekWrapTables(standingsSections(projectPlayoffField(teams, matches, { formatConfig: null })), matches, week);
   const placesOf = (rows: ReturnType<typeof weekWrapTable>) =>
     rows.map((r) => [r.teamId, r.rank, r.points, r.movement]);
 

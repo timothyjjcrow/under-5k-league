@@ -131,7 +131,7 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
     const field = projectPlayoffField(
       teams,
-      await prisma.match.findMany({ where: { seasonId: season.id } }),
+      await prisma.match.findMany({ where: { seasonId: season.id } }), { formatConfig: null },
     );
     if (!field.tiebreakers.resolved) {
       await createTiebreakerWeek(season.id);
@@ -145,7 +145,7 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
       }
       expect(projectPlayoffField(
         teams,
-        await prisma.match.findMany({ where: { seasonId: season.id } }),
+        await prisma.match.findMany({ where: { seasonId: season.id } }), { formatConfig: null },
       ).tiebreakers.resolved).toBe(true);
     }
     await createPlayoffBracket(season.id);
@@ -229,7 +229,7 @@ describe("full season with Bo2 draws → seeding → Bo3/Bo5 playoffs", () => {
     const allMatches = await prisma.match.findMany({ where: { seasonId: season.id } });
     expect(computeStandings(ids, allMatches)).toEqual(standings);
     const sportingSeeds = [...ids].sort((a, b) => b.localeCompare(a));
-    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), allMatches);
+    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), allMatches, { formatConfig: null });
     expect(field.seededTeamIds).toEqual(sportingSeeds);
     expect(field.tiebreakers).toMatchObject({ resolved: true, error: null });
     expect(field.seedingDeadHeatTeamIds).toEqual([]);

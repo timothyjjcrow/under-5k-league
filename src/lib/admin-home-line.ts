@@ -2,6 +2,7 @@ import { adminNextStep } from "./admin-next-step";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 import { projectPlayoffField } from "./playoff-field";
 import { nextRegularKickoff, regularResultsDue } from "./schedule-status";
+import type { FormatSource } from "./season-format";
 import type { MatchLike } from "./standings";
 import { formatLeagueTime } from "./zoned-time";
 
@@ -9,6 +10,8 @@ type LineMatch = MatchLike & { scheduledAt: Date | null; week: number };
 
 export type AdminHomeInput = {
   seasonStatus: string;
+  /** The season's stored format: its playoff places decide which ties count. */
+  season: FormatSource;
   /** null when the season has no Draft row. */
   draftStatus: string | null;
   /** ACTIVE player signups (the snapshot's playerCount). */
@@ -79,7 +82,7 @@ export function adminHomeLine(i: AdminHomeInput): AdminHomeLine {
     // Only the regular season's steps read it, and it is the one costly input.
     unresolvedPlayoffTieCount:
       i.seasonStatus === SEASON_STATUS.REGULAR_SEASON
-        ? projectPlayoffField(i.teams, i.matches).seedingDeadHeatTeamIds.length
+        ? projectPlayoffField(i.teams, i.matches, i.season).seedingDeadHeatTeamIds.length
         : 0,
     playoffMatchCount: playoff.length,
     unfinishedPlayoffCount: playoff.filter(open).length,

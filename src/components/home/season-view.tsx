@@ -313,12 +313,12 @@ export async function SeasonView({
   inhouseTile?: boolean;
 }) {
   const { season, teams } = snapshot;
-  const playoffField = projectPlayoffField(teams, matches);
+  const playoffField = projectPlayoffField(teams, matches, season);
   // The season's calendar while the regular season runs (season-format.ts).
   const lastRegularWeek = matches
     .filter((m) => m.phase === "REGULAR")
     .reduce((max, m) => Math.max(max, m.week), 0);
-  const planFormat = resolveSeasonFormat(teams, lastRegularWeek > 0);
+  const planFormat = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
   const seasonPlanView =
     planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
       ? {

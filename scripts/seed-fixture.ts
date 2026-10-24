@@ -78,7 +78,7 @@ async function main() {
   const regularMode = process.env.FIXTURE_MODE === "regular";
   // The format the site would pick: from ten teams, two groups drawn by
   // strength (team 0 strongest) and a round robin in each.
-  const format = plannedSeasonFormat(teams.length);
+  const format = plannedSeasonFormat(season, teams.length);
   if (format?.kind === "GROUPS") {
     const groups = drawGroups(
       teams.map((team, i) => ({ id: team.id, averageMmr: 10_000 - i })),

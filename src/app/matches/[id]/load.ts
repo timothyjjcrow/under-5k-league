@@ -5,6 +5,7 @@ import { GAME_VIEW_COLUMNS } from "@/lib/game-participants";
 import { prisma } from "@/lib/prisma";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { getSeasonDraftStatus } from "@/lib/queries";
+import { SEASON_FORMAT_SELECT } from "@/lib/season-format";
 
 /**
  * The match page's shared reads. The page loads the match once, with its
@@ -36,6 +37,8 @@ export async function loadMatch(id: string) {
           // The Standins card's open seats and the reschedule form's deadline.
           teamSize: true,
           firstMatchNight: true,
+          // The playoff places on the preview's tables and stakes.
+          ...SEASON_FORMAT_SELECT,
         },
       },
     },

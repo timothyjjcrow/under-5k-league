@@ -23,21 +23,43 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   for 2–17, captured before the resolver existed. Every season plays it,
   archived ones included (the one-table exception is below), so a new
   recommendation is a new rule beside it, never an edit to this one.
+- **A season may store its format** (`Season.formatConfig`, the season
+  builder): versioned JSON, `{"v":1,"groups":2,"meet":1,"playoffs":4}`, with
+  groups 1 or 2, meet once or twice and playoffs 2, 4 or 8. Null is the
+  Recommended format. `parseFormatConfig` reads this version's exact shape
+  only; anything else (a newer version's value, junk written by hand) is
+  UNREADABLE, never Recommended, because read as Recommended a season whose
+  group winners play the final would seed a top 8. Pages show an UNREADABLE
+  season as Recommended and /admin's attention card says why, while every
+  command that builds from it refuses (`FORMAT_UNREADABLE_MESSAGE`):
+  generate and swap, Start playoffs and the admin tiebreaker commands. The
+  automatic tiebreaker pass waits quietly instead of failing every minute.
+  While regular fixtures exist, the stored format is what they were built
+  from: generation builds from it, in the same transaction.
 - **Read the format through the resolver, never from a count.**
-  `plannedSeasonFormat(teamCount)` is what a schedule generated now would
-  build (generation, the fixture seeder). `resolveSeasonFormat(teams,
-  regularFixturesExist)` is what a season plays and every page and post prints
-  (/schedule's and Home's plan, the admin format box, the season-start post,
-  /rules through `rulesSeasonFormat`). Pass the whole field, withdrawn teams
-  included, so a withdrawal never changes the format. Once fixtures exist, a
-  season whose teams carry no groups (`seasonGroupKeys`, the rule the field
-  uses) is one table: a table of ten or more, which only exists in a season
-  generated before groups, keeps showing the table and the bracket it was built
-  for (`pickBracketSize`) instead of "Two groups". `season-format-guards.test.ts`
-  keeps `seasonFormat(`, the count constants, `playoffBracketSize(` and
-  `pickBracketSize(` inside the modules that own them, and the scenario
-  engine's cut comes from the field (`seasonScenarioReport` takes it
-  required).
+  `plannedSeasonFormat(season, teamCount)` is what a schedule generated now
+  would build (generation, the fixture seeder, the captain-count note).
+  `resolveSeasonFormat(season, teams, regularFixturesExist)` is what a season
+  plays and every page and post prints (/schedule's and Home's plan, the admin
+  format box, the season-start post, /rules through `rulesSeasonFormat`).
+  Pass the season that owns the teams (an archive page its archived season)
+  and the whole field, withdrawn teams included, so a withdrawal never changes
+  the format. With no stored format, once fixtures exist, a season whose teams
+  carry no groups (`seasonGroupKeys`, the rule the field uses) is one table: a
+  table of ten or more, which only exists in a season generated before groups,
+  keeps showing the table and the bracket it was built for (`pickBracketSize`)
+  instead of "Two groups".
+- **The field takes the season.** `projectPlayoffField(teams, matches,
+  season)` sizes the bracket with `seasonBracketSize`: a stored format's
+  playoff places, else the Recommended ones, shrunk to what the eligible teams
+  fill. The argument is required, as `FieldTeam.groupKey` is, so tsc lists
+  every caller; narrow selects spread `SEASON_FORMAT_SELECT`.
+  `playoffSetupRevision` hashes the stored format and every team's group.
+  `season-format-guards.test.ts` keeps `seasonFormat(`, the count constants,
+  `playoffBracketSize(` and `pickBracketSize(` inside the modules that own
+  them, keeps `season-format.ts` free of server-only imports (the builder
+  previews in the browser), and the scenario engine's cut comes from the field
+  (`seasonScenarioReport` takes it required).
 - **The week after the regular season is reserved for tiebreakers.** Round
   one plays at `firstPlayoffWeek` (two weeks after the last regular week, or
   the week after tiebreakers that ran long), whether or not a tie needed the

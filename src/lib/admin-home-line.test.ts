@@ -36,6 +36,7 @@ const NOW = Date.parse("2026-09-21T00:00:00Z");
 function line(overrides: Partial<AdminHomeInput>) {
   return adminHomeLine({
     seasonStatus: "REGULAR_SEASON",
+    season: { formatConfig: null },
     draftStatus: DRAFT_STATUS.COMPLETE,
     playerCount: 20,
     minPlayers: 20,

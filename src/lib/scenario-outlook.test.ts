@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectPlayoffField as projectCurrentPlayoffField } from "./playoff-field";
 // Historical fixture generation; production continues to recognize these stored formats.
-const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, "legacy");
+const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, { formatConfig: null }, "legacy");
 import { scenarioReport } from "./scenarios";
 import { applyNormalOutlook, standingOutlooks } from "./scenario-outlook";
 import { remainingRegular, seasonScenarioReport, type StakesMatchRow } from "./stakes";
@@ -15,7 +15,7 @@ function fixture(id: string, home: string, away: string, homeScore = 0, awayScor
     phase: "REGULAR", status: completed ? "COMPLETED" : "SCHEDULED", bestOf: 2, week: 1 };
 }
 function reportFor(ids: string[], matches: Fixture[], withdrawn: string[] = []) {
-  const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null, withdrawn: withdrawn.includes(id) })), matches);
+  const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null, withdrawn: withdrawn.includes(id) })), matches, { formatConfig: null });
   return seasonScenarioReport(field.eligibleStandings, matches, field.eligibleTeamIds.length, field)!;
 }
 
@@ -129,7 +129,7 @@ describe("normal-series outlook", () => {
     for (const a of [0, 1, 2]) for (const b of [0, 1, 2]) {
       const completed = matches.map((m) => m.id === "9" || m.id === "10"
         ? fixture(m.id, m.homeTeamId, m.awayTeamId, m.id === "9" ? a : b, 2 - (m.id === "9" ? a : b)) : m);
-      const projection = projectPlayoffField(ids.map((id) => ({ id, groupKey: null, withdrawn: id === "Withdrawn" })), completed);
+      const projection = projectPlayoffField(ids.map((id) => ({ id, groupKey: null, withdrawn: id === "Withdrawn" })), completed, { formatConfig: null });
       for (const [id, outlook] of standingOutlooks(projection.eligibleStandings, 4)) {
         const count = totals.get(id)!;
         count[0] += outlook.qualified; count[1] += outlook.qualificationTiebreaker; count[2] += outlook.eliminated;
@@ -143,7 +143,7 @@ describe("normal-series outlook", () => {
 
   it("stops detailed enumeration at its cap and preserves conservative results", () => {
     const matches = usFixtures();
-    const field = projectPlayoffField(usIds.map((id) => ({ id, groupKey: null })), matches);
+    const field = projectPlayoffField(usIds.map((id) => ({ id, groupKey: null })), matches, { formatConfig: null });
     const remaining = remainingRegular(matches);
     const report = scenarioReport(field.eligibleStandings, remaining, 4);
     const original = JSON.stringify([...report.teams]);
@@ -170,7 +170,7 @@ function ladderWithBottomTie(size: number): Fixture[] {
     fixture(`${home}-${away}`, home, away, i >= ids.length - size ? 1 : 2, i >= ids.length - size ? 1 : 0)));
 }
 function addTiebreaker(matches: Fixture[], winner: string): Fixture[] {
-  const field = projectPlayoffField(["A", "B", "C", "D", "E"].map((id) => ({ id, groupKey: null })), matches);
+  const field = projectPlayoffField(["A", "B", "C", "D", "E"].map((id) => ({ id, groupKey: null })), matches, { formatConfig: null });
   const group = field.tiebreakers.groups.find((g) => g.status === "needed")!;
   const pair = group.pairings[0] ?? { home: group.teamIds[0], away: group.teamIds[1] };
   const score = group.bestOf === 1 ? 1 : 2;
@@ -218,7 +218,7 @@ describe("actual tiebreaker outlook", () => {
   it("does not apply stale extra-week results to future normal-series scorelines", () => {
     const old = addTiebreaker(ladderWithBottomTie(2), "E");
     const reopened = old.map((m) => m.id === "D-E" ? { ...m, status: "SCHEDULED", homeScore: 0, awayScore: 0 } : m);
-    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), reopened);
+    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), reopened, { formatConfig: null });
     // A stale TB causes an error in the canonical projection: suppress the
     // detailed forecast rather than letting its old winner decide a new tie.
     const report = seasonScenarioReport(field.eligibleStandings, reopened, 5, field)!;

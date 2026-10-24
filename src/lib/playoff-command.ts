@@ -8,9 +8,11 @@ type RevisionSeason = {
   playoffBestOf: number;
   finalBestOf: number;
   firstMatchNight: Date | null;
+  /** The stored format: it sets how many teams the bracket seeds. */
+  formatConfig: string | null;
 };
 
-type RevisionTeam = { id: string; withdrawn: boolean };
+type RevisionTeam = { id: string; withdrawn: boolean; groupKey: string | null };
 
 type RevisionMatch = {
   id: string;
@@ -60,9 +62,10 @@ export function playoffSetupRevision(input: {
     playoffBestOf: input.season.playoffBestOf,
     finalBestOf: input.season.finalBestOf,
     firstMatchNight: input.season.firstMatchNight?.toISOString() ?? null,
+    formatConfig: input.season.formatConfig,
   };
   const teams = input.teams
-    .map((team) => ({ id: team.id, withdrawn: !!team.withdrawn }))
+    .map((team) => ({ id: team.id, withdrawn: !!team.withdrawn, groupKey: team.groupKey }))
     .sort((a, b) => a.id.localeCompare(b.id));
   const matches = input.matches
     .map((match) => ({

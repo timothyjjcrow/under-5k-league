@@ -14,7 +14,7 @@ import { computeStandings, type MatchLike } from "./standings";
 function fieldOf(teamIds: string[], matches: MatchLike[]) {
   return projectPlayoffField(
     teamIds.map((id) => ({ id, withdrawn: false, groupKey: null })),
-    matches,
+    matches, { formatConfig: null },
   );
 }
 

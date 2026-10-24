@@ -606,6 +606,7 @@ async function loadRegularSeason(
   const field = projectPlayoffField(
     teams.map((t) => ({ id: t.id, withdrawn: t.withdrawn, groupKey: t.groupKey })),
     [...matches],
+    season,
   );
   const rowsOf = (standings: readonly TeamStanding[]): StatusTableRow[] =>
     standings.map((row, i) => ({

@@ -26,7 +26,8 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { prisma } from "@/lib/prisma";
 import { generateSchedule, swapGroupTeams } from "@/app/actions/admin-schedule-results";
 import { createPlayoffBracket } from "@/lib/playoff-service";
-import { createTiebreakerWeek } from "@/lib/tiebreaker-service";
+import { advanceTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
+import { FORMAT_UNREADABLE_MESSAGE, serializeFormatConfig } from "@/lib/season-format";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchNightForWeek } from "@/lib/schedule";
 import { DRAFT_STATUS, MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
@@ -339,7 +340,7 @@ describe("a group season's playoffs", () => {
     );
     const field = projectPlayoffField(
       await prisma.team.findMany({ where: { seasonId: season.id } }),
-      await prisma.match.findMany({ where: { seasonId: season.id } }),
+      await prisma.match.findMany({ where: { seasonId: season.id } }), { formatConfig: null },
     );
     expect(field.seedingDeadHeatTeamIds.sort()).toEqual([teams[7].id, teams[8].id].sort());
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/still tied/);
@@ -353,5 +354,82 @@ describe("a group season's playoffs", () => {
     );
     // It plays in the reserved week, straight after the group stage.
     expect(tiebreakers[0].week).toBe(6);
+  });
+});
+
+describe("a season that stores its format", () => {
+  async function storeFormat(seasonId: string, formatConfig: string | null) {
+    await prisma.season.update({ where: { id: seasonId }, data: { formatConfig } });
+  }
+  const generate = async (seasonId: string) =>
+    generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(seasonId)) }));
+
+  it("generates the stored format, not the one the team count recommends", async () => {
+    // Eight teams would play one table; the stored format splits them.
+    const { season } = await draftedSeason(8);
+    await storeFormat(season.id, serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    const res = await generate(season.id);
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/Two groups of 4, drawn by roster MMR/);
+    expect(res?.message).toMatch(/12 matches over 3 week\(s\)/);
+    const groups = await groupsOf(season.id);
+    expect([groups.A.length, groups.B.length, groups.none.length]).toEqual([4, 4, 0]);
+  });
+
+  it("plays each group twice when the stored format says so", async () => {
+    const { season } = await draftedSeason(6);
+    await storeFormat(season.id, serializeFormatConfig({ groups: 2, meet: 2, playoffs: 2 }));
+    const res = await generate(season.id);
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/Two groups of 3, each played twice/);
+    expect(res?.message).toMatch(/12 matches over 6 week\(s\)/);
+  });
+
+  it("seeds the group winners into the grand final when that is the format", async () => {
+    const { season, teams } = await draftedSeason(10);
+    await storeFormat(season.id, serializeFormatConfig({ groups: 2, meet: 1, playoffs: 2 }));
+    await generate(season.id);
+    await prisma.season.update({ where: { id: season.id }, data: { status: SEASON_STATUS.REGULAR_SEASON } });
+    const rank = new Map(teams.map((t, i) => [t.id, i]));
+    for (const m of await prisma.match.findMany({ where: { seasonId: season.id } })) {
+      const stronger = rank.get(m.homeTeamId)! < rank.get(m.awayTeamId)!;
+      await recordMatch(m.id, stronger ? 2 : 0, stronger ? 0 : 2);
+    }
+    await createPlayoffBracket(season.id);
+    const bracket = await prisma.match.findMany({
+      where: { seasonId: season.id, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
+    });
+    // A1 is roster 0, B1 roster 1 (the MMR snake); the final is week 7.
+    expect(bracket.map((m) => [m.phase, m.homeTeamId, m.awayTeamId, m.week])).toEqual([
+      [MATCH_PHASE.FINAL, teams[0].id, teams[1].id, 7],
+    ]);
+  });
+
+  it("refuses to build from a stored format it can't read, and changes nothing", async () => {
+    const { season } = await draftedSeason(10);
+    await storeFormat(season.id, '{"v":2,"groups":3}');
+    const res = await generate(season.id);
+    expect(res?.error).toBe(FORMAT_UNREADABLE_MESSAGE);
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(0);
+    expect((await groupsOf(season.id)).none).toHaveLength(10);
+
+    // Built under a readable format, then unreadable (a newer release
+    // wrote it): no bracket and no tiebreaker week from it.
+    await storeFormat(season.id, null);
+    await generate(season.id);
+    await prisma.season.update({ where: { id: season.id }, data: { status: SEASON_STATUS.REGULAR_SEASON } });
+    for (const m of await prisma.match.findMany({ where: { seasonId: season.id } })) {
+      await recordMatch(m.id, 1, 1);
+    }
+    await storeFormat(season.id, "junk");
+    await expect(createPlayoffBracket(season.id)).rejects.toThrow(FORMAT_UNREADABLE_MESSAGE);
+    await expect(createTiebreakerWeek(season.id)).rejects.toThrow(FORMAT_UNREADABLE_MESSAGE);
+    // The worker's automatic pass waits quietly instead of failing every minute.
+    await expect(advanceTiebreakerWeek(season.id)).resolves.toBeUndefined();
+    expect(
+      await prisma.match.count({
+        where: { seasonId: season.id, phase: { not: MATCH_PHASE.REGULAR } },
+      }),
+    ).toBe(0);
   });
 });

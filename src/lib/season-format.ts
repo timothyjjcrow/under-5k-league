@@ -152,12 +152,92 @@ export function seasonFormat(teamCount: number): SeasonFormat | null {
   return knobs ? buildSeasonFormat(knobs, teamCount) : null;
 }
 
+/** What a season stores about its format (`Season.formatConfig`). */
+export type FormatSource = { formatConfig: string | null };
+
+/** The fields every season select spreads, so no reader forgets the format. */
+export const SEASON_FORMAT_SELECT = { formatConfig: true } as const;
+
+const FORMAT_VERSION = 1;
+const STORED_KNOBS = { groups: [1, 2], meet: [1, 2], playoffs: [2, 4, 8] } as const;
+
+export type StoredFormat =
+  | { kind: "RECOMMENDED" }
+  | { kind: "CUSTOM"; knobs: FormatKnobs }
+  | { kind: "UNREADABLE" };
+
 /**
- * The format a schedule generated now would build for `teamCount` teams.
- * Schedule generation and the fixture seeder read it.
+ * A season's stored format. Null is the Recommended format; anything else
+ * must be this version's exact shape. A value this code can't read (a newer
+ * version's, or junk written by hand) is UNREADABLE, never Recommended: read
+ * as Recommended, a season whose group winners play the final would seed a
+ * top 8 by its team count. Commands that build from the format refuse it.
  */
-export function plannedSeasonFormat(teamCount: number): SeasonFormat | null {
-  return seasonFormat(teamCount);
+export function parseFormatConfig(raw: string | null): StoredFormat {
+  if (raw === null) return { kind: "RECOMMENDED" };
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return { kind: "UNREADABLE" };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { kind: "UNREADABLE" };
+  }
+  const fields = value as Record<string, unknown>;
+  const allowed = (key: keyof typeof STORED_KNOBS) =>
+    (STORED_KNOBS[key] as readonly unknown[]).includes(fields[key]);
+  if (
+    Object.keys(fields).sort().join(",") !== "groups,meet,playoffs,v" ||
+    fields.v !== FORMAT_VERSION ||
+    !allowed("groups") ||
+    !allowed("meet") ||
+    !allowed("playoffs")
+  ) {
+    return { kind: "UNREADABLE" };
+  }
+  return {
+    kind: "CUSTOM",
+    knobs: {
+      groups: fields.groups as number,
+      meet: fields.meet as number,
+      playoffs: fields.playoffs as number,
+    },
+  };
+}
+
+/** Every command that builds from an UNREADABLE format refuses with this. */
+export const FORMAT_UNREADABLE_MESSAGE =
+  "This season's format was saved by a newer version of the site, so this version can't build from it. Nothing was changed.";
+
+/**
+ * The stored value for `knobs`, or null for the Recommended format. One key
+ * order, so two equal strings are the same format.
+ */
+export function serializeFormatConfig(knobs: FormatKnobs | null): string | null {
+  if (!knobs) return null;
+  return JSON.stringify({
+    v: FORMAT_VERSION,
+    groups: knobs.groups,
+    meet: knobs.meet,
+    playoffs: knobs.playoffs,
+  });
+}
+
+/**
+ * The format a schedule generated now would build for `teamCount` teams:
+ * the season's stored format, or the Recommended one. Schedule generation
+ * and the fixture seeder read it. An UNREADABLE format shows as Recommended;
+ * generation refuses it first (`parseFormatConfig`).
+ */
+export function plannedSeasonFormat(
+  season: FormatSource,
+  teamCount: number,
+): SeasonFormat | null {
+  const stored = parseFormatConfig(season.formatConfig);
+  return stored.kind === "CUSTOM"
+    ? buildSeasonFormat(stored.knobs, teamCount)
+    : seasonFormat(teamCount);
 }
 
 /**
@@ -175,21 +255,25 @@ export function seasonGroupKeys(
 }
 
 /**
- * The format a season plays, which every page and post prints. Pass its
- * whole field, withdrawn teams included, so a withdrawal never changes it,
- * and whether its regular-season fixtures exist. Before they do it is the
- * planned format. Once they do, a season whose teams carry no groups is one
- * table, as its standings and bracket are (`seasonGroupKeys`), whatever the
- * count says: a table of ten or more generated before groups existed keeps
- * the bracket it was built for.
+ * The format a season plays, which every page and post prints. Pass the
+ * season, its whole field, withdrawn teams included, so a withdrawal never
+ * changes it, and whether its regular-season fixtures exist. A stored format
+ * is the season's (while fixtures exist it is what they were built from).
+ * With none, it is the planned Recommended format until the fixtures exist;
+ * once they do, a season whose teams carry no groups is one table, as its
+ * standings and bracket are (`seasonGroupKeys`), whatever the count says: a
+ * table of ten or more generated before groups existed keeps the bracket it
+ * was built for.
  */
 export function resolveSeasonFormat(
+  season: FormatSource,
   teams: readonly { groupKey: string | null }[],
   regularFixturesExist: boolean,
 ): SeasonFormat | null {
-  const planned = plannedSeasonFormat(teams.length);
+  const planned = plannedSeasonFormat(season, teams.length);
   if (
     !planned ||
+    parseFormatConfig(season.formatConfig).kind === "CUSTOM" ||
     !regularFixturesExist ||
     planned.kind === "TABLE" ||
     seasonGroupKeys(teams)
@@ -220,6 +304,32 @@ export function playoffBracketSize(
   if (eligibleCount < 2) return 0;
   const spots = kind === "GROUPS" ? GROUP_PLAYOFF_SPOTS : tablePlayoffSpots(teamCount);
   return Math.min(spots, pickBracketSize(eligibleCount));
+}
+
+/**
+ * The bracket `season` seeds: a stored format's playoff places, else the
+ * Recommended ones (`playoffBracketSize`), shrunk to the largest power of
+ * two its eligible teams can fill, or 0 below two.
+ */
+export function seasonBracketSize(
+  season: FormatSource,
+  kind: SeasonFormatKind,
+  teamCount: number,
+  eligibleCount: number,
+): number {
+  const stored = parseFormatConfig(season.formatConfig);
+  if (stored.kind !== "CUSTOM") return playoffBracketSize(kind, teamCount, eligibleCount);
+  if (eligibleCount < 2) return 0;
+  return Math.min(stored.knobs.playoffs, pickBracketSize(eligibleCount));
+}
+
+/**
+ * The bracket a resolved format seeds from `eligibleCount` teams: its
+ * playoff places, shrunk the same way (`seasonBracketSize`).
+ */
+export function formatBracketSize(format: SeasonFormat, eligibleCount: number): number {
+  if (eligibleCount < 2) return 0;
+  return Math.min(format.playoffSpots, pickBracketSize(eligibleCount));
 }
 
 /**
@@ -520,12 +630,16 @@ export function seasonLengthPhrase(format: SeasonFormat): string {
  * What an admin reads while picking captains: the season this many teams
  * make, and how long one fewer or one more would make it, so a count that
  * stretches the season (9 teams, 13 teams) is a choice and not a surprise.
+ * It follows the season's stored format, if it has one.
  */
-export function teamCountSeasonNote(teamCount: number): string | null {
-  const here = seasonFormat(teamCount);
+export function teamCountSeasonNote(
+  season: FormatSource,
+  teamCount: number,
+): string | null {
+  const here = plannedSeasonFormat(season, teamCount);
   if (!here) return null;
   const others = [teamCount - 1, teamCount + 1].flatMap((count) => {
-    const format = seasonFormat(count);
+    const format = plannedSeasonFormat(season, count);
     return format ? [`${count} teams: ${format.totalWeeks} weeks`] : [];
   });
   return `${teamCount} teams: ${formatName(here).toLowerCase()}, ${seasonLengthPhrase(here)}.${

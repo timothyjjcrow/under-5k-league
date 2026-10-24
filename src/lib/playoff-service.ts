@@ -4,7 +4,11 @@ import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
 import { nextRoundPairings, upcomingMatchNight } from "./schedule";
 import { bracketShapeProblem, projectPlayoffField } from "./playoff-field";
-import { firstPlayoffWeek } from "./season-format";
+import {
+  FORMAT_UNREADABLE_MESSAGE,
+  firstPlayoffWeek,
+  parseFormatConfig,
+} from "./season-format";
 import {
   playoffSetupRevision,
   type PlayoffCommandIntent,
@@ -440,7 +444,10 @@ export async function createPlayoffBracket(
             }
           }
         }
-        const playoffField = projectPlayoffField(teams, matches);
+        if (parseFormatConfig(season.formatConfig).kind === "UNREADABLE") {
+          throw new UserFacingError(FORMAT_UNREADABLE_MESSAGE);
+        }
+        const playoffField = projectPlayoffField(teams, matches, season);
         if (playoffField.eligibleTeamIds.length < 2) {
           throw new UserFacingError(
             "Need at least 2 eligible teams for playoffs",

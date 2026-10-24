@@ -14,10 +14,11 @@ const revisionInput: RevisionInput = {
     playoffBestOf: 3,
     finalBestOf: 5,
     firstMatchNight: new Date("2026-08-01T02:00:00.000Z"),
+    formatConfig: null,
   },
   teams: [
-    { id: "a", withdrawn: false },
-    { id: "b", withdrawn: false },
+    { id: "a", withdrawn: false, groupKey: null },
+    { id: "b", withdrawn: false, groupKey: null },
   ],
   matches: [
     {
@@ -59,6 +60,12 @@ const revisionInput: RevisionInput = {
 
 const revisionMutations: RevisionMutation[] = [
   { name: "season.id", mutate: (input) => (input.season.id = "s2") },
+  {
+    name: "season.formatConfig",
+    mutate: (input) =>
+      (input.season.formatConfig = '{"v":1,"groups":2,"meet":1,"playoffs":2}'),
+  },
+  { name: "team.groupKey", mutate: (input) => (input.teams[0].groupKey = "A") },
   {
     name: "season.status",
     mutate: (input) => (input.season.status = "COMPLETE"),

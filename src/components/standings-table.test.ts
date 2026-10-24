@@ -129,7 +129,7 @@ describe("mid-season ties", () => {
   const teams = ["a", "b", "c", "d", "e", "f"].map((id) => ({ id, groupKey: null }));
   const teamName = new Map(teams.map((team) => [team.id, team.id]));
   const render = (matches: MatchLike[]) => {
-    const field = projectPlayoffField(teams, matches);
+    const field = projectPlayoffField(teams, matches, { formatConfig: null });
     return renderToStaticMarkup(createElement(StandingsTable, {
       standings: field.standings, teamName,
       playoffCut: field.bracketSize, playoffSeedByTeam: field.seedByTeam,

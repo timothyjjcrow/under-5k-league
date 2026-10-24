@@ -29,7 +29,7 @@ export function SeasonFormatControls({
   regenerateOpen,
   regenerateConsequences,
 }: {
-  season: { id: string; name: string };
+  season: { id: string; name: string; formatConfig: string | null };
   /** The season's teams, withdrawn ones included (they keep their group). */
   teams: FormatTeam[];
   firstMatchNight: Date | null;
@@ -42,11 +42,11 @@ export function SeasonFormatControls({
   /** What a regenerate destroys, for the swap's confirm. */
   regenerateConsequences: string[];
 }) {
-  const format = resolveSeasonFormat(teams, lastRegularWeek > 0);
+  const format = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
   if (!format) return null;
   // A table of ten or more generated before groups: a regenerate builds
   // the groups the team count now sets, so say so before anyone clicks.
-  const planned = plannedSeasonFormat(teams.length);
+  const planned = plannedSeasonFormat(season, teams.length);
   const rebuildsAs = planned && planned.kind !== format.kind ? planned : null;
   const plan = seasonPlan(format, firstMatchNight, lastRegularWeek || format.regularWeeks);
   const groups =

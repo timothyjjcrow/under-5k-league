@@ -47,7 +47,7 @@ const groupTeams = [
 
 describe("standingsSections", () => {
   it("gives one table per group with its own cut and bracket names", () => {
-    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)]);
+    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], { formatConfig: null });
     const sections = standingsSections(field);
     expect(sections.map((s) => [s.title, s.standings.map((r) => r.teamId), s.playoffCut])).toEqual([
       ["Group A", A, 4],
@@ -61,7 +61,7 @@ describe("standingsSections", () => {
 
   it("gives a one-table season its table, seeds and cut unchanged", () => {
     const ids = ["t1", "t2", "t3", "t4", "t5", "t6"];
-    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids));
+    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids), { formatConfig: null });
     const [only] = standingsSections(field);
     expect(only.title).toBeNull();
     expect(only.playoffCut).toBe(4);
@@ -80,7 +80,7 @@ describe("tableMovement", () => {
       result("a5", "a1", 2, 0, 20),
       result("b5", "b1", 2, 0, 20),
     ];
-    const field = projectPlayoffField(groupTeams, matches);
+    const field = projectPlayoffField(groupTeams, matches, { formatConfig: null });
     const movement = tableMovement(standingsSections(field), matches);
     // Each group is its own table: nobody moves by more than its group's size.
     for (const value of movement.values()) expect(Math.abs(value)).toBeLessThan(5);
@@ -121,7 +121,7 @@ describe("bracketSeedLabels", () => {
   });
 
   it("matches the field's own names", () => {
-    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)]);
+    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], { formatConfig: null });
     const frozen = seedsFromFirstRound(
       field.pairings.map((pairing, index) => ({
         bracketSlot: `R0M${index}`,
@@ -140,9 +140,13 @@ describe("bracketSeedLabels", () => {
 
 describe("playoffPlacesPhrase", () => {
   it("says how the places are shared", () => {
-    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)]);
+    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], { formatConfig: null });
     expect(playoffPlacesPhrase(field)).toBe("8 playoff places: the top 4 of each group");
     expect(playoffPlacesPhrase({ groups: null, bracketSize: 4 })).toBe("4 playoff places");
+    const winners = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], {
+      formatConfig: '{"v":1,"groups":2,"meet":1,"playoffs":2}',
+    });
+    expect(playoffPlacesPhrase(winners)).toBe("2 playoff places: the group winners");
   });
 });
 
@@ -159,7 +163,7 @@ describe("groupTablesFromResults", () => {
 
 describe("placeInTable", () => {
   it("places a team within its group, out of the group's teams", () => {
-    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)]);
+    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], { formatConfig: null });
     // The league's rows are group A's table then group B's: b2 is row 7.
     expect(field.standings.findIndex((row) => row.teamId === "b2")).toBe(6);
     const place = placeInTable(field, "b2");
@@ -171,7 +175,7 @@ describe("placeInTable", () => {
 
   it("keeps a one-table season's place and size", () => {
     const ids = ["t1", "t2", "t3", "t4", "t5", "t6"];
-    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids));
+    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids), { formatConfig: null });
     const place = placeInTable(field, "t3");
     expect(place).toEqual({ place: 3, of: 6, groupKey: null });
     expect(placeOfLabel(place!)).toBe("3rd of 6");
@@ -181,17 +185,17 @@ describe("placeInTable", () => {
 
 describe("placeOrder", () => {
   it("reads a group season place by place across the groups", () => {
-    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)]);
+    const field = projectPlayoffField(groupTeams, [...ladder(A), ...ladder(B)], { formatConfig: null });
     expect(placeOrder(field)).toEqual(["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4", "a5", "b5"]);
     // A smaller group simply runs out first.
     const short = groupTeams.filter((team) => team.id !== "b5");
-    const uneven = projectPlayoffField(short, [...ladder(A), ...ladder(B.slice(0, 4))]);
+    const uneven = projectPlayoffField(short, [...ladder(A), ...ladder(B.slice(0, 4))], { formatConfig: null });
     expect(placeOrder(uneven).slice(-3)).toEqual(["a4", "b4", "a5"]);
   });
 
   it("keeps a one-table season's order", () => {
     const ids = ["t1", "t2", "t3", "t4"];
-    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids));
+    const field = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), ladder(ids), { formatConfig: null });
     expect(placeOrder(field)).toEqual(field.standings.map((row) => row.teamId));
   });
 });

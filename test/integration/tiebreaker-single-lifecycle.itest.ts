@@ -109,7 +109,7 @@ describe("weekend BO1 knockout lifecycle", () => {
         home >= 15 && away >= 15 ? 1 : home < away ? 0 : 2);
     }
     await createTiebreakerWeek(season.id);
-    const project = async () => projectPlayoffField(teams, await prisma.match.findMany({ where: { seasonId: season.id } }));
+    const project = async () => projectPlayoffField(teams, await prisma.match.findMany({ where: { seasonId: season.id } }), { formatConfig: null });
     const first = (await project()).tiebreakers.groups[0].singlePlan!;
     expect(first.excluded).toHaveLength(1);
     expect(first.brackets).toHaveLength(1);
@@ -161,7 +161,7 @@ describe("weekend BO1 knockout lifecycle", () => {
     expect(slate.every((m) => m.bestOf === 1 && m.week === firstWeek && m.status === "COMPLETED")).toBe(true);
     for (const team of teams) expect(slate.filter((m) => m.homeTeamId === team.id || m.awayTeamId === team.id).length).toBeLessThanOrEqual(3);
     const all = await prisma.match.findMany({ where: { seasonId: season.id } });
-    expect(projectPlayoffField(teams, all).tiebreakers).toMatchObject({ resolved: true, error: null });
+    expect(projectPlayoffField(teams, all, { formatConfig: null }).tiebreakers).toMatchObject({ resolved: true, error: null });
     expect(all.filter((m) => m.phase === "REGULAR")).toEqual(before);
     expect((await prisma.season.findUniqueOrThrow({ where: { id: season.id } })).status).toBe("REGULAR_SEASON");
   });

@@ -13,7 +13,7 @@ export async function seedLegacyTiebreaker(seasonId: string) {
   const [teams, matches] = await Promise.all([
     prisma.team.findMany({ where: { seasonId } }), prisma.match.findMany({ where: { seasonId } }),
   ]);
-  const groups = projectPlayoffField(teams, matches, "legacy").tiebreakers.groups;
+  const groups = projectPlayoffField(teams, matches, { formatConfig: null }, "legacy").tiebreakers.groups;
   const week = Math.max(...matches.map((m) => m.week)) + 1;
   for (const group of groups) {
     const pairs = group.drawRequired ? [{ home: group.teamIds[0], away: group.teamIds[1] }] : group.pairings;

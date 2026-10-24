@@ -334,6 +334,22 @@ describe("leagueRules", () => {
     ).toContain("This season plays two groups");
   });
 
+  it("describes a stored format whose group winners play the final", () => {
+    const winners = rulesSeasonFormat(
+      { formatConfig: '{"v":1,"groups":2,"meet":1,"playoffs":2}' },
+      Array.from({ length: 13 }, (_, index) => ({ groupKey: index < 7 ? "A" : "B" })),
+      [{ phase: "REGULAR" }],
+    );
+    const rules = build({ teamCount: 13, format: winners });
+    const playoffs = section(rules, "playoffs");
+    expect(playoffs).toContain("This season plays two groups, so the group winners make the playoffs.");
+    expect(playoffs).toContain("The two group winners play the grand final, and Group A's winner hosts.");
+    expect(playoffs).not.toContain("The top two play the grand final");
+    expect(section(rules, "format")).toContain(
+      "This season has 13 teams: two groups of 7 and 6. Each group plays a round robin over 7 weeks, then the group winners play the grand final. That's 9 weeks in all: 7 group weeks, the tiebreaker week and 1 playoff week.",
+    );
+  });
+
   it("takes the season's format from every team and its regular fixtures", () => {
     const team = (groupKey: string | null, withdrawn = false) => ({ groupKey, withdrawn });
     const regular = [{ phase: "REGULAR" }, { phase: "PLAYOFF" }];
@@ -343,13 +359,13 @@ describe("leagueRules", () => {
       ...Array.from({ length: 4 }, () => team("B")),
       team("B", true),
     ];
-    expect(rulesSeasonFormat(grouped, regular)).toEqual(seasonFormat(10));
+    expect(rulesSeasonFormat({ formatConfig: null }, grouped, regular)).toEqual(seasonFormat(10));
     // Twelve teams with fixtures and no groups were generated as one table.
     const legacy = Array.from({ length: 12 }, () => team(null));
-    expect(rulesSeasonFormat(legacy, regular)).toMatchObject({ kind: "TABLE", playoffSpots: 8 });
+    expect(rulesSeasonFormat({ formatConfig: null }, legacy, regular)).toMatchObject({ kind: "TABLE", playoffSpots: 8 });
     // Until the regular season's fixtures exist, it is the planned format.
-    expect(rulesSeasonFormat(legacy, [{ phase: "TIEBREAKER" }])).toEqual(seasonFormat(12));
-    expect(rulesSeasonFormat(legacy, [])).toEqual(seasonFormat(12));
+    expect(rulesSeasonFormat({ formatConfig: null }, legacy, [{ phase: "TIEBREAKER" }])).toEqual(seasonFormat(12));
+    expect(rulesSeasonFormat({ formatConfig: null }, legacy, [])).toEqual(seasonFormat(12));
   });
 
   it("writes durations and clocks in words", () => {
@@ -489,7 +505,7 @@ describe("the rules page's claims hold in the code", () => {
   it("keeps withdrawn teams' results but not the teams in the bracket", () => {
     const field = projectPlayoffField(
       [{ id: "a", groupKey: null }, { id: "b", groupKey: null }, { id: "c", groupKey: null }, { id: "d", groupKey: null, withdrawn: true }],
-      [game("a", "d", 2, 0), game("b", "c", 2, 0)],
+      [game("a", "d", 2, 0), game("b", "c", 2, 0)], { formatConfig: null },
     );
     expect(field.seededTeamIds).not.toContain("d");
     expect(field.standings.find((row) => row.teamId === "a")?.points).toBe(3);
@@ -679,7 +695,9 @@ describe("the /rules page", () => {
     // Without it leagueRules falls back to the teams still in, and a
     // withdrawal in a group season would print one table.
     const text = stripLineComments(page!.text);
-    expect(text).toContain("format: teams ? rulesSeasonFormat(teams, fixtures) : null");
+    expect(text).toContain(
+      "format: active && teams ? rulesSeasonFormat(active, teams, fixtures) : null",
+    );
     const teamQuery = text.slice(text.indexOf("prisma.team.findMany("));
     expect(teamQuery.slice(0, teamQuery.indexOf("})"))).not.toContain("withdrawn: false");
   });

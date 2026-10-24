@@ -4,14 +4,14 @@ import { describe, expect, it } from "vitest";
 import { TiebreakerNotice } from "./tiebreaker-notice";
 import { projectPlayoffField as projectCurrentPlayoffField } from "@/lib/playoff-field";
 // Historical fixture generation; production continues to recognize these stored formats.
-const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, "legacy");
+const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, { formatConfig: null }, "legacy");
 import { scenarioReport } from "@/lib/scenarios";
 
 const teams = [
   { id: "a", name: "Alpha", groupKey: null },
   { id: "b", name: "Bravo", groupKey: null },
 ];
-const projection = projectPlayoffField(teams, []);
+const projection = projectPlayoffField(teams, [], { formatConfig: null });
 const render = (props: Partial<Parameters<typeof TiebreakerNotice>[0]> = {}) =>
   renderToStaticMarkup(
     createElement(TiebreakerNotice, {
@@ -26,7 +26,7 @@ const render = (props: Partial<Parameters<typeof TiebreakerNotice>[0]> = {}) =>
 describe("public tiebreaker notice", () => {
   it("describes only seeding after the third-place team is eliminated", () => {
     const threeTeams = [...teams, { id: "c", name: "Charlie", groupKey: null }];
-    const field = projectPlayoffField(threeTeams, []);
+    const field = projectPlayoffField(threeTeams, [], { formatConfig: null });
     const report = scenarioReport(field.eligibleStandings, [], 2);
     report.forecast = { basis: "final", total: 1 };
     for (const [id, scenario] of report.teams) {
@@ -72,7 +72,7 @@ describe("public tiebreaker notice", () => {
     const threeTeams = [...teams, { id: "c", name: "Charlie", groupKey: null }];
     const html = render({
       teams: threeTeams,
-      projection: projectPlayoffField(threeTeams, []),
+      projection: projectPlayoffField(threeTeams, [], { formatConfig: null }),
     });
     expect(html).toContain("Alpha, Bravo, Charlie");
     expect(html).toContain("best-of-one double-elimination bracket");

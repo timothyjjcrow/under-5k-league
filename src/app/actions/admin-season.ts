@@ -27,6 +27,7 @@ import {
   type SeasonStatus,
 } from "@/lib/constants";
 import {
+  SEASON_FORMAT_SELECT,
   formatName,
   playoffEntrantsPhrase,
   resolveSeasonFormat,
@@ -661,19 +662,19 @@ async function seasonOpeningSlate(seasonId: string) {
     }),
     prisma.season.findUnique({
       where: { id: seasonId },
-      select: { firstMatchNight: true },
+      select: { firstMatchNight: true, ...SEASON_FORMAT_SELECT },
     }),
   ]);
-  if (fixtures.length === 0) return undefined;
+  if (fixtures.length === 0 || !season) return undefined;
   // The season's shape and calendar: its groups, and when the reserved
   // tiebreaker week and the playoffs fall (season-format.ts). The format
   // counts the whole field, as every page does; byes and the group lists
   // name only the teams still in.
-  const format = resolveSeasonFormat(teams, true);
+  const format = resolveSeasonFormat(season, teams, true);
   const groupKeys = seasonGroupKeys(teams);
   const stillIn = teams.filter((team) => !team.withdrawn);
   const plan =
-    format && season?.firstMatchNight
+    format && season.firstMatchNight
       ? seasonPlan(
           format,
           season.firstMatchNight,

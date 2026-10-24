@@ -62,7 +62,7 @@ export default async function RulesPage() {
     // Generation times every fixture, so the timed ones say whether the
     // schedule exists.
     teamCount: teams ? teams.filter((team) => !team.withdrawn).length : null,
-    format: teams ? rulesSeasonFormat(teams, fixtures) : null,
+    format: active && teams ? rulesSeasonFormat(active, teams, fixtures) : null,
   });
 
   return (

@@ -6,6 +6,7 @@ import { getSeasonGameLeaders } from "./cached-queries";
 import { LEAGUE_CONFIG } from "./league-config";
 import { formatLeagueMatchTime } from "./match-time";
 import { prisma } from "./prisma";
+import { SEASON_FORMAT_SELECT } from "./season-format";
 import {
   buildStreamOverlay,
   type StreamOverlayPayload,
@@ -47,7 +48,7 @@ export async function loadStreamOverlay(
       seasonId: true,
       homeTeam: { select: { name: true, logoUrl: true } },
       awayTeam: { select: { name: true, logoUrl: true } },
-      season: { select: { name: true } },
+      season: { select: { name: true, ...SEASON_FORMAT_SELECT } },
       standins: {
         select: {
           teamId: true,
@@ -105,6 +106,7 @@ export async function loadStreamOverlay(
     leagueName: LEAGUE_CONFIG.name,
     seasonId,
     seasonName: season.name,
+    season: { formatConfig: season.formatConfig },
     match: { ...fixture, homeTeam, awayTeam },
     kickoffText: match.scheduledAt
       ? formatLeagueMatchTime(match.scheduledAt, "full")

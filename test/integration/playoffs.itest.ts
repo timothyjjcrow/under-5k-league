@@ -344,7 +344,7 @@ describe("playoffs — canonical eligibility and replay-safe commands", () => {
       prisma.team.findMany({ where: { seasonId: season.id } }),
       prisma.match.findMany({ where: { seasonId: season.id } }),
     ]);
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
     expect(projection.eligibleTeamIds).not.toContain(ids[1]);
     expect(
       projection.standings.find((row) => row.teamId === ids[2])?.played,

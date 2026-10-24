@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { HeroIcon } from "@/components/hero-icon";
 import { LocalTime } from "@/components/local-time";
 import { UpsetChip } from "@/components/home/week-highlights";
+import { SEASON_FORMAT_SELECT } from "@/lib/season-format";
 import {
   Card,
   CardBody,
@@ -83,6 +84,7 @@ export default async function WeekWrapPage({
       id: true,
       name: true,
       isActive: true,
+      ...SEASON_FORMAT_SELECT,
       teams: {
         select: {
           id: true,
@@ -161,7 +163,7 @@ export default async function WeekWrapPage({
   // the group. The playoff field decides whether the season plays groups,
   // as it does for every other table on the site.
   const tables = weekWrapTables(
-    standingsSections(projectPlayoffField(season.teams, season.matches)),
+    standingsSections(projectPlayoffField(season.teams, season.matches, season)),
     season.matches,
     week,
   );
