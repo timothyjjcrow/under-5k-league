@@ -34,6 +34,8 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   command that builds from it refuses (`FORMAT_UNREADABLE_MESSAGE`):
   generate and swap, Start playoffs and the admin tiebreaker commands. The
   automatic tiebreaker pass waits quietly instead of failing every minute.
+  The season-start post leaves out its format line: a post is never
+  corrected, and the stand-in could name a cut the standings don't use.
   While regular fixtures exist, the stored format is what they were built
   from: generation builds from it, in the same transaction.
 - **Read the format through the resolver, never from a count.**

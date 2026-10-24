@@ -29,6 +29,7 @@ import {
 import {
   SEASON_FORMAT_SELECT,
   formatName,
+  parseFormatConfig,
   playoffEntrantsPhrase,
   resolveSeasonFormat,
   seasonGroupKeys,
@@ -703,9 +704,14 @@ async function seasonOpeningSlate(seasonId: string) {
       whenMs: fixture.scheduledAt?.getTime() ?? null,
     })),
     byes: stillIn.filter((team) => !playing.has(team.id)).map((team) => team.name),
-    ...(groupKeys && format
+    ...(groupKeys
       ? {
-          format: `${formatName(format)}: ${playoffEntrantsPhrase(format)} make the playoffs.`,
+          // A format this release can't read (a newer one's, after a
+          // rollback) gets no line: its stand-in could name a cut the
+          // standings don't use, and a post is never corrected.
+          ...(format && parseFormatConfig(season.formatConfig).kind !== "UNREADABLE"
+            ? { format: `${formatName(format)}: ${playoffEntrantsPhrase(format)} make the playoffs.` }
+            : {}),
           groups: groupKeys.map((key) => ({
             key,
             teams: stillIn.filter((team) => team.groupKey === key).map((team) => team.name),

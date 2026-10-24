@@ -33,7 +33,9 @@ import { matchNightForWeek } from "@/lib/schedule";
 import { DRAFT_STATUS, MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import { setRaceHook } from "@/lib/race-hook";
+import { seedLegacyTiebreaker } from "../fixtures/legacy-tiebreaker";
 import {
+  generateRegularSchedule,
   makePlayer,
   makeSeason,
   makeTeam,
@@ -424,12 +426,37 @@ describe("a season that stores its format", () => {
     await storeFormat(season.id, "junk");
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(FORMAT_UNREADABLE_MESSAGE);
     await expect(createTiebreakerWeek(season.id)).rejects.toThrow(FORMAT_UNREADABLE_MESSAGE);
-    // The worker's automatic pass waits quietly instead of failing every minute.
-    await expect(advanceTiebreakerWeek(season.id)).resolves.toBeUndefined();
     expect(
       await prisma.match.count({
         where: { seasonId: season.id, phase: { not: MATCH_PHASE.REGULAR } },
       }),
     ).toBe(0);
+  });
+
+  it("lets the worker's tiebreaker pass wait on a format it can't read", async () => {
+    // A tiebreaker week started under a readable format (three teams level),
+    // its first game played, so the automatic pass has the next game due.
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    for (let i = 0; i < 3; i++) await makeTeam(season.id, `Level ${i}`, i);
+    for (const m of await generateRegularSchedule(season.id)) await recordMatch(m.id, 1, 1);
+    await seedLegacyTiebreaker(season.id);
+    const opening = await prisma.match.findFirstOrThrow({
+      where: { seasonId: season.id, phase: MATCH_PHASE.TIEBREAKER },
+    });
+    await recordMatch(opening.id, 1, 0);
+    const tiebreakers = () =>
+      prisma.match.count({ where: { seasonId: season.id, phase: MATCH_PHASE.TIEBREAKER } });
+
+    // Every worker run and import calls it: it waits instead of failing.
+    await storeFormat(season.id, "junk");
+    await expect(advanceTiebreakerWeek(season.id)).resolves.toBeUndefined();
+    expect(await tiebreakers()).toBe(1);
+    await expect(createTiebreakerWeek(season.id)).rejects.toThrow(FORMAT_UNREADABLE_MESSAGE);
+
+    // The same pass under a readable format schedules that game, so the wait
+    // above was the format check and not a pass with nothing to do.
+    await storeFormat(season.id, null);
+    await advanceTiebreakerWeek(season.id);
+    expect(await tiebreakers()).toBe(2);
   });
 });
