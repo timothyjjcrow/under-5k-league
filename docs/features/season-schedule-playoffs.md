@@ -129,7 +129,20 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   no COMPLETED regular series AND no Game (both halves pinned in
   `admin-flow-audit.itest.ts`), no withdrawn team, 2+ teams, no confirmed-scrim
   clash. A regenerate replaces fixture ids, so it names the check-ins, picks,
-  bookings and proposals it wipes, before (confirm) and after (toast, log).
+  bookings and proposals it wipes, before (confirm) and after (toast, log),
+  and drops the queued check-in reminders and result nudges of the fixtures
+  it deletes (`invalidateMatchNudges`, as every retime does), or a reminder
+  held by a Discord outage would ping players for a match that no longer
+  exists.
+- **A schedule form claims the fixtures it showed.** Generate, Regenerate and
+  Swap teams post `expectedSchedule` (`regularScheduleRevision`: "none", or a
+  digest of the regular fixture ids), and the rebuild recomputes it inside
+  its transaction. Every rebuild writes new ids, so a tab opened before
+  another admin generated or rebuilt the schedule is refused ("The schedule
+  was generated or rebuilt while this page was open") instead of replacing
+  that schedule behind a confirm written for the one it saw: a Generate
+  click from such a tab used to rebuild a fresh schedule behind a plain
+  confirm. A form with no claim gets the stale-form reload copy.
 - **The format decides the round robin, not a checkbox.** Four teams or fewer
   play it twice (`plannedSeasonFormat`); the double round robin checkbox is gone, and
   a stale form's `doubleRound` field is ignored. The toast names the format,

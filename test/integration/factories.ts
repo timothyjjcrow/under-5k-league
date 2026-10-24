@@ -7,6 +7,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { roundRobin } from "@/lib/schedule";
+import { regularScheduleRevision } from "@/lib/schedule-revision";
 // Pure (constants only), so safe to import statically; see the note below.
 import { undoSaleTarget } from "@/lib/draft-admin";
 import type { SessionUser } from "@/lib/auth";
@@ -290,6 +291,21 @@ export async function makeTeam(
   return prisma.team.create({
     data: { seasonId, name, captainId: captain.id, budget, draftOrder },
   });
+}
+
+/**
+ * The claim a schedule form posts for the season it shows: its id and the
+ * regular-season fixtures it was rendered with (Generate, Regenerate, Swap).
+ */
+export async function scheduleClaim(seasonId: string) {
+  const fixtures = await prisma.match.findMany({
+    where: { seasonId, phase: MATCH_PHASE.REGULAR },
+    select: { id: true },
+  });
+  return {
+    expectedActiveSeasonId: seasonId,
+    expectedSchedule: regularScheduleRevision(fixtures.map((fixture) => fixture.id)),
+  };
 }
 
 /** Generate a regular-season round-robin, like the generateSchedule action. */

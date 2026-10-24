@@ -24,6 +24,7 @@ import {
   slotRound,
   hasLaterBracketRound,
 } from "@/lib/schedule";
+import { regularScheduleRevision } from "@/lib/schedule-revision";
 import { playedSeriesFinalError, seriesScoreError } from "@/lib/standings";
 import {
   isPlayoffPhase,
@@ -158,7 +159,10 @@ export async function generateSchedule(
   const admin = await adminOrError();
   if ("error" in admin) return admin;
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
-  if (!expectedActiveSeasonId) {
+  // The fixtures the form showed (`regularScheduleRevision`): "none" for
+  // Generate. A form from before the claim existed carries neither.
+  const expectedSchedule = str(formData, "expectedSchedule").trim();
+  if (!expectedActiveSeasonId || !expectedSchedule) {
     return {
       error:
         "This schedule form is stale — reload before generating the schedule.",
@@ -194,6 +198,7 @@ export async function generateSchedule(
   // asks for a fresh draw.
   return replaceRegularSchedule({
     expectedActiveSeasonId,
+    expectedSchedule,
     firstNight,
     groups: bool(formData, "redrawGroups") ? { kind: "DRAW" } : { kind: "AUTO" },
   });
@@ -212,9 +217,10 @@ export async function swapGroupTeams(
   const admin = await adminOrError();
   if ("error" in admin) return admin;
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
+  const expectedSchedule = str(formData, "expectedSchedule").trim();
   const teamA = str(formData, "teamA").trim();
   const teamB = str(formData, "teamB").trim();
-  if (!expectedActiveSeasonId) {
+  if (!expectedActiveSeasonId || !expectedSchedule) {
     return { error: "This form is stale — reload before swapping teams." };
   }
   if (!teamA || !teamB) {
@@ -222,12 +228,16 @@ export async function swapGroupTeams(
   }
   return replaceRegularSchedule({
     expectedActiveSeasonId,
+    expectedSchedule,
     firstNight: null,
     groups: { kind: "SWAP", teamA, teamB },
   });
 }
 
 class GroupSwapError extends Error {}
+
+/** The regular-season fixtures changed since the form rendered. */
+class ScheduleChangedError extends Error {}
 
 class FirstNightPassedError extends Error {
   constructor(readonly firstNight: Date | null) {
@@ -246,10 +256,12 @@ type GroupPlan =
  * teams already carry when they still fit the format (`AUTO`), else a fresh
  * draw by roster MMR (`AUTO` with none that fit, or `DRAW`), or the current
  * groups with two teams swapped (`SWAP`). `firstNight` null keeps the
- * season's own week-1 night (a swap).
+ * season's own week-1 night (a swap). `expectedSchedule` is the
+ * `regularScheduleRevision` of the fixtures the form showed.
  */
 async function replaceRegularSchedule(input: {
   expectedActiveSeasonId: string;
+  expectedSchedule: string;
   firstNight: Date | null;
   groups: GroupPlan;
 }): Promise<ActionResult> {
@@ -342,6 +354,21 @@ async function replaceRegularSchedule(input: {
           throw new PostAuctionWorkLockedError();
         }
         if (played > 0 || games > 0) throw new ResultsLandedError();
+        // Claim the schedule the form showed: another admin's generate or
+        // rebuild in between gave every fixture a new id, and this form's
+        // confirm (a plain one for Generate) was written for the old ones.
+        const regularIds = (
+          await tx.match.findMany({
+            where: {
+              seasonId: expectedActiveSeasonId,
+              phase: MATCH_PHASE.REGULAR,
+            },
+            select: { id: true },
+          })
+        ).map((match) => match.id);
+        if (regularScheduleRevision(regularIds) !== input.expectedSchedule) {
+          throw new ScheduleChangedError();
+        }
         const withdrawn = teams.filter((team) => team.withdrawn);
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
@@ -435,14 +462,7 @@ async function replaceRegularSchedule(input: {
         // every player re-checks in — and none of that was reported. It stays
         // silent no more: count it and name it in the toast. (A first-ever
         // generate has nothing to count, so the message is unchanged there.)
-        const doomed = await tx.match.findMany({
-          where: {
-            seasonId: expectedActiveSeasonId,
-            phase: MATCH_PHASE.REGULAR,
-          },
-          select: { id: true },
-        });
-        const ids = doomed.map((m) => m.id);
+        const ids = regularIds;
         let cleared = { rsvps: 0, picks: 0, covers: 0, proposals: 0 };
         let standDowns: {
           standinName: string;
@@ -490,6 +510,10 @@ async function replaceRegularSchedule(input: {
             week: a.match.week,
           }));
         }
+        // A queued check-in reminder or result nudge for a deleted fixture
+        // would still post, pinging players about a match that no longer
+        // exists: drop them, as every retime does.
+        for (const id of ids) await invalidateMatchNudges(tx, id);
         await tx.match.deleteMany({
           where: {
             seasonId: expectedActiveSeasonId,
@@ -556,6 +580,12 @@ async function replaceRegularSchedule(input: {
       return {
         error:
           "Results are already recorded — a result landed before or while you were generating. Nothing was changed; reload and check the schedule.",
+      };
+    }
+    if (e instanceof ScheduleChangedError) {
+      return {
+        error:
+          "The schedule was generated or rebuilt while this page was open. Nothing was changed; reload to see it.",
       };
     }
     if (e instanceof WithdrawnTeamsError) {

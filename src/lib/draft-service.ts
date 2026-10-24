@@ -1187,6 +1187,10 @@ export async function abortDraft(
         await tx.setting.deleteMany({
           where: { key: { startsWith: weekReminderPrefix(seasonId) } },
         });
+        // The groups were drawn from the rosters this abort returns to the
+        // pool. Left on the teams, the next generate would keep a draw made
+        // from rosters that no longer exist whenever the sizes still fit.
+        await tx.team.updateMany({ where: { seasonId }, data: { groupKey: null } });
 
         // The draft time/readiness acknowledgements are deliberately kept: an
         // abort normally means "fix captains and rerun tonight", so asking the
