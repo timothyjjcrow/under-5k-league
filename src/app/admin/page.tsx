@@ -3869,7 +3869,11 @@ function ScheduleControls({
                         ]
                       : []),
                   ]}
-                  recovery="Playoff matches are untouched. Regenerating again with the same groups and first match night rebuilds the same pairings and kickoffs, but none of the check-ins, picks or bookings can be restored."
+                  recovery={
+                    rebuildChangesFormat
+                      ? "Playoff matches are untouched. The one-table schedule can't be rebuilt, and none of the check-ins, picks or bookings can be restored."
+                      : "Playoff matches are untouched. A rebuild puts every kickoff back on the weekly grid from the first match night, so moved weeks and accepted reschedules aren't kept, and none of the check-ins, picks or bookings can be restored."
+                  }
                 >
                   Regenerate schedule
                 </DangerSubmit>

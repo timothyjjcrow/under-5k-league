@@ -163,6 +163,38 @@ describe("swapGroupTeams", () => {
     return { season, teams };
   }
 
+  it("refuses a swap or regenerate from a tab opened before another admin rebuilt", async () => {
+    const { season, teams } = await grouped();
+    const oldTab = await scheduleClaim(season.id);
+    // Another admin regenerates: every fixture gets a new id.
+    const rebuilt = await generateSchedule(
+      empty,
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
+    );
+    expect(rebuilt?.error).toBeUndefined();
+    const fixturesNow = async () =>
+      (
+        await prisma.match.findMany({
+          where: { seasonId: season.id },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map((match) => match.id);
+    const before = { fixtures: await fixturesNow(), groups: await groupsOf(season.id) };
+    const stale =
+      "The schedule was generated or rebuilt while this page was open. Nothing was changed; reload to see it.";
+
+    // Teams 0 and 1 are in different groups, so only the claim can refuse.
+    const swap = await swapGroupTeams(
+      empty,
+      fd({ ...oldTab, teamA: teams[0].id, teamB: teams[1].id }),
+    );
+    expect(swap?.error).toBe(stale);
+    const regenerate = await generateSchedule(empty, fd({ ...firstNightFields(), ...oldTab }));
+    expect(regenerate?.error).toBe(stale);
+    expect({ fixtures: await fixturesNow(), groups: await groupsOf(season.id) }).toEqual(before);
+  });
+
   it("trades one team from each group and rebuilds the fixtures around them", async () => {
     const { season, teams } = await grouped();
     const res = await swapGroupTeams(
