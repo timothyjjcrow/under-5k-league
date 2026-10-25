@@ -14,7 +14,7 @@ import { SeasonPlanFold } from "@/components/season-plan";
 import {
   describeSeasonFormat,
   formatName,
-  seasonFormat,
+  resolveSeasonFormat,
   seasonPlan,
 } from "@/lib/season-format";
 import {
@@ -315,10 +315,10 @@ export async function SeasonView({
   const { season, teams } = snapshot;
   const playoffField = projectPlayoffField(teams, matches);
   // The season's calendar while the regular season runs (season-format.ts).
-  const planFormat = seasonFormat(teams.length);
   const lastRegularWeek = matches
     .filter((m) => m.phase === "REGULAR")
     .reduce((max, m) => Math.max(max, m.week), 0);
+  const planFormat = resolveSeasonFormat(teams, lastRegularWeek > 0);
   const seasonPlanView =
     planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
       ? {

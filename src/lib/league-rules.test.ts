@@ -26,6 +26,7 @@ import {
 import {
   RULES_CLOSING,
   leagueRules,
+  rulesSeasonFormat,
   type LeagueRules,
   type LeagueRulesInput,
   type RulesSeason,
@@ -35,6 +36,7 @@ import { MAX_RESCHEDULE_OPTIONS } from "./reschedule-ready-check";
 import { projectPlayoffField } from "./playoff-field";
 import { registrationGate } from "./registration";
 import { nextRoundPairings } from "./schedule";
+import { seasonFormat } from "./season-format";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
 
@@ -327,9 +329,27 @@ describe("leagueRules", () => {
     );
     expect(format).toContain("The week after the regular season is kept for tiebreakers");
     // A withdrawal leaves the format as the schedule made it.
-    expect(section(build({ teamCount: 9, formatTeamCount: 10 }), "playoffs")).toContain(
-      "This season plays two groups",
-    );
+    expect(
+      section(build({ teamCount: 9, format: seasonFormat(10) }), "playoffs"),
+    ).toContain("This season plays two groups");
+  });
+
+  it("takes the season's format from every team and its regular fixtures", () => {
+    const team = (groupKey: string | null, withdrawn = false) => ({ groupKey, withdrawn });
+    const regular = [{ phase: "REGULAR" }, { phase: "PLAYOFF" }];
+    // Ten teams in two groups, one withdrawn: still two groups of 5.
+    const grouped = [
+      ...Array.from({ length: 5 }, () => team("A")),
+      ...Array.from({ length: 4 }, () => team("B")),
+      team("B", true),
+    ];
+    expect(rulesSeasonFormat(grouped, regular)).toEqual(seasonFormat(10));
+    // Twelve teams with fixtures and no groups were generated as one table.
+    const legacy = Array.from({ length: 12 }, () => team(null));
+    expect(rulesSeasonFormat(legacy, regular)).toMatchObject({ kind: "TABLE", playoffSpots: 8 });
+    // Until the regular season's fixtures exist, it is the planned format.
+    expect(rulesSeasonFormat(legacy, [{ phase: "TIEBREAKER" }])).toEqual(seasonFormat(12));
+    expect(rulesSeasonFormat(legacy, [])).toEqual(seasonFormat(12));
   });
 
   it("writes durations and clocks in words", () => {
@@ -653,6 +673,15 @@ describe("the /rules page", () => {
     // One h1 (PageTitle) and an h2 per section.
     expect(text.match(/<PageTitle\b/g)).toHaveLength(1);
     expect(text).toContain("headingLevel={2}");
+  });
+
+  it("reads the season's format from its whole field and its fixtures", () => {
+    // Without it leagueRules falls back to the teams still in, and a
+    // withdrawal in a group season would print one table.
+    const text = stripLineComments(page!.text);
+    expect(text).toContain("format: teams ? rulesSeasonFormat(teams, fixtures) : null");
+    const teamQuery = text.slice(text.indexOf("prisma.team.findMany("));
+    expect(teamQuery.slice(0, teamQuery.indexOf("})"))).not.toContain("withdrawn: false");
   });
 
   it("is linked from How it works and from every How to host line", () => {

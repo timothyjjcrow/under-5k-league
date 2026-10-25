@@ -8,7 +8,7 @@ import {
   type FixtureKickoff,
 } from "@/lib/match-night";
 import { matchNightPollOpen } from "@/lib/match-night-poll-service";
-import { leagueRules } from "@/lib/league-rules";
+import { leagueRules, rulesSeasonFormat } from "@/lib/league-rules";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   Badge,
@@ -37,19 +37,19 @@ export default async function RulesPage() {
   // The match night and the playoff field are the ACTIVE season's: between
   // seasons the next season's are not known yet. While a match-night poll
   // is choosing the night, it says so, as Home does (pollDecidesMatchNight).
-  const [fixtures, teamFlags, pollOpen]: [
-    FixtureKickoff[],
-    { withdrawn: boolean }[] | null,
+  const [fixtures, teams, pollOpen]: [
+    (FixtureKickoff & { phase: string })[],
+    { withdrawn: boolean; groupKey: string | null }[] | null,
     boolean,
   ] = active
     ? await Promise.all([
         prisma.match.findMany({
           where: { seasonId: active.id, scheduledAt: { not: null } },
-          select: { scheduledAt: true, status: true },
+          select: { scheduledAt: true, status: true, phase: true },
         }),
         prisma.team.findMany({
           where: { seasonId: active.id },
-          select: { withdrawn: true },
+          select: { withdrawn: true, groupKey: true },
         }),
         pollCanDecideMatchNight(active) ? matchNightPollOpen() : false,
       ])
@@ -59,8 +59,10 @@ export default async function RulesPage() {
     matchNight: announcedMatchNight(active, fixtures),
     matchNightPoll: pollDecidesMatchNight(active, fixtures, pollOpen),
     // The playoff field counts teams still in; the format counts them all.
-    teamCount: teamFlags ? teamFlags.filter((team) => !team.withdrawn).length : null,
-    formatTeamCount: teamFlags ? teamFlags.length : null,
+    // Generation times every fixture, so the timed ones say whether the
+    // schedule exists.
+    teamCount: teams ? teams.filter((team) => !team.withdrawn).length : null,
+    format: teams ? rulesSeasonFormat(teams, fixtures) : null,
   });
 
   return (

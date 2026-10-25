@@ -57,9 +57,9 @@ import {
   SEASON_GROUP_KEYS,
   drawGroups,
   formatName,
+  plannedSeasonFormat,
   regularSeasonFixtures,
   rosterAverageMmr,
-  seasonFormat,
   seasonPlan,
   type SeasonFormat,
 } from "@/lib/season-format";
@@ -242,7 +242,7 @@ type GroupPlan =
 
 /**
  * Replace the season's regular-season fixtures with the team count's format
- * (`seasonFormat`): one table, or two groups. The groups are the ones the
+ * (`plannedSeasonFormat`): one table, or two groups. The groups are the ones the
  * teams already carry when they still fit the format (`AUTO`), else a fresh
  * draw by roster MMR (`AUTO` with none that fit, or `DRAW`), or the current
  * groups with two teams swapped (`SWAP`). `firstNight` null keeps the
@@ -346,7 +346,7 @@ async function replaceRegularSchedule(input: {
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
         }
-        const format = seasonFormat(teams.length);
+        const format = plannedSeasonFormat(teams.length);
         if (!format) throw new ScheduleNeedsTeamsError();
         const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
         if (!firstNight || firstNight.getTime() < Date.now()) {
