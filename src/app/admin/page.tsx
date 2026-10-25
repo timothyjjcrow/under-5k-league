@@ -663,7 +663,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               </AdminAnchor>
               {cards?.standins ? (
                 <AdminAnchor id="adm-standins">
-                  <StandinControls season={season} data={data} />
+                  <StandinControls
+                    season={season}
+                    data={data}
+                    viewerId={user.id}
+                  />
                 </AdminAnchor>
               ) : null}
               {setupControls}
@@ -726,7 +730,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </AdminAnchor>
           {cards?.standins ? (
             <AdminAnchor id="adm-standins">
-              <StandinControls season={season} data={data} />
+              <StandinControls
+                season={season}
+                data={data}
+                viewerId={user.id}
+              />
             </AdminAnchor>
           ) : null}
           {setupFirst ? null : reachCard}
@@ -4748,9 +4756,12 @@ function PlayoffControls({
 function StandinControls({
   season,
   data,
+  viewerId,
 }: {
   season: Season;
   data: AdminData;
+  /** The admin viewing the page: no "agree" on their own side's request. */
+  viewerId: string;
 }) {
   const upcoming = data.matches.filter((m) => m.status !== "COMPLETED");
   const teamName = new Map(data.teams.map((t) => [t.id, t.name]));
@@ -4863,6 +4874,7 @@ function StandinControls({
       teamName={teamName}
       teamSize={season.teamSize}
       assignOpen={assignOpen}
+      viewerId={viewerId}
       label={matchLabel(m)}
     />
   );

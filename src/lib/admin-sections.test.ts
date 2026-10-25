@@ -3,6 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { REPO_ROOT } from "../../test/support/source-files";
 import {
+  adminMayAgreeToRequest,
   adminSeasonCards,
   coverProblemMatchIds,
   matchCoverIssues,
@@ -183,8 +184,10 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
       matchId: "m1",
       teamId: "a",
       replacingUserId: "a1",
+      requestedById: "capA",
       standin: { name: "Sub Sam" },
     };
+    const always = () => true;
 
     it("points a seat with a waiting request at the other captain's answer", () => {
       const { uncovered } = matchCoverIssues(m, teams, [], out);
@@ -195,7 +198,7 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
           uncovered,
           requests: [asked],
           teamName,
-          agreeOpen: true,
+          canAgree: always,
         }),
       ).toEqual({
         needCover: [out[1]],
@@ -218,6 +221,22 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
       ]).toEqual(["m1"]);
     });
 
+    // The block's own answer for each row, so the banner names exactly the
+    // controls the row renders.
+    const captains = new Map([
+      ["a", "capA"],
+      ["b", "capB"],
+    ]);
+    const asViewer =
+      (viewerId: string | undefined, agreeOpen = true) =>
+      (r: typeof asked) =>
+        adminMayAgreeToRequest({
+          agreeOpen,
+          viewerId,
+          request: r,
+          askingCaptainId: captains.get(r.teamId),
+        });
+
     it("names only the controls that show once booking has closed", () => {
       expect(
         uncoveredByRequest({
@@ -225,11 +244,38 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
           uncovered: [out[1]],
           requests: [{ ...asked, teamId: "b", replacingUserId: "b1" }],
           teamName,
-          agreeOpen: false,
+          canAgree: asViewer("someAdmin", false),
         }).waiting.map((w) => w.note),
       ).toEqual([
         "waiting on the Alpha captain's OK for Sub Sam (decline or withdraw below)",
       ]);
+    });
+
+    it("never names agree to an admin on the asking side, request by request", () => {
+      const fromBravo = {
+        ...asked,
+        teamId: "b",
+        replacingUserId: "b1",
+        requestedById: "capB",
+      };
+      const notes = (viewerId: string | undefined) =>
+        uncoveredByRequest({
+          match: m,
+          uncovered: out,
+          requests: [asked, fromBravo],
+          teamName,
+          canAgree: asViewer(viewerId),
+        }).waiting.map((w) => w.note);
+      const agree = (other: string) =>
+        `waiting on the ${other} captain's OK for Sub Sam (agree, decline or withdraw below)`;
+      const noAgree = (other: string) =>
+        `waiting on the ${other} captain's OK for Sub Sam (decline or withdraw below)`;
+      // Alpha's captain, an admin: not their own request, but Bravo's.
+      expect(notes("capA")).toEqual([noAgree("Bravo"), agree("Alpha")]);
+      expect(notes("capB")).toEqual([agree("Bravo"), noAgree("Alpha")]);
+      // An admin on neither team, and a caller that names no viewer.
+      expect(notes("someAdmin")).toEqual([agree("Bravo"), agree("Alpha")]);
+      expect(notes(undefined)).toEqual([agree("Bravo"), agree("Alpha")]);
     });
 
     it("ignores an empty-seat request and one for another match", () => {
@@ -241,7 +287,7 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
           { ...asked, matchId: "m2" },
         ],
         teamName,
-        agreeOpen: true,
+        canAgree: always,
       });
       expect(split).toEqual({ needCover: [out[0]], waiting: [] });
     });
@@ -254,7 +300,7 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
         "utf8",
       );
       expect(block).toContain("uncoveredByRequest({");
-      expect(block).toContain("agreeOpen: assignOpen");
+      expect(block).toContain("canAgree: mayAgree");
       for (const action of [
         "approveStandinRequestAsAdmin",
         "declineStandinRequestAsAdmin",
@@ -266,6 +312,97 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
         expect(block).toMatch(new RegExp(`>\\s*${label}\\s*</SubmitButton>`));
       }
     });
+  });
+});
+
+// approveStandinRequest refuses an admin who captains the asking team or
+// filed the request ("You captain <team>, the team asking — …"), so the
+// admin standin block hides "agree" for them; decline and withdraw stay.
+describe("adminMayAgreeToRequest", () => {
+  const request = { requestedById: "filer" };
+  const may = (
+    viewerId: string | undefined,
+    askingCaptainId: string | undefined = "askingCap",
+    agreeOpen = true,
+  ) => adminMayAgreeToRequest({ agreeOpen, viewerId, request, askingCaptainId });
+
+  it("offers agree to an admin on neither side, and to the other captain", () => {
+    expect(may("someAdmin")).toBe(true);
+    expect(may("otherCap")).toBe(true);
+  });
+
+  it("hides it from the admin who filed the request", () => {
+    expect(may("filer")).toBe(false);
+    // Even once the captaincy has moved on and they no longer captain it.
+    expect(may("filer", "newCap")).toBe(false);
+  });
+
+  it("hides it from the admin who captains the asking team now", () => {
+    // A captaincy handed over since the ask: the service judges today's.
+    expect(may("askingCap")).toBe(false);
+  });
+
+  it("hides it from everyone once booking has closed", () => {
+    for (const viewer of ["someAdmin", "otherCap", "filer", undefined]) {
+      expect(may(viewer, "askingCap", false)).toBe(false);
+    }
+  });
+
+  it("leaves what it can't judge to the booking gate", () => {
+    // No viewer named: the block as it rendered before the prop existed.
+    expect(may(undefined)).toBe(true);
+    // An asking captain the page didn't load: only the filer is known.
+    expect(may("someAdmin", undefined)).toBe(true);
+    expect(may("filer", undefined)).toBe(false);
+  });
+
+  // The block is a server component: pin that its row and its banner both
+  // ask this one predicate, that only "agree" hides on it, and that both
+  // pages hand it the viewer and each team's captain.
+  it("is what the admin standin block and both its pages use", () => {
+    const tools = readFileSync(
+      path.join(REPO_ROOT, "src/components/admin-match-tools.tsx"),
+      "utf8",
+    );
+    const block = tools.slice(
+      tools.indexOf("export function StandinMatchBlock("),
+      tools.indexOf("export async function AdminMatchTools("),
+    );
+    expect(block).toMatch(
+      /const mayAgree = \(r: StandinRequestView\) =>\s*adminMayAgreeToRequest\(\{\s*agreeOpen: assignOpen,\s*viewerId,\s*request: r,\s*askingCaptainId: teams\.find\(\(t\) => t\.id === r\.teamId\)\?\.captainId,\s*\}\);/,
+    );
+    expect(block).toContain("canAgree: mayAgree");
+    // "agree" alone sits behind it; decline and withdraw follow its `: null`.
+    expect(block).toMatch(
+      /\{mayAgree\(r\) \? \(\s*<ActionForm\s+action=\{approveStandinRequestAsAdmin\}[\s\S]*?<\/ActionForm>\s*\) : null\}\s*<ActionForm\s+action=\{declineStandinRequestAsAdmin\}/,
+    );
+    expect(block.match(/mayAgree\(r\)/g)).toHaveLength(1);
+    expect(block).not.toMatch(/\{assignOpen \? \(\s*<ActionForm\s+action=\{approveStandinRequestAsAdmin\}/);
+    // The match page's Admin tools: the viewer through, captains loaded.
+    const adminTools = tools.slice(
+      tools.indexOf("export async function AdminMatchTools("),
+    );
+    expect(adminTools).toMatch(/<StandinMatchBlock[\s\S]*?viewerId=\{viewerId\}/);
+    expect(adminTools).toMatch(
+      /prisma\.team\.findMany\(\{[\s\S]*?select: \{\s*id: true,\s*name: true,\s*captainId: true,/,
+    );
+    const matchPage = readFileSync(
+      path.join(REPO_ROOT, "src/app/matches/[id]/page.tsx"),
+      "utf8",
+    );
+    expect(matchPage).toMatch(/<AdminMatchTools[^>]*?viewerId=\{viewer\.id\}/);
+    // /admin: every Standins card gets the signed-in admin, and its teams
+    // are whole Team rows (captainId included).
+    const admin = readFileSync(
+      path.join(REPO_ROOT, "src/app/admin/page.tsx"),
+      "utf8",
+    );
+    const cards = admin.match(/<StandinControls\b[^>]*>/g) ?? [];
+    expect(cards.length).toBeGreaterThan(0);
+    for (const card of cards) expect(card).toContain("viewerId={user.id}");
+    const controls = admin.slice(admin.indexOf("function StandinControls("));
+    expect(controls).toMatch(/<StandinMatchBlock[\s\S]*?viewerId=\{viewerId\}/);
+    expect(controls).toContain("teams={data.teams}");
   });
 });
 

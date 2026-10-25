@@ -63,6 +63,7 @@ describe("security and league configuration audit trail", () => {
     "assignStandin",
     "approveStandinRequestAsAdmin",
     "declineStandinRequestAsAdmin",
+    "withdrawStandinRequestAsAdmin",
     "removeStandin",
     "setMatchTime",
     "importGameAction",

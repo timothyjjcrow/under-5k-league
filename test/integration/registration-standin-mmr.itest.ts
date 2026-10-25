@@ -534,8 +534,9 @@ describe("a standin who leaves takes their PENDING requests with them", () => {
     );
 
     expect(res?.error).toBeUndefined();
+    // The undo hint beside it must not promise the requests back.
     expect(res?.message).toMatch(
-      / · 2 pending standin requests for them were cancelled$/,
+      /; use Reinstate to undo · 2 pending standin requests for them were cancelled \(Reinstate doesn't bring requests back\)$/,
     );
     expect((await regFor(fx.season.id, fx.sub.user.id)).status).toBe(
       "REMOVED",
