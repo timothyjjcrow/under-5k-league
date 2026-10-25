@@ -108,11 +108,14 @@ export type LowerOutPlayer = { userId: string; name: string; mmr: number };
 /**
  * A NAMED cover's baseline: the covered player's signup MMR, or lower when a
  * teammate who said they can't make this match (OUT for its current kickoff)
- * has a lower known MMR and no cover yet, booked or asked for. Otherwise a
- * captain could name their strongest player as "covered" while the standin
- * really takes the weakest absentee's seat. `lowerOut` is that teammate, so
- * the copy can say whose MMR it was judged against; null when the named
- * player's own MMR is the baseline (a tie included).
+ * has a lower known MMR and no booking covering them yet. Otherwise a captain
+ * could name their strongest player as "covered" while the standin really
+ * takes the weakest absentee's seat. A request waiting for the other captain
+ * is not cover and doesn't count: asking for anyone for the absentee, booking
+ * against the stronger MMR and withdrawing the ask would dodge the rule.
+ * `lowerOut` is that teammate, so the copy can say whose MMR it was judged
+ * against; null when the named player's own MMR is the baseline (a tie
+ * included).
  *
  * Unknown (0) MMRs never lower it, and an unknown named player stays unknown:
  * the other captain decides, as `standinNeedsApproval` says. The empty-seat
@@ -124,7 +127,7 @@ export function namedCoverBaseline(opts: {
   teammates: readonly { userId: string; name: string; mmr: number }[];
   /** Who checked in OUT for this match's current scheduleRevision. */
   outUserIds: ReadonlySet<string>;
-  /** Players in this match with a booking or a waiting request covering them. */
+  /** Players in this match with a BOOKING covering them (never a request). */
   coveredUserIds: ReadonlySet<string>;
 }): { baselineMmr: number | null; lowerOut: LowerOutPlayer | null } {
   const own = coverBaselineMmr({ replacedMmr: opts.replaced.mmr });
@@ -205,25 +208,27 @@ export function standinApprovalReason(opts: {
  * own advice is for whoever books, so only its reason is kept ("X is already
  * covered by Y — remove that assignment first" → "X is already covered by
  * Y"), and the approver is told what they can still do: decline it.
+ *
+ * The reason keeps its own case: it may open with a name ("The Rock is
+ * already covering…"), and no rule can tell a name from a sentence's first
+ * word.
  */
 export function agreeTooLateError(reason: string, teamName: string): string {
-  let clause = reason.split(" — ")[0].replace(/\.$/, "");
-  // A sentence's capital reads wrong after the colon; a name keeps its own.
-  if (/^(That|This|The|No|Unknown|Replaced|Standins)\b/.test(clause)) {
-    clause = clause[0].toLowerCase() + clause.slice(1);
-  }
+  const clause = reason.split(" — ")[0].replace(/\.$/, "");
   return `This can't be agreed to any more: ${clause} — decline it so ${teamName} can line up someone else`;
 }
 
 /**
- * The other captain already declined this standin for this team in this
- * match: a captain can't ask for them again (an admin can still book them).
+ * This standin was already declined for this team in this match: the team's
+ * captain can't book or ask for them again there (an admin can still book
+ * them from the panel). It names nobody as the decider, since an admin may
+ * have declined in the other captain's place.
  */
 export function standinDeclinedError(
-  otherTeamName: string,
   standinName: string,
+  teamName: string,
 ): string {
-  return `The ${otherTeamName} captain already declined ${standinName} for this match — pick someone else, or ask an admin`;
+  return `${standinName} was already declined for ${teamName} in this match — pick someone else, or ask an admin`;
 }
 
 /** "3,100 MMR", or "MMR unknown" for a 0. A fixed locale: see CLAUDE.md. */
@@ -243,8 +248,8 @@ export type StandinBooking = StandinSlot & {
   pending?: boolean;
   /**
    * A request for the picker's own team that the other team's captain
-   * declined (their team's name): not a booking, but the captain can't ask
-   * for this standin again in this match.
+   * declined (their team's name): not a booking, but the captain can't book
+   * or ask for this standin again in this match.
    */
   declinedBy?: string;
 };
@@ -255,12 +260,13 @@ export type StandinBooking = StandinSlot & {
  * It mirrors the refusals assignStandinGuarded gives most often, so the
  * picker stops offering a choice that can only come back as a toast: the
  * standin already has a booking or a request waiting for the other captain
- * anywhere in THIS match, the other captain declined them for this team in
- * this match (the captain's card can only ask again), or covers another
- * unplayed fixture the same night (`standinConflict`, with the same target
- * the server uses). `bookings` are the season's unplayed-fixture bookings,
- * this match's included, plus this match's pending requests and the
- * captain's own declined ones. The server still checks all of it at submit.
+ * anywhere in THIS match, they were declined for this team in this match
+ * (the captain's card refuses them for every seat, booked or asked for,
+ * whatever their MMR), or covers another unplayed fixture the same night
+ * (`standinConflict`, with the same target the server uses). `bookings` are
+ * the season's unplayed-fixture bookings, this match's included, plus this
+ * match's pending requests and the captain's own declined ones. The server
+ * still checks all of it at submit.
  */
 export function standinPickerBlock(
   standinUserId: string,

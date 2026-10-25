@@ -68,12 +68,28 @@ describe("match page standins card", () => {
       /blocked: standinPickerBlock\(r\.userId, pickerTarget, \[\s*\.\.\.bookingRows,\s*\.\.\.requestRows,\s*\]\)/,
     );
     expect(PAGE).toMatch(/const requestRows = requests\.map\(/);
-    // …and a standin the other captain declined for this team here: the
-    // server refuses asking for them again.
+    // …and a standin declined for this team here: the server refuses
+    // booking or asking for them again.
     expect(PAGE).toContain("loadDeclinedStandinIds(match, myTeamId)");
     expect(PAGE).toMatch(/\}\)\)\.concat\(declinedRows\);/);
     expect(PAGE).toMatch(
       /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
+    );
+  });
+
+  // A request is not cover: "counts as N MMR" takes a lower absentee out of
+  // the baseline only once a booking covers them, as coverBaseline does on
+  // the server. A waiting request still takes them off the Covers list.
+  it("judges 'counts as' by bookings only, never a waiting request", () => {
+    const card = CARD("standins.tsx");
+    expect(card).toMatch(
+      /const bookedIds = new Set\(\s*assignments\.flatMap\(\(a\) => \(a\.replaced \? \[a\.replaced\.id\] : \[\]\)\),\s*\);/,
+    );
+    expect(card).toMatch(
+      /namedCoverBaseline\(\{\s*replaced: [^\n]*\n\s*teammates,\s*outUserIds: outIds,\s*coveredUserIds: bookedIds,\s*\}\)/,
+    );
+    expect(card).toMatch(
+      /const coveredIds = new Set\(\[\s*\.\.\.bookedIds,\s*\.\.\.requests\.flatMap/,
     );
   });
 

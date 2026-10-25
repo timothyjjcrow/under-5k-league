@@ -527,31 +527,37 @@ async function judgeCover(
   };
 }
 
+// "Withdrawn", not "cancelled": Withdraw is the asking captain's button.
 const STANDIN_ASKED_ERROR =
-  "That standin is already waiting for the other captain's OK in this match — that request has to be answered or cancelled first";
+  "That standin is already waiting for the other captain's OK in this match — that request has to be answered or withdrawn first";
 
 function seatAskedError(replacedName: string | null, standinName: string) {
-  return `${replacedName}'s seat is waiting for the other captain's OK on ${standinName} — that request has to be answered or cancelled first`;
+  return `${replacedName}'s seat is waiting for the other captain's OK on ${standinName} — that request has to be answered or withdrawn first`;
 }
 
 function openSeatAskedError(teamName: string) {
-  return `${teamName}'s open seat is waiting for the other captain's OK on a standin — that request has to be answered or cancelled first`;
+  return `${teamName}'s open seat is waiting for the other captain's OK on a standin — that request has to be answered or withdrawn first`;
 }
 
 /**
  * Re-assert, INSIDE the caller's Serializable transaction, everything
  * judgeCover checked that a rival could change. Throws StandinRaceError,
  * never returns a refusal: past a write the callback resolving would commit.
+ *
+ * `refuseDeclined` is the captain's path (`overLimit: "ask"`, a booking or a
+ * request alike): a standin already DECLINED for this team in this match is
+ * refused, whatever their MMR, so a no stands for the match as the picker
+ * shows it. The admin panel's "book" and agreeing to a request leave it off.
  */
 async function recheckCover(
   tx: Prisma.TransactionClient,
   target: CoverTarget,
   cover: JudgedCover,
-  excludeRequestId?: string,
+  opts: { excludeRequestId?: string; refuseDeclined?: boolean } = {},
 ): Promise<void> {
   const { matchId, standinUserId, replacingUserId } = target;
-  const { season, match, coverTeamId, coverTeamName, replacedName } = cover;
-  const notThis = otherThan(excludeRequestId);
+  const { season, coverTeamId, coverTeamName, replacedName } = cover;
+  const notThis = otherThan(opts.excludeRequestId);
   // EVERY precondition is re-read in here, not just the registration.
   // Two reasons, both load-bearing:
   //
@@ -568,6 +574,7 @@ async function recheckCover(
   // pair with no cycle to detect, so both could commit and a rostered
   // player could hold live cover.
   const [
+    freshMatch,
     fresh,
     rostered,
     replacedSeat,
@@ -575,7 +582,20 @@ async function recheckCover(
     standinAsked,
     seatTaken,
     otherNights,
+    declined,
   ] = await Promise.all([
+    // The MATCH itself, re-read for the same two reasons: a forfeit ruling
+    // or a manual score can complete it, and a retime can move it, between
+    // judgeCover's read and this transaction. Judged on the stale row, a
+    // booking or a request lands on a decided fixture, and the same-night
+    // clash below is measured against a kickoff nobody plays. A no-game
+    // forfeit (recordResult, withdrawTeam) reads this match's bookings and
+    // requests while it writes the Match, so this read is also what closes
+    // that SSI cycle.
+    tx.match.findUnique({
+      where: { id: matchId },
+      select: { status: true, scheduledAt: true, week: true },
+    }),
     tx.registration.findUnique({
       where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
       select: { status: true },
@@ -676,7 +696,27 @@ async function recheckCover(
     // the same standin on two fixtures the same night would each see a
     // clear field outside the transaction.
     findClashingCover(tx, { matchId, standinUserId, seasonId: season.id }),
+    // A no stands for the match: read here, in the read set, so a decline
+    // racing this booking is either seen or still PENDING, which the
+    // `standinAsked` read refuses.
+    opts.refuseDeclined
+      ? tx.standinRequest.findFirst({
+          where: {
+            matchId,
+            teamId: coverTeamId,
+            standinUserId,
+            status: STANDIN_REQUEST_STATUS.DECLINED,
+          },
+          select: { id: true },
+        })
+      : Promise.resolve(null),
   ]);
+  if (!freshMatch)
+    throw new CoverRecheckError(
+      "This match was just taken off the schedule — reload",
+    );
+  if (freshMatch.status === MATCH_STATUS.COMPLETED)
+    throw new CoverRecheckError("This match is already played");
   if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
     throw new CoverRecheckError("That standin has no active signup this season");
   if (rostered)
@@ -693,16 +733,26 @@ async function recheckCover(
     );
   if (standinAsked) throw new CoverRecheckError(STANDIN_ASKED_ERROR);
   if (seatTaken) throw new CoverRecheckError(seatTaken);
-  const clash = otherNights.find((o) => standinConflict(match, o.match));
+  // The fresh kickoff, never judgeCover's: a retime since moved the night.
+  const clash = otherNights.find((o) => standinConflict(freshMatch, o.match));
   if (clash)
     throw new CoverRecheckError(clashError(cover.standinUser?.name, clash));
+  if (declined)
+    throw new CoverRecheckError(
+      standinDeclinedError(cover.standinUser?.name ?? "That standin", coverTeamName),
+    );
 }
 
 /**
  * The MMR the standin rule measures this cover against. Named cover: the
  * covered player's, or a lower teammate's who checked in OUT for this kickoff
- * and has no cover booked or asked for (`namedCoverBaseline`, which says
- * who). An empty seat: the lowest on the team (`coverBaselineMmr`).
+ * and has no cover BOOKED (`namedCoverBaseline`, which says who). An empty
+ * seat: the lowest on the team (`coverBaselineMmr`).
+ *
+ * A request waiting for the other captain is not cover, so it doesn't take
+ * its teammate out of the baseline: otherwise a captain asks for anyone for
+ * the low absentee, books a standin for a stronger teammate against the
+ * stronger MMR, and withdraws the ask.
  */
 async function coverBaseline(
   target: CoverTarget,
@@ -715,7 +765,7 @@ async function coverBaseline(
       select: { userId: true, user: { select: { name: true } } },
     });
     const ids = teammates.map((m) => m.userId);
-    const [out, regs, booked, asked] = await Promise.all([
+    const [out, regs, booked] = await Promise.all([
       // This kickoff's answers only: a retime bumps scheduleRevision, and an
       // older answer was for a night nobody is playing.
       prisma.matchAvailability.findMany({
@@ -731,16 +781,9 @@ async function coverBaseline(
         where: { seasonId: cover.season.id, userId: { in: ids } },
         select: { userId: true, mmr: true },
       }),
+      // Bookings only: a PENDING request is not cover.
       prisma.standinAssignment.findMany({
         where: { matchId: target.matchId, replacingUserId: { in: ids } },
-        select: { replacingUserId: true },
-      }),
-      prisma.standinRequest.findMany({
-        where: {
-          matchId: target.matchId,
-          replacingUserId: { in: ids },
-          status: STANDIN_REQUEST_STATUS.PENDING,
-        },
         select: { replacingUserId: true },
       }),
     ]);
@@ -754,7 +797,7 @@ async function coverBaseline(
       })),
       outUserIds: new Set(out.map((row) => row.userId)),
       coveredUserIds: new Set(
-        [...booked, ...asked].flatMap((row) =>
+        booked.flatMap((row) =>
           row.replacingUserId ? [row.replacingUserId] : [],
         ),
       ),
@@ -863,6 +906,9 @@ export async function assignStandinGuarded(opts: {
   const { baselineMmr, lowerOut } = await coverBaseline(target, cover);
   const overRule = standinNeedsApproval(cover.standinMmr, baselineMmr);
   const overLimit = opts.overLimit ?? (actingCaptainId ? "ask" : "book");
+  // Test seam: the read-time checks above and the transaction below (a
+  // ruling, a score or a retime landing on the match in between).
+  await raceHook("standin.assign.afterJudge");
   if (overRule && overLimit === "ask") {
     const requestedById = opts.actingUserId ?? actingCaptainId;
     if (!requestedById) return { ok: false, error: "Sign in required" };
@@ -886,7 +932,11 @@ export async function assignStandinGuarded(opts: {
   try {
     await prisma.$transaction(
       async (tx) => {
-        await recheckCover(tx, target, cover);
+        // The captain's card refuses a declined standin even within the
+        // allowance, as its picker does; the admin panel's "book" doesn't.
+        await recheckCover(tx, target, cover, {
+          refuseDeclined: overLimit === "ask",
+        });
         await tx.standinAssignment.create({
           data: {
             matchId,
@@ -968,11 +1018,11 @@ export async function assignStandinGuarded(opts: {
  * the same Serializable shape, so a request is only ever filed for a seat
  * that could be booked, and two clicks can't file two.
  *
- * A standin the other captain already declined for this team in this match
- * can't be asked for again (an admin's booking from the panel still can):
- * otherwise a no is only a pause before the same ping. Checked in the
- * transaction, the one place it is enforced; a decline racing the ask is
- * either seen here or is still PENDING, which `recheckCover` refuses.
+ * A standin already declined for this team in this match can't be asked for
+ * again (an admin's booking from the panel still can): otherwise a no is only
+ * a pause before the same ping. `recheckCover`'s `refuseDeclined` checks it
+ * in the transaction, the one place it is enforced, as it does for a
+ * captain's booking within the allowance.
  */
 async function requestStandinApproval(
   target: CoverTarget,
@@ -989,21 +1039,7 @@ async function requestStandinApproval(
   try {
     await prisma.$transaction(
       async (tx) => {
-        await recheckCover(tx, target, cover);
-        const declined = await tx.standinRequest.findFirst({
-          where: {
-            matchId: target.matchId,
-            teamId: cover.coverTeamId,
-            standinUserId: target.standinUserId,
-            status: STANDIN_REQUEST_STATUS.DECLINED,
-          },
-          select: { id: true },
-        });
-        if (declined) {
-          throw new StandinRaceError(
-            standinDeclinedError(other.name, standinUser?.name ?? "that standin"),
-          );
-        }
+        await recheckCover(tx, target, cover, { refuseDeclined: true });
         await tx.standinRequest.create({
           data: {
             matchId: target.matchId,
@@ -1096,7 +1132,9 @@ function requestClosedError(status: string): string {
     ? "That request was already agreed to — the standin is booked"
     : status === STANDIN_REQUEST_STATUS.DECLINED
       ? "That request was already declined"
-      : "That request was withdrawn";
+      : // CANCELLED: the asking captain withdrew it, or the league closed it
+        // (a release, a signing, a forfeit, a Reopen, a standin leaving).
+        "That request was withdrawn or closed";
 }
 
 const REQUEST_JUST_ANSWERED =
@@ -1207,7 +1245,7 @@ export async function approveStandinRequest(
           },
         });
         if (claimed.count === 0) throw new StandinRaceError(REQUEST_JUST_ANSWERED);
-        await recheckCover(tx, target, cover, request.id);
+        await recheckCover(tx, target, cover, { excludeRequestId: request.id });
         await tx.standinAssignment.create({
           data: {
             matchId: request.matchId,
@@ -1462,9 +1500,11 @@ export type CancelledStandinRequest = {
  * Close the PENDING standin requests a roster or schedule change has made
  * impossible to agree to, inside the caller's Serializable transaction, after
  * the change itself. A request is not cover, so nothing else needs undoing.
- * It reads the rows, then claims exactly those, still PENDING; the read and
- * the claim share the transaction's snapshot, so a short count means a rival
- * answered in between, and it throws (past the caller's first write).
+ * It reads the rows, then claims exactly those, still PENDING. Under
+ * SERIALIZABLE a rival that answers one of them in between aborts this
+ * transaction with P2034 before the claim's count can come up short, so the
+ * count check is defense in depth: a short count still throws (past the
+ * caller's first write), never commits half the closes.
  * `standinRequestCancellations` builds the posts for after the commit.
  */
 export async function cancelPendingStandinRequests(

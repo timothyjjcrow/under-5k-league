@@ -70,7 +70,11 @@ export const STANDIN_REQUEST_STATUS = {
   APPROVED: "APPROVED",
   /** The other captain (or an admin) said no. */
   DECLINED: "DECLINED",
-  /** The asking captain withdrew it. */
+  /**
+   * Withdrawn by the asking captain (or an admin), or closed by the league
+   * once nobody could agree to it: a release, a signing, a standin leaving,
+   * a forfeit ruling or a Reopen (`cancelPendingStandinRequests`).
+   */
   CANCELLED: "CANCELLED",
 } as const;
 

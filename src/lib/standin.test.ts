@@ -154,7 +154,8 @@ describe("namedCoverBaseline", () => {
       baselineMmr: 2000,
       lowerOut: { userId: "low", name: "Low", mmr: 2000 },
     });
-    // Covered (booked or asked for) players are already accounted for.
+    // Booked players are already accounted for (the caller passes bookings
+    // only: a request is not cover).
     expect(judge({ userId: "high", mmr: 3200 }, ["mid", "low"], ["low"])).toEqual({
       baselineMmr: 2600,
       lowerOut: { userId: "mid", name: "Mid", mmr: 2600 },
@@ -351,7 +352,7 @@ describe("agreeTooLateError", () => {
   // decline instead.
   it("keeps the reason, drops the booker's advice, and says to decline", () => {
     expect(agreeTooLateError("This match is already played", "Radiant")).toBe(
-      "This can't be agreed to any more: this match is already played — decline it so Radiant can line up someone else",
+      "This can't be agreed to any more: This match is already played — decline it so Radiant can line up someone else",
     );
     expect(
       agreeTooLateError(
@@ -364,13 +365,30 @@ describe("agreeTooLateError", () => {
     expect(
       agreeTooLateError("That standin has no active signup this season", "Radiant"),
     ).toBe(
-      "This can't be agreed to any more: that standin has no active signup this season — decline it so Radiant can line up someone else",
+      "This can't be agreed to any more: That standin has no active signup this season — decline it so Radiant can line up someone else",
     );
   });
 
+  // A reason can open with a standin's name, and a name keeps its case:
+  // "The Rock" is not "the Rock".
+  it("never changes the reason's case", () => {
+    expect(
+      agreeTooLateError(
+        "The Rock is already covering A vs B that night — they can't play both. Remove that assignment first.",
+        "Radiant",
+      ),
+    ).toBe(
+      "This can't be agreed to any more: The Rock is already covering A vs B that night — decline it so Radiant can line up someone else",
+    );
+    expect(agreeTooLateError("That match was moved.", "Radiant")).toBe(
+      "This can't be agreed to any more: That match was moved — decline it so Radiant can line up someone else",
+    );
+  });
+
+  // Not attributed to the other captain: an admin may have declined.
   it("words the declined refusal for the asking captain", () => {
-    expect(standinDeclinedError("Dire", "Sub Sam")).toBe(
-      "The Dire captain already declined Sub Sam for this match — pick someone else, or ask an admin",
+    expect(standinDeclinedError("Sub Sam", "Radiant")).toBe(
+      "Sub Sam was already declined for Radiant in this match — pick someone else, or ask an admin",
     );
   });
 });
