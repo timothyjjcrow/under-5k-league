@@ -59,9 +59,11 @@ export async function resetTiebreakerWeek(_prev: ActionResult, form: FormData): 
         failedStandDownNotices += 1;
       }
     }
+    // Waiting standin requests went with the slate; they post nothing.
+    const requestsNote = result.standinRequests ? `${result.standinRequests} standin request(s) cancelled` : "";
     await logAdminAction({ action: "resetTiebreakerWeek", seasonId,
-      summary: `Reset ${result.matchCount} tiebreaker series; archived ${result.removedGameCount} game IDs; removed ${result.checkins} check-ins, ${result.standins} standins, ${result.predictions} picks and ${result.reschedules} reschedule requests${failedStandDownNotices ? `; ${failedStandDownNotices} Discord stand-down notification(s) failed` : ""}` });
-    return { message: `Tiebreaker week reset.${result.removedGameCount ? ` Saved ${result.removedGameCount} imported game IDs for re-import.` : ""} Review the regular results, then schedule any ties again.${failedStandDownNotices ? ` Discord warning: ${failedStandDownNotices} standin stand-down notification(s) failed; notify the affected players manually.` : ""}` };
+      summary: `Reset ${result.matchCount} tiebreaker series; archived ${result.removedGameCount} game IDs; removed ${result.checkins} check-ins, ${result.standins} standins, ${result.predictions} picks and ${result.reschedules} reschedule requests${requestsNote ? `; ${requestsNote}` : ""}${failedStandDownNotices ? `; ${failedStandDownNotices} Discord stand-down notification(s) failed` : ""}` });
+    return { message: `Tiebreaker week reset.${result.removedGameCount ? ` Saved ${result.removedGameCount} imported game IDs for re-import.` : ""}${requestsNote ? ` ${requestsNote}.` : ""} Review the regular results, then schedule any ties again.${failedStandDownNotices ? ` Discord warning: ${failedStandDownNotices} standin stand-down notification(s) failed; notify the affected players manually.` : ""}` };
   } catch (error) {
     return { error: actionErrorMessage(error, "Couldn't reset the tiebreaker week. Reload and try again.", "tiebreakers.reset") };
   }
