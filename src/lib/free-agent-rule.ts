@@ -17,6 +17,14 @@ export const FREE_AGENT_OVER_RULE_LABEL = `Sign over the ${STANDIN_MMR_ALLOWANCE
 
 const MMR_NUMBER = new Intl.NumberFormat("en-US");
 
+/**
+ * The `RosterTenure.endReason` releasePlayer closes a seat with, the only
+ * departure a signing replaces (`admin-roster.ts`, source-guarded).
+ */
+export const RELEASE_END_REASON = "RELEASE";
+/** The `acquisitionKind` signFreeAgent opens a seat with, the only refill. */
+export const FREE_AGENT_ACQUISITION = "FREE_AGENT";
+
 /** One RosterTenure row on the team this season, as the pairing reads it. */
 export type TenureFacts = {
   id: string;
@@ -29,22 +37,30 @@ export type TenureFacts = {
    * end (null), so it can't be placed in the order and never counts.
    */
   endedAt: Date | null;
+  /** Why the seat ended (`closeRosterTenure`'s reason); null while open. */
+  endReason: string | null;
+  /** How the seat was filled: AUCTION, CAPTAIN_DESIGNATION, FREE_AGENT, … */
+  acquisitionKind: string;
   /** Their MMR when they joined; null or 0 = not recorded. */
   acquisitionMmr: number | null;
 };
 
 /**
- * The departure a signing now would refill: the newest one no later
- * acquisition has refilled yet, or null when every seat that emptied has been
- * filled again.
+ * The departure a signing now would refill: the newest release no later
+ * free-agent signing has refilled yet, or null when every released seat has
+ * been filled again.
  *
- * Seats pair last in, first out: a departure opens a seat, and each later
- * acquisition fills the newest seat still open before it. Every acquisition
- * counts, not only free-agent signings, so an auction re-sale after an undone
- * lot, or a pre-draft captain change, refills its own seat instead of
- * leaving a phantom departure behind. At the same instant a departure comes
- * first (one command freed the seat and filled it); a tenure's own start
- * always precedes its own end; ids break any other tie.
+ * Only a release (`RELEASE_END_REASON`) is a departure and only a free-agent
+ * signing (`FREE_AGENT_ACQUISITION`) a refill. Both happen only once the
+ * auction is done, so the draft's own churn never counts: an undone lot
+ * (DRAFT_UNDO), an aborted auction (DRAFT_ABORT) or a pre-draft captain change
+ * (PRE_DRAFT_*) leaves no departure, and a team short from the draft is judged
+ * by its lowest MMR, never by a player it no longer bought.
+ *
+ * Seats pair last in, first out: a release opens a seat, and each later
+ * signing fills the newest seat still open before it. At the same instant a
+ * departure comes first (one command freed the seat and filled it); a
+ * tenure's own start always precedes its own end; ids break any other tie.
  */
 export function unrefilledDeparture(
   tenures: readonly TenureFacts[],
@@ -52,8 +68,10 @@ export function unrefilledDeparture(
   type Event = { at: number; out: boolean; tenure: TenureFacts };
   const events: Event[] = [];
   for (const tenure of tenures) {
-    events.push({ at: tenure.joinedAt.getTime(), out: false, tenure });
-    if (tenure.endedAt) {
+    if (tenure.acquisitionKind === FREE_AGENT_ACQUISITION) {
+      events.push({ at: tenure.joinedAt.getTime(), out: false, tenure });
+    }
+    if (tenure.endedAt && tenure.endReason === RELEASE_END_REASON) {
       events.push({ at: tenure.endedAt.getTime(), out: true, tenure });
     }
   }

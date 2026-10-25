@@ -36,6 +36,7 @@ import {
   MATCH_STATUS,
   MATCH_PHASE,
   SCRIM_STATUS,
+  STANDIN_REQUEST_STATUS,
   HARD_MMR_CEILING,
 } from "@/lib/constants";
 import {
@@ -907,12 +908,17 @@ export async function signFreeAgent(
      *  withdrawGateError refuse-don't-auto-cancel precedent). */
     overbooked: string[];
     /** Waiting requests to book this player as someone's standin: a
-     *  rostered player can never cover, so they are off, and each asking
-     *  captain hears why after the commit. */
+     *  rostered player can never cover, so they are off. Each OTHER team's
+     *  asking captain hears why after the commit; on this team the player
+     *  now fills the seat themselves, so its captain has nothing to do. */
     standinRequests: CancelledStandinRequest[];
-    /** Waiting requests for this team's open seats, off once the last seat
-     *  fills. Nobody has to act on that, so nothing posts. */
+    /** Waiting requests for this team's open seats that no seat is left
+     *  for: all of them once the last seat fills, and on a partial refill
+     *  the newest past the seats left per match. Nobody has to act on that
+     *  (the seat filled), so nothing posts. */
     emptySeatRequests: number;
+    /** Open seats left after the signing (0 = the roster is full). */
+    openSeatsLeft: number;
   } = {
     cancelled: 0,
     kept: 0,
@@ -920,6 +926,7 @@ export async function signFreeAgent(
     overbooked: [],
     standinRequests: [],
     emptySeatRequests: 0,
+    openSeatsLeft: 0,
   };
   try {
     coverCleanup = await prisma.$transaction(
@@ -1074,6 +1081,7 @@ export async function signFreeAgent(
             overbooked: [],
             standinRequests,
             emptySeatRequests: emptySeatRequests.length,
+            openSeatsLeft: 0,
           };
         }
         // PARTIAL refill — the team is still short, so open-seat cover stays
@@ -1120,13 +1128,51 @@ export async function signFreeAgent(
             (m) =>
               `${m.count} open-seat booking(s) on ${m.label} now exceed the team's ${newOpen} open seat(s) — remove the extra on the match page`,
           );
+        // A waiting open-seat request holds a seat too, and agreeing to one
+        // refuses once bookings plus the other waiting requests fill the open
+        // seats (judgeCover, recheckCover): past the smaller budget nobody
+        // could ever agree to it, each counting the other. Per match, the
+        // oldest requests keep the seats the bookings leave; the newer ones
+        // close here. A request is not cover, so closing one cancels no
+        // booking (those stay reported above), and the seat filled, so nobody
+        // has to act and nothing posts. The signed player's own requests were
+        // closed above, so they hold no seat here.
+        const waitingForSeats = await tx.standinRequest.findMany({
+          where: {
+            teamId,
+            replacingUserId: null,
+            status: STANDIN_REQUEST_STATUS.PENDING,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { id: true, matchId: true },
+        });
+        const seatsKept = new Map<string, number>();
+        const surplusIds: string[] = [];
+        for (const request of waitingForSeats) {
+          const allowed = newOpen - (perMatch.get(request.matchId)?.count ?? 0);
+          const kept = seatsKept.get(request.matchId) ?? 0;
+          if (kept < allowed) seatsKept.set(request.matchId, kept + 1);
+          else surplusIds.push(request.id);
+        }
+        const surplusRequests = surplusIds.length
+          ? await cancelPendingStandinRequests(
+              tx,
+              { id: { in: surplusIds } },
+              actor.id,
+            )
+          : [];
         return {
           cancelled: 0,
           kept: 0,
           standDowns: [],
           overbooked,
           standinRequests,
-          emptySeatRequests: 0,
+          emptySeatRequests: surplusRequests.length,
+          openSeatsLeft: newOpen,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1169,6 +1215,13 @@ export async function signFreeAgent(
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
   const requestsOff = coverCleanup.standinRequests.length;
+  // A request this team made for the player it just signed needs no new
+  // standin: the player fills the seat themselves. Only other teams'
+  // captains have to line up someone else.
+  const otherTeamsRequests = coverCleanup.standinRequests.filter(
+    (request) => request.teamId !== team.id,
+  );
+  const ownTeamRequests = requestsOff - otherTeamsRequests.length;
   await logAdminAction({
     action: "signFreeAgent",
     summary:
@@ -1189,10 +1242,11 @@ export async function signFreeAgent(
     // subject. The message ends by naming their next move (check in).
     mentionsOf([registration.user.discordId]),
   );
-  // Each captain who asked for this player as a standin lines up someone
-  // else; the post mentions only them. Best-effort, after the commit.
+  // Each other team's captain who asked for this player as a standin lines
+  // up someone else; the post mentions only them. Best-effort, after the
+  // commit.
   const requestPosts = await standinRequestCancellations(
-    coverCleanup.standinRequests,
+    otherTeamsRequests,
     "STANDIN_SIGNED",
   ).catch(() => []);
   for (const post of requestPosts) {
@@ -1225,11 +1279,16 @@ export async function signFreeAgent(
       ? `${coverCleanup.kept} open-seat booking(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports)`
       : null,
     ...coverCleanup.overbooked,
-    requestsOff > 0
-      ? `${requestsOff} waiting standin request(s) for ${registration.user.name} cancelled, and the asking captain(s) told`
+    otherTeamsRequests.length > 0
+      ? `${otherTeamsRequests.length} waiting standin request(s) for ${registration.user.name} cancelled, and the asking captain(s) told`
+      : null,
+    ownTeamRequests > 0
+      ? `${ownTeamRequests} waiting ${team.name} standin request(s) for ${registration.user.name} closed: they're on the roster now`
       : null,
     coverCleanup.emptySeatRequests > 0
-      ? `${coverCleanup.emptySeatRequests} waiting open-seat standin request(s) for ${team.name} cancelled: the roster is full`
+      ? coverCleanup.openSeatsLeft === 0
+        ? `${coverCleanup.emptySeatRequests} waiting open-seat standin request(s) for ${team.name} cancelled: the roster is full`
+        : `${coverCleanup.emptySeatRequests} newer waiting open-seat standin request(s) for ${team.name} cancelled: the ${coverCleanup.openSeatsLeft} open seat(s) left are already booked or asked for in those matches`
       : null,
   ].filter(Boolean);
   return {

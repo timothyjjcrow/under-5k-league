@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { sourceFile, stripLineComments } from "../../test/support/source-files";
 import {
+  FREE_AGENT_ACQUISITION,
   FREE_AGENT_OVER_RULE_FIELD,
   FREE_AGENT_OVER_RULE_LABEL,
+  RELEASE_END_REASON,
   freeAgentBaseline,
   freeAgentOverRule,
   freeAgentOverRuleNote,
@@ -15,11 +17,17 @@ import { STANDIN_MMR_ALLOWANCE } from "./standin";
 
 const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
 
+/**
+ * A seat on the team. By default a free-agent signing, released if it ended:
+ * the two roster moves the pairing counts. `kind` and `endReason` set the
+ * draft's own churn (an auction buy, a captain, an undone lot).
+ */
 function tenure(
   id: string,
   joined: number,
   ended: number | null,
   acquisitionMmr: number | null = null,
+  opts: { kind?: string; endReason?: string } = {},
 ): TenureFacts {
   return {
     id,
@@ -27,9 +35,18 @@ function tenure(
     name: id.toUpperCase(),
     joinedAt: at(joined),
     endedAt: ended === null ? null : at(ended),
+    endReason: ended === null ? null : (opts.endReason ?? RELEASE_END_REASON),
+    acquisitionKind: opts.kind ?? FREE_AGENT_ACQUISITION,
     acquisitionMmr,
   };
 }
+
+const bought = (
+  id: string,
+  joined: number,
+  ended: number | null,
+  endReason?: string,
+) => tenure(id, joined, ended, null, { kind: "AUCTION", endReason });
 
 describe("unrefilledDeparture", () => {
   it("is null when nobody left", () => {
@@ -62,12 +79,67 @@ describe("unrefilledDeparture", () => {
     ).toBe("b");
   });
 
-  it("refills with any acquisition, so a captain change leaves no phantom departure", () => {
-    // The outgoing captain's seat closes and the incoming one opens in one
-    // command, at the same instant: the departure goes first and is refilled.
+  it("pairs a release made and refilled in one instant: the departure goes first", () => {
     expect(
       unrefilledDeparture([tenure("old", 0, 5), tenure("new", 5, null)]),
     ).toBeNull();
+  });
+
+  it("counts no departure for an undone lot, even when nobody re-bought the seat", () => {
+    // The team bought U, the lot was undone, and U was re-sold elsewhere: the
+    // team is short from the draft, judged by its lowest MMR, not by U.
+    expect(
+      unrefilledDeparture([
+        bought("stays", 0, null),
+        bought("undone", 1, 2, "DRAFT_UNDO"),
+      ]),
+    ).toBeNull();
+    // An aborted auction's returned players are no departure either.
+    expect(
+      unrefilledDeparture([bought("returned", 0, 3, "DRAFT_ABORT")]),
+    ).toBeNull();
+  });
+
+  it("counts no departure for a pre-draft captain change", () => {
+    const captain = (id: string, joined: number, ended: number | null) =>
+      tenure(id, joined, ended, null, {
+        kind: "CAPTAIN_DESIGNATION",
+        endReason: "PRE_DRAFT_CAPTAIN_CHANGED",
+      });
+    expect(
+      unrefilledDeparture([captain("old", 0, 5), captain("new", 5, null)]),
+    ).toBeNull();
+    // Even with the incoming captain's seat out of the picture.
+    expect(unrefilledDeparture([captain("old", 0, 5)])).toBeNull();
+    expect(
+      unrefilledDeparture([
+        tenure("removed", 0, 4, null, {
+          kind: "CAPTAIN_DESIGNATION",
+          endReason: "PRE_DRAFT_TEAM_REMOVED",
+        }),
+      ]),
+    ).toBeNull();
+  });
+
+  it("refills only with a free-agent signing, never with an auction buy", () => {
+    // A bought player was released after the draft; an auction tenure that
+    // happens to sort later is not a signing and refills nothing.
+    expect(
+      unrefilledDeparture([
+        bought("released", 0, 10, RELEASE_END_REASON),
+        bought("late-row", 20, null),
+      ])?.id,
+    ).toBe("released");
+  });
+
+  it("pairs a release with the free-agent signing after it, around the draft's churn", () => {
+    const tenures = [
+      bought("undone", 0, 1, "DRAFT_UNDO"),
+      bought("bob", 2, 10, RELEASE_END_REASON),
+      bought("stays", 2, null),
+    ];
+    expect(unrefilledDeparture(tenures)?.id).toBe("bob");
+    expect(unrefilledDeparture([...tenures, tenure("signed", 20, null)])).toBeNull();
   });
 
   it("puts a tenure's own start before its own end", () => {
@@ -137,6 +209,33 @@ describe("freeAgentBaseline", () => {
     expect(
       freeAgentBaseline({ teamName: "T", tenures: [], rosterUserIds: ["z"], signupMmr }),
     ).toEqual({ kind: "lowest", teamName: "T", mmr: null });
+  });
+
+  it("is the team's lowest MMR when the only seat that ended was an undone lot", () => {
+    expect(
+      freeAgentBaseline({
+        teamName: "T",
+        tenures: [
+          { ...bought("a", 0, 1, "DRAFT_UNDO"), acquisitionMmr: 1500 },
+        ],
+        rosterUserIds: ["x", "y"],
+        signupMmr,
+      }),
+    ).toEqual({ kind: "lowest", teamName: "T", mmr: 2100 });
+  });
+});
+
+describe("the pairing reads the reasons the roster moves write", () => {
+  const roster = stripLineComments(
+    sourceFile("src/app/actions/admin-roster.ts").text,
+  );
+  it("releasePlayer closes the seat with the release reason", () => {
+    expect(roster).toContain(
+      `closeRosterTenure(tx, member, "${RELEASE_END_REASON}"`,
+    );
+  });
+  it("signFreeAgent opens the seat as a free-agent acquisition", () => {
+    expect(roster).toContain(`kind: "${FREE_AGENT_ACQUISITION}"`);
   });
 });
 
@@ -221,5 +320,10 @@ describe("the sign form renders the control the copy names", () => {
   it("labels the team options from the loaded baselines", () => {
     expect(page).toContain("freeAgentSeatLabel(baseline)");
     expect(page).toContain("loadFreeAgentBaselines(");
+  });
+  it("words each free agent's MMR like the team options, unknown as unknown", () => {
+    expect(page).toContain("{p.user.name} ({standinMmrLabel(p.mmr)})");
+    // Never the raw number: an unknown read "(0 MMR)" and 4500 lost its comma.
+    expect(page).not.toContain("({p.mmr} MMR)");
   });
 });
