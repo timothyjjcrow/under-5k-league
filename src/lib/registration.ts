@@ -1,4 +1,5 @@
 import {
+  DRAFT_STATUS,
   HARD_MMR_CEILING,
   MATCH_STATUS,
   REGISTRATION_STATUS,
@@ -87,6 +88,46 @@ export function registrationSeasonClosedError(
   return seasonStatus === SEASON_STATUS.COMPLETE
     ? "This season is complete — signups and signup edits are closed."
     : null;
+}
+
+/**
+ * Once the season's auction is done, a player's own signup MMR is fixed. It
+ * priced them in the draft, and from then on it is what the standin MMR rule
+ * measures cover by (`coverBaselineMmr`): a standin who lowered their number,
+ * or a rostered player who raised theirs, could step round the other
+ * captain's say. saveRegistration keeps the stored number on an EXISTING
+ * signup (any type or status, so withdrawing and rejoining is no way round
+ * it) and says so; a NEW signup still sets its own, and admins correct it
+ * from the admin panel. /me renders the box disabled from the same rule.
+ * Locked from DRAFT with the auction COMPLETE onward; before that (signups,
+ * draft setup) it stays editable, and a live auction is the separate
+ * PLAYER-only freeze in saveRegistration.
+ */
+export function mmrSelfEditLocked(
+  seasonStatus: string,
+  draftStatus: string | null | undefined,
+): boolean {
+  if (seasonStatus === SEASON_STATUS.DRAFT) {
+    return draftStatus === DRAFT_STATUS.COMPLETE;
+  }
+  return (
+    seasonStatus === SEASON_STATUS.REGULAR_SEASON ||
+    seasonStatus === SEASON_STATUS.PLAYOFFS ||
+    seasonStatus === SEASON_STATUS.COMPLETE
+  );
+}
+
+/** Under /me's disabled MMR box while mmrSelfEditLocked holds. */
+export const MMR_SELF_EDIT_LOCKED_HINT =
+  "Locked after the draft — ask a league admin to change it.";
+
+/** The toast's note when a locked MMR edit was kept (never a silent rewrite). */
+export function mmrLockedAfterDraftNote(storedMmr: number): string {
+  const kept =
+    storedMmr > 0
+      ? `kept ${new Intl.NumberFormat("en-US").format(storedMmr)}`
+      : "it stays unknown";
+  return ` · MMR is locked after the draft — ${kept}. Ask a league admin to change it.`;
 }
 
 /**
