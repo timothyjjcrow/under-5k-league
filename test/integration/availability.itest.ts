@@ -20,6 +20,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 
 import { setMatchTime } from "@/app/actions/admin-schedule-results";
 import { setAvailability } from "@/app/actions/availability";
+import { legacyOutPingThrottleKey } from "@/lib/availability";
 import { requireAdmin, requireUser } from "@/lib/auth";
 import { sendDiscordMessage } from "@/lib/discord";
 import { prisma } from "@/lib/prisma";
@@ -614,6 +615,68 @@ describe("setAvailability — closing the OUT loop", () => {
     expect(outs()).toHaveLength(2);
     expect(backIns()).toHaveLength(1);
     expect(mockSend).toHaveBeenCalledTimes(3);
+  });
+
+  it("a moved kickoff gets its own OUT ping inside the old one's window", async () => {
+    const { season, match, home, player } = await setupMatch();
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999003" },
+    });
+    const admin = await makeUser("Scheduler", "ADMIN");
+    vi.mocked(requireAdmin).mockResolvedValue(sessionFor(admin));
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    await setAvailability({}, rsvpForm(match, "OUT"));
+    expect(outs()).toHaveLength(1);
+
+    // The captains move the match for the player; the retime clears the OUT.
+    const later = new Date(match.scheduledAt!.getTime() + 24 * 60 * 60 * 1000);
+    const moved = await setMatchTime(
+      {},
+      form({
+        matchId: match.id,
+        expectedActiveSeasonId: season.id,
+        scheduledAt: later.toISOString(),
+        scheduledAtTs: String(later.getTime()),
+      }),
+    );
+    expect(moved?.error).toBeUndefined();
+    mockSend.mockClear();
+
+    // The new kickoff doesn't work either: the captain must hear it now,
+    // not when the old kickoff's six-hour window runs out.
+    const res = await setAvailability({}, rsvpForm({ id: match.id, scheduleRevision: 1 }, "OUT"));
+    expect(res?.error).toBeUndefined();
+    expect(outs()).toHaveLength(1);
+    expect(outs()[0]![1]).toEqual({ users: ["555666777888999003"] });
+  });
+
+  it("answers an OUT announced under the key from before it carried the revision", async () => {
+    // A release mustn't strand an OUT the captain heard before it.
+    const { match, home, player } = await setupMatch();
+    await prisma.user.update({
+      where: { id: home.captainId },
+      data: { discordId: "555666777888999004" },
+    });
+    await prisma.matchAvailability.create({
+      data: {
+        matchId: match.id,
+        userId: player.id,
+        status: "OUT",
+        scheduleRevision: match.scheduleRevision,
+      },
+    });
+    const legacy = legacyOutPingThrottleKey(match.id, player.id);
+    await prisma.setting.create({
+      data: { key: legacy, value: new Date().toISOString() },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+
+    await setAvailability({}, rsvpForm(match, "IN"));
+    expect(backIns()).toHaveLength(1);
+    expect(backIns()[0]![1]).toEqual({ users: ["555666777888999004"] });
+    expect(await prisma.setting.findUnique({ where: { key: legacy } })).toBeNull();
   });
 
   it("says nothing for an IN when no OUT was ever announced", async () => {

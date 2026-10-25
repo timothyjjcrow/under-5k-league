@@ -25,9 +25,11 @@ import { singleActiveSeason } from "./season";
 import { claimThrottle } from "./settings";
 
 // A captain's one-button "please check in" for their own team. The weekly
-// reminder already pings everyone who hasn't answered about a day ahead; this
-// is the match-night follow-up a captain chasing a missing fifth used to do by
-// copying names into Discord. It is optional and adds no step anywhere.
+// reminder names everyone who hasn't answered about a day ahead, and pings
+// them only when the kickoff is news (kickoffIsRoutine); on a routine week
+// this is the one ping that reaches them. It is the match-night follow-up a
+// captain chasing a missing fifth used to do by copying names into Discord,
+// optional, and adds no step anywhere.
 //
 // Rules: only a captain of this match, only their own team's players, only
 // those with no answer for the current kickoff (never the captain themselves),

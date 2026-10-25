@@ -694,6 +694,70 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
     });
   });
 
+  it("deletes the stood-down booking, so no profile credit and no Reopen revival", async () => {
+    // recordResult's no-game forfeit rule. A kept row on the COMPLETED
+    // forfeit credited the standin with "Stood in" for a series nobody
+    // played, couldn't be removed (the match is played), and came back live
+    // when an admin reopened the fixture.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const doomed = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    await bookCover(doomed.id, quitter.id, "Gone Cover", "800000000000000006");
+
+    await withdrawTeam(null, teamFd(quitter));
+
+    expect(
+      await prisma.match.findUnique({ where: { id: doomed.id } }),
+    ).toMatchObject({ status: MATCH_STATUS.COMPLETED, forfeit: true });
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: doomed.id } }),
+    ).toBe(0);
+  });
+
+  it("a doomed series that already has games keeps its cover as history", async () => {
+    // A LIVE series is forfeited too, but a standin who played its games is
+    // in the box score; only a no-game ruling cancels the fixture's cover.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const live = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    await prisma.match.update({
+      where: { id: live.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+    await prisma.game.create({
+      data: {
+        matchId: live.id,
+        dotaMatchId: `withdraw-live-${randomUUID()}`,
+        radiantWin: true,
+        radiantTeamId: live.homeTeamId,
+        direTeamId: live.awayTeamId,
+        winnerTeamId: live.homeTeamId,
+      },
+    });
+    await bookCover(live.id, quitter.id, "Played Some", "800000000000000007");
+    mockSend.mockClear();
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    // The withdrawal really ruled the series...
+    expect(res).toMatchObject({ message: expect.stringMatching(/withdrawn/) });
+    expect(
+      await prisma.match.findUnique({ where: { id: live.id } }),
+    ).toMatchObject({ status: MATCH_STATUS.COMPLETED, forfeit: true });
+    // ...and stood the standin down for the games left, but kept the booking.
+    const standDown = mockSend.mock.calls.find(([m]) =>
+      String(m).includes("stand down"),
+    );
+    expect(standDown![1]).toEqual({ users: ["800000000000000007"] });
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: live.id } }),
+    ).toBe(1);
+  });
+
   it("cover on the OPPONENT's side of a doomed fixture dies with it too", async () => {
     // The fixture is dead for BOTH sides — mootCover keys on the match, never
     // on the withdrawing team's side of it, and the message names the team

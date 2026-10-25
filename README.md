@@ -131,8 +131,8 @@ player demonstrated they own.
    the role id into Admin → Discord notifications → **Ping role**.
 
 With all four done, the toggle appears on `/me` for players who have linked
-Discord, and the two interrupting inhouse alerts can mention the role. Miss any
-one and the feature stays invisible rather than half-working.
+Discord, and the interrupting inhouse posts can mention the role. Miss any one
+and the feature stays invisible rather than half-working.
 
 **To check it worked**, the admin Discord card shows a live checklist — bot
 token, server id, role chosen, bot in server, role found, matching OAuth app,
@@ -140,9 +140,10 @@ Create Invite, and whether the bot can actually grant the role — naming the
 first broken step and its fix. Step 3 above is the one nothing in Discord warns
 you about.
 
-Two messages ping that role: the queue filling up, and a match being found.
-Nothing else — not results, and never the board, whose edits notify nobody by
-design.
+Three posts ping that role: the queue filling up, and the inhouse night's
+planned and start posts. Nothing else: not "match found" (it mentions the ten
+players in the lobby), not results, and never the board, whose edits notify
+nobody by design.
 
 ### Live inhouse queue board (Discord)
 

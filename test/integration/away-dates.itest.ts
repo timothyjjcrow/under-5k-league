@@ -609,6 +609,25 @@ describe("markAwayDates + setAvailability share one OUT ping per match", () => {
     expect(mockSend).toHaveBeenCalledTimes(3);
   });
 
+  it("shares the key on a retimed kickoff too, at that kickoff's revision", async () => {
+    // Every case above runs at revision 0, so a path that keyed on a fixed
+    // revision would pass them all.
+    const { season, player, mine, days } = await setupSeason();
+    const moved = await prisma.match.update({
+      where: { id: mine[0].id },
+      data: { scheduleRevision: 2 },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(player));
+    const view = await page(player.id);
+    await markAwayDates({}, awayForm(season.id, days(1), days(4), view!.fixtures));
+    expect(mockSend).toHaveBeenCalledTimes(1);
+
+    // The single IN answers the range's OUT for that kickoff.
+    await setAvailability({}, rsvpForm(moved, "IN"));
+    expect(mockSend).toHaveBeenCalledTimes(2);
+    expect(String(mockSend.mock.calls[1][0])).toContain("after all");
+  });
+
   it("a double submit marks once and announces once", async () => {
     const { season, player, days } = await setupSeason();
     vi.mocked(requireUser).mockResolvedValue(sessionFor(player));

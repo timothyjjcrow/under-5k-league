@@ -83,8 +83,9 @@ export type AcceptedReschedule = {
   notifyUserId: string | null;
   /** Check-in rows the retime replaced (answers about the old night). */
   clearedRsvps: number;
-  /** Standins now double-booked because this match moved — surfaced in the toast. */
-  standinClashes: string[];
+  /** Standins now double-booked because this match moved — surfaced in the
+   *  toast. Null when that check couldn't run: unknown, never "no clash". */
+  standinClashes: string[] | null;
   /**
    * Standins ASSIGNED to this match — their personally-@-mentioned assignment
    * message embedded the OLD kickoff, and the acceptance broadcast is the one
@@ -93,6 +94,11 @@ export type AcceptedReschedule = {
    */
   standinUserIds: string[];
   readyCheck: LockedReadyCheck;
+  /** The kickoff revision the move created (each answer's check-in carries it). */
+  scheduleRevision: number;
+  /** Seats whose ✗ became an OUT check-in for the new kickoff. The lock post
+   *  names them, so it is their OUT's announcement. */
+  carriedOutUserIds: string[];
 };
 
 // Announcement data for a fresh proposal (mirrors AcceptedReschedule) — the
@@ -123,9 +129,10 @@ export type ProposedReschedule = {
   /**
    * Everyone else who answers the ready check: the players on both sides
    * (standins included), minus the proposer and the other captain. Read
-   * after the commit; user ids, not snowflakes.
+   * after the commit; user ids, not snowflakes. Null when that read failed:
+   * the post then pings the other captain alone and spends no roster window.
    */
-  readyCheckUserIds: string[];
+  readyCheckUserIds: string[] | null;
   /** The match's kickoff revision: the roster-ping throttle's window key. */
   scheduleRevision: number;
 };
@@ -422,6 +429,7 @@ function assertIsOption(
 /** What retimeToOption hands back to the caller's announcement. */
 type RetimeCommit = {
   clearedRsvps: number;
+  scheduleRevision: number;
   standinUserIds: string[];
   readyCheck: Omit<LockedReadyCheck, "outNames"> & { outUserIds: string[] };
 };
@@ -521,6 +529,7 @@ async function retimeToOption(
     .map((row) => row.userId);
   return {
     clearedRsvps: cleared.count,
+    scheduleRevision: match.scheduleRevision + 1,
     standinUserIds: standins.map((s) => s.standinUserId),
     readyCheck: {
       everyoneIn,
@@ -564,21 +573,30 @@ async function acceptedFromCommit(
   // games the same night — standinConflict is only checked when cover is
   // arranged, never when a match later moves onto that night. Reported, not
   // refused: the reschedule is the legitimate act.
-  const [standinClashes, roundLabel, outPeople] = await Promise.all([
-    clashesAfterRetime(commit.seasonId, [commit.matchId]),
+  //
+  // The match has already moved, so each read falls back rather than throws:
+  // a throw here reached the action's catch, which told the captain the move
+  // failed, skipped the "Rescheduled" post for good (a retry finds the
+  // request closed) and skipped the page refresh.
+  const outCount = commit.readyCheck.outUserIds.length;
+  const [standinClashes, roundLabel, outNames] = await Promise.all([
+    clashesAfterRetime(commit.seasonId, [commit.matchId]).catch(() => null),
     postRoundLabel({
       id: commit.matchId,
       seasonId: commit.seasonId,
       phase: commit.phase,
       week: commit.week,
       bracketSlot: commit.bracketSlot,
-    }),
-    commit.readyCheck.outUserIds.length
-      ? prisma.user.findMany({
-          where: { id: { in: commit.readyCheck.outUserIds } },
-          select: { name: true },
-          orderBy: [{ name: "asc" }, { id: "asc" }],
-        })
+    }).catch(() => null),
+    outCount
+      ? prisma.user
+          .findMany({
+            where: { id: { in: commit.readyCheck.outUserIds } },
+            select: { name: true },
+            orderBy: [{ name: "asc" }, { id: "asc" }],
+          })
+          .then((people) => people.map((p) => p.name))
+          .catch(() => [`${outCount} player${outCount === 1 ? "" : "s"}`])
       : Promise.resolve([]),
   ]);
   const { outUserIds: _out, ...readyCheck } = commit.readyCheck;
@@ -596,7 +614,9 @@ async function acceptedFromCommit(
     clearedRsvps: commit.clearedRsvps,
     standinUserIds: commit.standinUserIds,
     standinClashes,
-    readyCheck: { ...readyCheck, outNames: outPeople.map((p) => p.name) },
+    scheduleRevision: commit.scheduleRevision,
+    carriedOutUserIds: commit.readyCheck.outUserIds,
+    readyCheck: { ...readyCheck, outNames },
   };
 }
 
@@ -717,11 +737,15 @@ export async function proposeReschedule(
   }
   const { match, fixture, announcement } = proposed_;
   // Who answers the ready check, read after the commit: an announcement
-  // audience, not part of the decision.
-  const sides = await loadSides(prisma, match);
-  const readyCheckUserIds = [
-    ...new Set([...sides.home.seatIds, ...sides.away.seatIds]),
-  ].filter((id) => id !== userId && id !== announcement.notifyUserId);
+  // audience, not part of the decision. The proposal stands either way, so a
+  // failed read is unknown (null), never a throw that reports it as failed.
+  const readyCheckUserIds = await loadSides(prisma, match).then(
+    (sides) =>
+      [...new Set([...sides.home.seatIds, ...sides.away.seatIds])].filter(
+        (id) => id !== userId && id !== announcement.notifyUserId,
+      ),
+    () => null,
+  );
   return {
     ...announcement,
     roundLabel: await postRoundLabel(fixture),

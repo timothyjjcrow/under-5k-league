@@ -139,7 +139,11 @@ actions: `src/app/actions/admin-discord.ts`.
   `INHOUSE_NIGHT_START_PINGS_MAX` and only what fits the post; the rest are
   counted (Tim's call, 2026-10-08). Week reminder: unanswered players only
   (`unansweredUserIds`), every one of them, across as many numbered posts as
-  the limits need ([rosters-and-standins](rosters-and-standins.md)). Free-agent signing or release: that player. Draft
+  the limits need ([rosters-and-standins](rosters-and-standins.md)), and only
+  where the kickoff is news to that side: on a routine one (`kickoffIsRoutine`:
+  a regular fixture never retimed, past the side's first) they are named
+  without a ping (Tim's call, 2026-10-24: ping on a change, not on the
+  calendar). Free-agent signing or release: that player. Draft
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a
   captain who misses the start loses turns to auto-nomination, while everyone
@@ -166,7 +170,9 @@ actions: `src/app/actions/admin-discord.ts`.
   key. An IN after an announced OUT posts `playerBackInMessage` via
   `claimThrottleAnswer`, which deletes the OUT row (a later OUT is news again)
   and claims `outBackPingThrottleKey`: at most three buzzes per window
-  (`availability.itest.ts`).
+  (`availability.itest.ts`). Both keys carry the match's `scheduleRevision`,
+  like `checkinNudgeKey`: a retime wipes the answers, so an OUT for the new
+  kickoff pings the captain at once instead of waiting out the old window.
 
 ## Announcements that post once
 
@@ -214,9 +220,12 @@ actions: `src/app/actions/admin-discord.ts`.
   posted after the response too.
   Queueing is the consent; don't add an opt-out. One tabbed-away player burns
   the league's scarcest event on a short `INHOUSE.ACCEPT_SECONDS` clock.
-- **Only the interrupting posts carry the ping role:** queue filling, match
-  found, and the inhouse night's two (planned, and on now; `inhouse.md`),
-  never results, the board, or a night moved or called off. `SETTING_KEYS.INHOUSE_PING_ROLE_ID` (env
+- **Only the interrupting posts carry the ping role:** queue filling and the
+  inhouse night's two (planned, and on now; `inhouse.md`), never match found,
+  results, the board, or a night moved or called off. Match found rang the
+  whole role on every lobby, re-formations after a failed ready check too,
+  about a game none of them could join; it mentions the ten alone (Tim's call,
+  2026-10-24). `SETTING_KEYS.INHOUSE_PING_ROLE_ID` (env
   fallback `DISCORD_INHOUSE_ROLE_ID`; the admin field takes an id or `<@&id>`).
   Unset pings nobody. It must be self-assignable: an un-opt-out-able ping gets
   the channel muted.
