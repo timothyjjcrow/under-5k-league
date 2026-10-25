@@ -7,6 +7,7 @@ import {
   coverProblemMatchIds,
   matchCoverIssues,
   openBookingCount,
+  uncoveredByRequest,
 } from "./admin-sections";
 
 const base = {
@@ -163,6 +164,108 @@ describe("matchCoverIssues and coverProblemMatchIds", () => {
       clashes: [{ first: matches[3], second: matches[4] }],
     });
     expect([...ids].sort()).toEqual(["clash1", "clash2", "dropped", "out"]);
+  });
+
+  // A request (the MMR rule) is not cover, so its seat stays uncovered and
+  // the match stays a cover problem; but the Covers list hides that seat, so
+  // the banner names who has to answer and the request row's controls.
+  describe("uncoveredByRequest", () => {
+    const m = match("m1", "a", "b");
+    const teamName = new Map([
+      ["a", "Alpha"],
+      ["b", "Bravo"],
+    ]);
+    const out = [
+      { matchId: "m1", userId: "a1" },
+      { matchId: "m1", userId: "b1" },
+    ];
+    const asked = {
+      matchId: "m1",
+      teamId: "a",
+      replacingUserId: "a1",
+      standin: { name: "Sub Sam" },
+    };
+
+    it("points a seat with a waiting request at the other captain's answer", () => {
+      const { uncovered } = matchCoverIssues(m, teams, [], out);
+      expect(uncovered).toEqual(out);
+      expect(
+        uncoveredByRequest({
+          match: m,
+          uncovered,
+          requests: [asked],
+          teamName,
+          agreeOpen: true,
+        }),
+      ).toEqual({
+        needCover: [out[1]],
+        waiting: [
+          {
+            rsvp: out[0],
+            note: "waiting on the Bravo captain's OK for Sub Sam (agree, decline or withdraw below)",
+          },
+        ],
+      });
+      // Still a cover problem: the card opens on it.
+      expect([
+        ...coverProblemMatchIds({
+          matches: [m],
+          teams,
+          bookings: [],
+          outRsvps: [out[0]],
+          clashes: [],
+        }),
+      ]).toEqual(["m1"]);
+    });
+
+    it("names only the controls that show once booking has closed", () => {
+      expect(
+        uncoveredByRequest({
+          match: m,
+          uncovered: [out[1]],
+          requests: [{ ...asked, teamId: "b", replacingUserId: "b1" }],
+          teamName,
+          agreeOpen: false,
+        }).waiting.map((w) => w.note),
+      ).toEqual([
+        "waiting on the Alpha captain's OK for Sub Sam (decline or withdraw below)",
+      ]);
+    });
+
+    it("ignores an empty-seat request and one for another match", () => {
+      const split = uncoveredByRequest({
+        match: m,
+        uncovered: [out[0]],
+        requests: [
+          { ...asked, replacingUserId: null },
+          { ...asked, matchId: "m2" },
+        ],
+        teamName,
+        agreeOpen: true,
+      });
+      expect(split).toEqual({ needCover: [out[0]], waiting: [] });
+    });
+
+    // The block on /admin and the match page is a server component: pin
+    // that its banner asks this split and that the controls it names render.
+    it("the admin standin block uses it and renders withdraw beside agree and decline", () => {
+      const block = readFileSync(
+        path.join(REPO_ROOT, "src/components/admin-match-tools.tsx"),
+        "utf8",
+      );
+      expect(block).toContain("uncoveredByRequest({");
+      expect(block).toContain("agreeOpen: assignOpen");
+      for (const action of [
+        "approveStandinRequestAsAdmin",
+        "declineStandinRequestAsAdmin",
+        "withdrawStandinRequestAsAdmin",
+      ]) {
+        expect(block).toContain(`action={${action}}`);
+      }
+      for (const label of ["agree", "decline", "withdraw"]) {
+        expect(block).toMatch(new RegExp(`>\\s*${label}\\s*</SubmitButton>`));
+      }
+    });
   });
 });
 

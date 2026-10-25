@@ -4801,7 +4801,7 @@ function StandinControls({
   });
   const problems = upcoming.filter((m) => problemIds.has(m.id));
   // Outside the assign window only matches with a booking or a request have
-  // anything to show (removal, decline); an empty block there is noise.
+  // anything to show (removal, decline, withdraw); an empty block there is noise.
   const rest = upcoming.filter(
     (m) =>
       !problemIds.has(m.id) &&
