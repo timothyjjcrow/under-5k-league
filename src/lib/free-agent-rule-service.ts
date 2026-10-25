@@ -33,6 +33,8 @@ export async function loadFreeAgentBaselines(
         playerNameSnapshot: true,
         joinedAt: true,
         endedAt: true,
+        endReason: true,
+        acquisitionKind: true,
         acquisitionMmr: true,
         user: {
           select: {
@@ -66,6 +68,8 @@ export async function loadFreeAgentBaselines(
           name: t.user?.name ?? t.playerNameSnapshot,
           joinedAt: t.joinedAt,
           endedAt: t.endedAt,
+          endReason: t.endReason,
+          acquisitionKind: t.acquisitionKind,
           acquisitionMmr: t.acquisitionMmr,
         })),
       rosterUserIds: team.memberUserIds,

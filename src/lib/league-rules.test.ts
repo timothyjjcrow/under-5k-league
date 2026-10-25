@@ -551,13 +551,15 @@ describe("the rules page's claims hold in the code", () => {
     // "at most 100 MMR above the player they replace"
     expect(freeAgentOverRule(2100, replaced)).toBe(false);
     expect(freeAgentOverRule(2101, replaced)).toBe(true);
-    // "the latest to leave that team whose seat is still open"
+    // "the latest to leave that team whose seat is still open": A and B were
+    // released, C was signed into B's seat.
     const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
+    const left = { endReason: "RELEASE", acquisitionKind: "AUCTION" };
     expect(
       unrefilledDeparture([
-        { id: "a", userId: "a", name: "A", joinedAt: at(0), endedAt: at(10), acquisitionMmr: 2000 },
-        { id: "b", userId: "b", name: "B", joinedAt: at(0), endedAt: at(20), acquisitionMmr: 3000 },
-        { id: "c", userId: "c", name: "C", joinedAt: at(30), endedAt: null, acquisitionMmr: 3050 },
+        { id: "a", userId: "a", name: "A", joinedAt: at(0), endedAt: at(10), acquisitionMmr: 2000, ...left },
+        { id: "b", userId: "b", name: "B", joinedAt: at(0), endedAt: at(20), acquisitionMmr: 3000, ...left },
+        { id: "c", userId: "c", name: "C", joinedAt: at(30), endedAt: null, acquisitionMmr: 3050, endReason: null, acquisitionKind: "FREE_AGENT" },
       ])?.name,
     ).toBe("A");
     // "or the team's lowest MMR when nobody has left"

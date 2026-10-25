@@ -188,6 +188,7 @@ import { getAutomationGateDecision } from "@/lib/automation-gate";
 import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
 import { loadFreeAgentBaselines } from "@/lib/free-agent-rule-service";
 import { freeAgentSeatLabel } from "@/lib/free-agent-rule";
+import { standinMmrLabel } from "@/lib/standin";
 import { leagueFeedWaitText } from "@/lib/league-feed-wait";
 import {
   AUTOMATION_BACKLOG_STUCK_MS,
@@ -1393,6 +1394,18 @@ async function loadSeasonAdminData(seasonId: string, teamSize: number) {
       })),
     ),
   ]);
+  // The waiting standin requests a regenerate cascades away with the regular
+  // fixtures (replaceRegularSchedule counts them in its toast and log), from
+  // the requests already loaded. Those skip COMPLETED matches, which can't
+  // matter here: any regular-season result locks the regenerate.
+  const regularMatchIds = new Set(
+    matches
+      .filter((match) => match.phase === MATCH_PHASE.REGULAR)
+      .map((match) => match.id),
+  );
+  const requests = standinRequests.filter((request) =>
+    regularMatchIds.has(request.matchId),
+  ).length;
   return {
     players,
     standins,
@@ -1405,7 +1418,7 @@ async function loadSeasonAdminData(seasonId: string, teamSize: number) {
     outRsvps: outRsvps.filter((rsvp) => rsvp.scheduleRevision === matches.find((match) => match.id === rsvp.matchId)?.scheduleRevision),
     playoffArchive: parsePlayoffArchive(playoffArchive),
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
-    collateral: { rsvps, picks, covers, proposals },
+    collateral: { rsvps, picks, covers, proposals, requests },
     unlinkedDiscord,
     importsNeedingReview,
     feedWaiting,
@@ -3899,6 +3912,11 @@ function ScheduleControls({
                           `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
                         ]
                       : []),
+                    ...(collateral.requests
+                      ? [
+                          `${collateral.requests} waiting standin request(s) are cancelled — captains will have to ask again.`,
+                        ]
+                      : []),
                     ...(collateral.proposals
                       ? [
                           `${collateral.proposals} open reschedule proposal(s) are cancelled.`,
@@ -3946,6 +3964,11 @@ function ScheduleControls({
             ...(collateral.covers
               ? [
                   `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
+                ]
+              : []),
+            ...(collateral.requests
+              ? [
+                  `${collateral.requests} waiting standin request(s) are cancelled — captains will have to ask again.`,
                 ]
               : []),
             ...(collateral.proposals
@@ -5734,9 +5757,11 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Free agent…
               </option>
+              {/* Worded like the team options beside it ("3,200 MMR",
+                  "MMR unknown"): an unknown is not 0. */}
               {freeAgents.map((p) => (
                 <option key={p.userId} value={p.userId}>
-                  {p.user.name} ({p.mmr} MMR)
+                  {p.user.name} ({standinMmrLabel(p.mmr)})
                 </option>
               ))}
             </select>
