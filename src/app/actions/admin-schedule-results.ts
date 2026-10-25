@@ -10,13 +10,18 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { raceHook } from "@/lib/race-hook";
 import { getActiveSeason, singleActiveSeason } from "@/lib/season";
-import { clashesAfterRetime } from "@/lib/standin-service";
+import {
+  cancelPendingStandinRequests,
+  clashesAfterRetime,
+  StandinRequestsChangedError,
+} from "@/lib/standin-service";
 import { announceAdminRetime } from "@/lib/retime-announcement";
 import {
   SEASON_STATUS,
   MATCH_STATUS,
   MATCH_PHASE,
   DOTA_MATCH_KIND,
+  STANDIN_REQUEST_STATUS,
 } from "@/lib/constants";
 import {
   matchNightForWeek,
@@ -273,6 +278,8 @@ async function replaceRegularSchedule(input: {
       picks: number;
       covers: number;
       proposals: number;
+      /** PENDING standin requests, which cascade with their fixture. */
+      requests: number;
     };
     standDowns: {
       standinName: string;
@@ -429,12 +436,15 @@ async function replaceRegularSchedule(input: {
 
         // The results counts above protect games, but NOT the night-specific state
         // that hangs off a fixture id: MatchAvailability, Prediction,
-        // StandinAssignment and RescheduleRequest all cascade with the match
-        // (schema.prisma). The regenerated fixtures are the same pairings with NEW
-        // ids, so every captain has to re-arrange cover they already arranged and
-        // every player re-checks in — and none of that was reported. It stays
-        // silent no more: count it and name it in the toast. (A first-ever
-        // generate has nothing to count, so the message is unchanged there.)
+        // StandinAssignment, StandinRequest and RescheduleRequest all cascade
+        // with the match (schema.prisma). The regenerated fixtures are the same
+        // pairings with NEW ids, so every captain has to re-arrange cover they
+        // already arranged and every player re-checks in — and none of that was
+        // reported. It stays silent no more: count it and name it in the toast.
+        // (A first-ever generate has nothing to count, so the message is
+        // unchanged there.) A waiting standin request posts nothing: the
+        // fixture it asked about is gone, and its captain asks again on the
+        // new one if they still need cover.
         const doomed = await tx.match.findMany({
           where: {
             seasonId: expectedActiveSeasonId,
@@ -443,7 +453,13 @@ async function replaceRegularSchedule(input: {
           select: { id: true },
         });
         const ids = doomed.map((m) => m.id);
-        let cleared = { rsvps: 0, picks: 0, covers: 0, proposals: 0 };
+        let cleared = {
+          rsvps: 0,
+          picks: 0,
+          covers: 0,
+          proposals: 0,
+          requests: 0,
+        };
         let standDowns: {
           standinName: string;
           discordId: string | null;
@@ -453,7 +469,7 @@ async function replaceRegularSchedule(input: {
           week: number;
         }[] = [];
         if (ids.length > 0) {
-          const [rsvps, picks, coverRows, proposals] = await Promise.all([
+          const [rsvps, picks, coverRows, proposals, requests] = await Promise.all([
             tx.matchAvailability.count({ where: { matchId: { in: ids } } }),
             tx.prediction.count({ where: { matchId: { in: ids } } }),
             // The ROWS, not just a count: each is a standin holding a live
@@ -479,8 +495,20 @@ async function replaceRegularSchedule(input: {
             tx.rescheduleRequest.count({
               where: { matchId: { in: ids }, status: "PENDING" },
             }),
+            tx.standinRequest.count({
+              where: {
+                matchId: { in: ids },
+                status: STANDIN_REQUEST_STATUS.PENDING,
+              },
+            }),
           ]);
-          cleared = { rsvps, picks, covers: coverRows.length, proposals };
+          cleared = {
+            rsvps,
+            picks,
+            covers: coverRows.length,
+            proposals,
+            requests,
+          };
           standDowns = coverRows.map((a) => ({
             standinName: a.standin.name,
             discordId: a.standin.discordId,
@@ -628,8 +656,13 @@ async function replaceRegularSchedule(input: {
       (outcome.cleared.rsvps ||
       outcome.cleared.picks ||
       outcome.cleared.covers ||
-      outcome.cleared.proposals
-        ? ` — replaced the previous schedule, clearing ${outcome.cleared.rsvps} check-in(s), ${outcome.cleared.picks} pick'em pick(s), ${outcome.cleared.covers} standin booking(s) and ${outcome.cleared.proposals} open proposal(s)`
+      outcome.cleared.proposals ||
+      outcome.cleared.requests
+        ? ` — replaced the previous schedule, clearing ${outcome.cleared.rsvps} check-in(s), ${outcome.cleared.picks} pick'em pick(s), ${outcome.cleared.covers} standin booking(s) and ${outcome.cleared.proposals} open proposal(s)${
+            outcome.cleared.requests
+              ? `; ${outcome.cleared.requests} standin request(s) cancelled`
+              : ""
+          }`
         : ""),
     seasonId: outcome.seasonId,
   });
@@ -665,6 +698,10 @@ async function replaceRegularSchedule(input: {
     }${
       collateral.length
         ? ` · the old fixtures were replaced, clearing ${collateral.join(", ")}`
+        : ""
+    }${
+      outcome.cleared.requests
+        ? ` · ${outcome.cleared.requests} standin request(s) cancelled`
         : ""
     }`,
   };
@@ -836,9 +873,15 @@ export async function startPlayoffs(
     ),
   );
 
+  // The old bracket's waiting standin requests went with its fixtures. Nobody
+  // has to act on them (the rebuilt round is new fixtures), so no post: the
+  // admin reads the count.
+  const requestsNote = outcome.standinRequestsCancelled
+    ? `${outcome.standinRequestsCancelled} standin request(s) cancelled`
+    : "";
   await logAdminAction({
     action: "startPlayoffs",
-    summary: `${intent === "reset" ? "Reset and reseeded" : "Seeded"} the playoff bracket (${bracket.length} first-round match(es))${outcome.removedGameCount ? ` — archived ${outcome.removedGameCount} deleted OpenDota game id(s)` : ""}`,
+    summary: `${intent === "reset" ? "Reset and reseeded" : "Seeded"} the playoff bracket (${bracket.length} first-round match(es))${outcome.removedGameCount ? ` — archived ${outcome.removedGameCount} deleted OpenDota game id(s)` : ""}${requestsNote ? ` — ${requestsNote}` : ""}`,
     seasonId: season.id,
   });
   // Reset can cascade imported Games. The league-state cursor is stamped in
@@ -854,7 +897,9 @@ export async function startPlayoffs(
     message:
       (intent === "reset"
         ? "Playoff bracket reset and reseeded"
-        : "Playoff bracket created") + scrimNote,
+        : "Playoff bracket created") +
+      (requestsNote ? ` · ${requestsNote}` : "") +
+      scrimNote,
   };
 }
 
@@ -930,14 +975,19 @@ export async function returnToRegularSeasonAction(
   );
   const notificationFailures =
     failedStandDownNotices + (leagueNoticeSent ? 0 : 1);
+  // Waiting standin requests went with the bracket; nobody has to act, so
+  // they post nothing (the league notice already says the bracket is void).
+  const requestsNote = outcome.standinRequestsCancelled
+    ? `${outcome.standinRequestsCancelled} standin request(s) cancelled`
+    : "";
   await logAdminAction({
     action: "returnToRegularSeason",
-    summary: `Removed the playoff bracket and returned to Regular season${outcome.removedGameCount ? ` — archived ${outcome.removedGameCount} deleted OpenDota game id(s)` : ""}${notificationFailures ? ` — ${notificationFailures} Discord notification(s) failed` : ""}`,
+    summary: `Removed the playoff bracket and returned to Regular season${outcome.removedGameCount ? ` — archived ${outcome.removedGameCount} deleted OpenDota game id(s)` : ""}${requestsNote ? ` — ${requestsNote}` : ""}${notificationFailures ? ` — ${notificationFailures} Discord notification(s) failed` : ""}`,
     seasonId: season.id,
   });
   refreshGames();
   return {
-    message: `Returned to the regular season — correct the table, then start a fresh playoff bracket${notificationFailures ? `. Discord warning: ${leagueNoticeSent ? "the league notice sent, but one or more standin stand-downs failed" : "the league-wide bracket notice failed"}${failedStandDownNotices && !leagueNoticeSent ? `, and ${failedStandDownNotices} standin stand-down${failedStandDownNotices === 1 ? "" : "s"} also failed` : ""}; notify the affected players manually` : ""}`,
+    message: `Returned to the regular season — correct the table, then start a fresh playoff bracket${requestsNote ? ` · ${requestsNote}` : ""}${notificationFailures ? `. Discord warning: ${leagueNoticeSent ? "the league notice sent, but one or more standin stand-downs failed" : "the league-wide bracket notice failed"}${failedStandDownNotices && !leagueNoticeSent ? `, and ${failedStandDownNotices} standin stand-down${failedStandDownNotices === 1 ? "" : "s"} also failed` : ""}; notify the affected players manually` : ""}`,
   };
 }
 
@@ -995,6 +1045,8 @@ export async function recordResult(
       teamId: string;
       standin: { name: string; discordId: string | null };
     }[];
+    /** Waiting standin requests the no-game ruling closed. */
+    cancelledRequests: number;
   };
   try {
     outcome = await prisma.$transaction(
@@ -1177,6 +1229,7 @@ export async function recordResult(
           teamId: string;
           standin: { name: string; discordId: string | null };
         }[] = [];
+        let cancelledRequests = 0;
         if (forfeit && match.games.length === 0) {
           bookings = await tx.standinAssignment.findMany({
             where: { matchId: match.id },
@@ -1191,6 +1244,17 @@ export async function recordResult(
           await tx.standinAssignment.deleteMany({
             where: { matchId: match.id },
           });
+          // The same for a request still waiting on the other captain: left
+          // PENDING, "Reopen for import" would hand them an Agree for a
+          // fixture that was ruled. No post — the ruling leaves nobody
+          // anything to do; the toast and the log carry the count.
+          cancelledRequests = (
+            await cancelPendingStandinRequests(
+              tx,
+              { matchId: match.id },
+              admin.id,
+            )
+          ).length;
         }
         await stampResultChange(tx);
         // The score and its announcement source change together. Deleting the
@@ -1210,6 +1274,7 @@ export async function recordResult(
           awayName: match.awayTeam.name,
           winnerTeamId,
           bookings,
+          cancelledRequests,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -1219,6 +1284,10 @@ export async function recordResult(
       return { message: "That result is already saved — no changes were made" };
     }
     if (error instanceof ResultWriteError) return { error: error.message };
+    // A request on this match was answered mid-ruling; the ruling rolled back.
+    if (error instanceof StandinRequestsChangedError) {
+      return { error: error.message };
+    }
     if (isSerializationConflict(error)) {
       return {
         error:
@@ -1237,9 +1306,12 @@ export async function recordResult(
   // manual score can override an auto-import, which is exactly the "what did
   // I press?" case the log exists for. Match retiming is logged separately
   // because it clears check-ins and pending reschedule proposals.
+  const requestsNote = outcome.cancelledRequests
+    ? `${outcome.cancelledRequests} standin request(s) cancelled`
+    : "";
   await logAdminAction({
     action: "recordResult",
-    summary: `Recorded ${outcome.homeName} ${homeScore}–${awayScore} ${outcome.awayName} (week ${outcome.week})${forfeit ? " — forfeit" : ""}`,
+    summary: `Recorded ${outcome.homeName} ${homeScore}–${awayScore} ${outcome.awayName} (week ${outcome.week})${forfeit ? " — forfeit" : ""}${requestsNote ? `; ${requestsNote}` : ""}`,
     seasonId: outcome.seasonId,
   });
   // Use the same leased marker + durable outbox path as imported results.
@@ -1307,7 +1379,7 @@ export async function recordResult(
   }
   refresh();
   return {
-    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit / ruling)" : ""}${tiebreakerPending ? ". The next tiebreaker game is pending automatic retry; reload the schedule before playing." : ""}`,
+    message: `Result saved · ${homeScore}–${awayScore}${forfeit ? " (forfeit / ruling)" : ""}${requestsNote ? ` · ${requestsNote}` : ""}${tiebreakerPending ? ". The next tiebreaker game is pending automatic retry; reload the schedule before playing." : ""}`,
   };
 }
 
