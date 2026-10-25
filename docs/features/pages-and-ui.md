@@ -102,7 +102,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `playoffFirstRound` (crossed between groups in a group season), the withdrawal forfeit score from
   `withdrawalForfeitScore` (which the withdraw action uses too), the import
   window from `league-result-window.ts`, the reschedule limits from
-  `schedule.ts`, the standin clash and MMR gap from the standin constants and
+  `schedule.ts`, the standin clash window and MMR allowance from the standin
+  constants and
   the draft clocks from `DEFAULTS`. Sentences that only hold while a function
   decides them (`teamWithdrawalLockedReason`, `matchResultsOpen`) drop out
   when it changes. The literal copy (the tiebreak order, the draw refusals,
@@ -122,8 +123,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   write; until then the closing line covers them): a no-show grace period and
   when a no-show becomes a forfeit; double forfeits (a 0–0 ruling counts as a
   draw, so both teams get a draw's points); a cap on standins per match or
-  season; a standin MMR cap or the other captain's approval (a gap of
-  `STANDIN_MMR_FLAG_GAP` or more only warns the person booking); pauses,
+  season (the standin MMR rule is written: more than `STANDIN_MMR_ALLOWANCE`
+  above the seat needs the other captain's OK); pauses,
   disconnects and remakes; side and first-pick choice; hero or patch bans;
   conduct, smurfing, account sharing, disputes and appeals; a roster lock
   (admin signings stay open through the playoffs); reschedule notice and how

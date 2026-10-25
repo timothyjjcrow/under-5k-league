@@ -78,9 +78,28 @@ async function setup(teamSize = 5) {
   return { season, team, other, agent };
 }
 
+/**
+ * A rostered teammate with a signup MMR. Tests that aren't about the
+ * free-agent MMR rule give the team one, so the rule has a known yardstick
+ * (the team's lowest MMR): an empty roster is an unknown, which needs the box.
+ */
+async function rosterMember(
+  seasonId: string,
+  teamId: string,
+  name: string,
+  mmr = 3000,
+) {
+  const user = await makePlayer(seasonId, name, mmr);
+  await prisma.teamMember.create({
+    data: { seasonId, teamId, userId: user.id, price: 0 },
+  });
+  return user;
+}
+
 describe("signFreeAgent", () => {
   it("signs a registered free agent into an open seat", async () => {
-    const { team, agent } = await setup();
+    const { season, team, agent } = await setup();
+    await rosterMember(season.id, team.id, "Teammate");
     const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
     expect(res).toHaveProperty("message");
     const seat = await prisma.teamMember.findFirst({
@@ -109,10 +128,7 @@ describe("signFreeAgent", () => {
     // either way here — the assertion is that the SERIALIZABLE claim didn't
     // break the normal path or the guard.
     const { season, team, agent } = await setup(2);
-    const filler = await makeUser("Captainish");
-    await prisma.teamMember.create({
-      data: { seasonId: season.id, teamId: team.id, userId: filler.id, price: 0 },
-    });
+    await rosterMember(season.id, team.id, "Captainish");
     const second = await makeUser("Second Agent");
     await prisma.registration.create({
       data: {
@@ -174,6 +190,7 @@ describe("signFreeAgent", () => {
 
   it("allows the sign once that match has been played", async () => {
     const { season, team, other, agent } = await setup();
+    await rosterMember(season.id, team.id, "Teammate");
     const match = await prisma.match.create({
       data: {
         seasonId: season.id,
@@ -200,6 +217,571 @@ describe("signFreeAgent", () => {
 
     const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
     expect(res).toHaveProperty("message");
+  });
+});
+
+// Tim's call (2026-10-25): a signing is held to the standin MMR rule against
+// the player it replaces (the newest departure no signing has refilled), else
+// the team's lowest MMR, and only the admin's ticked box signs over it.
+describe("signFreeAgent — the 100-MMR rule against the player they replace", () => {
+  const BOX = { overMmrRule: "on" };
+  // Distinct timestamps between roster events, so the pairing's order is the
+  // test's order and never an id tiebreak.
+  const tick = () => new Promise((resolve) => setTimeout(resolve, 5));
+
+  async function release(teamId: string, userId: string) {
+    const seat = await prisma.teamMember.findFirstOrThrow({
+      where: { teamId, userId },
+    });
+    expect(await releasePlayer(null, fd({ memberId: seat.id }))).toHaveProperty(
+      "message",
+    );
+    await tick();
+  }
+
+  async function freeAgent(seasonId: string, name: string, mmr: number) {
+    return makePlayer(seasonId, name, mmr);
+  }
+
+  /** Shorthanded: Stayer (2,600) stays, Bob (2,000) was released. */
+  async function bobLeft() {
+    const { season, team, other } = await setup();
+    await rosterMember(season.id, team.id, "Stayer", 2600);
+    const bob = await rosterMember(season.id, team.id, "Bob", 2000);
+    await release(team.id, bob.id);
+    return { season, team, other, bob };
+  }
+
+  const signs = (teamId: string, userId: string, extra = {}) =>
+    signFreeAgent(null, fd({ teamId, userId, ...extra }));
+
+  it("refuses a free agent over the rule without the box, with both MMRs and the gap", async () => {
+    const { season, team } = await bobLeft();
+    const agent = await freeAgent(season.id, "Ringer", 4500);
+    mockSend.mockClear();
+
+    const res = await signs(team.id, agent.id);
+
+    expect(res).toEqual({
+      error:
+        "Ringer (4,500 MMR) is 2,500 above Bob (2,000 MMR), the player they'd replace. Tick “Sign over the 100-MMR rule” to sign them anyway.",
+    });
+    expect(
+      await prisma.teamMember.count({ where: { teamId: team.id, userId: agent.id } }),
+    ).toBe(0);
+    expect(
+      await prisma.adminAction.count({
+        where: { action: "signFreeAgent", seasonId: season.id },
+      }),
+    ).toBe(0);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("signs over the rule with the box, and the toast, log and post carry both MMRs", async () => {
+    const { season, team } = await bobLeft();
+    const agent = await freeAgent(season.id, "Ringer", 4500);
+    mockSend.mockClear();
+
+    const res = await signs(team.id, agent.id, BOX);
+
+    const note = "Signed over the 100-MMR rule: 4,500 MMR, replacing Bob's 2,000.";
+    expect(res?.message).toContain(note);
+    expect(
+      await prisma.teamMember.count({ where: { teamId: team.id, userId: agent.id } }),
+    ).toBe(1);
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "signFreeAgent", seasonId: season.id },
+    });
+    expect(log.summary).toContain(note);
+    const post = mockSend.mock.calls.find(([msg]) => String(msg).includes("signs with"));
+    expect(String(post?.[0])).toContain(note);
+  });
+
+  it("signs within the rule as before, with nothing said about it", async () => {
+    const { season, team } = await bobLeft();
+    // Exactly the allowance above Bob is fine.
+    const agent = await freeAgent(season.id, "Close Match", 2100);
+    mockSend.mockClear();
+
+    const res = await signs(team.id, agent.id);
+
+    expect(res).toHaveProperty("message");
+    expect(res?.message).not.toContain("MMR rule");
+    const post = mockSend.mock.calls.find(([msg]) => String(msg).includes("signs with"));
+    expect(String(post?.[0])).not.toContain("MMR");
+  });
+
+  it("judges against the newest departure no signing has refilled", async () => {
+    // A (2,000) leaves, then B (3,000). C fills B's seat; the next signing
+    // replaces A, so a 3,000 who'd have matched B is over the rule.
+    const { season, team } = await setup();
+    await rosterMember(season.id, team.id, "Stayer", 2600);
+    const a = await rosterMember(season.id, team.id, "Early Leaver", 2000);
+    const b = await rosterMember(season.id, team.id, "Late Leaver", 3000);
+    await release(team.id, a.id);
+    await release(team.id, b.id);
+
+    const c = await freeAgent(season.id, "First Refill", 3050);
+    expect(await signs(team.id, c.id)).toHaveProperty("message");
+    await tick();
+
+    const d = await freeAgent(season.id, "Too Strong", 3000);
+    expect(await signs(team.id, d.id)).toEqual({
+      error: expect.stringContaining(
+        "Too Strong (3,000 MMR) is 1,000 above Early Leaver (2,000 MMR), the player they'd replace.",
+      ),
+    });
+    const e = await freeAgent(season.id, "Second Refill", 2100);
+    expect(await signs(team.id, e.id)).toHaveProperty("message");
+  });
+
+  it("falls back to the team's lowest MMR when nobody has left", async () => {
+    const { season, team } = await setup();
+    await rosterMember(season.id, team.id, "Low", 2100);
+    await rosterMember(season.id, team.id, "High", 2600);
+
+    const strong = await freeAgent(season.id, "Strong Agent", 2500);
+    expect(await signs(team.id, strong.id)).toEqual({
+      error:
+        "Strong Agent (2,500 MMR) is 400 above Shorthanded's lowest MMR (2,100). Tick “Sign over the 100-MMR rule” to sign them anyway.",
+    });
+    const close = await freeAgent(season.id, "Close Agent", 2200);
+    expect(await signs(team.id, close.id)).toHaveProperty("message");
+  });
+
+  it("needs the box when either MMR is unknown", async () => {
+    const { season, team } = await bobLeft();
+    const unknown = await freeAgent(season.id, "No Rank", 0);
+    expect(await signs(team.id, unknown.id)).toEqual({
+      error: expect.stringMatching(
+        /^No Rank's MMR is unknown, so the 100-MMR rule can't clear them against Bob \(2,000 MMR\)/,
+      ),
+    });
+    const signed = await signs(team.id, unknown.id, BOX);
+    expect(signed?.message).toContain(
+      "Signed over the 100-MMR rule: MMR unknown, replacing Bob's 2,000.",
+    );
+
+    // An empty roster with no departures has no yardstick at all.
+    const empty = await makeTeam(season.id, "Empty Team", 2);
+    const agent = await freeAgent(season.id, "Any Agent", 2000);
+    expect(await signs(empty.id, agent.id)).toEqual({
+      error: expect.stringMatching(/^Nobody on Empty Team has a known MMR/),
+    });
+  });
+});
+
+// A rostered player can't stand in, and a full roster has no open seat, so a
+// signing closes the PENDING requests it makes impossible to agree to.
+describe("signFreeAgent — closes the standin requests it makes impossible", () => {
+  async function requestFor(opts: {
+    seasonId: string;
+    home: { id: string };
+    away: { id: string };
+    teamId: string;
+    standinUserId: string;
+    requestedById: string;
+    status?: string;
+  }) {
+    const match = await prisma.match.create({
+      data: {
+        seasonId: opts.seasonId,
+        week: 2,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: opts.home.id,
+        awayTeamId: opts.away.id,
+        bestOf: 2,
+        status: opts.status ?? MATCH_STATUS.SCHEDULED,
+      },
+    });
+    return prisma.standinRequest.create({
+      data: {
+        matchId: match.id,
+        teamId: opts.teamId,
+        standinUserId: opts.standinUserId,
+        replacingUserId: null,
+        requestedById: opts.requestedById,
+        standinMmr: 3000,
+        baselineMmr: 2000,
+      },
+    });
+  }
+
+  it("cancels requests for the signed player as a standin and tells only the asking captain", async () => {
+    const { season, team, other, agent } = await setup();
+    await rosterMember(season.id, team.id, "Teammate");
+    const third = await makeTeam(season.id, "Third", 2);
+    await prisma.user.update({
+      where: { id: other.captainId },
+      data: { discordId: "111000111000111000" },
+    });
+    await prisma.user.update({
+      where: { id: third.captainId },
+      data: { discordId: "222000222000222000" },
+    });
+    // Opponent asked for the free agent on an unplayed match; a request on a
+    // finished match is history and stays as it is.
+    const live = await requestFor({
+      seasonId: season.id,
+      home: other,
+      away: third,
+      teamId: other.id,
+      standinUserId: agent.id,
+      requestedById: other.captainId,
+    });
+    const played = await requestFor({
+      seasonId: season.id,
+      home: other,
+      away: third,
+      teamId: other.id,
+      standinUserId: agent.id,
+      requestedById: other.captainId,
+      status: MATCH_STATUS.COMPLETED,
+    });
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res?.message).toContain(
+      "1 waiting standin request(s) for Free Agent cancelled, and the asking captain(s) told",
+    );
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: live.id } }),
+    ).toMatchObject({ status: "CANCELLED", decidedById: "test-admin" });
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: played.id } }),
+    ).toMatchObject({ status: "PENDING" });
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "signFreeAgent", seasonId: season.id },
+    });
+    expect(log.summary).toContain("1 waiting standin request(s) for Free Agent");
+    const posts = mockSend.mock.calls.filter(([msg]) =>
+      String(msg).includes("was signed to a team"),
+    );
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0][0])).toContain("Opponent");
+    // The asking captain only: not the other side's captain, not the player.
+    expect(posts[0][1]).toEqual({ users: ["111000111000111000"] });
+  });
+
+  it("cancels the team's open-seat requests once the last seat fills, with no post", async () => {
+    const { season, team, other, agent } = await setup(2);
+    await rosterMember(season.id, team.id, "Teammate");
+    const standin = await makePlayer(season.id, "Asked Standin", 3000);
+    const request = await requestFor({
+      seasonId: season.id,
+      home: team,
+      away: other,
+      teamId: team.id,
+      standinUserId: standin.id,
+      requestedById: team.captainId,
+    });
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res?.message).toContain(
+      "1 waiting open-seat standin request(s) for Shorthanded cancelled: the roster is full",
+    );
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).toMatchObject({ status: "CANCELLED", decidedById: "test-admin" });
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "signFreeAgent", seasonId: season.id },
+    });
+    expect(log.summary).toContain("1 waiting open-seat request(s)");
+    expect(
+      mockSend.mock.calls.some(([msg]) => String(msg).includes("is off")),
+    ).toBe(false);
+  });
+
+  it("leaves open-seat requests waiting while the team is still short", async () => {
+    const { season, team, other, agent } = await setup(3);
+    await rosterMember(season.id, team.id, "Teammate");
+    const standin = await makePlayer(season.id, "Asked Standin", 3000);
+    const request = await requestFor({
+      seasonId: season.id,
+      home: team,
+      away: other,
+      teamId: team.id,
+      standinUserId: standin.id,
+      requestedById: team.captainId,
+    });
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res).toHaveProperty("message");
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }),
+    ).toMatchObject({ status: "PENDING" });
+  });
+
+  // A request on the signing team for the player it signs: the player fills
+  // the seat themselves, so its captain has nobody to line up and hears
+  // nothing; another team's request for them still posts.
+  it("closes this team's request for the signed player without a post, and still tells other teams", async () => {
+    const { season, team, other, agent } = await setup();
+    await rosterMember(season.id, team.id, "Teammate");
+    const third = await makeTeam(season.id, "Third", 2);
+    await prisma.user.update({
+      where: { id: team.captainId },
+      data: { discordId: "333000333000333000" },
+    });
+    await prisma.user.update({
+      where: { id: other.captainId },
+      data: { discordId: "111000111000111000" },
+    });
+    const own = await requestFor({
+      seasonId: season.id,
+      home: team,
+      away: third,
+      teamId: team.id,
+      standinUserId: agent.id,
+      requestedById: team.captainId,
+    });
+    const theirs = await requestFor({
+      seasonId: season.id,
+      home: other,
+      away: third,
+      teamId: other.id,
+      standinUserId: agent.id,
+      requestedById: other.captainId,
+    });
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(res?.message).toContain(
+      "1 waiting Shorthanded standin request(s) for Free Agent closed: they're on the roster now",
+    );
+    expect(res?.message).toContain(
+      "1 waiting standin request(s) for Free Agent cancelled, and the asking captain(s) told",
+    );
+    for (const request of [own, theirs]) {
+      expect(
+        await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }),
+      ).toMatchObject({ status: "CANCELLED", decidedById: "test-admin" });
+    }
+    const posts = mockSend.mock.calls.filter(([msg]) =>
+      String(msg).includes("was signed to a team"),
+    );
+    expect(posts).toHaveLength(1);
+    expect(String(posts[0][0])).toContain("Opponent");
+    expect(posts[0][1]).toEqual({ users: ["111000111000111000"] });
+    // The signing team's captain is never told to line up someone else.
+    expect(
+      mockSend.mock.calls.some(([, mentions]) =>
+        JSON.stringify(mentions ?? {}).includes("333000333000333000"),
+      ),
+    ).toBe(false);
+  });
+});
+
+// A partial refill shrinks the open-seat budget every waiting request was
+// asked against. Agreeing to one refuses once bookings plus the other waiting
+// requests fill the seats, so past the budget nobody could ever agree: the
+// signing keeps the oldest requests that fit, per match, and closes the rest.
+describe("signFreeAgent — a partial refill closes the open-seat requests no seat is left for", () => {
+  /** Shorthanded with `rostered` of 5 seats filled, and one unplayed match. */
+  async function shortTeamWithMatch(rostered: number) {
+    const { season, team, other, agent } = await setup(5);
+    for (let i = 0; i < rostered; i++) {
+      await rosterMember(season.id, team.id, `Filler ${i + 1}`);
+    }
+    const match = await fixture(season.id, team.id, other.id, 4);
+    return { season, team, other, agent, match };
+  }
+
+  function fixture(seasonId: string, homeTeamId: string, awayTeamId: string, week: number) {
+    return prisma.match.create({
+      data: {
+        seasonId,
+        week,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId,
+        awayTeamId,
+        bestOf: 2,
+        status: MATCH_STATUS.SCHEDULED,
+      },
+    });
+  }
+
+  /** A waiting open-seat request, asked `minutesAgo` before now. */
+  async function openSeatRequest(opts: {
+    seasonId: string;
+    matchId: string;
+    teamId: string;
+    requestedById: string;
+    name: string;
+    minutesAgo: number;
+  }) {
+    const standin = await makePlayer(opts.seasonId, opts.name, 3000);
+    return prisma.standinRequest.create({
+      data: {
+        matchId: opts.matchId,
+        teamId: opts.teamId,
+        standinUserId: standin.id,
+        replacingUserId: null,
+        requestedById: opts.requestedById,
+        standinMmr: 3000,
+        baselineMmr: 2000,
+        createdAt: new Date(Date.now() - opts.minutesAgo * 60_000),
+      },
+    });
+  }
+
+  const statusOf = async (id: string) =>
+    (await prisma.standinRequest.findUniqueOrThrow({ where: { id } })).status;
+
+  it("closes the newer of two requests when one seat is left, with no post", async () => {
+    // 3 of 5 rostered: two open seats, two requests. The signing leaves one.
+    const { season, team, agent, match } = await shortTeamWithMatch(3);
+    const older = await openSeatRequest({
+      seasonId: season.id,
+      matchId: match.id,
+      teamId: team.id,
+      requestedById: team.captainId,
+      name: "Asked First",
+      minutesAgo: 30,
+    });
+    const newer = await openSeatRequest({
+      seasonId: season.id,
+      matchId: match.id,
+      teamId: team.id,
+      requestedById: team.captainId,
+      name: "Asked Second",
+      minutesAgo: 10,
+    });
+    mockSend.mockClear();
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(await statusOf(older.id)).toBe("PENDING");
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: newer.id } }),
+    ).toMatchObject({ status: "CANCELLED", decidedById: "test-admin" });
+    expect(res?.message).toContain(
+      "1 newer waiting open-seat standin request(s) for Shorthanded cancelled: the 1 open seat(s) left are already booked or asked for in those matches",
+    );
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "signFreeAgent", seasonId: season.id },
+    });
+    expect(log.summary).toContain("1 waiting open-seat request(s)");
+    // Only the signing's own announcement goes out.
+    expect(
+      mockSend.mock.calls.filter(([msg]) => !String(msg).includes("signs with")),
+    ).toEqual([]);
+  });
+
+  it("orders by asking time, not by id", async () => {
+    const { season, team, agent, match } = await shortTeamWithMatch(3);
+    // Created first, but asked later.
+    const askedLater = await openSeatRequest({
+      seasonId: season.id,
+      matchId: match.id,
+      teamId: team.id,
+      requestedById: team.captainId,
+      name: "Asked Later",
+      minutesAgo: 5,
+    });
+    const askedEarlier = await openSeatRequest({
+      seasonId: season.id,
+      matchId: match.id,
+      teamId: team.id,
+      requestedById: team.captainId,
+      name: "Asked Earlier",
+      minutesAgo: 50,
+    });
+
+    await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(await statusOf(askedEarlier.id)).toBe("PENDING");
+    expect(await statusOf(askedLater.id)).toBe("CANCELLED");
+  });
+
+  it("closes the request when a booking already holds the one seat left", async () => {
+    const { season, team, agent, match } = await shortTeamWithMatch(3);
+    const booked = await makePlayer(season.id, "Booked Standin", 2500);
+    const booking = await prisma.standinAssignment.create({
+      data: {
+        matchId: match.id,
+        teamId: team.id,
+        standinUserId: booked.id,
+        replacingUserId: null,
+      },
+    });
+    const request = await openSeatRequest({
+      seasonId: season.id,
+      matchId: match.id,
+      teamId: team.id,
+      requestedById: team.captainId,
+      name: "Asked Standin",
+      minutesAgo: 10,
+    });
+
+    const res = await signFreeAgent(null, fd({ teamId: team.id, userId: agent.id }));
+
+    expect(await statusOf(request.id)).toBe("CANCELLED");
+    // The booking is cover and fits the seat: it stays, and nothing is
+    // reported as overbooked.
+    expect(
+      await prisma.standinAssignment.findUnique({ where: { id: booking.id } }),
+    ).not.toBeNull();
+    expect(res?.message).not.toMatch(/now exceed/);
+    expect(res?.message).toContain(
+      "1 newer waiting open-seat standin request(s) for Shorthanded cancelled",
+    );
+  });
+
+  it("leaves every request that still fits waiting, per match", async () => {
+    // 2 of 5 rostered: the signing leaves two open seats, and two requests fit.
+    const two = await shortTeamWithMatch(2);
+    const first = await openSeatRequest({
+      seasonId: two.season.id,
+      matchId: two.match.id,
+      teamId: two.team.id,
+      requestedById: two.team.captainId,
+      name: "Fits One",
+      minutesAgo: 30,
+    });
+    const second = await openSeatRequest({
+      seasonId: two.season.id,
+      matchId: two.match.id,
+      teamId: two.team.id,
+      requestedById: two.team.captainId,
+      name: "Fits Two",
+      minutesAgo: 20,
+    });
+    // One seat left, but one request on each of two matches: seats are per
+    // match, so each fits its own.
+    const otherWeek = await fixture(two.season.id, two.team.id, two.other.id, 5);
+    const onOtherWeek = await openSeatRequest({
+      seasonId: two.season.id,
+      matchId: otherWeek.id,
+      teamId: two.team.id,
+      requestedById: two.team.captainId,
+      name: "Other Week",
+      minutesAgo: 10,
+    });
+
+    const res = await signFreeAgent(
+      null,
+      fd({ teamId: two.team.id, userId: two.agent.id }),
+    );
+
+    expect(res).toHaveProperty("message");
+    expect(res?.message).not.toMatch(/request\(s\)/);
+    for (const request of [first, second, onOtherWeek]) {
+      expect(await statusOf(request.id)).toBe("PENDING");
+    }
+
+    // Then a second signing leaves one seat: per match, the older request on
+    // week 4 keeps it, the newer closes, and week 5's lone request stays.
+    const next = await makePlayer(two.season.id, "Second Signing", 3000);
+    await signFreeAgent(null, fd({ teamId: two.team.id, userId: next.id }));
+    expect(await statusOf(first.id)).toBe("PENDING");
+    expect(await statusOf(second.id)).toBe("CANCELLED");
+    expect(await statusOf(onOtherWeek.id)).toBe("PENDING");
   });
 });
 
@@ -614,10 +1196,7 @@ describe("signFreeAgent — redundant empty-seat cover (the reverse of releasePl
     });
     const team = await makeTeam(season.id, "Shorthanded", 0);
     const other = await makeTeam(season.id, "Opponent", 1);
-    const filler = await makeUser("Filler");
-    await prisma.teamMember.create({
-      data: { seasonId: season.id, teamId: team.id, userId: filler.id, price: 0 },
-    });
+    await rosterMember(season.id, team.id, "Filler");
     const agent = await makeUser("Free Agent");
     await prisma.registration.create({
       data: {
@@ -769,10 +1348,7 @@ describe("signFreeAgent — PARTIAL refill reports surplus open-seat bookings, n
     const { season, team, other, agent } = await setup(5);
     // 3 of 5 rostered — the sign leaves ONE open seat, under two bookings.
     for (const n of ["Filler A", "Filler B", "Filler C"]) {
-      const u = await makeUser(n);
-      await prisma.teamMember.create({
-        data: { seasonId: season.id, teamId: team.id, userId: u.id, price: 0 },
-      });
+      await rosterMember(season.id, team.id, n);
     }
     const match = await prisma.match.create({
       data: {
@@ -844,7 +1420,8 @@ describe("signFreeAgent — the signing announcement pings its subject", () => {
   // this send was a bare broadcast while the one-night standin assign has
   // always mentioned its subject.
   it("@-mentions the signed player on the Discord send", async () => {
-    const { agent, team } = await setup();
+    const { season, agent, team } = await setup();
+    await rosterMember(season.id, team.id, "Teammate");
     await prisma.user.update({
       where: { id: agent.id },
       data: { discordId: "555666777888999000" },
@@ -1225,6 +1802,7 @@ describe("roster moves stay open through the PLAYOFFS", () => {
 
   it("signFreeAgent signs onto a short team mid-playoffs", async () => {
     const { season, team } = await playoffSeason();
+    await rosterMember(season.id, team.id, "Playoff Teammate");
     const agent = await makeUser("Playoff Agent");
     await prisma.registration.create({
       data: {

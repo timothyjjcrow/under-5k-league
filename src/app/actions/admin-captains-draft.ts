@@ -1565,9 +1565,14 @@ export async function abortDraftAction(
   }
   const res = await abortDraft(season.id, admin);
   if (!res.ok) return { error: res.error };
+  // Waiting standin requests died with their fixtures. Nobody has to act on
+  // them (the league is back in Signups), so no post: the count is reported.
+  const requestsNote = res.standinRequestsCancelled
+    ? `${res.standinRequestsCancelled} standin request(s) cancelled`
+    : "";
   await logAdminAction({
     action: "abortDraft",
-    summary: `Aborted the draft — ${res.playersReturned} non-captain roster member(s) returned, $${res.budgetRestored} refunded, ${res.matchesRemoved} unplayed fixture(s), ${res.checkInsCleared} check-in(s), ${res.predictionsCleared} pick(s), ${res.reschedulesCleared} reschedule(s) and ${res.fantasyRostersCleared} fantasy roster(s) cleared; ${res.teams} captain(s) kept`,
+    summary: `Aborted the draft — ${res.playersReturned} non-captain roster member(s) returned, $${res.budgetRestored} refunded, ${res.matchesRemoved} unplayed fixture(s), ${res.checkInsCleared} check-in(s), ${res.predictionsCleared} pick(s), ${res.reschedulesCleared} reschedule(s) and ${res.fantasyRostersCleared} fantasy roster(s) cleared${requestsNote ? `, ${requestsNote}` : ""}; ${res.teams} captain(s) kept`,
     seasonId: season.id,
   });
   // Stand down the standins whose bookings died with the rosters — post-commit
@@ -1612,6 +1617,7 @@ export async function abortDraftAction(
       `${res.coverStandDowns.length} standin booking(s) on the old rosters cancelled and stood down`,
     );
   }
+  if (requestsNote) bits.push(requestsNote);
   const cleared = [
     res.matchesRemoved ? `${res.matchesRemoved} unplayed fixture(s)` : null,
     res.checkInsCleared ? `${res.checkInsCleared} check-in(s)` : null,

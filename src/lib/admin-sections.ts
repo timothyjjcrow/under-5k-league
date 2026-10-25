@@ -98,6 +98,91 @@ export function matchCoverIssues<R extends CoverRsvp>(
   };
 }
 
+/** A PENDING standin request, as the cover banner reads it. */
+type CoverRequest = {
+  matchId: string;
+  teamId: string;
+  replacingUserId: string | null;
+  standin: { name: string };
+};
+
+/**
+ * Whether the admin standin block offers "agree" on a PENDING request.
+ * Agreeing books the standin, so booking must be open (`agreeOpen`, the
+ * block's standinAssignmentOpen gate). And approveStandinRequest refuses an
+ * admin who captains the asking team or who filed the request ("You captain
+ * <team>, the team asking — …"): nobody agrees to their own side's request,
+ * so the button hides for that viewer instead of offering a refusal. Decline
+ * and withdraw never ask this; they show on every request.
+ *
+ * The server re-reads the asking captain inside its transaction and stays
+ * the authority. A viewer the caller didn't name (`undefined`) or an asking
+ * captain the page didn't load can't be judged here, so they leave the
+ * button to the booking gate alone, as the block rendered before.
+ */
+export function adminMayAgreeToRequest(input: {
+  agreeOpen: boolean;
+  /** The admin looking at the block. */
+  viewerId: string | null | undefined;
+  request: { requestedById: string };
+  /** The asking team's captain, as the page read it. */
+  askingCaptainId: string | null | undefined;
+}): boolean {
+  if (!input.agreeOpen) return false;
+  const { viewerId } = input;
+  if (!viewerId) return true;
+  return (
+    viewerId !== input.request.requestedById &&
+    viewerId !== input.askingCaptainId
+  );
+}
+
+/**
+ * Splits a match's uncovered players (matchCoverIssues) by what the admin
+ * can do about them. A player whose seat has a PENDING request (the MMR
+ * rule) is still uncovered, since a request is not cover, so the match stays
+ * a cover problem; but the assign form's Covers list hides that seat, so
+ * "assign a standin below" would send the admin to an option that isn't
+ * there. Those players get a note naming who has to answer and the request
+ * row's controls instead. The note names "agree" only where the row shows
+ * it (`canAgree`: the block's own adminMayAgreeToRequest call, so the two
+ * can't disagree); decline and withdraw always show.
+ */
+export function uncoveredByRequest<
+  R extends CoverRsvp,
+  Q extends CoverRequest,
+>(input: {
+  match: CoverMatch;
+  uncovered: readonly R[];
+  requests: readonly Q[];
+  teamName: ReadonlyMap<string, string>;
+  canAgree: (request: Q) => boolean;
+}): { needCover: R[]; waiting: { rsvp: R; note: string }[] } {
+  const { match } = input;
+  const needCover: R[] = [];
+  const waiting: { rsvp: R; note: string }[] = [];
+  for (const rsvp of input.uncovered) {
+    const request = input.requests.find(
+      (r) => r.matchId === match.id && r.replacingUserId === rsvp.userId,
+    );
+    if (!request) {
+      needCover.push(rsvp);
+      continue;
+    }
+    const otherId =
+      request.teamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId;
+    const other = otherId ? input.teamName.get(otherId) : undefined;
+    const controls = input.canAgree(request)
+      ? "agree, decline or withdraw below"
+      : "decline or withdraw below";
+    waiting.push({
+      rsvp,
+      note: `waiting on the ${other ? `${other} captain's` : "other captain's"} OK for ${request.standin.name} (${controls})`,
+    });
+  }
+  return { needCover, waiting };
+}
+
 /**
  * The unplayed matches the Standins card opens on: a player out with no
  * cover, a booked standin who dropped out, or a standin booked on two

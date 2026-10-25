@@ -205,8 +205,10 @@ In the Captains & draft card on `/admin` and inside the room
   `registration.itest.ts`. The admin "Edit medal & MMR"
   (`AdminPlayerRankEditor`) stays visible until COMPLETE but locks a PLAYER's
   MMR for the same window (`mmrLocked`, re-checked in `setPlayerRank`, which
-  throws `DraftAlreadyStartedError`); medal corrections stay open, and a
-  standin's MMR never locks.
+  throws `DraftAlreadyStartedError`); medal corrections stay open, and the
+  admin editor never locks a standin's MMR. A player's own edits lock for
+  everyone once the auction is done (`mmrSelfEditLocked`,
+  `players-and-registration.md`).
 
 ## The /draft page and routes
 

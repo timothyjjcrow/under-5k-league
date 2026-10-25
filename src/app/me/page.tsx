@@ -70,7 +70,10 @@ import {
   REGISTRATION_TYPE,
   SEASON_STATUS,
 } from "@/lib/constants";
-import { registrationSeasonClosedError } from "@/lib/registration";
+import {
+  mmrSelfEditLocked,
+  registrationSeasonClosedError,
+} from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { draftSetupOpen } from "@/lib/draft-setup";
 import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
@@ -253,6 +256,11 @@ export default async function MePage({
   const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
   const medalBlocked = medalFloor != null && medalFloor > HARD_MMR_CEILING;
   const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
+  // After the draft a player's own signup MMR is fixed (saveRegistration
+  // keeps it): an existing signup's box renders disabled and says who can
+  // change it. A first signup still types its own.
+  const mmrLocked =
+    !!season && !!reg && mmrSelfEditLocked(season.status, draft?.status);
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
@@ -956,7 +964,7 @@ export default async function MePage({
                         above {HARD_MMR_CEILING} MMR, so this league can&apos;t
                         take your signup.
                       </p>
-                    ) : mmrLead ? (
+                    ) : mmrLead && !mmrLocked ? (
                       <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-muted">
                         {mmrLead}
                       </p>
@@ -978,7 +986,12 @@ export default async function MePage({
                         reg.status === REGISTRATION_STATUS.ACTIVE &&
                         auctionRunning(draft?.status)
                       }
-                      describedBy={medalBlocked || mmrLead ? "mmr-lead" : undefined}
+                      locked={mmrLocked}
+                      describedBy={
+                        medalBlocked || (mmrLead && !mmrLocked)
+                          ? "mmr-lead"
+                          : undefined
+                      }
                     />
                     </div>
                     <p className="mt-1 text-xs text-muted">

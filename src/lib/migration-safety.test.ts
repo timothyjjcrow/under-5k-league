@@ -175,6 +175,7 @@ describe("migration SQL safety gate", () => {
       "20261017120000_inhouse_admin_mmr",
       "20261019120000_team_group_key",
       "20261020120000_roll_call",
+      "20261025120000_standin_request",
     ]);
   });
 
