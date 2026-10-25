@@ -26,7 +26,10 @@ import {
   inhouseToken,
   lastSeasonTitle,
   lastSeasonToken,
+  NO_DISCORD_TITLE,
+  PUB_QUIET_TITLE,
   pubHeroTitle,
+  pubQuietToken,
   pubTitle,
   recentHeroTitle,
   pubToken,
@@ -536,8 +539,8 @@ export function PlayerPool({
                           />
                         ) : null}
                         {activity?.quiet ? (
-                          <span title="No visible pub games in over two months — the listed MMR may describe who they used to be">
-                            last played {activity.label}
+                          <span title={PUB_QUIET_TITLE}>
+                            {pubQuietToken(activity)}
                           </span>
                         ) : null}
                         {p.accountId ? (
@@ -559,10 +562,7 @@ export function PlayerPool({
                            player can't be reached where the league lives. Only
                            for authorized league viewers — hidden handles must
                            never be presented as missing data. */
-                          <span
-                            className="text-muted"
-                            title="No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work"
-                          >
+                          <span className="text-muted" title={NO_DISCORD_TITLE}>
                             no Discord
                           </span>
                         ) : null}
@@ -843,7 +843,7 @@ function PubScoutLine({
   );
 }
 
-function PubHeroStrip({
+export function PubHeroStrip({
   label,
   heroes,
   titleOf,

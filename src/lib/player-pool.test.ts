@@ -8,6 +8,7 @@ import {
   lastSeasonToken,
   inhouseToken,
   pubHeroTitle,
+  pubQuietToken,
   recentHeroTitle,
   pubTitle,
   pubToken,
@@ -323,6 +324,12 @@ describe("scouting token copy", () => {
     expect(
       inhouseToken({ rating: 1042, rank: null, wins: 2, losses: 0, games: 2 }),
     ).toBe("Inhouse 2–0");
+  });
+
+  it("pubQuietToken says when they last played", () => {
+    expect(pubQuietToken({ label: "4mo ago", quiet: true })).toBe(
+      "last played 4mo ago",
+    );
   });
 
   it("pubHeroTitle names the hero with its record, falling back on unknown ids", () => {

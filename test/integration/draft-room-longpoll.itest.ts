@@ -456,16 +456,23 @@ describe("the draft room's shared copy", () => {
       return rest;
     };
     let sawContact = 0;
+    let mayContact = 0;
     for (const [label, session] of viewers) {
       const tick = await plainTick(d.season.id, session);
       const fresh = await getDraftState(d.season.id, session, { resolveDeadlines: false });
       expect(strip(tick.state), label).toEqual(strip(fresh as unknown as Record<string, unknown>));
-      const nominee = tick.state.nominatedPlayer as { discordName: string } | null;
+      const nominee = tick.state.nominatedPlayer as {
+        discordName: string;
+        showContact: boolean;
+      } | null;
       if (nominee?.discordName) sawContact += 1;
+      if (nominee?.showContact === true) mayContact += 1;
     }
     // The gating ran per viewer: the nominee, the active registrants and the
     // admin see the Discord; signed out and the unregistered spectator don't.
     expect(sawContact).toBe(6);
+    // And the flag that lets the lot card say "no Discord" follows it.
+    expect(mayContact).toBe(6);
   });
 
   it("a captain coming back into the room shows on every open tab at once", async () => {

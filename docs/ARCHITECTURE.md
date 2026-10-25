@@ -178,7 +178,10 @@ The client is `src/components/draft-room.tsx`, a long-poll loop (a 2s/5s ladder
 as its fallback) whose cadence,
 sequence ordering, expiry observation, outbid latch, feed recovery, and title
 flags are extracted into tested pure modules (`src/lib/room-poll.ts`,
-`room-sequence.ts`, `draft-feed.ts`, `draft.ts`). A lost response is presented
+`room-sequence.ts`, `draft-feed.ts`, `draft.ts`). Player scouting (the lot
+card and the pool's cards, `draft-player-card.tsx` over `draft-scout.ts`)
+reaches it from the `/draft` page render (`draft-scout-service.ts`, a 60s
+per-season memo), never the poll. A lost response is presented
 as indeterminate until an authoritative refresh; session expiry, stale season,
 initial failure, delayed sync, paused, waiting, completed, and short-roster
 completion each have distinct UI states.

@@ -1641,6 +1641,10 @@ export function buildDraftState(
             : "",
           discordVerified:
             canSeeNominatedContact && !!nomineeProfile.user.discordId,
+          // Whether this viewer may see the nominee's contact at all, so the
+          // lot card can say "no Discord" without a blanked handle reading
+          // as missing.
+          showContact: canSeeNominatedContact,
         }
       : null,
     teams: teamViews,

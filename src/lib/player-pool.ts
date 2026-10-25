@@ -2,7 +2,12 @@
 // unit-testable and reusable on client and server.
 import { heroById } from "./heroes";
 import type { PubScout } from "./pub-scout";
-import { pubCheckedAgo, pubLastPlayed, pubWinRate } from "./pub-stats";
+import {
+  pubCheckedAgo,
+  pubLastPlayed,
+  pubWinRate,
+  type PubActivity,
+} from "./pub-stats";
 import { parseRoles } from "./roles";
 import { seriesRecordText } from "./team-matches";
 
@@ -183,6 +188,20 @@ export function pubTitle(pub: PoolPubRecord, nowMs: number): string {
     .filter(Boolean)
     .join(" · ");
 }
+
+/** "last played 4mo ago": shown only once the account has gone quiet
+ *  (`PubActivity.quiet`), with PUB_QUIET_TITLE as its hover. */
+export function pubQuietToken(activity: PubActivity): string {
+  return `last played ${activity.label}`;
+}
+
+export const PUB_QUIET_TITLE =
+  "No visible pub games in over two months — the listed MMR may describe who they used to be";
+
+/** The "no Discord" marker's hover. Show the marker only to a viewer allowed
+ *  the player's contact, never as a hidden handle's stand-in. */
+export const NO_DISCORD_TITLE =
+  "No Discord linked or entered — the league coordinates on Discord, so reaching this player takes extra work";
 
 /** Hover text for a most-played-hero icon: "Pudge — 220 pub games, 55% won". */
 export function pubHeroTitle(h: {
