@@ -102,7 +102,8 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   `playoffFirstRound` (crossed between groups in a group season), the withdrawal forfeit score from
   `withdrawalForfeitScore` (which the withdraw action uses too), the import
   window from `league-result-window.ts`, the reschedule limits from
-  `schedule.ts`, the standin clash and MMR gap from the standin constants and
+  `schedule.ts`, the standin clash window and MMR allowance from the standin
+  constants and
   the draft clocks from `DEFAULTS`. Sentences that only hold while a function
   decides them (`teamWithdrawalLockedReason`, `matchResultsOpen`) drop out
   when it changes. The literal copy (the tiebreak order, the draw refusals,

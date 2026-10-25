@@ -58,10 +58,12 @@ standin cover, and match-night check-ins. Main files:
   re-read in the transaction (else two signings into the last seat make six).
 - **A signing is held to the standin MMR rule** (Tim's call, 2026-10-25). The
   free agent is judged at read time against the player they replace: the newest
-  departure from that team this season that no later acquisition has refilled
-  (`unrefilledDeparture`, `free-agent-rule.ts`; tenures paired last in, first
-  out, and every acquisition refills, so an auction re-sale after Undo or a
-  pre-draft captain change leaves no phantom). Its MMR is the tenure's
+  player released from that team this season whose seat no later free-agent
+  signing has refilled (`unrefilledDeparture`, `free-agent-rule.ts`; paired
+  last in, first out). Only releases count as departures and only free-agent
+  signings as refills, since both happen only after the draft: an auction
+  Undo, an abort or a pre-draft captain change is no departure, so a team
+  short from the draft uses its lowest MMR. Its MMR is the tenure's
   `acquisitionMmr`, else that player's signup MMR; with nothing waiting to be
   refilled, the team's lowest signup MMR (the empty-seat yardstick). Over
   `STANDIN_MMR_ALLOWANCE`, or with an MMR unknown on either side
@@ -201,8 +203,10 @@ the rows in `StandinRequest`.
   "close enough".
 - **Measure a named cover against the lowest absentee too.** The baseline is
   min(the covered player's MMR, the lowest KNOWN MMR among teammates who checked
-  in OUT for the match's current `scheduleRevision` and have no booking or
-  PENDING request in it) (`namedCoverBaseline`, fed by `coverBaseline`).
+  in OUT for the match's current `scheduleRevision` and have no booking in it)
+  (`namedCoverBaseline`, fed by `coverBaseline`). A waiting request doesn't
+  count as their cover: asking for one, booking against the stronger player,
+  then withdrawing the ask would step round the rule.
   Unknown MMRs never lower it, and an unknown named player stays unknown.
   Otherwise a captain names their strongest player as "covered" while the
   standin really takes a weaker absentee's seat. The request stores that
@@ -238,22 +242,26 @@ the rows in `StandinRequest`.
   standin block on /admin and in the match page's Admin tools (logged;
   `withdrawStandinRequestAsAdmin` posts nothing). Agree shows only while booking
   is open; decline and withdraw always show.
-- **Nobody agrees to their own side's request.** `approveStandinRequest`
+- **No captain agrees to their own side's request.** `approveStandinRequest`
   refuses an actor who captains the asking team (read inside the transaction,
-  so a captaincy handed over since is judged) or who filed the request. Admin
-  callers must pass `actingUserId` (typed).
-- **A no stands for the match.** A captain's ask refuses a standin already
-  DECLINED for that team in this match ("The <other> captain already declined
-  <S> for this match — pick someone else, or ask an admin"), checked inside
-  `requestStandinApproval`'s Serializable transaction. A withdrawn request
-  doesn't count, and the admin panel's "book" is unaffected. The picker greys
-  them out (`loadDeclinedStandinIds` → `standinPickerBlock` `declinedBy`).
+  so a captaincy handed over since is judged) or who filed the request, and
+  the admin tools hide "agree" for that viewer. Admin callers must pass
+  `actingUserId` (typed). The admin panel's "book" stays the admin's own
+  ruling over the rule, logged as such.
+- **A no stands for the match.** On the captain path every booking or ask of
+  a standin already DECLINED for that team in this match is refused, inside
+  the Serializable transaction ("<S> was already declined for <team> in this
+  match — pick someone else, or ask an admin"). A withdrawn request doesn't
+  count, and the admin panel's "book" is unaffected. The picker greys them out
+  (`loadDeclinedStandinIds` → `standinPickerBlock` `declinedBy`).
 - **Agreeing re-runs every booking check.** `approveStandinRequest` runs
   `judgeCover` again (phase, completed match, signup, roster, seat, night), then
   in one Serializable transaction re-reads the other team's captain, claims the
   request (`updateMany` on PENDING), runs `recheckCover` and books. Past the
   claim a failure throws, so a standin who withdrew in the gap leaves the
-  request PENDING, not APPROVED with nobody booked. Seam
+  request PENDING, not APPROVED with nobody booked. `recheckCover` re-reads the
+  match in the transaction too, so a ruling or a retime in the gap is judged
+  (a played match refuses; the same-night clash uses the fresh kickoff). Seam
   `standin.approveRequest.beforeTx` sits between the read-time status check and
   the claim. A failed check speaks to the approver, at read time or in the
   transaction (`agreeTooLateError`): "This can't be agreed to any more: <reason>
@@ -278,12 +286,15 @@ the rows in `StandinRequest`.
   "agree" once booking is closed (`uncoveredByRequest`, `admin-sections.ts`).
 - **Close a request the moment nobody can agree to it.** Inside the change's
   own Serializable transaction, `cancelPendingStandinRequests` reads the
-  PENDING rows and claims exactly those to CANCELLED (a short count throws:
-  `StandinRequestsChangedError`). Who closes what:
+  PENDING rows and claims exactly those to CANCELLED. Every caller is
+  Serializable, so a rival answer aborts one side (P2034) before any short
+  count; the count check (`StandinRequestsChangedError`) is defense in depth.
+  Who closes what:
   - `releasePlayer`: requests to cover that player on unfinished matches;
-  - `signFreeAgent`: requests naming the signed player as the standin, and when
-    the last seat fills, the team's open-seat requests (a partial refill leaves
-    them waiting);
+  - `signFreeAgent`: requests naming the signed player as the standin, and the
+    open-seat requests the smaller seat budget can no longer hold (all of them
+    when the last seat fills; the newest beyond the budget on a partial
+    refill);
   - `leaveLeague` and admin `withdrawSignup`: the leaving standin's requests
     (bookings still refuse a withdrawal);
   - `withdrawTeam`: each fixture whose forfeit claim won;
@@ -292,7 +303,8 @@ the rows in `StandinRequest`.
     decided fixture.
 
   Only the first three need the asking captain to line up someone else, so only
-  they post (`standinRequestCancellations`: `PLAYER_RELEASED`, `STANDIN_SIGNED`,
+  they post (a standin signed onto the very team that asked for them posts
+  nothing: they fill that seat) (`standinRequestCancellations`: `PLAYER_RELEASED`, `STANDIN_SIGNED`,
   `STANDIN_LEFT`, mentioning that team's captain alone, after the commit). The
   rest report the count in the toast and the admin log. Fixture teardowns
   (`replaceRegularSchedule`, `removePostseason`, `clearTiebreakerWeek`,

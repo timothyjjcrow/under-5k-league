@@ -123,7 +123,11 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Mention the person who must act, and nobody else** (a ping people can't act
   on gets the channel muted). OUT or "can make it after all": their captain,
   never about their own answer. Standin booked or removed: the standin, plus
-  the covered captain when someone else acted. Reschedule proposed (a ready
+  the covered captain when someone else acted. Standin request (a booking past
+  the 100-MMR allowance, `standinApprovalRequestedMessage`): the other captain
+  only; agreed (the booking post, with `agreedBy`): the standin plus the asking
+  captain; declined (`standinRequestDeclinedMessage`): the asking captain;
+  withdrawn: nobody. Reschedule proposed (a ready
   check): the other captain, then every other seat on both sides, since each
   must answer, but only for a kickoff's first proposal in
   `READY_CHECK_ROSTER_PING_SECONDS` (6h, `readyCheckRosterPingKey`, keyed by
@@ -163,8 +167,11 @@ actions: `src/app/actions/admin-discord.ts`.
   the same text as before (`{ users: [undefined] }` fails silently).
   `mentionUsers` costs a query: mutation paths only. Only the OAuth-proven
   `discordId` is mentionable, never the typed `discordName`.
-- **Send standin assign/remove posts from all four sites:** `standins.ts` and
-  `admin-roster.ts`, twice each. Stand-down paths:
+- **Send standin posts from every site that writes the change:** assign and
+  remove from `standins.ts` and `admin-roster.ts` (twice each), agree and
+  decline from both files too, and the request-cancellation posts from the
+  roster moves that close a request (`releasePlayer`, `signFreeAgent`,
+  `leaveLeague`, `withdrawSignup`). Stand-down paths:
   `docs/features/rosters-and-standins.md`.
 - **Throttle the OUT ping.** `setAvailability` also claims
   `outPingThrottleKey` (`claimThrottle`, `RSVP_OUT_PING_THROTTLE_SECONDS`)

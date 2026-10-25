@@ -484,12 +484,19 @@ describe("the rules page's claims hold in the code", () => {
   });
 
   it("asks the other captain for a standin more than the allowance above", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "An empty roster seat counts as covering the team's lowest-MMR player. When the site doesn't know one of the two MMRs, the other captain decides.",
+    );
+    expect(rules).toContain(
+      "Admins can book any standin themselves, and can agree, decline or withdraw a request in a captain's place.",
+    );
     // "at most 100 MMR above … books straight away", "more than 100 … agree".
     expect(standinNeedsApproval(2500, 2400)).toBe(false);
     expect(standinNeedsApproval(2501, 2400)).toBe(true);
     // "An empty roster seat counts as covering the team's lowest-MMR player."
     expect(coverBaselineMmr({ rosterMmrs: [3000, 2400, 2800] })).toBe(2400);
-    // "When the site doesn't know either MMR, the other captain decides."
+    // "When the site doesn't know one of the two MMRs, the other captain decides."
     expect(standinNeedsApproval(0, 2400)).toBe(true);
     expect(standinNeedsApproval(2400, null)).toBe(true);
     // "Admins can book any standin themselves": the admin panel books over
@@ -527,7 +534,7 @@ describe("the rules page's claims hold in the code", () => {
   it("states the declined and own-request refusals the server gives", () => {
     const rules = section(build(), "rosters");
     expect(rules).toContain(
-      "Once the other captain declines a standin, that team can't ask for them again for the same match.",
+      "Once a standin is declined for a team, that team's captain can't book or ask for them again for the same match.",
     );
     expect(rules).toContain(
       "An admin can't agree to a request from a team they captain or that they made themselves.",
@@ -545,13 +552,13 @@ describe("the rules page's claims hold in the code", () => {
 
   it("holds a free-agent signing to the same allowance over the player it replaces", () => {
     expect(section(build(), "rosters")).toContain(
-      "A signed player can be at most 100 MMR above the player they replace (the latest to leave that team whose seat is still open), or the team's lowest MMR when nobody has left. An admin can sign them over that, and the announcement shows both MMRs.",
+      "A signed player can be at most 100 MMR above the player they replace (the latest player released from that team whose seat is still open), or the team's lowest MMR when no released player is waiting to be replaced. When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.",
     );
     const replaced = { kind: "replaced" as const, name: "Bob", mmr: 2000 };
     // "at most 100 MMR above the player they replace"
     expect(freeAgentOverRule(2100, replaced)).toBe(false);
     expect(freeAgentOverRule(2101, replaced)).toBe(true);
-    // "the latest to leave that team whose seat is still open"
+    // "the latest player released from that team whose seat is still open"
     const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
     expect(
       unrefilledDeparture([
