@@ -31,7 +31,10 @@ describe("MmrField", () => {
       }),
     );
     expect(html).toContain('value="4400"');
-    expect(html).toContain("you stay listed at 4400 MMR until it ends");
+    expect(html).toContain(
+      "The draft is running, so you stay listed at 4,400 MMR. After the draft only a league admin can change it.",
+    );
+    expect(html).not.toContain("until it ends");
     expect(html).not.toMatch(/<input[^>]*\sdisabled=""/);
   });
 

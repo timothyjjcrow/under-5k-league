@@ -230,7 +230,7 @@ describe("saveRegistration — a player's own MMR is locked after the draft", ()
     expect((await regFor(season.id, user.id)).mmr).toBe(4800);
   });
 
-  it("judges the ceiling on the kept number, not what was typed", async () => {
+  it("never judges the ceiling on what was typed under the lock", async () => {
     const { season, user } = await signedUp({ status: "REGULAR_SEASON" });
 
     const res = await saveRegistration({}, form({ type: "PLAYER", mmr: 6000 }));
@@ -238,6 +238,125 @@ describe("saveRegistration — a player's own MMR is locked after the draft", ()
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/kept 4,200/);
     expect((await regFor(season.id, user.id)).mmr).toBe(4200);
+  });
+
+  it("lets a player an admin set over the ceiling keep saving, the admin's number standing", async () => {
+    // The ceiling judges numbers a player enters. Under the lock this save
+    // stores the admin's 5,200, so refusing it ("you entered 5,200", with
+    // the box disabled) bricked every profile edit for the rest of the season.
+    const { season, user } = await signedUp({
+      status: "REGULAR_SEASON",
+      draftStatus: "COMPLETE",
+      mmr: 5200,
+    });
+
+    // What /me posts with the box disabled: every field but mmr.
+    const fromMe = await saveRegistration(
+      {},
+      form({ type: "PLAYER", roles: "3", about: "still here" }),
+    );
+    expect(fromMe?.error).toBeUndefined();
+    expect(fromMe?.message).toBe("Signup updated");
+    let reg = await regFor(season.id, user.id);
+    expect(reg.mmr).toBe(5200);
+    expect(reg.roles).toBe("3");
+    expect(reg.captainNote).toBe("still here");
+
+    // A stale tab or a replayed POST that still carries the box is kept the
+    // same way, and the toast says so.
+    const typed = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 5200, roles: "1" }),
+    );
+    expect(typed?.error).toBeUndefined();
+    expect(typed?.message).toBe("Signup updated");
+    const lowered = await saveRegistration(
+      {},
+      form({ type: "PLAYER", mmr: 3000, roles: "2" }),
+    );
+    expect(lowered?.error).toBeUndefined();
+    expect(lowered?.message).toMatch(/kept 5,200/);
+    reg = await regFor(season.id, user.id);
+    expect(reg.mmr).toBe(5200);
+    expect(reg.roles).toBe("2");
+  });
+
+  it("keeps every other gate on a kept number over the ceiling", async () => {
+    // A withdrawn standin rejoining is a fresh admission: a Divine 3+ medal
+    // still refuses it, kept number or not.
+    const { season, user } = await signedUp({
+      status: "REGULAR_SEASON",
+      type: "STANDIN",
+      regStatus: "WITHDRAWN",
+      mmr: 5200,
+      rankTier: 80,
+    });
+
+    const rejoin = await saveRegistration({}, form({ type: "STANDIN" }));
+    expect(rejoin?.error).toMatch(/medal puts you above/);
+    expect((await regFor(season.id, user.id)).status).toBe("WITHDRAWN");
+
+    // …and a standin still can't make themselves a full player mid-season.
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { rankTier: null },
+    });
+    const upgrade = await saveRegistration({}, form({ type: "PLAYER" }));
+    expect(upgrade?.error).toBe("Player signups are closed for this season");
+    const reg = await regFor(season.id, user.id);
+    expect(reg.type).toBe("STANDIN");
+    expect(reg.status).toBe("WITHDRAWN");
+  });
+
+  it("a tab left open across an aborted draft keeps the number, saying nothing about MMR", async () => {
+    // The tab rendered while the lock held, so its box is disabled and posts
+    // no mmr field. An admin then aborts the draft (the season goes back to
+    // SIGNUPS and the auction to NOT_STARTED), lifting the lock. The save
+    // from that tab used to read the missing field as a cleared box: 0 with
+    // no medal, silently, or the medal's floor with one.
+    for (const rankTier of [null, 53] as const) {
+      const { season, user } = await signedUp({
+        status: "DRAFT",
+        draftStatus: "COMPLETE",
+        mmr: 4200,
+        rankTier, // Legend 3: a window of 2,965–3,964, under the stored 4,200
+      });
+      await prisma.draft.update({
+        where: { seasonId: season.id },
+        data: { status: "NOT_STARTED" },
+      });
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { status: "SIGNUPS" },
+      });
+
+      const res = await saveRegistration(
+        {},
+        form({ type: "PLAYER", roles: "5", about: "after the abort" }),
+      );
+
+      expect(res?.error).toBeUndefined();
+      expect(res?.message).toBe("Signup updated");
+      const reg = await regFor(season.id, user.id);
+      expect(reg.mmr).toBe(4200);
+      expect(reg.roles).toBe("5");
+      expect(reg.captainNote).toBe("after the abort");
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { isActive: false },
+      });
+    }
+  });
+
+  it("still clears a box the player blanked while unlocked", async () => {
+    // A blank box sends the field (""), unlike a disabled one: that is the
+    // player saying "unknown", judged as typed.
+    const { season, user } = await signedUp({ status: "SIGNUPS", mmr: 3300 });
+
+    const res = await saveRegistration({}, form({ type: "PLAYER", mmr: "" }));
+
+    expect(res?.error).toBeUndefined();
+    expect((await regFor(season.id, user.id)).mmr).toBe(0);
   });
 
   it("still refuses when an admin's correction lands mid-save, keeping theirs", async () => {

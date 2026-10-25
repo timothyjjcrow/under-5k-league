@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   MMR_SELF_EDIT_LOCKED_HINT,
+  keepsStoredMmr,
   medalProvesIneligible,
+  mmrFrozenDuringDraftLine,
   mmrLockedAfterDraftNote,
   mmrSelfEditLocked,
   promoteGateError,
@@ -47,6 +49,79 @@ describe("registrationGate — MMR limits", () => {
     expect(
       registrationGate({ season: soft, type: "STANDIN", mmr: 6000, hasExisting: false }),
     ).toMatch(/over 5000/);
+  });
+});
+
+describe("registrationGate — a kept stored number (mmrKept)", () => {
+  const kept = {
+    season: regular,
+    type: "PLAYER" as const,
+    mmr: 5200, // an admin's number over the ceiling
+    hasExisting: true,
+    existingType: "PLAYER" as const,
+    existingStatus: "ACTIVE",
+  };
+
+  it("leaves the typed-MMR ceiling to numbers the player entered", () => {
+    expect(registrationGate({ ...kept, mmrKept: true })).toBeNull();
+    // The same number typed in is still refused, naming what was typed.
+    expect(registrationGate(kept)).toBe(
+      "This league doesn't take players over 5000 MMR — you entered 5200.",
+    );
+    expect(registrationGate({ ...kept, mmrKept: false })).toMatch(
+      /you entered 5200/,
+    );
+  });
+
+  it("keeps every other rule", () => {
+    // The season is over.
+    expect(
+      registrationGate({ ...kept, season: complete, mmrKept: true }),
+    ).toMatch(/season is complete/);
+    // A re-entry is an admission, so the medal still judges it.
+    expect(
+      registrationGate({
+        ...kept,
+        existingStatus: "WITHDRAWN",
+        rankTier: 80,
+        mmrKept: true,
+      }),
+    ).toMatch(/medal puts you above/);
+    // A standin can't make themselves a full player once signups close.
+    expect(
+      registrationGate({ ...kept, existingType: "STANDIN", mmrKept: true }),
+    ).toBe("Player signups are closed for this season");
+  });
+});
+
+describe("keepsStoredMmr — when a save stores the signup's own number", () => {
+  it("keeps it under the post-draft lock, whatever was typed", () => {
+    expect(
+      keepsStoredMmr({ hasExisting: true, locked: true, mmrSubmitted: true }),
+    ).toBe(true);
+    expect(
+      keepsStoredMmr({ hasExisting: true, locked: true, mmrSubmitted: false }),
+    ).toBe(true);
+  });
+
+  it("reads a missing field on an existing signup as unchanged in every phase", () => {
+    // A disabled box posts nothing; the lock may have lifted since the page
+    // rendered (an aborted draft), and that must not clear the number.
+    expect(
+      keepsStoredMmr({ hasExisting: true, locked: false, mmrSubmitted: false }),
+    ).toBe(true);
+  });
+
+  it("judges a submitted box, blank included, while unlocked, and every new signup", () => {
+    expect(
+      keepsStoredMmr({ hasExisting: true, locked: false, mmrSubmitted: true }),
+    ).toBe(false);
+    expect(
+      keepsStoredMmr({ hasExisting: false, locked: false, mmrSubmitted: false }),
+    ).toBe(false);
+    expect(
+      keepsStoredMmr({ hasExisting: false, locked: true, mmrSubmitted: true }),
+    ).toBe(false);
   });
 });
 
@@ -554,6 +629,17 @@ describe("mmrSelfEditLocked — a player's own MMR after the draft", () => {
     );
   });
 
+  it("words the draft-night freeze without promising an edit window after it", () => {
+    // The post-draft lock follows the auction, so "until it ends" would
+    // promise self-editing that never opens.
+    expect(mmrFrozenDuringDraftLine(4200)).toBe(
+      "The draft is running, so you stay listed at 4,200 MMR. After the draft only a league admin can change it.",
+    );
+    expect(mmrFrozenDuringDraftLine(0)).toBe(
+      "The draft is running, so you stay listed at an unknown MMR. After the draft only a league admin can change it.",
+    );
+  });
+
   it("is the one rule saveRegistration and the /me form both apply", () => {
     // The action keeps the stored number on the rule's say, and only after
     // reading the signup it is about to keep.
@@ -569,10 +655,19 @@ describe("mmrSelfEditLocked — a player's own MMR after the draft", () => {
     );
     expect(save).toMatch(/mmrLockedAfterDraftNote\(existing\.mmr\)/);
     expect(save).toMatch(/mmr = existing\.mmr;/);
+    // A missing field keeps the number in every phase, and the gate is told
+    // the number was kept, not entered.
+    expect(save).toMatch(/mmrSubmitted: formData\.has\("mmr"\)/);
+    expect(save).toMatch(/^\s*mmrKept,$/m);
     // …and decides it before the gate judges the number.
     expect(save.indexOf("mmrSelfEditLocked(")).toBeLessThan(
       save.indexOf("const gateFacts"),
     );
+    expect(save.indexOf("keepsStoredMmr(")).toBeLessThan(
+      save.indexOf("const gateFacts"),
+    );
+    // The draft-night freeze's toast is the shared sentence.
+    expect(save).toMatch(/mmrFrozenDuringDraftLine\(existing\.mmr\)/);
 
     // /me: the page computes the lock from the same facts and hands it to
     // the one MMR box, which disables itself and shows the hint.

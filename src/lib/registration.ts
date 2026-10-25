@@ -43,6 +43,15 @@ export type RegistrationGateInput = {
    * "judge this as an admission", the safe default every existing caller gets.
    */
   existingStatus?: string | null;
+  /**
+   * `mmr` is the signup's own stored number, kept rather than entered
+   * (`keepsStoredMmr`: the post-draft lock, or a form that sent no MMR). The
+   * typed-MMR ceiling judges what a player sets, so it doesn't judge this:
+   * an admin who set a number over it made that call, and "you entered …"
+   * would name a number the player never typed. Every other rule still
+   * applies. Absent means entered, as every other caller has it.
+   */
+  mmrKept?: boolean;
 };
 
 export type WithdrawGateInput = {
@@ -117,17 +126,47 @@ export function mmrSelfEditLocked(
   );
 }
 
+/**
+ * Whether saveRegistration stores an existing signup's own MMR instead of
+ * the box: while mmrSelfEditLocked holds, whatever was typed, and in every
+ * phase when the form sent no `mmr` field at all. A disabled box submits
+ * nothing, so a /me tab left open while the lock came and went (the draft
+ * completed, then an admin aborted it) posts no field, and reading that as
+ * a cleared box stored 0, or the medal's floor, without a word. A blank box
+ * DOES send the field (""): that is the player clearing it, judged as typed.
+ * A new signup never keeps anything; it has nothing stored.
+ */
+export function keepsStoredMmr(input: {
+  hasExisting: boolean;
+  locked: boolean;
+  mmrSubmitted: boolean;
+}): boolean {
+  return input.hasExisting && (input.locked || !input.mmrSubmitted);
+}
+
 /** Under /me's disabled MMR box while mmrSelfEditLocked holds. */
 export const MMR_SELF_EDIT_LOCKED_HINT =
   "Locked after the draft — ask a league admin to change it.";
 
+const mmrDigits = new Intl.NumberFormat("en-US");
+
 /** The toast's note when a locked MMR edit was kept (never a silent rewrite). */
 export function mmrLockedAfterDraftNote(storedMmr: number): string {
   const kept =
-    storedMmr > 0
-      ? `kept ${new Intl.NumberFormat("en-US").format(storedMmr)}`
-      : "it stays unknown";
+    storedMmr > 0 ? `kept ${mmrDigits.format(storedMmr)}` : "it stays unknown";
   return ` · MMR is locked after the draft — ${kept}. Ask a league admin to change it.`;
+}
+
+/**
+ * The draft-night freeze in words: a full player's MMR stays put while the
+ * auction runs (live or paused). It promises no edit window afterwards, since
+ * the post-draft lock (mmrSelfEditLocked) follows straight on. The same
+ * sentence under /me's box (mmrPreviewLine) and in saveRegistration's toast.
+ */
+export function mmrFrozenDuringDraftLine(storedMmr: number): string {
+  const listed =
+    storedMmr > 0 ? `${mmrDigits.format(storedMmr)} MMR` : "an unknown MMR";
+  return `The draft is running, so you stay listed at ${listed}. After the draft only a league admin can change it.`;
 }
 
 /**
@@ -234,7 +273,8 @@ export function signupRemovalBlockers({
  *
  * The two ceiling rules are asymmetric ON PURPOSE. The TYPED MMR is re-judged
  * on every submit — it is a number the player controls, so the ceiling has to
- * hold each time they set it. The MEDAL rule runs only at ADMISSION, because
+ * hold each time they set it (a stored number the save keeps instead,
+ * `mmrKept`, is not one they set). The MEDAL rule runs only at ADMISSION, because
  * it judges a value synced behind their back that an admin has already been
  * shown and chosen to keep (see the medal branch below).
  *
@@ -248,12 +288,14 @@ export function registrationGate({
   hasExisting,
   existingType,
   existingStatus,
+  mmrKept = false,
 }: RegistrationGateInput): string | null {
   const seasonClosed = registrationSeasonClosedError(season.status);
   if (seasonClosed) return seasonClosed;
   // The soft limit (season.maxMmr) is a review threshold, not a block — only
   // the hard ceiling turns anyone away (keeps out 5K+ players and Immortals).
-  if (mmr > HARD_MMR_CEILING) {
+  // A kept stored number isn't a claim (see mmrKept), so it isn't judged.
+  if (!mmrKept && mmr > HARD_MMR_CEILING) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — you entered ${mmr}.`;
   }
   // The medal alone can prove ineligibility — but only at ADMISSION. A Divine
