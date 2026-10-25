@@ -2043,10 +2043,11 @@ describe("generateSchedule — the results gate (both halves)", () => {
   });
 });
 
-describe("generateSchedule — the team count sets the format, not a switch", () => {
+describe("generateSchedule — the saved layout decides, not a stray field", () => {
   // The double round robin was a checkbox (wired 2026-07-28 after the lib
-  // had it for weeks). Since the season format (2026-10-19) the team count
-  // decides: four teams or fewer play twice, five to nine play once.
+  // had it for weeks). Since the season format (2026-10-19) the layout
+  // decides it: with none saved, Recommended plays four teams or fewer
+  // twice and five to nine once (season-builder.ts saves another).
   it("plays four teams twice, every pairing mirrored home/away", async () => {
     const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
     for (let i = 0; i < 4; i++) await makeTeam(season.id, `RR${i}`, i + 1);
@@ -2060,7 +2061,7 @@ describe("generateSchedule — the team count sets the format, not a switch", ()
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).toMatch(/One table, played twice · 12 matches over 6 week\(s\)/);
+    expect(res?.message).toMatch(/One table, played twice · all 4 teams make the playoffs · 12 matches over 6 week\(s\)/);
     const matches = await prisma.match.findMany({
       where: { seasonId: season.id },
     });
@@ -2099,7 +2100,7 @@ describe("generateSchedule — the team count sets the format, not a switch", ()
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).toMatch(/One table · 15 matches over 5 week\(s\)/);
+    expect(res?.message).toMatch(/One table · the top 4 make the playoffs · 15 matches over 5 week\(s\)/);
     expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(
       15,
     );

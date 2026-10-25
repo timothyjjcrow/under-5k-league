@@ -8,7 +8,7 @@ import {
   type FixtureKickoff,
 } from "@/lib/match-night";
 import { matchNightPollOpen } from "@/lib/match-night-poll-service";
-import { leagueRules, rulesSeasonFormat } from "@/lib/league-rules";
+import { leagueRules, regularScheduleMade, rulesSeasonFormat } from "@/lib/league-rules";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   Badge,
@@ -63,6 +63,7 @@ export default async function RulesPage() {
     // schedule exists.
     teamCount: teams ? teams.filter((team) => !team.withdrawn).length : null,
     format: active && teams ? rulesSeasonFormat(active, teams, fixtures) : null,
+    formatFinal: regularScheduleMade(fixtures),
   });
 
   return (

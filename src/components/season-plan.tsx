@@ -28,13 +28,16 @@ function weeksLabel(step: SeasonPlanStep): string {
 export function SeasonPlanList({
   plan,
   className,
+  label = "Season plan",
 }: {
   plan: SeasonPlanStep[];
   className?: string;
+  /** The list's accessible name, where a page shows a second plan. */
+  label?: string;
 }) {
   return (
     <ol
-      aria-label="Season plan"
+      aria-label={label}
       className={cn("grid grid-cols-1 gap-1 text-xs text-muted sm:grid-cols-2", className)}
     >
       {plan.map((step) => (

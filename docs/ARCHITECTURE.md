@@ -215,12 +215,15 @@ roster command.
 
 **Schedule generation.** `generateSchedule`
 (`src/app/actions/admin-schedule-results.ts`, over `replaceRegularSchedule`,
-shared with `swapGroupTeams`) takes the season's format from its team count
-(`plannedSeasonFormat`, `src/lib/season-format.ts`; readers print the format
-a season plays through `resolveSeasonFormat`, which is the same except for a
-table of ten or more generated before groups: one table up to nine teams,
-played twice up to four; two groups from ten, drawn by roster MMR and stored
-on `Team.groupKey`), runs the pure circle-method round robin per group
+shared with `swapGroupTeams`) builds the layout the season builder posted
+(saved to `Season.formatConfig` with the fixtures), else the stored one, else
+Recommended for the team count (`plannedSeasonFormat`,
+`src/lib/season-format.ts`; the builder's rules are `src/lib/season-builder.ts`
+and its save is `saveSeasonFormat`; readers print the format a season plays
+through `resolveSeasonFormat`, which is the same except for a table of ten or
+more generated before groups. Recommended is one table up to nine teams,
+played twice up to four, and two groups from ten; groups are drawn by roster
+MMR and stored on `Team.groupKey`), runs the pure circle-method round robin per group
 (`regularSeasonFixtures` over `roundRobin` in `src/lib/schedule.ts`,
 home/away fairness, rotating BYE, mirrored second leg for small tables) and
 stamps kickoffs as pure arithmetic off `Season.firstMatchNight`

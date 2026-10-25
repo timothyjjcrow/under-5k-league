@@ -30,11 +30,22 @@ import {
   SEASON_FORMAT_SELECT,
   formatName,
   parseFormatConfig,
+  plannedSeasonFormat,
   playoffEntrantsPhrase,
   resolveSeasonFormat,
   seasonGroupKeys,
+  seasonLengthPhrase,
   seasonPlan,
+  serializeFormatConfig,
+  type SeasonFormat,
 } from "@/lib/season-format";
+import {
+  formatDiff,
+  formatEditState,
+  formatProblems,
+  knobsLabel,
+  parseFormatChoice,
+} from "@/lib/season-builder";
 import { ADMIN_PHASE_LABEL as PHASE_LABELS } from "@/lib/season-copy";
 import {
   SERIES_LENGTH_PHASES,
@@ -704,14 +715,16 @@ async function seasonOpeningSlate(seasonId: string) {
       whenMs: fixture.scheduledAt?.getTime() ?? null,
     })),
     byes: stillIn.filter((team) => !playing.has(team.id)).map((team) => team.name),
+    // Every season names its cut: an admin may have chosen a top 2 or a top
+    // 8, so it no longer follows from the team count. A format this release
+    // can't read (a newer one's, after a rollback) gets no line: its
+    // stand-in could name a cut the standings don't use, and a post is
+    // never corrected.
+    ...(format && parseFormatConfig(season.formatConfig).kind !== "UNREADABLE"
+      ? { format: `${formatName(format)}: ${playoffEntrantsPhrase(format)} make the playoffs.` }
+      : {}),
     ...(groupKeys
       ? {
-          // A format this release can't read (a newer one's, after a
-          // rollback) gets no line: its stand-in could name a cut the
-          // standings don't use, and a post is never corrected.
-          ...(format && parseFormatConfig(season.formatConfig).kind !== "UNREADABLE"
-            ? { format: `${formatName(format)}: ${playoffEntrantsPhrase(format)} make the playoffs.` }
-            : {}),
           groups: groupKeys.map((key) => ({
             key,
             teams: stillIn.filter((team) => team.groupKey === key).map((team) => team.name),
@@ -1186,6 +1199,173 @@ export async function setSeriesLengths(
   refresh();
   return {
     message: `Series lengths saved · regular Bo${regularBestOf}, playoffs Bo${playoffBestOf}, final Bo${finalBestOf}${note}`,
+  };
+}
+
+/** A save the season's state refuses; its message is the toast. */
+class FormatSaveRefusal extends Error {}
+
+/**
+ * Save the season's format (the season builder). Before the schedule exists
+ * it is the plan generation will build; while fixtures exist and no result
+ * does, only the playoff places change here, in place, and a change to the
+ * groups or how often teams meet goes through Regenerate, which writes the
+ * layout with its fixtures. Locked while any result stands
+ * (`formatEditState`, which the card shares).
+ */
+export async function saveSeasonFormat(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const claim = await renderedSeasonClaim(formData);
+  if ("error" in claim) return claim;
+  const choice = parseFormatChoice({
+    formatChoice: str(formData, "formatChoice"),
+    groups: str(formData, "groups"),
+    meet: str(formData, "meet"),
+    playoffs: str(formData, "playoffs"),
+  });
+  if (!choice) {
+    return {
+      error:
+        "Pick Recommended, or a layout: one table or two groups, once or twice, and the top 2, 4 or 8.",
+    };
+  }
+  const nextConfig = serializeFormatConfig(choice.kind === "CUSTOM" ? choice.knobs : null);
+  const seasonId = claim.expectedId;
+  let saved: {
+    teamCount: number;
+    built: boolean;
+    /** A built season's playoff places moved (the result stamp did too). */
+    cutMoved: boolean;
+    countFinal: boolean;
+    before: SeasonFormat | null;
+    after: SeasonFormat | null;
+  } | null;
+  try {
+    // Serializable, with both rivals in its read set: generate and swap
+    // read this row and write the fixtures this counts, and a first result
+    // (recordResult, an import, a withdrawal) reads this row and writes the
+    // matches and games this counts. Whichever commits second conflicts.
+    saved = await retrySerializable(() =>
+      prisma.$transaction(
+        async (tx) => {
+          const [season, draft, teams, regularFixtures, regularResults, games] =
+            await Promise.all([
+              tx.season.findUnique({
+                where: { id: seasonId },
+                select: { isActive: true, status: true, ...SEASON_FORMAT_SELECT },
+              }),
+              tx.draft.findUnique({ where: { seasonId }, select: { status: true } }),
+              tx.team.findMany({ where: { seasonId }, select: { groupKey: true } }),
+              tx.match.count({ where: { seasonId, phase: MATCH_PHASE.REGULAR } }),
+              tx.match.count({
+                where: {
+                  seasonId,
+                  phase: MATCH_PHASE.REGULAR,
+                  status: MATCH_STATUS.COMPLETED,
+                },
+              }),
+              tx.game.count({ where: { match: { seasonId } } }),
+            ]);
+          if (!season?.isActive) return null;
+          const state = formatEditState({
+            seasonStatus: season.status,
+            draftStatus: draft?.status,
+            regularFixtures,
+            regularResults,
+            games,
+          });
+          if (state.mode === "LOCKED") {
+            throw new FormatSaveRefusal(`${state.lockReason} Nothing was changed.`);
+          }
+          // Fixtures built from a format this version can't read: it can't
+          // tell whether a new layout keeps them, so only a rebuild may
+          // replace it (generate saves the layout with its fixtures).
+          if (
+            state.mode === "BUILT" &&
+            parseFormatConfig(season.formatConfig).kind === "UNREADABLE"
+          ) {
+            throw new FormatSaveRefusal(
+              "These fixtures were built from a format saved by a newer version of the site, so this version can't tell whether a new layout keeps them. Use Regenerate schedule, which saves the layout with its new fixtures. Nothing was changed.",
+            );
+          }
+          const before = resolveSeasonFormat(season, teams, regularFixtures > 0);
+          const after = plannedSeasonFormat({ formatConfig: nextConfig }, teams.length);
+          if (
+            state.mode === "BUILT" &&
+            before &&
+            after &&
+            (before.kind !== after.kind ||
+              before.doubleRound !== after.doubleRound ||
+              before.groupSizes.join() !== after.groupSizes.join())
+          ) {
+            throw new FormatSaveRefusal(
+              "That changes the groups or how often teams meet, so the fixtures must be rebuilt. Use Regenerate schedule, which saves the layout with its new fixtures. Nothing was changed.",
+            );
+          }
+          if (state.countFinal && choice.kind === "CUSTOM") {
+            const [error] = formatProblems(choice.knobs, teams.length).errors;
+            if (error) {
+              throw new FormatSaveRefusal(
+                `This layout doesn't fit the season's ${teams.length} teams: ${error} Nothing was changed.`,
+              );
+            }
+          }
+          // The first write: a stale form still refuses without a half-save.
+          if (!(await updateRenderedSeason(claim, { formatConfig: nextConfig }, tx))) {
+            return null;
+          }
+          // The playoff cut moved under existing fixtures: public snapshots
+          // are keyed on the result stamp. A save that resolves to the same
+          // cut (a custom layout equal to Recommended) moves nothing.
+          const cutMoved =
+            state.mode === "BUILT" && before?.playoffSpots !== after?.playoffSpots;
+          if (cutMoved) await stampResultChange(tx);
+          return {
+            teamCount: teams.length,
+            built: state.mode === "BUILT",
+            cutMoved,
+            countFinal: state.countFinal,
+            before,
+            after,
+          };
+        },
+        { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+      ),
+    );
+  } catch (error) {
+    if (error instanceof FormatSaveRefusal) return { error: error.message };
+    if (!isSerializationConflict(error)) throw error;
+    return {
+      error:
+        "The season changed while the format was being saved. Nothing was changed; reload and try again.",
+    };
+  }
+  if (!saved) return staleSeasonSettingsError;
+  const label = choice.kind === "CUSTOM" ? knobsLabel(choice.knobs) : "Recommended";
+  const length = saved.after ? ` · ${seasonLengthPhrase(saved.after)} with ${saved.teamCount} teams` : "";
+  const unfit =
+    !saved.countFinal && choice.kind === "CUSTOM"
+      ? formatProblems(choice.knobs, saved.teamCount).errors[0]
+      : undefined;
+  const diff = saved.before && saved.after ? formatDiff(saved.before, saved.after) : "";
+  await logAdminAction({
+    action: "saveSeasonFormat",
+    summary: `Season format: ${saved.before ? formatName(saved.before) : "none"} → ${label}${diff ? ` (${diff})` : ""}`,
+    seasonId: claim.season.id,
+  });
+  refresh();
+  return {
+    message: `Season format saved · ${label}${length}${
+      saved.built
+        ? saved.cutMoved
+          ? " · the fixtures stay as they are; only the playoff places changed"
+          : " · the fixtures and the playoff places stay as they are"
+        : ""
+    }${unfit ? ` · with ${saved.teamCount} captains today it can't be generated: ${unfit}` : ""}`,
   };
 }
 

@@ -99,7 +99,6 @@ import {
   reinstateSignup,
 } from "@/app/actions/admin-roster";
 import {
-  generateSchedule,
   startPlayoffs,
   returnToRegularSeasonAction,
   setWeekNight,
@@ -148,13 +147,10 @@ import { LocalTime } from "@/components/local-time";
 import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
 import { RollCallControls } from "@/components/admin/roll-call-controls";
+import { SeasonFormatBuilder } from "@/components/admin/season-format-builder";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
-import {
-  formatName,
-  parseFormatConfig,
-  plannedSeasonFormat,
-  teamCountSeasonNote,
-} from "@/lib/season-format";
+import { formatEditState, formatProblems, knobsLabel } from "@/lib/season-builder";
+import { parseFormatConfig, teamCountSeasonNote } from "@/lib/season-format";
 import { playoffPlacesPhrase } from "@/lib/season-groups";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
@@ -447,14 +443,26 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     season?.status === "DRAFT" && data?.draft?.status === DRAFT_STATUS.COMPLETE;
   const setupFirst =
     season?.status === "SIGNUPS" || (season?.status === "DRAFT" && !auctionDone);
-  const setupControls = season && data && nextStep ? <>
-          <AdminAnchor id="adm-season">
-            <SeasonControls season={season} data={data} nextStep={nextStep} />
-          </AdminAnchor>
-          <AdminAnchor id="adm-captains">
-            <CaptainControls season={season} data={data} />
-          </AdminAnchor>
-  </> : null;
+  const seasonCard = season && data && nextStep ? (
+    <AdminAnchor id="adm-season">
+      <SeasonControls season={season} data={data} nextStep={nextStep} />
+    </AdminAnchor>
+  ) : null;
+  const captainsCard = season && data && nextStep ? (
+    <AdminAnchor id="adm-captains">
+      <CaptainControls season={season} data={data} />
+    </AdminAnchor>
+  ) : null;
+  const setupControls = seasonCard ? <>{seasonCard}{captainsCard}</> : null;
+  // While captains are picked the layout is chosen beside them. Once the
+  // schedule card shows (after the auction, or fixtures from a phase
+  // recovery) the builder lives there instead, so there is only ever one.
+  const formatSetupCard =
+    season && data && formatBuilderAnchor(season, data) === "#adm-format" ? (
+      <AdminAnchor id="adm-format">
+        <SeasonFormatSetup season={season} data={data} nowMs={nowMs} />
+      </AdminAnchor>
+    ) : null;
   // Between seasons the job left on this page is opening the next one, so
   // its card leads, right under the title: once a champion is crowned, and
   // in the offseason. A crowned season's own cards can no longer change much,
@@ -529,6 +537,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   // season's working cards.
   const setupItems = [
     { id: "adm-season", label: "Phase" },
+    ...(formatSetupCard ? [{ id: "adm-format", label: "Season format" }] : []),
     { id: "adm-captains", label: "Captains & draft" },
   ];
   const reachItem = { id: "adm-reach", label: "Discord reach" };
@@ -697,7 +706,9 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           ) : null}
           {setupFirst ? (
             <>
-              {setupControls}
+              {seasonCard}
+              {formatSetupCard}
+              {captainsCard}
               {reachCard}
               {rollCallCard}
             </>
@@ -1575,16 +1586,33 @@ function AdminAttention({
     (text, index) => ({ key: `delivery-${index}`, text, href: "#adm-discord" }),
   );
   // A format a newer release saved: every command that builds from it refuses.
-  const formatItems =
+  // While the builder renders, saving a layout replaces the value; once it
+  // is locked only the newer version can build from it.
+  const formatMode =
     parseFormatConfig(season.formatConfig).kind === "UNREADABLE"
-      ? [
-          {
-            key: "format-unreadable",
-            text: "This season's format was saved by a newer version of the site, so generating the schedule, starting playoffs and scheduling tiebreakers are refused until that version is back.",
-            href: "#adm-schedule",
-          },
-        ]
-      : [];
+      ? seasonFormatEditState(season, data).mode
+      : null;
+  const formatItems =
+    formatMode === null
+      ? []
+      : [
+          formatMode === "LOCKED"
+            ? {
+                key: "format-unreadable",
+                text: "This season's format was saved by a newer version of the site, so starting playoffs and scheduling tiebreakers are refused until that version is back.",
+                href: "#adm-schedule",
+              }
+            : {
+                key: "format-unreadable",
+                text: `This season's format was saved by a newer version of the site, which this version can't build from: swapping groups, starting playoffs and scheduling tiebreakers are refused. ${
+                  formatMode === "BUILT"
+                    ? "Regenerate schedule in the season builder replaces it."
+                    : "Saving a layout in the season builder, or generating the schedule from it, replaces it."
+                }`,
+                // The builder: its own card until the schedule card shows.
+                href: formatBuilderAnchor(season, data),
+              },
+        ];
   const items = [
     ...deliveryItems,
     ...formatItems,
@@ -2432,6 +2460,21 @@ function CaptainControls({
     data.teams,
     data.players,
   );
+  // A saved layout that this many captains can't build: the preflight says
+  // so in red, since Generate will refuse it after the auction.
+  const storedFormat = parseFormatConfig(season.formatConfig);
+  const formatUnfitError =
+    storedFormat.kind === "CUSTOM"
+      ? formatProblems(storedFormat.knobs, captainCount).errors[0]
+      : undefined;
+  // The note quotes one fewer and one more captain only where the saved
+  // layout could be built.
+  const formatFits = (count: number) =>
+    storedFormat.kind !== "CUSTOM" || formatProblems(storedFormat.knobs, count).errors.length === 0;
+  const formatUnfit =
+    storedFormat.kind === "CUSTOM" && formatUnfitError
+      ? { knobs: storedFormat.knobs, error: formatUnfitError }
+      : null;
   // The sale Undo last sale would revert — the newest AUCTION purchase
   // (price > 0; $0 rows are free-agent signings), the same row undoLastSale
   // picks — so the confirm can name it like the draft room's does. The form
@@ -2739,10 +2782,24 @@ function CaptainControls({
                     : seatFitSentence(seats, season.teamSize)}
               </li>
               {captainCount >= 2 ? (
-                <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
+                <li
+                  className={cn(
+                    "rounded-md border border-line/70 px-3 py-2 sm:col-span-2",
+                    formatUnfit ? "text-danger" : "text-muted",
+                  )}
+                >
                   <b className="text-fg">Season format:</b>{" "}
-                  {teamCountSeasonNote(season, captainCount)} One captain is one team,
-                  and the site picks the format from that count.
+                  {formatUnfit
+                    ? `the saved layout (${knobsLabel(formatUnfit.knobs).toLowerCase()}) can't be generated with ${captainCount} teams: ${formatUnfit.error}`
+                    : `${teamCountSeasonNote(season, captainCount, formatFits)} One captain is one team; ${
+                        storedFormat.kind === "CUSTOM"
+                          ? "the layout is the one saved in the season builder."
+                          : "Recommended follows that count."
+                      }`}{" "}
+                  <a href={formatBuilderAnchor(season, data)} className={textLink()}>
+                    Change it in Season format
+                  </a>
+                  .
                 </li>
               ) : null}
               <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
@@ -3724,6 +3781,87 @@ function TiebreakerControls({
   );
 }
 
+/**
+ * Where the season builder renders, for the page and every link to it: its
+ * own Season format card while captains are picked (`setupFirst`) and the
+ * schedule card is hidden, else inside Schedule & results. Only one renders.
+ */
+function formatBuilderAnchor(season: Season, data: AdminData): "#adm-format" | "#adm-schedule" {
+  const draftStatus = data.draft?.status ?? null;
+  const setupFirst =
+    season.status === SEASON_STATUS.SIGNUPS ||
+    (season.status === SEASON_STATUS.DRAFT && draftStatus !== DRAFT_STATUS.COMPLETE);
+  const scheduleCard = adminSeasonCards({
+    seasonStatus: season.status,
+    draftStatus,
+    matches: data.matches,
+    openBookings: 0,
+    archivedPostseasonGames: 0,
+  }).schedule;
+  return setupFirst && !scheduleCard ? "#adm-format" : "#adm-schedule";
+}
+
+/** `formatEditState` from the page's data: the counts saveSeasonFormat reads. */
+function seasonFormatEditState(season: Season, data: AdminData) {
+  return formatEditState({
+    seasonStatus: season.status,
+    draftStatus: data.draft?.status ?? null,
+    regularFixtures: data.matches.filter((m) => m.phase === MATCH_PHASE.REGULAR).length,
+    regularResults: regularSeasonStatus(data.matches).completed,
+    games: data.matches.reduce((sum, match) => sum + match.games.length, 0),
+  });
+}
+
+/**
+ * Signups and the draft: the season builder before any fixture exists, so
+ * the layout is chosen while the captains (one per team) are picked, not
+ * met for the first time after the auction. It only saves here; Generate
+ * joins it in Schedule & results once the auction is complete.
+ */
+function SeasonFormatSetup({
+  season,
+  data,
+  nowMs,
+}: {
+  season: Season;
+  data: AdminData;
+  nowMs: number;
+}) {
+  const regularMatches = data.matches.filter((m) => m.phase === MATCH_PHASE.REGULAR);
+  const formatState = seasonFormatEditState(season, data);
+  if (formatState.mode === "LOCKED") return null;
+  const scheduleRevision = regularScheduleRevision(regularMatches.map((match) => match.id));
+  return (
+    <Card>
+      <CardHeader
+        headingLevel={2}
+        title="Season format"
+        subtitle="How the season runs: one table or two groups, how often teams meet and how many make the playoffs. Save it before the auction; the schedule is built from it afterwards."
+      />
+      <CardBody>
+        <SeasonFormatBuilder
+          placement="setup"
+          season={{
+            id: season.id,
+            name: season.name,
+            formatConfig: season.formatConfig,
+            updatedAt: season.updatedAt.toISOString(),
+          }}
+          teamGroupKeys={data.teams.map((team) => team.groupKey)}
+          mode={formatState.mode}
+          countFinal={formatState.countFinal}
+          regularCount={regularMatches.length}
+          scheduleRevision={scheduleRevision}
+          generateLockedReason={null}
+          firstMatchNightTs={season.firstMatchNight?.getTime() ?? null}
+          nowMs={nowMs}
+          regenerateConsequences={[]}
+        />
+      </CardBody>
+    </Card>
+  );
+}
+
 function ScheduleControls({
   season,
   data,
@@ -3747,15 +3885,23 @@ function ScheduleControls({
     (m) => m.phase === "TIEBREAKER",
   );
   const playoffField = projectPlayoffField(data.teams, data.matches, season);
-  const seasonGrouped = playoffField.kind === "GROUPS";
   // The fixtures these forms show: a rebuild refuses if another admin's
   // generate or rebuild replaced them since (regularScheduleRevision).
   const scheduleRevision = regularScheduleRevision(regularMatches.map((match) => match.id));
-  // A table of ten or more generated before groups regenerates as groups.
-  const rebuildFormat = plannedSeasonFormat(season, data.teams.length);
-  const rebuildChangesFormat =
-    regularCount > 0 && rebuildFormat !== null && rebuildFormat.kind !== playoffField.kind;
   const collateral = data.collateral;
+  // What a regenerate destroys, for every confirm that rebuilds fixtures.
+  const regenerateConsequences = [
+    ...(collateral.rsvps ? [`${collateral.rsvps} player check-in(s) are cleared.`] : []),
+    ...(collateral.picks ? [`${collateral.picks} pick'em pick(s) are deleted.`] : []),
+    ...(collateral.covers
+      ? [
+          `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
+        ]
+      : []),
+    ...(collateral.proposals
+      ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
+      : []),
+  ];
   const lastRegularWeek = regularMatches.reduce(
     (max, match) => Math.max(max, match.week),
     0,
@@ -3784,128 +3930,52 @@ function ScheduleControls({
         : data.teams.length < 2
           ? "At least two drafted teams are required before a schedule can be generated."
           : null);
+  // The same predicate saveSeasonFormat runs in its transaction.
+  const formatState = seasonFormatEditState(season, data);
   return (
     <Card>
       <CardHeader
         headingLevel={2}
         title="Schedule & results"
-        subtitle="Generate the schedule (the team count sets the format) and enter weekly scores."
+        subtitle="Choose the season's layout, generate the schedule and enter weekly scores."
         action={
           // The lock reason sits where the control would be, not in a banner
           // over the card: once any result exists it is true all season.
-          scheduleGenerationLockedReason ? (
+          // Until then the season builder below holds Generate.
+          formatState.mode === "LOCKED" ? (
             <p className="max-w-sm text-xs text-muted">
               {regularCount > 0 ? "Regenerate schedule" : "Generate schedule"}{" "}
-              is unavailable: {scheduleGenerationLockedReason}
+              is unavailable:{" "}
+              {scheduleGenerationLockedReason ?? formatState.lockReason}
             </p>
-          ) : (
-            <ActionForm
-              action={generateSchedule}
-              hidden={{ expectedActiveSeasonId: season.id, expectedSchedule: scheduleRevision }}
-              className="flex flex-wrap items-center gap-2"
-            >
-              <label
-                htmlFor="firstNight"
-                className="text-xs text-muted"
-                title="Week 1 plays at this time on the league's clock; each later week (and playoff round) is +7 days at the same time."
-              >
-                First match night
-              </label>
-              {/* Required: a fixture with no kickoff gets no check-in, no
-                  reminder, no automatic results and no pick'em lock. */}
-              <LocalDatetimeField
-                id="firstNight"
-                name="firstNight"
-                tsName="firstNightTs"
-                required
-                defaultTs={
-                  season.firstMatchNight &&
-                  season.firstMatchNight.getTime() >= nowMs
-                    ? season.firstMatchNight.getTime()
-                    : undefined
-                }
-                // A week 1 already past would schedule kickoffs nobody can
-                // play; the server refuses it too.
-                minTs={nowMs}
-                timeZone={LEAGUE_CONFIG.timeZone}
-                className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-              />
-              {/* The team count picks one table or two groups (and a
-                  double round robin for four teams or fewer); nothing to
-                  choose here. A regenerate keeps the groups it finds, so a
-                  swap survives a new first night, unless this is ticked. */}
-              {seasonGrouped ? (
-                <label
-                  className="flex items-center gap-1.5 text-xs text-muted"
-                  title="Deal the groups again by each roster's average signup MMR, undoing any swap. Unticked, the regenerated schedule keeps today's groups."
-                >
-                  <input
-                    type="checkbox"
-                    name="redrawGroups"
-                    className="h-3.5 w-3.5 accent-[var(--color-brand)]"
-                  />
-                  redraw the groups
-                </label>
-              ) : null}
-              {/* GENERATE and REGENERATE are the same action and were the same
-                button. The first is routine; the second deletes every regular
-                fixture and recreates the identical pairings with NEW ids, so
-                every check-in, pick'em pick, arranged standin booking and open
-                reschedule proposal cascades away — none of which is archived
-                anywhere, and mid-season that is cover captains spent days
-                arranging. Different controls, so the routine one can stay
-                cheap. */}
-              {regularCount > 0 ? (
-                <DangerSubmit
-                  token={season.name}
-                  title="Replace the regular-season schedule?"
-                  consequences={[
-                    rebuildChangesFormat && rebuildFormat
-                      ? `All ${regularCount} regular-season fixture(s) are deleted, and the new schedule is ${formatName(rebuildFormat).toLowerCase()} drawn by roster MMR, not one table.`
-                      : seasonGrouped
-                        ? `All ${regularCount} regular-season fixture(s) are deleted and recreated with new ids — the same pairings unless "redraw the groups" is ticked.`
-                        : `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
-                    ...(collateral.rsvps
-                      ? [`${collateral.rsvps} player check-in(s) are cleared.`]
-                      : []),
-                    ...(collateral.picks
-                      ? [`${collateral.picks} pick'em pick(s) are deleted.`]
-                      : []),
-                    ...(collateral.covers
-                      ? [
-                          `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
-                        ]
-                      : []),
-                    ...(collateral.proposals
-                      ? [
-                          `${collateral.proposals} open reschedule proposal(s) are cancelled.`,
-                        ]
-                      : []),
-                  ]}
-                  recovery={
-                    rebuildChangesFormat
-                      ? "Playoff matches are untouched. The one-table schedule can't be rebuilt, and none of the check-ins, picks or bookings can be restored."
-                      : "Playoff matches are untouched. A rebuild puts every kickoff back on the weekly grid from the first match night, so moved weeks and accepted reschedules aren't kept, and none of the check-ins, picks or bookings can be restored."
-                  }
-                >
-                  Regenerate schedule
-                </DangerSubmit>
-              ) : (
-                <SubmitButton
-                  variant="secondary"
-                  size="sm"
-                  confirm={`Generate the regular-season schedule? ${
-                    teamCountSeasonNote(season, data.teams.length)?.split(". ")[0] ?? ""
-                  }.`}
-                >
-                  Generate schedule
-                </SubmitButton>
-              )}
-            </ActionForm>
-          )
+          ) : null
         }
       />
       <CardBody>
+        {formatState.mode !== "LOCKED" ? (
+          <div className="mb-3">
+            <SeasonFormatBuilder
+              // Not keyed: a save or rebuild resets the picks inside the
+              // card, which keeps a typed First match night.
+              placement="schedule"
+              season={{
+                id: season.id,
+                name: season.name,
+                formatConfig: season.formatConfig,
+                updatedAt: season.updatedAt.toISOString(),
+              }}
+              teamGroupKeys={data.teams.map((team) => team.groupKey)}
+              mode={formatState.mode}
+              countFinal={formatState.countFinal}
+              regularCount={regularCount}
+              scheduleRevision={scheduleRevision}
+              generateLockedReason={scheduleGenerationLockedReason}
+              firstMatchNightTs={season.firstMatchNight?.getTime() ?? null}
+              nowMs={nowMs}
+              regenerateConsequences={regenerateConsequences}
+            />
+          </div>
+        ) : null}
         <SeasonFormatControls
           season={season}
           teams={data.teams}
@@ -3913,22 +3983,7 @@ function ScheduleControls({
           lastRegularWeek={lastRegularWeek}
           scheduleRevision={scheduleRevision}
           regenerateOpen={!scheduleGenerationLockedReason && regularCount > 0}
-          regenerateConsequences={[
-            ...(collateral.rsvps
-              ? [`${collateral.rsvps} player check-in(s) are cleared.`]
-              : []),
-            ...(collateral.picks
-              ? [`${collateral.picks} pick'em pick(s) are deleted.`]
-              : []),
-            ...(collateral.covers
-              ? [
-                  `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
-                ]
-              : []),
-            ...(collateral.proposals
-              ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
-              : []),
-          ]}
+          regenerateConsequences={regenerateConsequences}
         />
         {data.matches.length === 0 ? (
           <p className="mt-3 text-sm text-muted">

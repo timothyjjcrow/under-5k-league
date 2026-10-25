@@ -390,7 +390,7 @@ export function regularSeasonStartedMessage(
     week: number;
     fixtures: { home: string; away: string; whenMs: number | null }[];
     byes: string[];
-    /** A group-stage season's format line and groups (season-format.ts). */
+    /** The season's format line, and a group-stage season's groups (season-format.ts). */
     format?: string;
     groups?: { key: string; teams: string[] }[];
     /** The reserved tiebreaker night and the first playoff night, epoch ms. */
@@ -430,7 +430,7 @@ export function regularSeasonStartedMessage(
   const byes = opening.byes.length
     ? `\nBye: ${opening.byes.map((team) => name(team)).join(", ")}`
     : "";
-  // A one-table season reads as it always did; groups get their own lines.
+  // The format follows the headline; groups get their own lines.
   const intro =
     format || groups
       ? `${head}${format}${groups}\nWeek ${opening.week}:`

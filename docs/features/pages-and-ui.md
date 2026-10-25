@@ -986,9 +986,10 @@ the league is already draftable and many visitors have joined. Write for both.
   (`sm:w-fit`). The wrapped sticky bar is up to ~135px tall, so every jump
   target carries `scroll-mt-40 lg:scroll-mt-56`. A new anchor needs both.
 - **Chips follow the page's render order,** so the active chip only moves
-  forward on scroll. `setupFirst` (SIGNUPS or DRAFT) puts the Phase, Captains &
-  draft and Discord reach chips AND cards first; later phases put them after
-  the working cards. Chips and cards branch on the same flag, and
+  forward on scroll. `setupFirst` (SIGNUPS or DRAFT) puts the Phase, Season
+  format (only while the schedule card is hidden), Captains & draft and
+  Discord reach chips AND cards first; later phases put them after the
+  working cards, and the season builder moves into Schedule & results. Chips and cards branch on the same flag, and
   `admin-copy-guard.test.ts` ("the jump bar lists sections in the order the
   page renders them") fails if the two orders drift.
 - **Never put a `<button>` in a `<summary>`:** it toggles instead of

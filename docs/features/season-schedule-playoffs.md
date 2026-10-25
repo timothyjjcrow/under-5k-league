@@ -10,18 +10,63 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
 
 ## Season format
 
-- **The team count sets the format; nobody designs a season**
-  (`recommendedKnobs`, `season-format.ts`, Tim's call on 2026-10-19). One table
-  up to nine teams, played twice up to four (`DOUBLE_ROUND_MAX_TEAMS`); two
-  groups from ten (`GROUP_STAGE_MIN_TEAMS`), split as evenly as possible, each
-  a single round robin on the same match nights. The playoffs take the top 2
-  of a table of two or three, the top 4 of a table of four to nine and the top
-  4 of each group. `buildSeasonFormat` turns those settings into the season,
-  and `seasonFormat(n)` is the two together.
+- **The admins choose the format; Recommended follows the team count**
+  (Tim's call on 2026-10-24, reversing 2026-10-19's "nobody designs a
+  season"). The layout is three settings (`FormatKnobs`): one table or two
+  groups, each played once or twice, and the top 2, 4 or 8 in the playoffs
+  (with groups, the winner, top 2 or top 4 of each). Recommended
+  (`recommendedKnobs`, the 2026-10-19 rule) is one table up to nine teams,
+  played twice up to four (`DOUBLE_ROUND_MAX_TEAMS`); two groups from ten
+  (`GROUP_STAGE_MIN_TEAMS`), split as evenly as possible, each a single round
+  robin on the same match nights; the top 2 of a table of two or three, the
+  top 4 of a table of four to nine and the top 4 of each group.
+  `buildSeasonFormat` turns settings into the season, and `seasonFormat(n)` is
+  Recommended's. Nothing carries into the next season: each opens on
+  Recommended.
+- **What may be chosen** (`formatProblems`, `season-builder.ts`): two groups
+  need 6+ teams (3 in each), a top P needs P teams, and twice only while the
+  largest group (or the table) has 6 teams or fewer (`TWICE_MAX_GROUP_SIZE`;
+  13 teams twice would be 26+ weeks). Those are errors: Generate refuses them,
+  and so does a save once the auction has started (`countFinal`); before it, a
+  save stores the layout and the toast and the Draft preflight say it can't be
+  generated with today's captains. Warnings (everyone makes the playoffs, a
+  group sends all its teams, over 12 weeks, under 4 matches, one withdrawal
+  shrinking the bracket) never block. Recommended never errors (property
+  test).
+- **The season builder** (`season-format-builder.tsx`, a client island) shows
+  the layout, its preview (`previewSeasonFormat`: weeks, matches per team,
+  groups, fixtures, the plan with dates once week 1 is set, each group's off
+  weeks) and every layout that fits the count (`formatAlternatives`). It judges
+  with the same functions the actions use, so the preview can't promise a
+  season the schedule won't build. During signups and the draft it is the
+  Season format card between Phase and Captains & draft, saving only, with a
+  preview count to try other captain counts; once the schedule card shows it
+  moves into Schedule & results with First match night and Generate (only
+  one builder renders). It is keyed by the stored format and the schedule
+  revision, so other season saves keep an admin's unsaved picks.
+- **When it can change** (`formatEditState`, the card and `saveSeasonFormat`
+  share it): OPEN before fixtures; BUILT with fixtures and no result, where a
+  playoff-places change saves in place ("Save format (the fixtures stay)":
+  every fixture id, check-in, pick and booking survives, and the result stamp
+  moves) and a groups or meet change goes through Regenerate schedule, which
+  saves the layout with its fixtures; LOCKED while any regular result or game
+  stands, and in the playoffs or a complete season. A reopened only result
+  unlocks it, the same rule as Regenerate. The season-start post isn't
+  re-sent after a playoff-places change.
+- **Save and generate claim what the page showed.** Save uses the rendered
+  season claim (`updateRenderedSeason`: id, active, `updatedAt`); Generate
+  posts the layout with `expectedFormat` (`formatToken`: the stored value at
+  render, or `RECOMMENDED`) beside `expectedSchedule`, and refuses when another
+  admin's save landed in between. Save counts the fixtures, results and games
+  inside a Serializable transaction, and recordResult and generate read the
+  Season inside theirs, so a save racing the first result or a rebuild
+  conflicts and the loser retries into a refusal (seams
+  `admin.updateRenderedSeason.beforeWrite` with a rival result, and
+  `admin.generateSchedule.afterRead` with a rival save, Postgres only).
 - **The Recommended format is frozen.** `season-format-golden.test.ts` pins
   its formats, copy, plans and bracket sizes for 2–32 teams and its fixtures
-  for 2–17, captured before the resolver existed. Every season plays it,
-  archived ones included (the one-table exception is below), so a new
+  for 2–17, captured before the resolver existed. Every season without a
+  stored format plays it, archived ones included (the one-table exception is below), so a new
   recommendation is a new rule beside it, never an edit to this one.
 - **A season may store its format** (`Season.formatConfig`, the season
   builder): versioned JSON, `{"v":1,"groups":2,"meet":1,"playoffs":4}`, with
@@ -31,11 +76,18 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   UNREADABLE, never Recommended, because read as Recommended a season whose
   group winners play the final would seed a top 8. Pages show an UNREADABLE
   season as Recommended and /admin's attention card says why, while every
-  command that builds from it refuses (`FORMAT_UNREADABLE_MESSAGE`):
-  generate and swap, Start playoffs and the admin tiebreaker commands. The
+  command that builds from it refuses (`FORMAT_UNREADABLE_MESSAGE`): a
+  generate without a posted layout, swap, Start playoffs and the admin
+  tiebreaker commands. The
   automatic tiebreaker pass waits quietly instead of failing every minute.
   The season-start post leaves out its format line: a post is never
   corrected, and the stand-in could name a cut the standings don't use.
+  Before fixtures exist the builder's Save format or its Generate (which
+  posts a layout) replaces the value: a rollback's way out. Once fixtures
+  exist only Regenerate schedule does, since a save can't tell whether the
+  fixtures fit a layout it can't read. The attention line says which, or,
+  once a result locks the format, that only the newer version can build
+  from it.
   While regular fixtures exist, the stored format is what they were built
   from: generation builds from it, in the same transaction.
 - **Read the format through the resolver, never from a count.**

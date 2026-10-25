@@ -38,6 +38,7 @@ export function LocalDatetimeField({
   maxTs,
   describedBy,
   timeZone,
+  onTsChange,
 }: {
   /** Name for the raw datetime-local string (server-side fallback). */
   name: string;
@@ -66,8 +67,16 @@ export function LocalDatetimeField({
    *  prefills on, labelled beside the box. Omitted = the viewer's own clock,
    *  exactly as before. */
   timeZone?: string;
+  /** Opt-in: told the chosen instant (or null) whenever the hidden field
+   *  syncs, so a preview beside the box can follow it. */
+  onTsChange?: (ts: number | null) => void;
 }) {
   const inputRef = useRef<HTMLInputElement>(null);
+  // The latest callback, read by the listeners without re-binding them.
+  const onTsChangeRef = useRef(onTsChange);
+  useEffect(() => {
+    onTsChangeRef.current = onTsChange;
+  });
   const hiddenRef = useRef<HTMLInputElement>(null);
   const hintRef = useRef<HTMLSpanElement>(null);
   const zoneId = useId();
@@ -110,6 +119,7 @@ export function LocalDatetimeField({
         ? (zonedDatetimeLocalToEpoch(input.value, timeZone) ?? NaN)
         : new Date(input.value).getTime();
       hidden.value = Number.isNaN(ms) ? "" : String(ms);
+      onTsChangeRef.current?.(Number.isNaN(ms) ? null : ms);
       if (hint && timeZone) {
         const text =
           viewerZone && !Number.isNaN(ms)

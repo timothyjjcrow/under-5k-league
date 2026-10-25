@@ -1,6 +1,7 @@
-// The schedule card's format box (/admin): the season the team count makes
+// The schedule card's format box (/admin): the season as stored or built
 // (one table or two groups, season-format.ts), its calendar, and in a group
 // season each group, with a swap while the schedule can still be rebuilt.
+// The season builder beside it is where the layout is chosen.
 
 import { swapGroupTeams } from "@/app/actions/admin-schedule-results";
 import { ActionForm } from "@/components/action-form";
@@ -10,6 +11,7 @@ import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
   formatName,
+  parseFormatConfig,
   plannedSeasonFormat,
   resolveSeasonFormat,
   seasonPlan,
@@ -71,7 +73,9 @@ export function SeasonFormatControls({
         {describeSeasonFormat(format)}{" "}
         {rebuildsAs
           ? "This schedule was generated as one table before groups existed;"
-          : "The site sets this from the team count;"}{" "}
+          : parseFormatConfig(season.formatConfig).kind === "CUSTOM"
+            ? "An admin chose this layout in the season builder;"
+            : "Recommended for this many teams;"}{" "}
         one week after the regular season is kept for tiebreakers.
       </p>
       {rebuildsAs && regenerateOpen ? (

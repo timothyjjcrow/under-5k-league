@@ -1,8 +1,9 @@
-// The league's shape for any number of teams. The site decides it from the
-// team count when the schedule is generated, so no admin designs a season
-// (Tim's call, 2026-10-19): one table up to nine teams, two groups from ten,
-// and every season keeps the week after its regular season for tiebreakers.
-// Pure + testable.
+// The league's shape for any number of teams. Admins choose a season's
+// layout in the season builder (Tim's call, 2026-10-24); unless they do, the
+// Recommended format follows the team count (the 2026-10-19 rule): one table
+// up to nine teams, two groups from ten. Every season keeps the week after
+// its regular season for tiebreakers. Pure + testable, and safe to import
+// from client code.
 
 import {
   matchNightForWeek,
@@ -87,7 +88,8 @@ export type FormatKnobs = {
  *   5–9:       one table, the top 4 play the semifinals.
  *   10+:       two groups, the top 4 of each play the quarterfinals.
  *
- * Every season plays this rule, archived ones included (a table of ten or
+ * Every season without a stored format (`Season.formatConfig`) plays this
+ * rule, archived ones included (a table of ten or
  * more generated before groups excepted, `resolveSeasonFormat`), so it never
  * changes: season-format-golden.test.ts pins what it makes. A new
  * recommendation is a new rule beside it.
@@ -635,10 +637,13 @@ export function seasonLengthPhrase(format: SeasonFormat): string {
 export function teamCountSeasonNote(
   season: FormatSource,
   teamCount: number,
+  /** Whether a saved layout can be built for a neighbouring count; one it
+   *  can't is left out rather than quoted with a length. */
+  fits: (count: number) => boolean = () => true,
 ): string | null {
   const here = plannedSeasonFormat(season, teamCount);
   if (!here) return null;
-  const others = [teamCount - 1, teamCount + 1].flatMap((count) => {
+  const others = [teamCount - 1, teamCount + 1].filter(fits).flatMap((count) => {
     const format = plannedSeasonFormat(season, count);
     return format ? [`${count} teams: ${format.totalWeeks} weeks`] : [];
   });

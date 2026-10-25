@@ -104,13 +104,16 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Write times as `<t:epoch:F|R|T>`**, never formatted strings, and keep
   content within 2,000 characters (`isValidDiscordContent` checks the exact
   rendered text).
-- **Say a group season's shape where the season is announced.** The
+- **Say the season's shape where the season is announced.** The
   regular-season start post (`regularSeasonStartedMessage`, from
-  `seasonOpeningSlate`) adds the format line and each group's teams, plus the
-  first playoff night and the reserved tiebreaker night (`<t:…:D>`); a
-  one-table season's post reads as before except for that calendar line. The
-  playoffs post names a group season's seeds as the bracket does ("(A1) …
-  vs (B4) …", `bracketSeedLabels`).
+  `seasonOpeningSlate`) adds the format line for every season ("One table:
+  the top 4 make the playoffs.", since an admin may have chosen a top 2 or a
+  top 8), each group's teams in a group season, and the first playoff night
+  and the reserved tiebreaker night (`<t:…:D>`). A stored format this release
+  can't read gets no format line. Saving a format or generating posts no
+  format announcement (a regenerate still stands down each standin booking
+  it removes, reason `SCHEDULE_REGENERATED`). The playoffs post names a group season's seeds as the bracket does
+  ("(A1) … vs (B4) …", `bracketSeedLabels`).
 
 ## Mentions
 

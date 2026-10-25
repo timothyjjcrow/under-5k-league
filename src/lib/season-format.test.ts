@@ -301,6 +301,16 @@ describe("teamCountSeasonNote", () => {
   it("says a single week in the singular", () => {
     expect(seasonLengthPhrase(seasonFormat(2)!)).toContain("1 playoff week");
   });
+
+  it("leaves out a neighbouring count the saved layout can't be built for", () => {
+    // Two groups, top 2 of each: 6 teams fit, 5 don't (3 in each group).
+    const stored = { formatConfig: '{"v":1,"groups":2,"meet":1,"playoffs":4}' };
+    const note = teamCountSeasonNote(stored, 6, (count) => count >= 6);
+    expect(note).not.toContain("5 teams");
+    expect(note).toContain("7 teams:");
+    // Without the check every neighbour is quoted, as before.
+    expect(teamCountSeasonNote(stored, 6)).toContain("5 teams:");
+  });
 });
 
 describe("formatSteps", () => {

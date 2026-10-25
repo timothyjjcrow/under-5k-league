@@ -123,6 +123,13 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Saved import progress", rendered: "Saved import progress</h3>" },
   { quoted: "Retry next sync", rendered: "Retry next sync</SubmitButton>" },
   { quoted: "Ignore this game", rendered: "Ignore this game</summary>" },
+  // The draft preflight's format line sends admins to the setup card. The
+  // card title is a prop string, which the preflight's prose can't satisfy.
+  { quoted: "Season format", rendered: 'title="Season format"' },
+  // saveSeasonFormat refuses a groups or meet change in a built season and
+  // sends the admin to the builder's danger button (its JSX text line; the
+  // lock line's string literal can't satisfy it).
+  { quoted: "Regenerate schedule", rendered: "Regenerate schedule\n" },
 ];
 
 describe("admin copy names only controls that exist", () => {
@@ -465,7 +472,13 @@ describe("admin copy names only controls that exist", () => {
     // it after the season's working cards. Chips and cards branch on the
     // same flag.
     inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem, ...rollCallItems] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem, ...rollCallItems])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
-    inOrder(season, "{setupFirst ? (", "{setupControls}", "{reachCard}", "{rollCallCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{setupFirst ? null : rollCallCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
+    inOrder(season, "{setupFirst ? (", "{seasonCard}", "{formatSetupCard}", "{captainsCard}", "{reachCard}", "{rollCallCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{setupFirst ? null : rollCallCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
+    // During setup the Season format card sits between Phase and Captains,
+    // and so does its chip.
+    const setupItems = page.slice(page.indexOf("const setupItems"), page.indexOf("];", page.indexOf("const setupItems")));
+    inOrder(setupItems, 'id: "adm-season"', 'id: "adm-format"', 'id: "adm-captains"');
+    const setupFragment = page.slice(page.indexOf("const seasonCard"), page.indexOf("const setupControls"));
+    inOrder(setupFragment, '<AdminAnchor id="adm-season">', '<AdminAnchor id="adm-captains">');
     // The evergreen sections after the season's own.
     inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-poll"', 'id: "adm-news"', 'id: "adm-security"');
     inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminMatchNightPoll", "<AdminNews ", "<SecurityControls />");

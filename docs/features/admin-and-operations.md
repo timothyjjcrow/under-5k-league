@@ -64,7 +64,10 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
 - **Once the auction is complete, Schedule & results leads the panel**
   (`setupFirst` is signups, or the draft phase before the auction ends): the
   captains card, which lists every signup, used to sit between the admin and
-  Generate schedule on draft night.
+  Generate schedule on draft night. Generate lives in the season builder
+  there, beside the layout it builds; before the auction the builder is the
+  Season format card, which only saves
+  ([season-schedule-playoffs](season-schedule-playoffs.md#season-format)).
 - **Generate schedule refuses a week 1 in the past** (server check plus the
   box's `min`): kickoffs that already happened get no check-in window, an
   instant "result due" and pick'em locked from the start.

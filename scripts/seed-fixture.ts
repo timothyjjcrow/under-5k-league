@@ -2,7 +2,8 @@
 // server's, see scripts/fixture-server.ts) into a mid-season or mid-playoffs
 // state for UI verification. Every other target is refused.
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
-// FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
+// FIXTURE_TEAMS=n) | complete (whole bracket played) | drafted (auction done,
+// no schedule, 13 teams) | default (mid-playoffs).
 // The playoff modes default to ten teams, which the season format plays as
 // two groups of five (season-format.ts) with an eight-team crossover bracket.
 import { prisma } from "@/lib/prisma";
@@ -40,9 +41,15 @@ const NAMES = [
   "Feed & Seed",
   "Aegis Hoarders",
   "Ancient Defenders",
+  "Glimmer Cape Club",
+  "Bounty Hunters",
+  "Rapier Rush",
+  "Tango Traders",
 ];
 /** The playoff modes' league: two groups of five (season-format.ts). */
 const PLAYOFF_FIXTURE_TEAMS = 10;
+/** The drafted mode's league: Recommended plays it as groups of 7 and 6. */
+const DRAFTED_FIXTURE_TEAMS = 13;
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
@@ -53,6 +60,27 @@ async function main() {
   );
 
   await resetDb();
+  // FIXTURE_MODE=drafted: the auction is over and no schedule exists yet, so
+  // /admin's season builder can lay the season out and generate it.
+  if (process.env.FIXTURE_MODE === "drafted") {
+    const drafted = await makeSeason({
+      name: "Season 9 (fixture)",
+      status: SEASON_STATUS.DRAFT,
+      teamSize: 5,
+    });
+    await prisma.draft.create({ data: { seasonId: drafted.id, status: "COMPLETE" } });
+    const count = Number(process.env.FIXTURE_TEAMS) || DRAFTED_FIXTURE_TEAMS;
+    for (let i = 0; i < count; i++) {
+      const team = await makeTeam(drafted.id, NAMES[i], i);
+      for (let j = 0; j < 5; j++) {
+        const user = await makeUser(`${team.name.split(" ")[0]} Player${j + 1}`);
+        await prisma.teamMember.create({
+          data: { seasonId: drafted.id, teamId: team.id, userId: user.id, isCaptain: j === 0, price: i },
+        });
+      }
+    }
+    return;
+  }
   const season = await makeSeason({
     name: "Season 9 (fixture)",
     status: SEASON_STATUS.REGULAR_SEASON,

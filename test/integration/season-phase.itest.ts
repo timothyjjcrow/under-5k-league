@@ -213,6 +213,8 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
             },
           ],
           byes: [bye.team.name],
+          // Three teams: Recommended plays one table twice, top 2.
+          format: "One table, played twice: the top 2 make the playoffs.",
         },
         true,
       ),
