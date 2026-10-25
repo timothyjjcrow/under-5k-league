@@ -6,7 +6,6 @@ import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { LEAGUE_CONFIG } from "./league-config";
 import { wallTime, zoneFormatter } from "./zoned-time";
 import { scenarioReport, type ScenarioMatch, type ScenarioReport } from "./scenarios";
-import { pickBracketSize } from "./schedule";
 import type { ClinchStatus, MatchLike, TeamStanding } from "./standings";
 import type { PlayoffFieldProjection } from "./playoff-field";
 import { applyFinalOutlook, applyNormalOutlook, partialTiebreakerStandings } from "./scenario-outlook";
@@ -109,22 +108,21 @@ function memoized(key: string, compute: () => ScenarioReport): ScenarioReport {
 
 /**
  * Scenario report for the season as the playoff seeder will see it: cut from
- * the projected field's bracket (pickBracketSize(teamCount) without one),
- * exactly like createPlayoffBracket. Null when the cut wouldn't drop anyone
- * (everyone makes the bracket — no race to narrate) or when there are no
- * teams yet. A group-stage season runs one race per group, each against its
- * own cut, and merges them (`groupScenarioReport`).
+ * the projected field's bracket, exactly like createPlayoffBracket, so the
+ * season's format decides it and no team count does. Null when there are no
+ * teams yet or no bracket. A group-stage season runs one race per group,
+ * each against its own cut, and merges them (`groupScenarioReport`).
  */
 export function seasonScenarioReport(
   standings: TeamStanding[],
   matches: StakesMatchRow[],
   teamCount: number,
-  field?: PlayoffFieldProjection,
+  field: PlayoffFieldProjection,
 ): ScenarioReport | null {
   if (teamCount === 0) return null;
-  if (field?.groups) return groupScenarioReport(standings, matches, field);
-  const cut = field?.bracketSize ?? pickBracketSize(teamCount);
-  if (cut === 0 || (!field && cut >= teamCount)) return null;
+  if (field.groups) return groupScenarioReport(standings, matches, field);
+  const cut = field.bracketSize;
+  if (cut === 0) return null;
   const remaining = remainingRegular(matches);
   // Stringify the WHOLE input rather than a hand-picked projection of the
   // fields the engine happens to read today: adding a field to TeamStanding or
@@ -132,10 +130,9 @@ export function seasonScenarioReport(
   // (remainingRegular strips scheduledAt), and ~8 rows + ~11 matches is
   // microseconds against a 60ms enumeration.
   const key = JSON.stringify([cut, teamCount, standings, remaining,
-    field && [field.standings, field.eligibleStandings, field.tiebreakers, matches]]);
+    [field.standings, field.eligibleStandings, field.tiebreakers, matches]]);
   return memoized(key, () => {
     const report = scenarioReport(standings, remaining, cut);
-    if (!field) return report;
     if (field.tiebreakers.error) {
       if (remaining.length === 0) for (const team of report.teams.values()) {
         team.status = null;

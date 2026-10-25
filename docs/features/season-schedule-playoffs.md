@@ -11,15 +11,33 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
 ## Season format
 
 - **The team count sets the format; nobody designs a season**
-  (`seasonFormat`, `season-format.ts`, Tim's call on 2026-10-19). One table up
-  to nine teams, played twice up to four (`DOUBLE_ROUND_MAX_TEAMS`); two
+  (`recommendedKnobs`, `season-format.ts`, Tim's call on 2026-10-19). One table
+  up to nine teams, played twice up to four (`DOUBLE_ROUND_MAX_TEAMS`); two
   groups from ten (`GROUP_STAGE_MIN_TEAMS`), split as evenly as possible, each
   a single round robin on the same match nights. The playoffs take the top 2
   of a table of two or three, the top 4 of a table of four to nine and the top
-  4 of each group. Every rule and sentence (/rules' `formatSteps` and
-  `playoffSteps`, the admin card, the captain-count note) reads that one
-  function. A table of ten or more only exists in a season generated before
-  groups and keeps the bracket it was built for (`pickBracketSize`).
+  4 of each group. `buildSeasonFormat` turns those settings into the season,
+  and `seasonFormat(n)` is the two together.
+- **The Recommended format is frozen.** `season-format-golden.test.ts` pins
+  its formats, copy, plans and bracket sizes for 2–32 teams and its fixtures
+  for 2–17, captured before the resolver existed. Every season plays it,
+  archived ones included (the one-table exception is below), so a new
+  recommendation is a new rule beside it, never an edit to this one.
+- **Read the format through the resolver, never from a count.**
+  `plannedSeasonFormat(teamCount)` is what a schedule generated now would
+  build (generation, the fixture seeder). `resolveSeasonFormat(teams,
+  regularFixturesExist)` is what a season plays and every page and post prints
+  (/schedule's and Home's plan, the admin format box, the season-start post,
+  /rules through `rulesSeasonFormat`). Pass the whole field, withdrawn teams
+  included, so a withdrawal never changes the format. Once fixtures exist, a
+  season whose teams carry no groups (`seasonGroupKeys`, the rule the field
+  uses) is one table: a table of ten or more, which only exists in a season
+  generated before groups, keeps showing the table and the bracket it was built
+  for (`pickBracketSize`) instead of "Two groups". `season-format-guards.test.ts`
+  keeps `seasonFormat(`, the count constants, `playoffBracketSize(` and
+  `pickBracketSize(` inside the modules that own them, and the scenario
+  engine's cut comes from the field (`seasonScenarioReport` takes it
+  required).
 - **The week after the regular season is reserved for tiebreakers.** Round
   one plays at `firstPlayoffWeek` (two weeks after the last regular week, or
   the week after tiebreakers that ran long), whether or not a tie needed the
@@ -111,9 +129,22 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   no COMPLETED regular series AND no Game (both halves pinned in
   `admin-flow-audit.itest.ts`), no withdrawn team, 2+ teams, no confirmed-scrim
   clash. A regenerate replaces fixture ids, so it names the check-ins, picks,
-  bookings and proposals it wipes, before (confirm) and after (toast, log).
+  bookings and proposals it wipes, before (confirm) and after (toast, log),
+  and drops the queued check-in reminders and result nudges of the fixtures
+  it deletes (`invalidateMatchNudges`, as every retime does), or a reminder
+  held by a Discord outage would ping players for a match that no longer
+  exists.
+- **A schedule form claims the fixtures it showed.** Generate, Regenerate and
+  Swap teams post `expectedSchedule` (`regularScheduleRevision`: "none", or a
+  digest of the regular fixture ids), and the rebuild recomputes it inside
+  its transaction. Every rebuild writes new ids, so a tab opened before
+  another admin generated or rebuilt the schedule is refused ("The schedule
+  was generated or rebuilt while this page was open") instead of replacing
+  that schedule behind a confirm written for the one it saw: a Generate
+  click from such a tab used to rebuild a fresh schedule behind a plain
+  confirm. A form with no claim gets the stale-form reload copy.
 - **The format decides the round robin, not a checkbox.** Four teams or fewer
-  play it twice (`seasonFormat`); the double round robin checkbox is gone, and
+  play it twice (`plannedSeasonFormat`); the double round robin checkbox is gone, and
   a stale form's `doubleRound` field is ignored. The toast names the format,
   the groups, the week count, the tiebreaker week and the first playoff night.
 - **Every retime follows one contract.** Set time (`setMatchTime`), "Move a match
@@ -436,6 +467,13 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   clashing scrims, tears the old bracket down and flips to PLAYOFFS with a
   guarded `updateMany`. Slots are `R{round}M{match}`; `pickBracketSize`,
   `playoffFirstRound`, `nextRoundPairings`, `roundName` are pure in `schedule.ts`.
+- **A bracket short of seeds is refused, not built.** `playoffFirstRound`
+  silently drops a pair whose seed is missing, the top seeds' first, and three
+  groups into eight places seed only six (`groupShares`), so round one would
+  lose 1v8 and 2v7. `createPlayoffBracket` refuses whenever the seeds or pairs
+  don't fill the bracket (`bracketShapeProblem`: "The bracket would seed 6
+  teams for 8 places."). Only A and B are ever written today, so it is a
+  guard for the formats to come (`playoffs.itest.ts`, sabotage-verified).
 - **Teardown keeps what it deletes.** `removePostseason` (reset and
   `returnToRegularSeason`, the only way back once a bracket exists) writes a
   history receipt per fixture, MERGES removed game ids into

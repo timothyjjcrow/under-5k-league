@@ -90,7 +90,7 @@ import { SeasonPlanFold } from "@/components/season-plan";
 import {
   describeSeasonFormat,
   formatName,
-  seasonFormat,
+  resolveSeasonFormat,
   seasonPlan,
 } from "@/lib/season-format";
 import {
@@ -448,7 +448,7 @@ export default async function SchedulePage() {
   const hasFixtures = regular.length > 0;
   // The season's calendar from its schedule: the regular weeks, the reserved
   // tiebreaker week and each playoff round. Shown until the playoffs start.
-  const planFormat = seasonFormat(teams.length);
+  const planFormat = resolveSeasonFormat(teams, hasFixtures);
   const seasonPlanView =
     planFormat &&
     hasFixtures &&

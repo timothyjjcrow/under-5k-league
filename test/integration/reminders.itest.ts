@@ -3,7 +3,7 @@ import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
 import { DRAFT_STATUS, MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
-import { makeSeason, makeTeam, makeUser } from "./factories";
+import { makeSeason, makeTeam, makeUser, scheduleClaim } from "./factories";
 import { generateSchedule, setMatchTime } from "@/app/actions/admin-schedule-results";
 import {
   proposeReschedule,
@@ -542,9 +542,11 @@ describe("week reminder — only a kickoff that is news pings", () => {
     await prisma.draft.create({
       data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
     });
-    const generate = (first: Date) => {
+    // Each generate claims the schedule the admin's page showed (the
+    // regenerate posts the first one's revision).
+    const generate = async (first: Date) => {
       const fd = new FormData();
-      fd.set("expectedActiveSeasonId", season.id);
+      for (const [key, value] of Object.entries(await scheduleClaim(season.id))) fd.set(key, value);
       fd.set("firstNight", "2026-10-25T20:00");
       fd.set("firstNightTs", String(first.getTime()));
       return generateSchedule({}, fd);

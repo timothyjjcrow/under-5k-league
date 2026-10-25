@@ -164,8 +164,10 @@ In the Captains & draft card on `/admin` and inside the room
   that isn't the team's `Team.captainId` to the pool, zeroes kept captain
   rows, credits each team all its rows cost (a price paid for a player later
   made captain included), clears Bid rows, deletes unplayed fixtures (their
-  check-ins, picks, cover and reschedules cascade), fantasy rosters and sent
-  week-reminder markers, and drops the season to SIGNUPS so captains can be
+  check-ins, picks, cover and reschedules cascade), fantasy rosters, sent
+  week-reminder markers and every team's group (`Team.groupKey`, drawn from
+  the rosters the abort dissolves, so the next generate draws afresh), and
+  drops the season to SIGNUPS so captains can be
   fixed and late players register. Draft time and readiness acknowledgements
   stay. Losses throw `AbortRaceError`; raced by `raceN(4)` in `draft.itest.ts`.
 - **Abort keeps captains and teams and stops at the first result.** It refuses

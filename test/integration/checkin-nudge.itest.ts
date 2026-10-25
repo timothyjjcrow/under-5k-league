@@ -23,6 +23,7 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 import { randomUUID } from "node:crypto";
 import { remindUnansweredCheckins } from "@/app/actions/availability";
 import {
+  generateSchedule,
   recordResult,
   setMatchTime,
 } from "@/app/actions/admin-schedule-results";
@@ -56,6 +57,7 @@ import {
   makeTeam,
   makeUser,
   raceN,
+  scheduleClaim,
   sessionFor,
 } from "./factories";
 
@@ -359,6 +361,22 @@ describe("remindUnansweredCheckins", () => {
         const res = await recordResult(
           {},
           form({ matchId: s.match.id, homeScore: "2", awayScore: "0" }),
+        );
+        expect(res?.error).toBeUndefined();
+      },
+    },
+    {
+      // The fixture itself is deleted and rebuilt with a new id.
+      event: "an admin regenerates the schedule",
+      run: async (s: Awaited<ReturnType<typeof setup>>) => {
+        const firstNight = new Date(Date.now() + 5 * 24 * 60 * 60 * 1000);
+        const res = await generateSchedule(
+          {},
+          form({
+            ...(await scheduleClaim(s.season.id)),
+            firstNight: firstNight.toISOString().slice(0, 16),
+            firstNightTs: String(firstNight.getTime()),
+          }),
         );
         expect(res?.error).toBeUndefined();
       },

@@ -151,7 +151,11 @@ import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { MatchNightPollControls } from "@/components/admin/match-night-poll-controls";
 import { RollCallControls } from "@/components/admin/roll-call-controls";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
-import { teamCountSeasonNote } from "@/lib/season-format";
+import {
+  formatName,
+  plannedSeasonFormat,
+  teamCountSeasonNote,
+} from "@/lib/season-format";
 import { playoffPlacesPhrase } from "@/lib/season-groups";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
@@ -263,6 +267,7 @@ import {
 import { fixturesMatchNightLabel } from "@/lib/match-night";
 import { projectPlayoffField } from "@/lib/playoff-field";
 import { playoffSetupRevision } from "@/lib/playoff-command";
+import { regularScheduleRevision } from "@/lib/schedule-revision";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import {
   matchCorrectionContext,
@@ -3766,6 +3771,13 @@ function ScheduleControls({
   );
   const playoffField = projectPlayoffField(data.teams, data.matches);
   const seasonGrouped = playoffField.kind === "GROUPS";
+  // The fixtures these forms show: a rebuild refuses if another admin's
+  // generate or rebuild replaced them since (regularScheduleRevision).
+  const scheduleRevision = regularScheduleRevision(regularMatches.map((match) => match.id));
+  // A table of ten or more generated before groups regenerates as groups.
+  const rebuildFormat = plannedSeasonFormat(data.teams.length);
+  const rebuildChangesFormat =
+    regularCount > 0 && rebuildFormat !== null && rebuildFormat.kind !== playoffField.kind;
   const collateral = data.collateral;
   const lastRegularWeek = regularMatches.reduce(
     (max, match) => Math.max(max, match.week),
@@ -3812,7 +3824,7 @@ function ScheduleControls({
           ) : (
             <ActionForm
               action={generateSchedule}
-              hidden={{ expectedActiveSeasonId: season.id }}
+              hidden={{ expectedActiveSeasonId: season.id, expectedSchedule: scheduleRevision }}
               className="flex flex-wrap items-center gap-2"
             >
               <label
@@ -3871,9 +3883,11 @@ function ScheduleControls({
                   token={season.name}
                   title="Replace the regular-season schedule?"
                   consequences={[
-                    seasonGrouped
-                      ? `All ${regularCount} regular-season fixture(s) are deleted and recreated with new ids — the same pairings unless "redraw the groups" is ticked.`
-                      : `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
+                    rebuildChangesFormat && rebuildFormat
+                      ? `All ${regularCount} regular-season fixture(s) are deleted, and the new schedule is ${formatName(rebuildFormat).toLowerCase()} drawn by roster MMR, not one table.`
+                      : seasonGrouped
+                        ? `All ${regularCount} regular-season fixture(s) are deleted and recreated with new ids — the same pairings unless "redraw the groups" is ticked.`
+                        : `All ${regularCount} regular-season fixture(s) are deleted and recreated — same pairings, new ids.`,
                     ...(collateral.rsvps
                       ? [`${collateral.rsvps} player check-in(s) are cleared.`]
                       : []),
@@ -3891,7 +3905,11 @@ function ScheduleControls({
                         ]
                       : []),
                   ]}
-                  recovery="Playoff matches are untouched, and the fixtures themselves regenerate identically. None of the check-ins, picks or bookings can be restored."
+                  recovery={
+                    rebuildChangesFormat
+                      ? "Playoff matches are untouched. The one-table schedule can't be rebuilt, and none of the check-ins, picks or bookings can be restored."
+                      : "Playoff matches are untouched. A rebuild puts every kickoff back on the weekly grid from the first match night, so moved weeks and accepted reschedules aren't kept, and none of the check-ins, picks or bookings can be restored."
+                  }
                 >
                   Regenerate schedule
                 </DangerSubmit>
@@ -3916,6 +3934,7 @@ function ScheduleControls({
           teams={data.teams}
           firstMatchNight={season.firstMatchNight}
           lastRegularWeek={lastRegularWeek}
+          scheduleRevision={scheduleRevision}
           regenerateOpen={!scheduleGenerationLockedReason && regularCount > 0}
           regenerateConsequences={[
             ...(collateral.rsvps

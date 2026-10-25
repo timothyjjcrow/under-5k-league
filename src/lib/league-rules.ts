@@ -39,9 +39,11 @@ import {
   describeSeasonFormat,
   formatSteps,
   playoffBracketSize,
+  plannedSeasonFormat,
   playoffSteps,
-  seasonFormat,
+  resolveSeasonFormat,
   seasonLengthPhrase,
+  type SeasonFormat,
 } from "./season-format";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 import { MATCH_NIGHT_POLL_LABEL } from "./season-copy";
@@ -84,10 +86,10 @@ export type LeagueRulesInput = {
   /** The active season's teams that haven't withdrawn; null when unknown. */
   teamCount: number | null;
   /**
-   * Every team in the active season, withdrawn ones included: the count the
-   * site picked the format from (season-format.ts). Omitted, `teamCount`.
+   * The active season's format (`resolveSeasonFormat` over every team,
+   * withdrawn ones included). Omitted, the format `teamCount` teams plan.
    */
-  formatTeamCount?: number | null;
+  format?: SeasonFormat | null;
   /** The deployment's identity. Tests pass `createLeagueConfig({...})`. */
   config?: Pick<typeof LEAGUE_CONFIG, "name" | "gameServerRegion">;
 };
@@ -202,22 +204,35 @@ function firstRoundRule(bracketSize: number | null, groups = false): string | nu
 }
 
 /**
- * The season's structure: what the team count makes it (season-format.ts),
- * how groups are drawn, and the reserved tiebreaker week. `teamCount` is the
- * active season's whole field, withdrawn teams included.
+ * The active season's format for /rules (`resolveSeasonFormat`): every team,
+ * withdrawn ones included, and whether its regular-season fixtures exist.
  */
-function formatSection(teamCount: number | null): RuleSection {
-  const format = teamCount !== null ? seasonFormat(teamCount) : null;
+export function rulesSeasonFormat(
+  teams: readonly { groupKey: string | null }[],
+  fixtures: readonly { phase: string }[],
+): SeasonFormat | null {
+  return resolveSeasonFormat(
+    teams,
+    fixtures.some((fixture) => fixture.phase === MATCH_PHASE.REGULAR),
+  );
+}
+
+/**
+ * The season's structure: what the team count makes it (season-format.ts),
+ * how groups are drawn, and the reserved tiebreaker week. `format` is the
+ * active season's, from its whole field, withdrawn teams included.
+ */
+function formatSection(format: SeasonFormat | null): RuleSection {
   const rules = [
     `The number of teams sets the season's format before it starts, so nobody designs a season by hand: ${formatSteps()}.`,
     "Groups are drawn when the schedule is made: teams are ranked by their roster's average signup MMR and dealt A, B, B, A, A, B… so both groups get the same spread. An admin can swap one team from each group before the first result.",
     "In a group season each group's table counts only its own matches, and ties are played off inside the group.",
     "The week after the regular season is kept for tiebreakers, so the playoff dates are set the day the schedule is made. If no tie needs it, that week is off.",
   ];
-  if (format && teamCount !== null) {
+  if (format) {
     const described = describeSeasonFormat(format);
     rules.push(
-      `This season has ${plural(teamCount, "team")}: ${described.charAt(0).toLowerCase()}${described.slice(1)} That's ${seasonLengthPhrase(format)}.`,
+      `This season has ${plural(format.teamCount, "team")}: ${described.charAt(0).toLowerCase()}${described.slice(1)} That's ${seasonLengthPhrase(format)}.`,
     );
   }
   return { id: "format", title: "Season format", rules };
@@ -274,9 +289,8 @@ function standingsSection(s: CarriedSeasonSettings): RuleSection {
 
 function playoffsSection(
   teamCount: number | null,
-  formatTeamCount: number | null,
+  format: SeasonFormat | null,
 ): RuleSection {
-  const format = formatTeamCount !== null ? seasonFormat(formatTeamCount) : null;
   const groups = format?.kind === "GROUPS";
   const size =
     teamCount !== null && teamCount >= 2 && format
@@ -458,11 +472,12 @@ export function leagueRules({
   matchNight,
   matchNightPoll = false,
   teamCount,
-  formatTeamCount,
+  format,
   config = LEAGUE_CONFIG,
 }: LeagueRulesInput): LeagueRules {
   const activeTeams = season?.isActive ? teamCount : null;
-  const activeField = season?.isActive ? (formatTeamCount ?? teamCount) : null;
+  const plannedFormat = teamCount !== null ? plannedSeasonFormat(teamCount) : null;
+  const activeFormat = season?.isActive ? (format === undefined ? plannedFormat : format) : null;
   const settings: CarriedSeasonSettings = season ?? carriedSeasonSettings(null);
   // The ticket is the ACTIVE season's (How it works asks the same question);
   // between seasons the next season's ticket isn't known yet.
@@ -471,10 +486,10 @@ export function leagueRules({
     basis: basisLine(season, config.name),
     defaults: season === null,
     sections: [
-      formatSection(activeField),
+      formatSection(activeFormat),
       seriesSection(settings),
       standingsSection(settings),
-      playoffsSection(activeTeams, activeField),
+      playoffsSection(activeTeams, activeFormat),
       forfeitsSection(settings),
       rostersSection(settings),
       matchNightSection(matchNight, matchNightPoll),

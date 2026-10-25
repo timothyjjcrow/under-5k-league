@@ -40,6 +40,7 @@ import {
   makeTeam,
   makeUser,
   resetDb,
+  scheduleClaim,
 } from "./factories";
 
 const fd = (o: Record<string, string>) => {
@@ -121,7 +122,7 @@ describe("destructive actions leave a trail", () => {
       fd({
         firstNight: "2026-10-07T20:00",
         firstNightTs: String(Date.now() + 7 * 864e5),
-        expectedActiveSeasonId: season.id,
+        ...(await scheduleClaim(season.id)),
       }),
     );
 

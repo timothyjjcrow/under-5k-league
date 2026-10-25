@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
 import { nextRoundPairings, upcomingMatchNight } from "./schedule";
-import { projectPlayoffField } from "./playoff-field";
+import { bracketShapeProblem, projectPlayoffField } from "./playoff-field";
 import { firstPlayoffWeek } from "./season-format";
 import {
   playoffSetupRevision,
@@ -485,6 +485,11 @@ export async function createPlayoffBracket(
           throw new UserFacingError(
             "Playoff qualification or seeding is still tied. Schedule and complete the tiebreaker week before starting playoffs.",
           );
+        }
+
+        const shapeProblem = bracketShapeProblem(playoffField);
+        if (shapeProblem) {
+          throw new UserFacingError(`${shapeProblem} Nothing was changed.`);
         }
 
         const pairings = playoffField.pairings;

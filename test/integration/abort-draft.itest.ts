@@ -97,6 +97,20 @@ describe("abortDraft — the way back from a premature Start draft", () => {
     );
   });
 
+  it("clears the groups, which were drawn from the rosters it returns to the pool", async () => {
+    // A re-run auction makes new rosters; a draw kept from the old ones
+    // would survive the next generate whenever the group sizes still fit.
+    const { season, a, b } = await prematureStart();
+    await prisma.team.update({ where: { id: a.team.id }, data: { groupKey: "A" } });
+    await prisma.team.update({ where: { id: b.team.id }, data: { groupKey: "B" } });
+
+    const res = await abortDraft(season.id, await admin());
+
+    expect(res.ok).toBe(true);
+    const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
+    expect(teams.map((team) => team.groupKey)).toEqual([null, null]);
+  });
+
   it("unlocks captain management again, so the real fix is possible", async () => {
     const { season } = await prematureStart();
     const late = await makePlayer(season.id, "Late Captain", 3000, {
