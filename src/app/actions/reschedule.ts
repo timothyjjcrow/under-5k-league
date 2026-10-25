@@ -24,11 +24,14 @@ import {
   type ReadyCheckView,
 } from "@/lib/reschedule-ready-check";
 import { claimThrottle } from "@/lib/settings";
+import { outPingThrottleKey } from "@/lib/availability";
+import { RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import {
   rescheduleDeclinedMessage,
   rescheduleMessage,
   rescheduleProposedMessage,
   sendDiscordMessage,
+  type MentionAllowlist,
 } from "@/lib/discord";
 import { mentionUsers } from "@/lib/discord-mentions";
 import type { ActionResult } from "@/lib/action-result";
@@ -49,6 +52,22 @@ function epoch(raw: FormDataEntryValue | null): Date | null {
 }
 
 /**
+ * The allowlist for a post about something that has already committed, or
+ * none when the lookup fails. The post then lands unpinged and the action
+ * still reports its success: rejecting after the commit told the captain a
+ * move had failed when it hadn't, and lost the post for good.
+ */
+async function mentionsAfterCommit(
+  userIds: (string | null | undefined)[],
+): Promise<MentionAllowlist | undefined> {
+  try {
+    return await mentionUsers(userIds);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * Announce a locked-in time and build the toast for whoever locked it.
  * `lockedByName` is the captain who locked it early; null when the last
  * ready-check answer moved it.
@@ -59,7 +78,7 @@ async function announceLock(
   lockedByName: string | null,
 ): Promise<string> {
   const rc = outcome.readyCheck;
-  await sendDiscordMessage(
+  const sent = await sendDiscordMessage(
     rescheduleMessage({
       homeName: outcome.homeName,
       awayName: outcome.awayName,
@@ -83,7 +102,7 @@ async function announceLock(
     // personally-mentioned assignment message quoted the OLD kickoff; and
     // whoever never answered still owes a check-in for the new night. Never
     // the person who just acted.
-    await mentionUsers(
+    await mentionsAfterCommit(
       [
         outcome.notifyUserId,
         ...outcome.standinUserIds,
@@ -91,6 +110,23 @@ async function announceLock(
       ].filter((id) => id !== actorId),
     ),
   );
+  // The post names who can't make it, so it is each carried OUT's
+  // announcement: claim their OUT ping for the new kickoff. That is what lets
+  // a later "can make it after all" reach their captain (claimThrottleAnswer
+  // answers only an announced OUT). Best-effort, like the post.
+  if (sent) {
+    try {
+      for (const userId of outcome.carriedOutUserIds) {
+        await claimThrottle(
+          outPingThrottleKey(outcome.matchId, outcome.scheduleRevision, userId),
+          RSVP_OUT_PING_THROTTLE_SECONDS,
+          Date.now(),
+        );
+      }
+    } catch {
+      // A missed claim costs only that answer's ping.
+    }
+  }
   return (
     (rc.everyoneIn
       ? "Everyone's in — match moved for both teams."
@@ -101,9 +137,11 @@ async function announceLock(
     // Name a standin the move has just double-booked. The captain who
     // accepted is the one who arranged that cover, so they are the right
     // person to hear it — and until now nothing anywhere said it.
-    (outcome.standinClashes.length
-      ? ` ⚠ Standin clash: ${outcome.standinClashes.join("; ")} — remove one of those assignments.`
-      : "")
+    (outcome.standinClashes === null
+      ? " ⚠ The standin clash check couldn't run — check this match's standins before match night."
+      : outcome.standinClashes.length
+        ? ` ⚠ Standin clash: ${outcome.standinClashes.join("; ")} — remove one of those assignments.`
+        : "")
   );
 }
 
@@ -156,15 +194,37 @@ export async function proposeReschedule(
   // rings the rosters; a re-proposal pings the other captain alone (players
   // still see the open check on Home and the match page). A store failure
   // pings everyone: one extra ping beats a check nobody heard about.
-  let rosterPing = true;
+  //
+  // Both audiences are resolved BEFORE the window is claimed: a lookup that
+  // threw after the claim spent the window on a post that never went out, so
+  // the captain's retry rang the other captain alone. When the lookup fails
+  // the post goes out unpinged and the window stays unclaimed.
+  // An unknown audience (the seat read failed) is treated the same way: the
+  // other captain is still asked, and the window waits for a post that can
+  // ring the rosters.
+  const rosterIds = proposed.readyCheckUserIds;
+  let rosterMentions: MentionAllowlist | undefined;
+  let captainMentions: MentionAllowlist | undefined;
+  let mentionsResolved = rosterIds !== null;
   try {
-    rosterPing = await claimThrottle(
-      readyCheckRosterPingKey(proposed.matchId, proposed.scheduleRevision),
-      READY_CHECK_ROSTER_PING_SECONDS,
-      Date.now(),
-    );
+    [rosterMentions, captainMentions] = await Promise.all([
+      mentionUsers([proposed.notifyUserId, ...(rosterIds ?? [])]),
+      mentionUsers([proposed.notifyUserId]),
+    ]);
   } catch {
-    rosterPing = true;
+    mentionsResolved = false;
+  }
+  let rosterPing = rosterIds !== null;
+  if (mentionsResolved) {
+    try {
+      rosterPing = await claimThrottle(
+        readyCheckRosterPingKey(proposed.matchId, proposed.scheduleRevision),
+        READY_CHECK_ROSTER_PING_SECONDS,
+        Date.now(),
+      );
+    } catch {
+      rosterPing = true;
+    }
   }
   await sendDiscordMessage(
     rescheduleProposedMessage({
@@ -180,11 +240,7 @@ export async function proposeReschedule(
       optionsMs: proposed.options.map((t) => t.getTime()),
       note: proposed.note,
     }),
-    await mentionUsers(
-      rosterPing
-        ? [proposed.notifyUserId, ...proposed.readyCheckUserIds]
-        : [proposed.notifyUserId],
-    ),
+    rosterPing ? rosterMentions : captainMentions,
   );
   refresh();
   return {
@@ -354,7 +410,7 @@ export async function respondReschedule(
       optionCount: outcome.optionTimes.length,
       matchId: outcome.matchId,
     }),
-    await mentionUsers([outcome.notifyUserId]),
+    await mentionsAfterCommit([outcome.notifyUserId]),
   );
   refresh();
   return {

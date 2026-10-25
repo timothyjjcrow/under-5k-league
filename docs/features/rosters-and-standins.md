@@ -38,7 +38,9 @@ standin cover, and match-night check-ins. Main files:
   `mentionsOf([standin.discordId])`. `grep -rn "standinRemovedMessage(" src`
   lists the paths; one without it leaves an @-mentioned instruction for a dead
   fixture. Send only when the delete took every row it meant to. `withdrawTeam`
-  stands down only fixtures whose forfeit claim won; `recordResult` only a forfeit
+  stands down only fixtures whose forfeit claim won, and deletes the bookings on
+  those with zero games in the same claim (a kept row credits "Stood in" for a
+  series nobody played, and Reopen would revive it); `recordResult` only a forfeit
   with zero games (never someone who played a manually scored series);
   `abortDraft` deletes the fixtures and their bookings.
 - **Return the announcement; let the action send it.** Services return
@@ -224,10 +226,20 @@ standin cover, and match-night check-ins. Main files:
   (`weekReminderAnnouncements`, `discord.ts`): whole fixtures in input order,
   each post within 2,000 characters and 100 mentions, numbered ("2/3") and
   carrying the heading and the kickoff, with the bye line and the RSVP ask on
-  the last. Every unanswered player is named and every linked one mentioned,
-  with no cap: it is the week's first nudge, when a whole side may not have
-  answered (Tim's call, 2026-10-23; a 15-team night is seven fixtures and up to
-  seventy players). Each part is its own outbox row under the cluster's claim:
+  the last. Every unanswered player is named, with no cap: it is the week's
+  first nudge, when a whole side may not have answered (Tim's call, 2026-10-23;
+  a 15-team night is seven fixtures and up to seventy players). The linked ones
+  are mentioned only where the kickoff is news to their side, by
+  `kickoffIsRoutine` (`kickoff-routine.ts`): the side's first regular fixture
+  (`firstFixtureBySide`: its earliest kickoff that isn't a no-game forfeit, so
+  a week-1 bye, a moved week 1 or a forfeited week 1 still hears about its
+  first game), a retimed fixture (`scheduleRevision` above 0), a tiebreaker or a
+  playoff round. Every other regular kickoff is the weekly slot they already
+  know, so its waiters are named without a ping (Tim's call, 2026-10-24). A
+  regenerated schedule starts over at its own first fixture, which pings; "Move
+  a match night" bumps the revision of every fixture it moves, so those keep
+  pinging all season. A forfeit brought back with "Reopen for import" keeps its
+  revision and reads as routine. Each part is its own outbox row under the cluster's claim:
   part 1 keeps the claim's dedupe key and later parts add `:2`, `:3`, so a
   retry under the same event id adds only the parts that never queued
   (`week-reminder-posts.itest.ts`).
