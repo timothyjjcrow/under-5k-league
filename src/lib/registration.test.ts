@@ -1,11 +1,19 @@
 import { describe, expect, it } from "vitest";
 import {
+  MMR_SELF_EDIT_LOCKED_HINT,
   medalProvesIneligible,
+  mmrLockedAfterDraftNote,
+  mmrSelfEditLocked,
   promoteGateError,
   registrationGate,
   signupRemovalBlockers,
   withdrawGateError,
 } from "./registration";
+import {
+  sourceFile,
+  sourceFiles,
+  stripLineComments,
+} from "../../test/support/source-files";
 
 // maxMmr 4500 = the 4.5K soft/review limit; the hard ceiling (5000) is what
 // actually blocks. maxMmr 0 = no soft limit (the hard ceiling still applies).
@@ -508,5 +516,75 @@ describe("signupRemovalBlockers", () => {
       matches,
     });
     expect(blockers.get("drafted")?.note).toBe("on Radiant Rejects");
+  });
+});
+
+describe("mmrSelfEditLocked — a player's own MMR after the draft", () => {
+  it("stays editable through signups and draft setup", () => {
+    expect(mmrSelfEditLocked("SIGNUPS", null)).toBe(false);
+    // A reset draft can leave a row behind; signups are still signups.
+    expect(mmrSelfEditLocked("SIGNUPS", "COMPLETE")).toBe(false);
+    expect(mmrSelfEditLocked("DRAFT", null)).toBe(false);
+    expect(mmrSelfEditLocked("DRAFT", undefined)).toBe(false);
+    expect(mmrSelfEditLocked("DRAFT", "NOT_STARTED")).toBe(false);
+  });
+
+  it("leaves a live auction to the draft-night freeze", () => {
+    // saveRegistration's own PLAYER-only freeze covers these; standins
+    // registering on draft night still fix their typos.
+    expect(mmrSelfEditLocked("DRAFT", "IN_PROGRESS")).toBe(false);
+    expect(mmrSelfEditLocked("DRAFT", "PAUSED")).toBe(false);
+  });
+
+  it("locks once the auction is done, for the rest of the season", () => {
+    expect(mmrSelfEditLocked("DRAFT", "COMPLETE")).toBe(true);
+    expect(mmrSelfEditLocked("REGULAR_SEASON", "COMPLETE")).toBe(true);
+    // A season moved on without a Draft row is past the draft all the same.
+    expect(mmrSelfEditLocked("REGULAR_SEASON", null)).toBe(true);
+    expect(mmrSelfEditLocked("PLAYOFFS", "COMPLETE")).toBe(true);
+    expect(mmrSelfEditLocked("COMPLETE", "COMPLETE")).toBe(true);
+  });
+
+  it("says what was kept and who can change it, in en-US digits", () => {
+    expect(mmrLockedAfterDraftNote(4200)).toBe(
+      " · MMR is locked after the draft — kept 4,200. Ask a league admin to change it.",
+    );
+    expect(mmrLockedAfterDraftNote(0)).toBe(
+      " · MMR is locked after the draft — it stays unknown. Ask a league admin to change it.",
+    );
+  });
+
+  it("is the one rule saveRegistration and the /me form both apply", () => {
+    // The action keeps the stored number on the rule's say, and only after
+    // reading the signup it is about to keep.
+    const action = stripLineComments(
+      sourceFile("src/app/actions/registration.ts").text,
+    );
+    const save = action.slice(
+      action.indexOf("export async function saveRegistration("),
+      action.indexOf("export async function leaveLeague("),
+    );
+    expect(save).toMatch(
+      /existing && mmrSelfEditLocked\(season\.status, draftSnapshot\?\.status\)/,
+    );
+    expect(save).toMatch(/mmrLockedAfterDraftNote\(existing\.mmr\)/);
+    expect(save).toMatch(/mmr = existing\.mmr;/);
+    // …and decides it before the gate judges the number.
+    expect(save.indexOf("mmrSelfEditLocked(")).toBeLessThan(
+      save.indexOf("const gateFacts"),
+    );
+
+    // /me: the page computes the lock from the same facts and hands it to
+    // the one MMR box, which disables itself and shows the hint.
+    const me = sourceFiles("src/app/me/**/*.tsx", 1);
+    const page = stripLineComments(me.map((f) => f.text).join("\n"));
+    expect(page).toMatch(
+      /!!reg && mmrSelfEditLocked\(season\.status, draft\?\.status\)/,
+    );
+    expect(page).toMatch(/locked=\{mmrLocked\}/);
+    const field = sourceFile("src/components/mmr-field.tsx").text;
+    expect(field).toMatch(/disabled=\{locked\}/);
+    expect(field).toMatch(/MMR_SELF_EDIT_LOCKED_HINT/);
+    expect(MMR_SELF_EDIT_LOCKED_HINT).toMatch(/league admin/);
   });
 });

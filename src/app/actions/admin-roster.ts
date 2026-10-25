@@ -13,8 +13,12 @@ import { getActiveSeason } from "@/lib/season";
 import {
   approveStandinRequest,
   assignStandinGuarded,
+  cancelPendingStandinRequests,
   declineStandinRequest,
   removeStandinGuarded,
+  standinRequestCancellations,
+  StandinRequestsChangedError,
+  type CancelledStandinRequest,
 } from "@/lib/standin-service";
 import {
   SEASON_STATUS,
@@ -252,8 +256,9 @@ export async function withdrawSignup(
   // — fires BEFORE the tx (the leaveLeague placement) so the rival commits
   // before the snapshot and the test runs on SQLite too.
   await raceHook("admin.withdrawSignup.beforeTx");
+  let cancelledRequests: CancelledStandinRequest[] = [];
   try {
-    await prisma.$transaction(
+    cancelledRequests = await prisma.$transaction(
       async (tx) => {
         const [currentSeason, live, currentDraft] = await Promise.all([
           tx.season.findUnique({
@@ -304,10 +309,23 @@ export async function withdrawSignup(
           },
         });
         if (claimed.count === 0) throw new Error("STATUS_CHANGED");
+        // Their PENDING standin requests on this season's unplayed matches go
+        // with the signup, as in leaveLeague: each would hold a seat nobody
+        // can now agree to. Past the first write, a lost claim throws.
+        return cancelPendingStandinRequests(
+          tx,
+          pendingCoverWhere(reg.userId, season.id),
+          admin.id,
+        );
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
+    if (e instanceof StandinRequestsChangedError) {
+      return {
+        error: `A captain just answered a request for ${reg.user.name} to stand in — reload and try again.`,
+      };
+    }
     if (e instanceof SignupWithdrawalLockedError) {
       return {
         error:
@@ -342,14 +360,36 @@ export async function withdrawSignup(
   }
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
+  const requestCount = cancelledRequests.length;
+  const requests = `${requestCount} pending standin request${requestCount === 1 ? "" : "s"}`;
   await logAdminAction({
     action: "withdrawSignup",
-    summary: `Removed ${reg.user.name}'s ${reg.type.toLowerCase()} signup`,
+    summary:
+      `Removed ${reg.user.name}'s ${reg.type.toLowerCase()} signup` +
+      (requestCount > 0 ? `; cancelled ${requests} for them` : ""),
     seasonId: season.id,
   });
+  // After the commit, best-effort: each asking captain hears their request
+  // is off (the post mentions only them).
+  if (requestCount > 0) {
+    try {
+      for (const post of await standinRequestCancellations(
+        cancelledRequests,
+        "STANDIN_LEFT",
+      )) {
+        await sendDiscordMessage(post.announcement, post.mentions);
+      }
+    } catch {
+      // The requests are closed either way.
+    }
+  }
   refresh();
   return {
-    message: `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo`,
+    message:
+      `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo` +
+      (requestCount > 0
+        ? ` · ${requests} for them ${requestCount === 1 ? "was" : "were"} cancelled`
+        : ""),
   };
 }
 
