@@ -9,7 +9,7 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { matchCoverIssues } from "@/lib/admin-sections";
+import { matchCoverIssues, uncoveredByRequest } from "@/lib/admin-sections";
 import {
   matchCorrectionContext,
   matchLogisticsOpen,
@@ -39,6 +39,7 @@ import {
   assignStandin,
   declineStandinRequestAsAdmin,
   removeStandin,
+  withdrawStandinRequestAsAdmin,
 } from "@/app/actions/admin-roster";
 import type { StandinRequestView } from "@/lib/standin-service";
 import {
@@ -638,7 +639,8 @@ export function MatchResultRow({
 
 // One match's any-team standin controls: an OUT-players alert, current
 // assignments, captains' requests waiting for the other captain's OK (with
-// the admin's Agree and Decline in that captain's place), and the assign form. /admin's Standin assignments card renders
+// the admin's Agree and Decline in that captain's place, and Withdraw in the
+// asking captain's), and the assign form. /admin's Standin assignments card renders
 // one per upcoming fixture; the match page's Admin tools render the same block.
 export function StandinMatchBlock({
   m,
@@ -757,8 +759,21 @@ export function StandinMatchBlock({
         // direction, an assigned STANDIN who has declared OUT, gets distinct
         // copy because the fix differs (remove/replace, not add). The same
         // matchCoverIssues decides which matches open /admin's card at the top.
-        const { uncovered: needing, standinsOut: standinOut } =
-          matchCoverIssues(m, teams, asg, outRsvps);
+        const { uncovered, standinsOut: standinOut } = matchCoverIssues(
+          m,
+          teams,
+          asg,
+          outRsvps,
+        );
+        // A seat with a waiting request is still uncovered, but the Covers
+        // list below hides it: point at the request row instead.
+        const { needCover: needing, waiting } = uncoveredByRequest({
+          match: m,
+          uncovered,
+          requests,
+          teamName,
+          agreeOpen: assignOpen,
+        });
         return (
           <>
             {needing.length > 0 ? (
@@ -768,6 +783,14 @@ export function StandinMatchBlock({
                 standin below.
               </div>
             ) : null}
+            {waiting.map(({ rsvp, note }) => (
+              <div
+                key={rsvp.userId}
+                className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs [overflow-wrap:anywhere]"
+              >
+                ✗ Can&apos;t make it: <b>{rsvp.user.name}</b> — {note}.
+              </div>
+            ))}
             {standinOut.length > 0 ? (
               <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
                 ✗ Assigned standin{" "}
@@ -873,6 +896,22 @@ export function StandinMatchBlock({
                       confirm={`Decline ${r.standin.name} in place of the ${teamName.get(otherTeamId) ?? "other team's"} captain? The ${teamName.get(r.teamId) ?? "asking"} captain is told on Discord to find someone else.`}
                     >
                       decline
+                    </SubmitButton>
+                  </ActionForm>
+                  {/* The asking captain's Withdraw, in their place: cleanup,
+                      so it shows in every phase, like decline. */}
+                  <ActionForm
+                    action={withdrawStandinRequestAsAdmin}
+                    hidden={{ requestId: r.id }}
+                  >
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-danger-soft"
+                      aria-describedby={descId}
+                      confirm={`Withdraw the ${teamName.get(r.teamId) ?? "asking team's"} request for ${r.standin.name}, in their captain's place? The seat is free to book someone else, and nothing is posted on Discord.`}
+                    >
+                      withdraw
                     </SubmitButton>
                   </ActionForm>
                 </span>

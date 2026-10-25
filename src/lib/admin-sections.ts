@@ -98,6 +98,56 @@ export function matchCoverIssues<R extends CoverRsvp>(
   };
 }
 
+/** A PENDING standin request, as the cover banner reads it. */
+type CoverRequest = {
+  matchId: string;
+  teamId: string;
+  replacingUserId: string | null;
+  standin: { name: string };
+};
+
+/**
+ * Splits a match's uncovered players (matchCoverIssues) by what the admin
+ * can do about them. A player whose seat has a PENDING request (the MMR
+ * rule) is still uncovered, since a request is not cover, so the match stays
+ * a cover problem; but the assign form's Covers list hides that seat, so
+ * "assign a standin below" would send the admin to an option that isn't
+ * there. Those players get a note naming who has to answer and the request
+ * row's controls instead. Agree shows only while booking is open
+ * (`agreeOpen`); decline and withdraw always do.
+ */
+export function uncoveredByRequest<R extends CoverRsvp>(input: {
+  match: CoverMatch;
+  uncovered: readonly R[];
+  requests: readonly CoverRequest[];
+  teamName: ReadonlyMap<string, string>;
+  agreeOpen: boolean;
+}): { needCover: R[]; waiting: { rsvp: R; note: string }[] } {
+  const { match } = input;
+  const needCover: R[] = [];
+  const waiting: { rsvp: R; note: string }[] = [];
+  const controls = input.agreeOpen
+    ? "agree, decline or withdraw below"
+    : "decline or withdraw below";
+  for (const rsvp of input.uncovered) {
+    const request = input.requests.find(
+      (r) => r.matchId === match.id && r.replacingUserId === rsvp.userId,
+    );
+    if (!request) {
+      needCover.push(rsvp);
+      continue;
+    }
+    const otherId =
+      request.teamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId;
+    const other = otherId ? input.teamName.get(otherId) : undefined;
+    waiting.push({
+      rsvp,
+      note: `waiting on the ${other ? `${other} captain's` : "other captain's"} OK for ${request.standin.name} (${controls})`,
+    });
+  }
+  return { needCover, waiting };
+}
+
 /**
  * The unplayed matches the Standins card opens on: a player out with no
  * cover, a booked standin who dropped out, or a standin booked on two
