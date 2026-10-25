@@ -833,7 +833,9 @@ export function StandinMatchBlock({
                 <span id={descId} className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
                   ⏳ {r.standin.name} ({standinMmrLabel(r.standinMmr)}){" "}
                   {r.replaced
-                    ? `in for ${r.replaced.name} (${standinMmrLabel(r.baselineMmr)})`
+                    ? r.baselinePlayer
+                      ? `in for ${r.replaced.name}`
+                      : `in for ${r.replaced.name} (${standinMmrLabel(r.baselineMmr)})`
                     : "for an open seat"}{" "}
                   · {teamName.get(r.teamId)}: {r.requestedBy.name} asked, and the{" "}
                   {teamName.get(otherTeamId)} captain hasn&apos;t answered (
@@ -841,6 +843,7 @@ export function StandinMatchBlock({
                     standinMmr: r.standinMmr,
                     baselineMmr: r.baselineMmr,
                     emptySeat: r.replacingUserId === null,
+                    lowerOutName: r.baselinePlayer?.name,
                   })}
                   ).
                 </span>

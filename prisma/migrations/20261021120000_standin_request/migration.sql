@@ -15,6 +15,7 @@ CREATE TABLE "StandinRequest" (
     "requestedById" TEXT NOT NULL,
     "standinMmr" INTEGER NOT NULL,
     "baselineMmr" INTEGER,
+    "baselineUserId" TEXT,
     "status" TEXT NOT NULL DEFAULT 'PENDING',
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "decidedAt" TIMESTAMP(3),
@@ -37,5 +38,8 @@ ALTER TABLE "StandinRequest" ADD CONSTRAINT "StandinRequest_replacingUserId_fkey
 
 -- AddForeignKey
 ALTER TABLE "StandinRequest" ADD CONSTRAINT "StandinRequest_requestedById_fkey" FOREIGN KEY ("requestedById") REFERENCES "User"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "StandinRequest" ADD CONSTRAINT "StandinRequest_baselineUserId_fkey" FOREIGN KEY ("baselineUserId") REFERENCES "User"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 COMMIT;

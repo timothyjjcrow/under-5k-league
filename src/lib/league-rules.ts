@@ -335,7 +335,10 @@ function rostersSection(s: CarriedSeasonSettings): RuleSection {
       `A standin can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they cover, by signup MMR. A captain books a standin within that straight away.`,
       `A standin more than ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above needs the other captain to agree on the match page. The standin isn't booked until they do, and the seat waits until they answer or the request is withdrawn.`,
       "An empty roster seat counts as covering the team's lowest-MMR player. When the site doesn't know either MMR, the other captain decides.",
+      "If a teammate with a lower MMR has said they can't make the match and has no cover yet, the standin is measured against them instead of the player they cover.",
+      "Once the other captain declines a standin, that team can't ask for them again for the same match.",
       "Admins can book any standin themselves, and can agree or decline in a captain's place.",
+      "An admin can't agree to a request from a team they captain or that they made themselves.",
     ],
   };
 }

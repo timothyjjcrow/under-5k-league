@@ -1,9 +1,12 @@
 import { describe, it, expect } from "vitest";
 import {
+  agreeTooLateError,
   coverBaselineMmr,
   coverChoices,
+  namedCoverBaseline,
   standinApprovalReason,
   standinConflict,
+  standinDeclinedError,
   standinMmrLabel,
   standinNeedsApproval,
   standinPickerBlock,
@@ -113,9 +116,111 @@ describe("coverBaselineMmr", () => {
   });
 });
 
+// The lowest-out loophole: naming the strongest player as "covered" while
+// the standin really takes a weaker absentee's seat.
+describe("namedCoverBaseline", () => {
+  const teammates = [
+    { userId: "high", name: "High", mmr: 3200 },
+    { userId: "mid", name: "Mid", mmr: 2600 },
+    { userId: "low", name: "Low", mmr: 2000 },
+    { userId: "anon", name: "Anon", mmr: 0 },
+  ];
+  const judge = (
+    replaced: { userId: string; mmr: number | null },
+    out: string[],
+    covered: string[] = [],
+  ) =>
+    namedCoverBaseline({
+      replaced,
+      teammates,
+      outUserIds: new Set(out),
+      coveredUserIds: new Set(covered),
+    });
+
+  it("is the covered player's MMR when nobody lower is out", () => {
+    expect(judge({ userId: "high", mmr: 3200 }, [])).toEqual({
+      baselineMmr: 3200,
+      lowerOut: null,
+    });
+    // Out but higher than the named player: no effect.
+    expect(judge({ userId: "low", mmr: 2000 }, ["mid"])).toEqual({
+      baselineMmr: 2000,
+      lowerOut: null,
+    });
+  });
+
+  it("drops to the lowest uncovered teammate who said they can't make it", () => {
+    expect(judge({ userId: "high", mmr: 3200 }, ["mid", "low"])).toEqual({
+      baselineMmr: 2000,
+      lowerOut: { userId: "low", name: "Low", mmr: 2000 },
+    });
+    // Covered (booked or asked for) players are already accounted for.
+    expect(judge({ userId: "high", mmr: 3200 }, ["mid", "low"], ["low"])).toEqual({
+      baselineMmr: 2600,
+      lowerOut: { userId: "mid", name: "Mid", mmr: 2600 },
+    });
+  });
+
+  it("never lowers it with an unknown MMR, and an unknown named player stays unknown", () => {
+    expect(judge({ userId: "high", mmr: 3200 }, ["anon"])).toEqual({
+      baselineMmr: 3200,
+      lowerOut: null,
+    });
+    expect(judge({ userId: "high", mmr: 0 }, ["low"])).toEqual({
+      baselineMmr: null,
+      lowerOut: null,
+    });
+    expect(judge({ userId: "high", mmr: null }, ["low"])).toEqual({
+      baselineMmr: null,
+      lowerOut: null,
+    });
+  });
+
+  it("ignores the named player's own row and a tie, and breaks ties by id", () => {
+    expect(judge({ userId: "low", mmr: 2000 }, ["low"])).toEqual({
+      baselineMmr: 2000,
+      lowerOut: null,
+    });
+    expect(judge({ userId: "high", mmr: 2000 }, ["low"])).toEqual({
+      baselineMmr: 2000,
+      lowerOut: null,
+    });
+    const twins = namedCoverBaseline({
+      replaced: { userId: "high", mmr: 3200 },
+      teammates: [
+        { userId: "b", name: "B", mmr: 2000 },
+        { userId: "a", name: "A", mmr: 2000 },
+      ],
+      outUserIds: new Set(["a", "b"]),
+      coveredUserIds: new Set(),
+    });
+    expect(twins.lowerOut?.userId).toBe("a");
+  });
+});
+
 describe("standinApprovalReason", () => {
-  // Every branch is a clause that reads after "since", and carries no player
-  // name, so the same words are safe in a Discord post.
+  // Every branch is a clause that reads after "since"; the only name it
+  // carries is the lower teammate's, which the caller formats.
+  it("names the lower teammate who said they can't make it", () => {
+    expect(
+      standinApprovalReason({
+        standinMmr: 2300,
+        baselineMmr: 2000,
+        emptySeat: false,
+        lowerOutName: "Low Lou",
+      }),
+    ).toBe("the standin is 300 MMR above Low Lou (2,000), who said they can't make it");
+    // Unknown wins over the name: there is no gap to state.
+    expect(
+      standinApprovalReason({
+        standinMmr: 0,
+        baselineMmr: 2000,
+        emptySeat: false,
+        lowerOutName: "Low Lou",
+      }),
+    ).toBe("the standin's MMR is unknown");
+  });
+
   it("says how far above, measured against the right seat", () => {
     expect(
       standinApprovalReason({ standinMmr: 3100, baselineMmr: 2400, emptySeat: false }),
@@ -212,6 +317,61 @@ describe("standinPickerBlock", () => {
         booking({ scheduledAt: at("2026-08-02T20:00:00Z"), week: 3, pending: true }),
       ]),
     ).toBeNull();
+  });
+
+  // The server refuses asking again for a standin the other captain declined
+  // for this team in this match; a booking or a waiting request here wins.
+  it("greys out a standin the other captain declined here, and only here", () => {
+    const declined = booking({ matchId: "m1", replacedName: null, declinedBy: "Techies" });
+    expect(standinPickerBlock("alice", target, [declined])).toBe(
+      "the Techies captain already declined them for this match",
+    );
+    expect(
+      standinPickerBlock("alice", target, [
+        declined,
+        booking({ matchId: "m1", pending: true }),
+      ]),
+    ).toBe("waiting for the other captain's OK in this match");
+    // A declined request is no booking: elsewhere the same night it holds nothing.
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({
+          matchId: "m9",
+          declinedBy: "Techies",
+          scheduledAt: at("2026-08-02T18:00:00Z"),
+          week: 3,
+        }),
+      ]),
+    ).toBeNull();
+  });
+});
+
+describe("agreeTooLateError", () => {
+  // The booking check's advice is for whoever books; the approver is told to
+  // decline instead.
+  it("keeps the reason, drops the booker's advice, and says to decline", () => {
+    expect(agreeTooLateError("This match is already played", "Radiant")).toBe(
+      "This can't be agreed to any more: this match is already played — decline it so Radiant can line up someone else",
+    );
+    expect(
+      agreeTooLateError(
+        "Sub Sam is already covering A vs B that night — they can't play both. Remove that assignment first.",
+        "Radiant",
+      ),
+    ).toBe(
+      "This can't be agreed to any more: Sub Sam is already covering A vs B that night — decline it so Radiant can line up someone else",
+    );
+    expect(
+      agreeTooLateError("That standin has no active signup this season", "Radiant"),
+    ).toBe(
+      "This can't be agreed to any more: that standin has no active signup this season — decline it so Radiant can line up someone else",
+    );
+  });
+
+  it("words the declined refusal for the asking captain", () => {
+    expect(standinDeclinedError("Dire", "Sub Sam")).toBe(
+      "The Dire captain already declined Sub Sam for this match — pick someone else, or ask an admin",
+    );
   });
 });
 

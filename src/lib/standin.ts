@@ -102,6 +102,52 @@ export function coverBaselineMmr(
   return known.length > 0 ? Math.min(...known) : null;
 }
 
+/** A teammate whose MMR set a named cover's baseline instead of the named player. */
+export type LowerOutPlayer = { userId: string; name: string; mmr: number };
+
+/**
+ * A NAMED cover's baseline: the covered player's signup MMR, or lower when a
+ * teammate who said they can't make this match (OUT for its current kickoff)
+ * has a lower known MMR and no cover yet, booked or asked for. Otherwise a
+ * captain could name their strongest player as "covered" while the standin
+ * really takes the weakest absentee's seat. `lowerOut` is that teammate, so
+ * the copy can say whose MMR it was judged against; null when the named
+ * player's own MMR is the baseline (a tie included).
+ *
+ * Unknown (0) MMRs never lower it, and an unknown named player stays unknown:
+ * the other captain decides, as `standinNeedsApproval` says. The empty-seat
+ * baseline (`coverBaselineMmr` with the roster) is a different rule.
+ */
+export function namedCoverBaseline(opts: {
+  replaced: { userId: string; mmr: number | null };
+  /** The covered team's roster, with signup MMRs (0 = unknown). */
+  teammates: readonly { userId: string; name: string; mmr: number }[];
+  /** Who checked in OUT for this match's current scheduleRevision. */
+  outUserIds: ReadonlySet<string>;
+  /** Players in this match with a booking or a waiting request covering them. */
+  coveredUserIds: ReadonlySet<string>;
+}): { baselineMmr: number | null; lowerOut: LowerOutPlayer | null } {
+  const own = coverBaselineMmr({ replacedMmr: opts.replaced.mmr });
+  if (own === null) return { baselineMmr: null, lowerOut: null };
+  const lowest = opts.teammates
+    .filter(
+      (m) =>
+        m.userId !== opts.replaced.userId &&
+        m.mmr > 0 &&
+        m.mmr < own &&
+        opts.outUserIds.has(m.userId) &&
+        !opts.coveredUserIds.has(m.userId),
+    )
+    // Exact stored keys, the id last: the same teammate every time.
+    .sort((a, b) => a.mmr - b.mmr || a.userId.localeCompare(b.userId))[0];
+  return lowest
+    ? {
+        baselineMmr: lowest.mmr,
+        lowerOut: { userId: lowest.userId, name: lowest.name, mmr: lowest.mmr },
+      }
+    : { baselineMmr: own, lowerOut: null };
+}
+
 /**
  * Does this booking need the other captain's OK? Yes when the standin is more
  * than STANDIN_MMR_ALLOWANCE above the baseline (exactly the allowance is
@@ -120,16 +166,22 @@ export function standinNeedsApproval(
 const MMR_NUMBER = new Intl.NumberFormat("en-US");
 
 /**
- * Why a booking needs the other captain, as a clause with no player names in
- * it, so the same words are safe in a toast, the match page and a Discord
- * post ("…, since the standin is 700 MMR above the player they cover"). Only
- * call it when `standinNeedsApproval` said yes.
+ * Why a booking needs the other captain, as a clause that reads after
+ * "since" in a toast, the match page and a Discord post ("…, since the
+ * standin is 700 MMR above the player they cover"). Only call it when
+ * `standinNeedsApproval` said yes.
+ *
+ * The only name it can carry is `lowerOutName`, the teammate a named cover
+ * was judged against (`namedCoverBaseline`), passed in already formatted for
+ * the surface: a Discord caller escapes it.
  */
 export function standinApprovalReason(opts: {
   standinMmr: number;
   baselineMmr: number | null;
   /** An empty seat, judged against the team's lowest MMR. */
   emptySeat: boolean;
+  /** Set when a lower teammate who said they're out set the baseline. */
+  lowerOutName?: string | null;
 }): string {
   if (opts.standinMmr <= 0) return "the standin's MMR is unknown";
   if (opts.baselineMmr === null || opts.baselineMmr <= 0) {
@@ -138,9 +190,40 @@ export function standinApprovalReason(opts: {
       : "the covered player's MMR is unknown";
   }
   const gap = MMR_NUMBER.format(opts.standinMmr - opts.baselineMmr);
-  return opts.emptySeat
-    ? `the standin is ${gap} MMR above the team's lowest-MMR player`
+  if (opts.emptySeat)
+    return `the standin is ${gap} MMR above the team's lowest-MMR player`;
+  return opts.lowerOutName
+    ? `the standin is ${gap} MMR above ${opts.lowerOutName} (${MMR_NUMBER.format(
+        opts.baselineMmr,
+      )}), who said they can't make it`
     : `the standin is ${gap} MMR above the player they cover`;
+}
+
+/**
+ * The approver's refusal when a request no longer passes the booking checks
+ * (the seat, the signup or the night moved since it was asked). The check's
+ * own advice is for whoever books, so only its reason is kept ("X is already
+ * covered by Y — remove that assignment first" → "X is already covered by
+ * Y"), and the approver is told what they can still do: decline it.
+ */
+export function agreeTooLateError(reason: string, teamName: string): string {
+  let clause = reason.split(" — ")[0].replace(/\.$/, "");
+  // A sentence's capital reads wrong after the colon; a name keeps its own.
+  if (/^(That|This|The|No|Unknown|Replaced|Standins)\b/.test(clause)) {
+    clause = clause[0].toLowerCase() + clause.slice(1);
+  }
+  return `This can't be agreed to any more: ${clause} — decline it so ${teamName} can line up someone else`;
+}
+
+/**
+ * The other captain already declined this standin for this team in this
+ * match: a captain can't ask for them again (an admin can still book them).
+ */
+export function standinDeclinedError(
+  otherTeamName: string,
+  standinName: string,
+): string {
+  return `The ${otherTeamName} captain already declined ${standinName} for this match — pick someone else, or ask an admin`;
 }
 
 /** "3,100 MMR", or "MMR unknown" for a 0. A fixed locale: see CLAUDE.md. */
@@ -158,6 +241,12 @@ export type StandinBooking = StandinSlot & {
   awayName: string;
   /** A request still waiting for the other captain, not a booking. */
   pending?: boolean;
+  /**
+   * A request for the picker's own team that the other team's captain
+   * declined (their team's name): not a booking, but the captain can't ask
+   * for this standin again in this match.
+   */
+  declinedBy?: string;
 };
 
 /**
@@ -166,10 +255,12 @@ export type StandinBooking = StandinSlot & {
  * It mirrors the refusals assignStandinGuarded gives most often, so the
  * picker stops offering a choice that can only come back as a toast: the
  * standin already has a booking or a request waiting for the other captain
- * anywhere in THIS match, or covers another unplayed fixture the same night
- * (`standinConflict`, with the same target the server uses). `bookings` are
- * the season's unplayed-fixture bookings, this match's included, plus this
- * match's pending requests. The server still checks all of it at submit.
+ * anywhere in THIS match, the other captain declined them for this team in
+ * this match (the captain's card can only ask again), or covers another
+ * unplayed fixture the same night (`standinConflict`, with the same target
+ * the server uses). `bookings` are the season's unplayed-fixture bookings,
+ * this match's included, plus this match's pending requests and the
+ * captain's own declined ones. The server still checks all of it at submit.
  */
 export function standinPickerBlock(
   standinUserId: string,
@@ -177,16 +268,23 @@ export function standinPickerBlock(
   bookings: readonly StandinBooking[],
 ): string | null {
   const theirs = bookings.filter((b) => b.standinUserId === standinUserId);
-  const here = theirs.find((b) => b.matchId === target.matchId);
+  const inThisMatch = theirs.filter((b) => b.matchId === target.matchId);
+  const here = inThisMatch.find((b) => !b.declinedBy);
   if (here) {
     if (here.pending) return "waiting for the other captain's OK in this match";
     return here.replacedName
       ? `covering ${here.replacedName} in this match`
       : "filling an open seat in this match";
   }
+  const declined = inThisMatch.find((b) => b.declinedBy);
+  if (declined) {
+    return `the ${declined.declinedBy} captain already declined them for this match`;
+  }
   // A request elsewhere isn't a booking yet: agreeing to it re-checks the
   // night, so it doesn't hide the standin here.
-  const clash = theirs.find((b) => !b.pending && standinConflict(target, b));
+  const clash = theirs.find(
+    (b) => !b.pending && !b.declinedBy && standinConflict(target, b),
+  );
   return clash
     ? `booked for ${clash.homeName} vs ${clash.awayName} that night`
     : null;

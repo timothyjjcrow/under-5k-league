@@ -1142,6 +1142,13 @@ export function standinApprovalRequestedMessage(m: {
   /** The request's numbers: 0 = unknown standin MMR, null = unknown seat. */
   standinMmr: number;
   baselineMmr: number | null;
+  /**
+   * The lower teammate who said they can't make it and set the baseline
+   * instead of the covered player (`namedCoverBaseline`), with the covered
+   * player's own MMR for their line. Omitted: the covered player is the
+   * baseline.
+   */
+  lowerOut?: { name: string; replacedMmr: number | null } | null;
   /** Deep link target: the match page's Standins card holds the buttons. */
   matchId?: string;
 }): string {
@@ -1149,13 +1156,15 @@ export function standinApprovalRequestedMessage(m: {
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = `**${name(m.standinName)}** (${standinMmrLabel(m.standinMmr)})`;
+  const replacedMmr = m.lowerOut ? m.lowerOut.replacedMmr : m.baselineMmr;
   const forWhom = m.replacedName
-    ? `to stand in for **${name(m.replacedName)}** (${standinMmrLabel(m.baselineMmr)}) on **${name(m.teamName)}**`
+    ? `to stand in for **${name(m.replacedName)}** (${standinMmrLabel(replacedMmr)}) on **${name(m.teamName)}**`
     : `to fill an open roster seat on **${name(m.teamName)}**`;
   const why = standinApprovalReason({
     standinMmr: m.standinMmr,
     baselineMmr: m.baselineMmr,
     emptySeat: m.replacedName === null,
+    lowerOutName: m.lowerOut ? `**${name(m.lowerOut.name)}**` : null,
   });
   const where = m.matchId
     ? `on the match page: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
