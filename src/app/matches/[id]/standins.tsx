@@ -202,10 +202,15 @@ export async function StandinSection({
     ...poolChoices.filter((c) => !c.blocked),
     ...poolChoices.filter((c) => c.blocked),
   ];
+  // Players a BOOKING covers. A request is not cover: it holds the seat, but
+  // never takes its player out of the MMR rule's baseline (coverBaseline).
+  const bookedIds = new Set(
+    assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
+  );
   // One seat, one standin — players already covered, or whose cover waits
   // for the other captain, leave the Covers list (the server refuses both).
   const coveredIds = new Set([
-    ...assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
+    ...bookedIds,
     ...requests.flatMap((r) => (r.replacingUserId ? [r.replacingUserId] : [])),
   ]);
   // OPEN SEATS on this captain's own roster. A team that lost a player
@@ -228,7 +233,8 @@ export async function StandinSection({
     rosterMmrs: roster.map((m) => mmrOf.get(m.userId) ?? 0),
   });
   // A named player counts as a lower teammate who said they can't make it
-  // and has no cover yet, as the server judges it (namedCoverBaseline).
+  // and has no booking yet, as the server judges it (namedCoverBaseline): a
+  // waiting request for that teammate doesn't change it.
   const teammates = roster.map((m) => ({
     userId: m.userId,
     name: m.user.name,
@@ -239,7 +245,7 @@ export async function StandinSection({
       replaced: { userId, mmr: mmrOf.get(userId) ?? 0 },
       teammates,
       outUserIds: outIds,
-      coveredUserIds: coveredIds,
+      coveredUserIds: bookedIds,
     });
     return lowerOut ? ` · counts as ${standinMmrLabel(lowerOut.mmr)}` : "";
   };
@@ -536,7 +542,8 @@ export async function StandinSection({
             them instead. Any higher, or with an MMR the site doesn&apos;t
             know, and the {teamNameOf(otherTeamId)} captain has to agree first;
             an empty seat counts as your lowest-MMR player. Someone they
-            decline can&apos;t be asked for again for this match.{" "}
+            decline can&apos;t be booked or asked for again for this
+            match.{" "}
             <Link href="/rules#rosters" className={textLink("whitespace-nowrap")}>
               Standin rules
             </Link>
