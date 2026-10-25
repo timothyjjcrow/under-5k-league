@@ -73,38 +73,79 @@ export function standinConflict(target: StandinSlot, other: StandinSlot): boolea
 }
 
 /**
- * Flag a standin whose MMR towers over the seat they're filling. ADVISORY,
- * never a block (the maxMmr house rule): amateur-league convention is
- * comparable-or-lower-MMR cover, but the league's only hard gate is
- * registration's ceiling, so the assigner just gets told what they're doing.
+ * How far above the seat a captain may bring in a standin on their own (Tim's
+ * rule, 2026-10-21). Up to this many MMR above, a captain locks the standin
+ * in; more than this, or with an MMR the site doesn't know, the booking waits
+ * for the other captain to agree (a StandinRequest). An admin's booking from
+ * /admin is the league's ruling and needs no one's OK.
  */
-export const STANDIN_MMR_FLAG_GAP = 500;
+export const STANDIN_MMR_ALLOWANCE = 100;
 
 /**
- * The advisory line for an assign toast, or null when there's nothing to say.
+ * The MMR a cover is judged against, or null when the site doesn't know it.
  *
- * Named cover compares against the REPLACED player — that's the strength the
- * team was already fielding, so a small gap (or covering down) is silent even
- * in a capped season. An empty seat has no baseline, so the season's soft MMR
- * cap (0 = none) is the only yardstick. An unknown standin MMR (0) never
- * flags: "unknown" must not dress up as "fine" OR as "too strong".
+ * Named cover compares with the covered player's signup MMR: the strength the
+ * team was already fielding. An empty seat has nobody behind it, so it counts
+ * as covering the team's LOWEST-MMR player; a short side can't bring in a
+ * stronger fifth than a full side covering its weakest seat could. 0 is an
+ * unknown signup MMR and never counts as a number.
  */
-export function standinMmrNote(opts: {
-  standinMmr: number;
-  /** The replaced player's registration MMR; null/0 = empty seat or unknown. */
-  replacedMmr: number | null;
-  /** Season.maxMmr — 0 = no review threshold set. */
-  maxMmr: number;
-}): string | null {
-  if (opts.standinMmr <= 0) return null;
-  if (opts.replacedMmr && opts.replacedMmr > 0) {
-    return opts.standinMmr - opts.replacedMmr >= STANDIN_MMR_FLAG_GAP
-      ? `heads up: a ${opts.standinMmr} MMR standin is covering a ${opts.replacedMmr} MMR player — make sure the other captain is fine with it`
-      : null;
+export function coverBaselineMmr(
+  cover:
+    | { replacedMmr: number | null }
+    | { rosterMmrs: readonly number[] },
+): number | null {
+  if ("replacedMmr" in cover) {
+    return cover.replacedMmr && cover.replacedMmr > 0 ? cover.replacedMmr : null;
   }
-  return opts.maxMmr > 0 && opts.standinMmr > opts.maxMmr
-    ? `heads up: ${opts.standinMmr} MMR is above this season's ${opts.maxMmr} MMR review threshold`
-    : null;
+  const known = cover.rosterMmrs.filter((mmr) => mmr > 0);
+  return known.length > 0 ? Math.min(...known) : null;
+}
+
+/**
+ * Does this booking need the other captain's OK? Yes when the standin is more
+ * than STANDIN_MMR_ALLOWANCE above the baseline (exactly the allowance is
+ * fine), and whenever either MMR is unknown: an unknown must not pass as
+ * "close enough", or leaving MMR blank would make anyone a free ringer. Asking
+ * isn't a refusal; the other captain decides.
+ */
+export function standinNeedsApproval(
+  standinMmr: number,
+  baselineMmr: number | null,
+): boolean {
+  if (standinMmr <= 0 || baselineMmr === null || baselineMmr <= 0) return true;
+  return standinMmr - baselineMmr > STANDIN_MMR_ALLOWANCE;
+}
+
+const MMR_NUMBER = new Intl.NumberFormat("en-US");
+
+/**
+ * Why a booking needs the other captain, as a clause with no player names in
+ * it, so the same words are safe in a toast, the match page and a Discord
+ * post ("…, since the standin is 700 MMR above the player they cover"). Only
+ * call it when `standinNeedsApproval` said yes.
+ */
+export function standinApprovalReason(opts: {
+  standinMmr: number;
+  baselineMmr: number | null;
+  /** An empty seat, judged against the team's lowest MMR. */
+  emptySeat: boolean;
+}): string {
+  if (opts.standinMmr <= 0) return "the standin's MMR is unknown";
+  if (opts.baselineMmr === null || opts.baselineMmr <= 0) {
+    return opts.emptySeat
+      ? "nobody on the team has a known MMR to compare with"
+      : "the covered player's MMR is unknown";
+  }
+  const gap = MMR_NUMBER.format(opts.standinMmr - opts.baselineMmr);
+  return opts.emptySeat
+    ? `the standin is ${gap} MMR above the team's lowest-MMR player`
+    : `the standin is ${gap} MMR above the player they cover`;
+}
+
+/** "3,100 MMR", or "MMR unknown" for a 0. A fixed locale: see CLAUDE.md. */
+export function standinMmrLabel(mmr: number | null): string {
+  return mmr && mmr > 0 ? `${MMR_NUMBER.format(mmr)} MMR` : "MMR unknown";
 }
 
 /** One unplayed-fixture booking the captain's standin picker checks. */
@@ -115,17 +156,20 @@ export type StandinBooking = StandinSlot & {
   replacedName: string | null;
   homeName: string;
   awayName: string;
+  /** A request still waiting for the other captain, not a booking. */
+  pending?: boolean;
 };
 
 /**
  * Why the assign form should not offer this standin, or null when it may.
  *
- * It mirrors the two refusals assignStandinGuarded gives most often, so the
+ * It mirrors the refusals assignStandinGuarded gives most often, so the
  * picker stops offering a choice that can only come back as a toast: the
- * standin already has a booking anywhere in THIS match, or covers another
- * unplayed fixture the same night (`standinConflict`, with the same target
- * the server uses). `bookings` are the season's unplayed-fixture bookings,
- * this match's included. The server still checks both at submit.
+ * standin already has a booking or a request waiting for the other captain
+ * anywhere in THIS match, or covers another unplayed fixture the same night
+ * (`standinConflict`, with the same target the server uses). `bookings` are
+ * the season's unplayed-fixture bookings, this match's included, plus this
+ * match's pending requests. The server still checks all of it at submit.
  */
 export function standinPickerBlock(
   standinUserId: string,
@@ -135,11 +179,14 @@ export function standinPickerBlock(
   const theirs = bookings.filter((b) => b.standinUserId === standinUserId);
   const here = theirs.find((b) => b.matchId === target.matchId);
   if (here) {
+    if (here.pending) return "waiting for the other captain's OK in this match";
     return here.replacedName
       ? `covering ${here.replacedName} in this match`
       : "filling an open seat in this match";
   }
-  const clash = theirs.find((b) => standinConflict(target, b));
+  // A request elsewhere isn't a booking yet: agreeing to it re-checks the
+  // night, so it doesn't hide the standin here.
+  const clash = theirs.find((b) => !b.pending && standinConflict(target, b));
   return clash
     ? `booked for ${clash.homeName} vs ${clash.awayName} that night`
     : null;

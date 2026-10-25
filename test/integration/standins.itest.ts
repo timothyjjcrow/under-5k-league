@@ -8,10 +8,15 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import {
+  approveStandinRequest,
   assignStandinGuarded,
+  cancelStandinRequest,
   clashesAfterRetime,
+  declineStandinRequest,
   removeStandinGuarded,
 } from "@/lib/standin-service";
+import { STANDIN_MMR_ALLOWANCE } from "@/lib/standin";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { makeSeason, makeTeam, makeUser } from "./factories";
 
 // Captain self-serve standins: the guards that used to live admin-only now
@@ -23,6 +28,9 @@ async function setup() {
   const home = await makeTeam(season.id, "Home", 0);
   const away = await makeTeam(season.id, "Away", 1);
 
+  // Rostered players carry a signup, as every drafted player does: its MMR is
+  // what the standin MMR rule measures cover against. Level with Sub Sam's,
+  // so a captain's booking locks in unless a test moves one of them.
   const roster = async (teamId: string, name: string) => {
     const user = await makeUser(name);
     await prisma.teamMember.create({
@@ -32,6 +40,15 @@ async function setup() {
         userId: user.id,
         isCaptain: false,
         price: 5,
+      },
+    });
+    await prisma.registration.create({
+      data: {
+        seasonId: season.id,
+        userId: user.id,
+        type: "PLAYER",
+        status: "ACTIVE",
+        mmr: 3200,
       },
     });
     return user;
@@ -249,20 +266,10 @@ describe("captain standin assignment (integration)", () => {
     const { home, homePlayer, awayPlayer, sub, match } = await setup();
     const cap = home.captainId;
 
-    // Rostered player can't stand in. The rostered fixtures are bare Users
-    // with no Registration, so without this row the call is rejected by the
-    // "no active signup" guard and never reaches the roster guard the
-    // assertion names — it passed with the roster check deleted. Give them a
-    // real ACTIVE signup and assert the REASON, not just the refusal.
-    await prisma.registration.create({
-      data: {
-        seasonId: match.seasonId,
-        userId: awayPlayer.id,
-        type: "PLAYER",
-        status: "ACTIVE",
-        mmr: 3000,
-      },
-    });
+    // Rostered player can't stand in. The rostered fixtures carry a real
+    // ACTIVE signup (setup), so the call gets past the "no active signup"
+    // guard to the roster guard the assertion names — without one it passed
+    // with the roster check deleted. Assert the REASON, not just the refusal.
     const rostered = await assignStandinGuarded({
       matchId: match.id,
       standinUserId: awayPlayer.id,
@@ -1071,111 +1078,488 @@ describe("standin assignment phase gate", () => {
 });
 
 // ---------------------------------------------------------------------------
-// MMR ADVISORY (standinMmrNote). Warn-and-name, NEVER a block — the maxMmr
-// house rule. Named cover compares against the REPLACED player's registration
-// MMR (the strength the team was already fielding); an empty seat has no
-// baseline, so the season's soft cap is the only yardstick.
+// THE STANDIN MMR RULE (Tim, 2026-10-21). A captain books a standin up to
+// STANDIN_MMR_ALLOWANCE above the seat; past it, or with an unknown MMR, the
+// booking becomes a StandinRequest the OTHER captain agrees to or declines.
+// The admin panel books over the rule. setup() puts Sub Sam and both rostered
+// players at 3200.
 // ---------------------------------------------------------------------------
-describe("standin MMR advisory", () => {
-  it("flags a 4900 standin covering a 1800 seat — and still assigns", async () => {
-    const { season, home, homePlayer, sub, match } = await setup();
-    await prisma.registration.updateMany({
-      where: { userId: sub.id },
-      data: { mmr: 4900 },
+describe("standin MMR rule", () => {
+  async function setSubMmr(userId: string, mmr: number) {
+    await prisma.registration.updateMany({ where: { userId }, data: { mmr } });
+  }
+
+  /** setup(), with Sub Sam over the allowance and both captains linked. */
+  async function overTheLine() {
+    const fx = await setup();
+    await setSubMmr(fx.sub.id, 3200 + STANDIN_MMR_ALLOWANCE + 1);
+    await prisma.user.update({
+      where: { id: fx.home.captainId },
+      data: { discordId: "700000000000000011" },
     });
-    // The replaced player's MMR comes from their Registration row — the
-    // rostered fixtures are bare Users, so give them one.
-    await prisma.registration.create({
-      data: {
-        seasonId: season.id,
-        userId: homePlayer.id,
-        type: "PLAYER",
-        status: "ACTIVE",
-        mmr: 1800,
-      },
+    await prisma.user.update({
+      where: { id: fx.away.captainId },
+      data: { discordId: "700000000000000022" },
     });
+    await prisma.user.update({
+      where: { id: fx.sub.id },
+      data: { discordId: "700000000000000033" },
+    });
+    return fx;
+  }
+
+  async function ask(fx: Awaited<ReturnType<typeof overTheLine>>) {
+    const res = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: fx.sub.id,
+      replacingUserId: fx.homePlayer.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(res.ok && res.pending).toBe(true);
+    return prisma.standinRequest.findFirstOrThrow({
+      where: { matchId: fx.match.id },
+    });
+  }
+
+  it("a captain books a standin up to the allowance above straight away", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    await setSubMmr(sub.id, 3200 + STANDIN_MMR_ALLOWANCE);
     const res = await assignStandinGuarded({
       matchId: match.id,
       standinUserId: sub.id,
       replacingUserId: homePlayer.id,
       actingCaptainId: home.captainId,
     });
-    // Advisory means the assignment LANDS and the message names the gap.
+    expect(res.ok && res.pending).toBeFalsy();
+    expect(await prisma.standinAssignment.count()).toBe(1);
+    expect(await prisma.standinRequest.count()).toBe(0);
+  });
+
+  it("past it, the captain's booking waits for the other captain, who alone is pinged", async () => {
+    const fx = await overTheLine();
+    const res = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: fx.sub.id,
+      replacingUserId: fx.homePlayer.id,
+      actingCaptainId: fx.home.captainId,
+    });
     expect(res.ok).toBe(true);
-    if (res.ok)
+    if (!res.ok) return;
+    expect(res.pending).toBe(true);
+    // Nothing is booked: no cover until the other captain agrees.
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    const request = await prisma.standinRequest.findFirstOrThrow();
+    expect(request).toMatchObject({
+      status: "PENDING",
+      teamId: fx.home.id,
+      standinUserId: fx.sub.id,
+      replacingUserId: fx.homePlayer.id,
+      requestedById: fx.home.captainId,
+      standinMmr: 3301,
+      baselineMmr: 3200,
+    });
+    // The other captain must act; the standin isn't booked yet.
+    expect(res.mentions).toEqual({ users: ["700000000000000022"] });
+    expect(res.reachUserId).toBe(fx.away.captainId);
+    expect(res.announcement).toContain("The **Away** captain has to agree first");
+    expect(res.announcement).toContain("101 MMR above the player they cover");
+    expect(res.message).toContain("Asked Away Captain (the Away captain) to agree");
+  });
+
+  it("an admin's booking from the panel books over the rule, and says so", async () => {
+    const { homePlayer, sub, match } = await setup();
+    await setSubMmr(sub.id, 4900);
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: null,
+    });
+    expect(res.ok && res.pending).toBeFalsy();
+    if (res.ok) {
       expect(res.message).toContain(
-        "heads up: a 4900 MMR standin is covering a 1800 MMR player",
+        "booked over the standin MMR rule (the standin is 1,700 MMR above the player they cover)",
       );
+      expect(res.summary).toContain("without the other captain's OK");
+    }
     expect(await prisma.standinAssignment.count()).toBe(1);
   });
 
-  it("says nothing under the 500-MMR flag gap", async () => {
-    // 2600 covering 2500 — comparable cover is the normal case, no noise.
-    const { season, home, homePlayer, sub, match } = await setup();
-    await prisma.registration.updateMany({
-      where: { userId: sub.id },
-      data: { mmr: 2600 },
+  // The captain's card asks even when its captain is an admin (who reaches
+  // the service with actingCaptainId null): only the panel rules over it.
+  it("overLimit: ask files a request even for an admin", async () => {
+    const { home, homePlayer, sub, match } = await setup();
+    await setSubMmr(sub.id, 4900);
+    const res = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: null,
+      actingUserId: home.captainId,
+      overLimit: "ask",
     });
+    expect(res.ok && res.pending).toBe(true);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+  });
+
+  it("the other captain agrees: the standin is booked and both hear it", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    const res = await approveStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const booking = await prisma.standinAssignment.findFirstOrThrow();
+    expect(booking).toMatchObject({
+      teamId: fx.home.id,
+      standinUserId: fx.sub.id,
+      replacingUserId: fx.homePlayer.id,
+    });
+    const after = await prisma.standinRequest.findUniqueOrThrow({
+      where: { id: request.id },
+    });
+    expect(after.status).toBe("APPROVED");
+    expect(after.decidedById).toBe(fx.away.captainId);
+    expect(after.decidedAt).not.toBeNull();
+    // The standin learns it's their night; the asking captain that it went through.
+    expect(res.mentions).toEqual({
+      users: ["700000000000000033", "700000000000000011"],
+    });
+    expect(res.announcement).toContain("**Away Captain** agreed to it.");
+  });
+
+  it("only the other team's captain (or an admin) can agree", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    for (const actingCaptainId of [fx.home.captainId, fx.sub.id]) {
+      const res = await approveStandinRequest({
+        requestId: request.id,
+        actingCaptainId,
+      });
+      expect(!res.ok && res.error).toBe(
+        "Only the Away captain (or an admin) can agree to this standin",
+      );
+    }
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    const admin = await approveStandinRequest({
+      requestId: request.id,
+      actingCaptainId: null,
+    });
+    expect(admin.ok).toBe(true);
+    if (admin.ok) expect(admin.announcement).toContain("An admin agreed to it.");
+    expect(await prisma.standinAssignment.count()).toBe(1);
+  });
+
+  it("the other captain declines: nothing is booked and the asking captain is told", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    const wrong = await declineStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(wrong.ok).toBe(false);
+    const res = await declineStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.mentions).toEqual({ users: ["700000000000000011"] });
+      expect(res.announcement).toContain("**Away Captain** didn't agree to **Sub Sam**");
+    }
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("DECLINED");
+  });
+
+  it("the asking captain withdraws; the other captain can't, and nobody is pinged", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    const wrong = await cancelStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(!wrong.ok && wrong.error).toBe(
+      "Only the Home captain (or an admin) can withdraw this request",
+    );
+    const res = await cancelStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(res.ok && res.announcement).toBe("");
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("CANCELLED");
+  });
+
+  it("a waiting request holds its seat and its standin until it's answered", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    const other = await makeUser("Sub Tara");
     await prisma.registration.create({
       data: {
-        seasonId: season.id,
-        userId: homePlayer.id,
-        type: "PLAYER",
+        seasonId: fx.season.id,
+        userId: other.id,
+        type: "STANDIN",
         status: "ACTIVE",
-        mmr: 2500,
+        mmr: 3000,
       },
     });
-    const res = await assignStandinGuarded({
+    // Someone within the allowance for the same seat: refused, not booked.
+    const sameSeat = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: other.id,
+      replacingUserId: fx.homePlayer.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(!sameSeat.ok && sameSeat.error).toBe(
+      "Home Carry's seat is waiting for the other captain's OK on Sub Sam — that request has to be answered or cancelled first",
+    );
+    // The same standin for the other side's seat: refused too (an admin's).
+    const sameStandin = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: fx.sub.id,
+      replacingUserId: fx.awayPlayer.id,
+      actingCaptainId: null,
+    });
+    expect(!sameStandin.ok && sameStandin.error).toMatch(
+      /already waiting for the other captain's OK in this match/,
+    );
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    // Withdrawn, the seat is free again.
+    await cancelStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    const after = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: other.id,
+      replacingUserId: fx.homePlayer.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(after.ok && after.pending).toBeFalsy();
+    expect(await prisma.standinAssignment.count()).toBe(1);
+  });
+
+  it("an empty seat counts as covering the team's lowest-MMR player", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    const low = await makeUser("Home Support");
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: home.id, userId: low.id, price: 1 },
+    });
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: low.id, mmr: 2000 },
+    });
+    expect(homePlayer).toBeTruthy(); // 3200 on the same roster
+    await setSubMmr(sub.id, 2000 + STANDIN_MMR_ALLOWANCE);
+    const fills = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(fills.ok && fills.pending).toBeFalsy();
+    await prisma.standinAssignment.deleteMany();
+    await setSubMmr(sub.id, 2000 + STANDIN_MMR_ALLOWANCE + 1);
+    const asks = await assignStandinGuarded({
+      matchId: match.id,
+      standinUserId: sub.id,
+      replacingUserId: null,
+      teamId: home.id,
+      actingCaptainId: home.captainId,
+    });
+    expect(asks.ok && asks.pending).toBe(true);
+    expect(await prisma.standinRequest.findFirstOrThrow()).toMatchObject({
+      replacingUserId: null,
+      baselineMmr: 2000,
+    });
+  });
+
+  it("an unknown MMR on either side goes to the other captain", async () => {
+    const { season, home, homePlayer, sub, match } = await setup();
+    await setSubMmr(sub.id, 0);
+    const unknownStandin = await assignStandinGuarded({
       matchId: match.id,
       standinUserId: sub.id,
       replacingUserId: homePlayer.id,
       actingCaptainId: home.captainId,
     });
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.message).not.toContain("heads up");
-  });
-
-  it("an empty-seat fill measures against the season's review threshold", async () => {
-    // No replaced player to compare with, so Season.maxMmr is the yardstick.
-    const { season, home, sub, match } = await setup();
-    await prisma.season.update({
-      where: { id: season.id },
-      data: { maxMmr: 3500 },
+    expect(unknownStandin.ok && unknownStandin.pending).toBe(true);
+    if (unknownStandin.ok)
+      expect(unknownStandin.announcement).toContain("since the standin's MMR is unknown");
+    await prisma.standinRequest.deleteMany();
+    await setSubMmr(sub.id, 3200);
+    await prisma.registration.update({
+      where: { seasonId_userId: { seasonId: season.id, userId: homePlayer.id } },
+      data: { mmr: 0 },
     });
-    await prisma.registration.updateMany({
-      where: { userId: sub.id },
-      data: { mmr: 4000 },
-    });
-    const res = await assignStandinGuarded({
+    const unknownSeat = await assignStandinGuarded({
       matchId: match.id,
       standinUserId: sub.id,
-      replacingUserId: null,
-      teamId: home.id,
-      actingCaptainId: null,
+      replacingUserId: homePlayer.id,
+      actingCaptainId: home.captainId,
     });
-    expect(res.ok).toBe(true);
-    if (res.ok)
-      expect(res.message).toContain(
-        "above this season's 3500 MMR review threshold",
+    expect(unknownSeat.ok && unknownSeat.pending).toBe(true);
+    expect(await prisma.standinRequest.findFirstOrThrow()).toMatchObject({
+      baselineMmr: null,
+    });
+  });
+
+  it("agreeing runs every booking check again, and a failure books nothing", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    await prisma.match.update({
+      where: { id: fx.match.id },
+      data: { status: "COMPLETED" },
+    });
+    const res = await approveStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(!res.ok && res.error).toBe("This match is already played");
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("PENDING");
+  });
+
+  // Past the claim, a failed re-check must THROW: a resolved callback would
+  // commit the APPROVED status with nobody booked. The seam lets the standin
+  // withdraw between the read-time checks and the transaction.
+  it("a standin who withdraws as it's agreed leaves the request waiting, not approved", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    let fired = false;
+    setRaceHook(
+      onceAt("standin.approveRequest.beforeTx", async () => {
+        fired = true;
+        await prisma.registration.updateMany({
+          where: { userId: fx.sub.id },
+          data: { status: "WITHDRAWN" },
+        });
+      }),
+    );
+    try {
+      const res = await approveStandinRequest({
+        requestId: request.id,
+        actingCaptainId: fx.away.captainId,
+      });
+      expect(!res.ok && res.error).toBe(
+        "That standin has no active signup this season",
       );
+    } finally {
+      setRaceHook(null);
+    }
+    expect(fired).toBe(true);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("PENDING");
   });
 
-  it("an empty-seat fill with no threshold set stays silent", async () => {
-    // maxMmr 0 = no review threshold — there is nothing to measure against.
-    const { home, sub, match } = await setup();
-    await prisma.registration.updateMany({
-      where: { userId: sub.id },
-      data: { mmr: 4000 },
+  // The claims. The approve claim sits behind a read-time status check, so
+  // the seam closes the request after that check: only the claim's WHERE
+  // (status PENDING) can stop the booking then.
+  it("an agree that loses to a withdrawal books nobody", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    let fired = false;
+    setRaceHook(
+      onceAt("standin.approveRequest.beforeTx", async () => {
+        fired = true;
+        const cancelled = await cancelStandinRequest({
+          requestId: request.id,
+          actingCaptainId: fx.home.captainId,
+        });
+        expect(cancelled.ok).toBe(true);
+      }),
+    );
+    try {
+      const res = await approveStandinRequest({
+        requestId: request.id,
+        actingCaptainId: fx.away.captainId,
+      });
+      expect(!res.ok && res.error).toMatch(/just answered or withdrawn/);
+    } finally {
+      setRaceHook(null);
+    }
+    expect(fired).toBe(true);
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("CANCELLED");
+  });
+
+  // Decline and withdraw read no status before their claim, so a request
+  // already answered reaches the WHERE, which alone refuses it.
+  it("an answered request can't be declined or withdrawn after all", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    expect(
+      (
+        await approveStandinRequest({
+          requestId: request.id,
+          actingCaptainId: fx.away.captainId,
+        })
+      ).ok,
+    ).toBe(true);
+    const declined = await declineStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
     });
-    const res = await assignStandinGuarded({
-      matchId: match.id,
-      standinUserId: sub.id,
-      replacingUserId: null,
-      teamId: home.id,
+    expect(!declined.ok && declined.error).toBe(
+      "That request was already agreed to — the standin is booked",
+    );
+    const withdrawn = await cancelStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(!withdrawn.ok && withdrawn.error).toBe(
+      "That request was already agreed to — the standin is booked",
+    );
+    const after = await prisma.standinRequest.findUniqueOrThrow({
+      where: { id: request.id },
+    });
+    expect(after.status).toBe("APPROVED");
+    expect(after.decidedById).toBe(fx.away.captainId);
+  });
+
+  it("a declined request can't be withdrawn, agreed to or declined again", async () => {
+    const fx = await overTheLine();
+    const request = await ask(fx);
+    await declineStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    const withdrawn = await cancelStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(!withdrawn.ok && withdrawn.error).toBe("That request was already declined");
+    const again = await declineStandinRequest({
+      requestId: request.id,
       actingCaptainId: null,
     });
-    expect(res.ok).toBe(true);
-    if (res.ok) expect(res.message).not.toContain("heads up");
+    expect(!again.ok && again.error).toBe("That request was already declined");
+    const agreed = await approveStandinRequest({
+      requestId: request.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(!agreed.ok && agreed.error).toBe("That request was already declined");
+    expect(await prisma.standinAssignment.count()).toBe(0);
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: request.id } }))
+        .status,
+    ).toBe("DECLINED");
   });
 });
 

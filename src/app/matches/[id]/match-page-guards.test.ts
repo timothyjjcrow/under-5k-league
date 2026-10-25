@@ -29,6 +29,25 @@ describe("match page files", () => {
 });
 
 describe("match page standins card", () => {
+  // The standin MMR rule: Agree books the standin, so it renders only where a
+  // booking would be accepted; Decline and Withdraw are cleanup and always
+  // render. Only the other captain answers, only the asking side withdraws.
+  it("answers a standin request only where the server would take the answer", () => {
+    const card = CARD("standins.tsx");
+    expect(card).toMatch(
+      /\{mine \? \([\s\S]*?captainCancelStandinRequest[\s\S]*?\) : \([\s\S]*?\{assignOpen \? \([\s\S]*?captainApproveStandinRequest[\s\S]*?\) : null\}[\s\S]*?captainDeclineStandinRequest/,
+    );
+    expect(card).toContain("const mine = r.teamId === myTeamId;");
+    // A request on a played match is moot: the card drops it.
+    expect(card).toMatch(
+      /const requests =\s*match\.status === MATCH_STATUS\.COMPLETED \? \[\] : match\.standinRequests;/,
+    );
+    // Captain to-dos points the other captain at the card.
+    expect(CARD("captain-todos.tsx")).toMatch(
+      /match\.standinRequests\.filter\(\(r\) => r\.teamId !== myTeamId\)/,
+    );
+  });
+
   it("offers Remove only before the series has a game", () => {
     // removeStandinGuarded refuses once games are imported, so the button
     // would only ever open a confirm and then fail.
@@ -43,9 +62,12 @@ describe("match page standins card", () => {
     expect(PAGE).toMatch(
       /standinUserId: \{ in: pool\.map\(\(r\) => r\.userId\) \},\s*match: \{\s*seasonId: match\.seasonId,\s*status: \{ not: MATCH_STATUS\.COMPLETED \},/,
     );
-    expect(PAGE).toContain(
-      "blocked: standinPickerBlock(r.userId, pickerTarget, bookingRows)",
+    // Bookings plus this match's requests waiting for the other captain:
+    // the server refuses a standin held by either.
+    expect(PAGE).toMatch(
+      /blocked: standinPickerBlock\(r\.userId, pickerTarget, \[\s*\.\.\.bookingRows,\s*\.\.\.requestRows,\s*\]\)/,
     );
+    expect(PAGE).toMatch(/const requestRows = requests\.map\(/);
     expect(PAGE).toMatch(
       /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
     );
@@ -58,7 +80,7 @@ describe("match page standins card", () => {
     expect(PAGE).toMatch(
       /<select\s+key=\{cover\.preselect \?\? ""\}\s+name="replacingUserId"[\s\S]*?defaultValue=\{cover\.preselect \?\? ""\}/,
     );
-    expect(PAGE).toContain("(can&apos;t make it)");
+    expect(PAGE).toContain(`{" · can't make it"}`);
   });
 });
 
@@ -340,8 +362,9 @@ describe("match page admin tools", () => {
       TOOLS.indexOf("export async function AdminMatchTools("),
     );
     expect(block).toContain(
-      "blocked: standinPickerBlock(s.userId, target, bookings)",
+      "blocked: standinPickerBlock(s.userId, target, withRequests)",
     );
+    expect(block).toMatch(/const withRequests = \[\s*\.\.\.bookings,\s*\.\.\.requests\.map\(/);
     expect(block).toMatch(
       /<option key=\{s\.userId\} value=\{s\.userId\} disabled=\{!!blocked\}>/,
     );

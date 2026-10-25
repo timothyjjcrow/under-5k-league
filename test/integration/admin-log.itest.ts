@@ -275,6 +275,11 @@ describe("log lines name the fixture, never an internal id", () => {
     await prisma.teamMember.create({
       data: { seasonId: season.id, teamId: home.id, userId: covered.id, price: 1 },
     });
+    // A signup level with the standin's: within the standin MMR rule, so the
+    // line is the plain booking (an over-the-rule one says so; standins.itest).
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: covered.id, mmr: 3000 },
+    });
     const sub = await makeUser("Standin Sam");
     await prisma.registration.create({
       data: {

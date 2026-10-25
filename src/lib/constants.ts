@@ -63,6 +63,17 @@ export const MATCH_PHASE = {
   FINAL: "FINAL",
 } as const;
 
+/** A StandinRequest: a booking waiting for the other captain's OK. */
+export const STANDIN_REQUEST_STATUS = {
+  PENDING: "PENDING",
+  /** Agreed: the same transaction created the StandinAssignment. */
+  APPROVED: "APPROVED",
+  /** The other captain (or an admin) said no. */
+  DECLINED: "DECLINED",
+  /** The asking captain withdrew it. */
+  CANCELLED: "CANCELLED",
+} as const;
+
 export const TEAM_STAFF_ROLE = {
   COACH: "COACH",
 } as const;

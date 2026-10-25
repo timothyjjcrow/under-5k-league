@@ -30,6 +30,7 @@ import { PLAYER_SIGNUPS_OPEN_UNTIL } from "./season-copy";
 import { POLL_ANCHOR } from "./match-night-poll";
 import { INHOUSE_NIGHT_INVITE_PATH } from "./inhouse-night";
 import { INHOUSE_QUEUE_INVITE_PATH } from "./inhouse-queue-invite";
+import { standinApprovalReason, standinMmrLabel } from "./standin";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -1088,11 +1089,21 @@ export function standinAssignedMessage(m: {
   whenMs: number | null;
   /** Deep link target — the match page holds the check-in banner. */
   matchId?: string;
+  /**
+   * Set when the booking waited for the other side's OK (a StandinRequest):
+   * who agreed, the other team's captain by name or null for an admin.
+   */
+  agreedBy?: { name: string | null };
 }): string {
   const label = fixtureLabel(m);
   const when =
     m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
   const standin = name(m.standinName);
+  const agreed = m.agreedBy
+    ? m.agreedBy.name
+      ? ` **${name(m.agreedBy.name)}** agreed to it.`
+      : " An admin agreed to it."
+    : "";
   // "stands in for nobody" would be nonsense — a short roster is filling a seat
   // that has no player behind it, which is a different (and more urgent) thing
   // to tell a standin than covering for a named team-mate.
@@ -1102,7 +1113,132 @@ export function standinAssignedMessage(m: {
   // "check in on the match page" without the page is a scavenger hunt for
   // someone who arrived from a phone ping — link the page (week-reminder shape).
   const link = m.matchId ? `: <${resolveSiteUrl()}/matches/${m.matchId}>` : ".";
-  return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. ${standin}: that's your game night now, check in on the match page${link}`;
+  return `🧩 **${standin}** ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}.${agreed} ${standin}: that's your game night now, check in on the match page${link}`;
+}
+
+/**
+ * A captain asked for a standin the other captain has to agree to: more than
+ * STANDIN_MMR_ALLOWANCE above the seat, or an MMR the site doesn't know.
+ * Meant for the OTHER captain, the one who must act (the action mentions only
+ * them); the standin hears nothing until it's agreed, when the usual
+ * assignment post tells them it's their game night.
+ */
+export function standinApprovalRequestedMessage(m: {
+  requesterName: string;
+  standinName: string;
+  /** null = filling an EMPTY seat on a short roster. */
+  replacedName: string | null;
+  teamName: string;
+  /** The team whose captain has to agree. */
+  otherTeamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+  /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
+  whenMs: number | null;
+  /** The request's numbers: 0 = unknown standin MMR, null = unknown seat. */
+  standinMmr: number;
+  baselineMmr: number | null;
+  /** Deep link target: the match page's Standins card holds the buttons. */
+  matchId?: string;
+}): string {
+  const label = fixtureLabel(m);
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  const standin = `**${name(m.standinName)}** (${standinMmrLabel(m.standinMmr)})`;
+  const forWhom = m.replacedName
+    ? `to stand in for **${name(m.replacedName)}** (${standinMmrLabel(m.baselineMmr)}) on **${name(m.teamName)}**`
+    : `to fill an open roster seat on **${name(m.teamName)}**`;
+  const why = standinApprovalReason({
+    standinMmr: m.standinMmr,
+    baselineMmr: m.baselineMmr,
+    emptySeat: m.replacedName === null,
+  });
+  const where = m.matchId
+    ? `on the match page: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : "on the match page.";
+  return `🧩 **${name(m.requesterName)}** wants ${standin} ${forWhom} — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. The **${name(m.otherTeamName)}** captain has to agree first, since ${why}. Agree or decline ${where}`;
+}
+
+/**
+ * The other captain (or an admin) said no to a standin request. Meant for the
+ * asking team's captain, who has to line up someone else.
+ */
+export function standinRequestDeclinedMessage(m: {
+  /** Who said no: the other team's captain by name, or null for an admin. */
+  declinedByName: string | null;
+  standinName: string;
+  /** null = an empty-seat request. */
+  replacedName: string | null;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+  /** Deep link target: the match page's Standins card. */
+  matchId?: string;
+}): string {
+  const label = fixtureLabel(m);
+  const who = m.declinedByName ? `**${name(m.declinedByName)}**` : "An admin";
+  const forWhom = m.replacedName
+    ? `standing in for **${name(m.replacedName)}** on **${name(m.teamName)}**`
+    : `filling an open seat on **${name(m.teamName)}**`;
+  const where = m.matchId
+    ? `: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : ".";
+  return `🧩 ${who} didn't agree to **${name(m.standinName)}** ${forWhom} (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**). Line up someone else on the match page${where}`;
+}
+
+/**
+ * Why the league closed a standin request before the other captain answered.
+ * A fixed list, like STAND_DOWN_REASON: each is a case where nobody can agree
+ * to it any more and the asking captain has to line up someone else. Cases
+ * that need nothing from them (the seat filled, the fixture went) post nothing.
+ */
+export type StandinRequestCancelReason =
+  | "STANDIN_LEFT"
+  | "STANDIN_SIGNED"
+  | "PLAYER_RELEASED";
+
+/**
+ * A standin request the league closed before the other captain answered.
+ * Meant for the asking team's captain, who has to line up someone else.
+ */
+export function standinRequestCancelledMessage(m: {
+  reason: StandinRequestCancelReason;
+  standinName: string;
+  /** null = an empty-seat request. */
+  replacedName: string | null;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+  /** Deep link target: the match page's Standins card. */
+  matchId?: string;
+}): string {
+  const label = fixtureLabel(m);
+  const standin = `**${name(m.standinName)}**`;
+  const forWhom = m.replacedName
+    ? `standing in for **${name(m.replacedName)}** on **${name(m.teamName)}**`
+    : `filling an open seat on **${name(m.teamName)}**`;
+  const why =
+    m.reason === "STANDIN_LEFT"
+      ? `${standin} left the league`
+      : m.reason === "STANDIN_SIGNED"
+        ? `${standin} was signed to a team`
+        : `**${name(m.replacedName ?? "the covered player")}** was released, so that seat is open now`;
+  const where = m.matchId
+    ? `: <${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`
+    : ".";
+  return `🧩 The request for ${standin} ${forWhom} (${label} **${name(m.homeName)}** vs **${name(m.awayName)}**) is off: ${why}. Line up someone else on the match page${where}`;
 }
 
 /**

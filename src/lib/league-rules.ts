@@ -49,7 +49,7 @@ import {
   carriedSeasonSettings,
   type CarriedSeasonSettings,
 } from "./season-handoff";
-import { STANDIN_CONFLICT_HOURS, STANDIN_MMR_FLAG_GAP } from "./standin";
+import { STANDIN_CONFLICT_HOURS, STANDIN_MMR_ALLOWANCE } from "./standin";
 import { computeStandings } from "./standings";
 import {
   teamWithdrawalLockedReason,
@@ -332,7 +332,10 @@ function rostersSection(s: CarriedSeasonSettings): RuleSection {
       "Captains book standins for their own team on the match page, and admins can book for any team. One standin per seat.",
       `A standin can't be booked for two matches within ${plural(STANDIN_CONFLICT_HOURS, "hour")} of each other.`,
       "Cover can be booked from the end of the auction until the series is over, and removed until the series' first game is in.",
-      `Booking a standin ${STANDIN_MMR_FLAG_GAP.toLocaleString("en-US")} or more MMR above the player they cover shows a warning to check with the other captain. It never blocks the booking.`,
+      `A standin can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they cover, by signup MMR. A captain books a standin within that straight away.`,
+      `A standin more than ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above needs the other captain to agree on the match page. The standin isn't booked until they do, and the seat waits until they answer or the request is withdrawn.`,
+      "An empty roster seat counts as covering the team's lowest-MMR player. When the site doesn't know either MMR, the other captain decides.",
+      "Admins can book any standin themselves, and can agree or decline in a captain's place.",
     ],
   };
 }

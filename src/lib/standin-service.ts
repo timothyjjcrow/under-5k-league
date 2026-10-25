@@ -1,6 +1,6 @@
 import { fixtureLogLabel } from "./admin-log-copy";
 import { isPlayoffPhase } from "./league-lifecycle";
-import { Prisma } from "@prisma/client";
+import { Prisma, type Season } from "@prisma/client";
 import { prisma } from "./prisma";
 import {
   DRAFT_STATUS,
@@ -8,17 +8,28 @@ import {
   MATCH_STATUS,
   REGISTRATION_STATUS,
   SEASON_STATUS,
+  STANDIN_REQUEST_STATUS,
 } from "./constants";
 import { getActiveSeason } from "./season";
 import {
+  standinApprovalRequestedMessage,
   standinAssignedMessage,
   standinRemovedMessage,
+  standinRequestCancelledMessage,
+  standinRequestDeclinedMessage,
   type MentionAllowlist,
+  type StandinRequestCancelReason,
 } from "./discord";
 import { mentionsOf } from "./discord-mentions";
-import { standinConflict, standinMmrNote } from "./standin";
+import {
+  coverBaselineMmr,
+  standinApprovalReason,
+  standinConflict,
+  standinNeedsApproval,
+} from "./standin";
 import { isSerializationConflict } from "./prisma-errors";
 import { roundLabelsForPost } from "./playoff-rounds";
+import { raceHook } from "./race-hook";
 
 /**
  * A precondition re-checked INSIDE the assign transaction stopped holding.
@@ -48,6 +59,14 @@ export type StandinServiceResult =
       announcement: string;
       /** Who the announcement is FOR — the action passes it to the send. */
       mentions?: MentionAllowlist;
+      /**
+       * Whose Discord the announcement has to reach (the action's toast says
+       * when it structurally can't): the standin for a booking, the other
+       * captain for a request, the asking captain for a decline.
+       */
+      reachUserId?: string;
+      /** A request for the other captain's OK was filed; nothing is booked. */
+      pending?: true;
     }
   | { ok: false; error: string };
 
@@ -143,36 +162,79 @@ function clashError(
   return `${who} is already covering ${clash.match.homeTeam.name} vs ${clash.match.awayTeam.name} that night — they can't play both. Remove that assignment first.`;
 }
 
-export async function assignStandinGuarded(opts: {
+/**
+ * A pending StandinRequest as the match page's Standins card and /admin's
+ * standin block show it: who asked, for whom, and the MMRs it was asked on.
+ */
+export const STANDIN_REQUEST_VIEW = {
+  standin: { select: { name: true } },
+  replaced: { select: { name: true } },
+  requestedBy: { select: { name: true } },
+} satisfies Prisma.StandinRequestInclude;
+
+export type StandinRequestView = Prisma.StandinRequestGetPayload<{
+  include: typeof STANDIN_REQUEST_VIEW;
+}>;
+
+/** The match fields every cover check reads, loaded once. */
+const COVER_MATCH_INCLUDE = {
+  games: { select: { id: true } },
+  homeTeam: { select: { name: true, captainId: true } },
+  awayTeam: { select: { name: true, captainId: true } },
+} satisfies Prisma.MatchInclude;
+
+type CoverMatch = Prisma.MatchGetPayload<{
+  include: typeof COVER_MATCH_INCLUDE;
+}>;
+
+/** Who would cover which seat in which match. */
+type CoverTarget = {
   matchId: string;
   standinUserId: string;
-  /**
-   * The rostered player being covered, or NULL to fill an EMPTY SEAT on a short
-   * roster — in which case `teamId` says which side.
-   *
-   * The empty-seat case is why a 4-of-5 team could not be covered at all.
-   * `matchNightRoster` has always kept a null-replacement assignment (it adds a
-   * player without removing one) and CLAUDE.md documented it as working, but
-   * nothing could ever CREATE one: this parameter was typed `string` and the
-   * guard below refused empty. So the one roster state that most needs cover —
-   * a team that lost a player mid-season — was the one state with no way to
-   * arrange it.
-   */
+  /** The covered player, or null for an EMPTY seat (`teamId` says whose). */
   replacingUserId: string | null;
-  /** Required when `replacingUserId` is null: which team's seat is being filled. */
   teamId?: string;
-  /** null = admin (either team); a userId must captain the covered team. */
-  actingCaptainId: string | null;
-  /**
-   * Who pressed the button (defaults to actingCaptainId). The covered team's
-   * captain is mentioned unless they are the one acting.
-   */
-  actingUserId?: string;
-}): Promise<StandinServiceResult> {
-  const { matchId, standinUserId, replacingUserId, actingCaptainId } = opts;
+};
+
+/** What the read-time checks learned about a cover they allowed. */
+type JudgedCover = {
+  season: Season;
+  match: CoverMatch;
+  /** The standin's signup MMR; 0 = unknown. */
+  standinMmr: number;
+  standinUser: { name: string; discordId: string | null } | null;
+  coverTeamId: string;
+  coverTeamName: string;
+  coverTeamCaptainId: string;
+  replacedName: string | null;
+  /** The covered player's signup MMR; null when there's no signup. */
+  replacedMmr: number | null;
+  /** How to swap a taken seat, honest about a series already under way. */
+  swapHint: string;
+};
+
+/** A request that isn't this one: an approval must not trip over itself. */
+function otherThan(requestId: string | undefined) {
+  return requestId ? { not: requestId } : undefined;
+}
+
+/**
+ * Every read-time check a booking must pass, shared by a captain's or an
+ * admin's booking, a captain's request for the other captain's OK, and the
+ * other captain agreeing to one. A PENDING request holds its seat and its
+ * standin in this match, exactly as a booking does; `excludeRequestId` is the
+ * request being agreed to, which must not block itself.
+ */
+async function judgeCover(
+  target: CoverTarget,
+  opts: { actingCaptainId: string | null; excludeRequestId?: string },
+): Promise<{ ok: true; cover: JudgedCover } | { ok: false; error: string }> {
+  const { matchId, standinUserId, replacingUserId } = target;
+  const { actingCaptainId } = opts;
+  const notThis = otherThan(opts.excludeRequestId);
   if (!matchId || !standinUserId)
     return { ok: false, error: "Pick a standin" };
-  if (!replacingUserId && !opts.teamId)
+  if (!replacingUserId && !target.teamId)
     return {
       ok: false,
       error: "Pick the player they cover, or the team whose seat they fill",
@@ -184,11 +246,7 @@ export async function assignStandinGuarded(opts: {
   if (!season) return { ok: false, error: "No active season" };
   const match = await prisma.match.findUnique({
     where: { id: matchId },
-    include: {
-      games: { select: { id: true } },
-      homeTeam: { select: { name: true } },
-      awayTeam: { select: { name: true } },
-    },
+    include: COVER_MATCH_INCLUDE,
   });
   if (!match) return { ok: false, error: "Unknown match" };
   // Every lookup below keys on the ACTIVE season — an archived season's
@@ -273,8 +331,8 @@ export async function assignStandinGuarded(opts: {
   let coverTeamName: string;
   let coverTeamCaptainId: string;
   let replacedName: string | null = null;
-  // The replaced player's registration MMR — only for the ADVISORY below,
-  // never a gate (the maxMmr house rule). 0/missing reads as unknown.
+  // The replaced player's registration MMR: the yardstick for the standin
+  // MMR rule. 0/missing reads as unknown.
   let replacedMmr: number | null = null;
 
   if (replacingUserId) {
@@ -309,7 +367,7 @@ export async function assignStandinGuarded(opts: {
     coverTeamCaptainId = membership.team.captainId;
     replacedName = membership.user.name;
   } else {
-    const teamId = opts.teamId as string;
+    const teamId = target.teamId as string;
     if (teamId !== match.homeTeamId && teamId !== match.awayTeamId) {
       return { ok: false, error: "That team isn't in this match" };
     }
@@ -334,15 +392,30 @@ export async function assignStandinGuarded(opts: {
         error: `${team.name} has a full roster — pick the player being covered instead`,
       };
     }
-    // …and one standin per empty seat, no more.
-    const filled = await prisma.standinAssignment.count({
-      where: { matchId, teamId, replacingUserId: null },
-    });
+    // …and one standin per empty seat, no more. A request waiting for the
+    // other captain holds a seat too.
+    const [filled, asked] = await Promise.all([
+      prisma.standinAssignment.count({
+        where: { matchId, teamId, replacingUserId: null },
+      }),
+      prisma.standinRequest.count({
+        where: {
+          matchId,
+          teamId,
+          replacingUserId: null,
+          status: STANDIN_REQUEST_STATUS.PENDING,
+          id: notThis,
+        },
+      }),
+    ]);
     if (filled >= emptySeats) {
       return {
         ok: false,
         error: `${team.name}'s ${emptySeats} open seat(s) are already covered for this match`,
       };
+    }
+    if (filled + asked >= emptySeats) {
+      return { ok: false, error: openSeatAskedError(team.name) };
     }
     coverTeamId = teamId;
     coverTeamName = team.name;
@@ -362,22 +435,44 @@ export async function assignStandinGuarded(opts: {
   // SEAT takes one standin: a second cover for the same player would inflate
   // the match-night roster (6-player check-in counts) and the import account
   // sets — remove the first assignment to swap standins.
-  const [already, seatTaken, otherNights] = await Promise.all([
-    prisma.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
-    // Only meaningful when a NAMED player is being covered. With a null
-    // replacingUserId this query would match every other empty-seat assignment
-    // in the match and refuse the second one wrongly — the open-seat budget
-    // above is what limits those.
-    replacingUserId
-      ? prisma.standinAssignment.findFirst({
-          where: { matchId, replacingUserId },
-          include: { standin: { select: { name: true } } },
-        })
-      : Promise.resolve(null),
-    findClashingCover(prisma, { matchId, standinUserId, seasonId: season.id }),
-  ]);
+  const [already, standinAsked, seatTaken, seatAsked, otherNights] =
+    await Promise.all([
+      prisma.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
+      prisma.standinRequest.findFirst({
+        where: {
+          matchId,
+          standinUserId,
+          status: STANDIN_REQUEST_STATUS.PENDING,
+          id: notThis,
+        },
+        select: { id: true },
+      }),
+      // Only meaningful when a NAMED player is being covered. With a null
+      // replacingUserId this query would match every other empty-seat
+      // assignment in the match and refuse the second one wrongly — the
+      // open-seat budget above is what limits those.
+      replacingUserId
+        ? prisma.standinAssignment.findFirst({
+            where: { matchId, replacingUserId },
+            include: { standin: { select: { name: true } } },
+          })
+        : Promise.resolve(null),
+      replacingUserId
+        ? prisma.standinRequest.findFirst({
+            where: {
+              matchId,
+              replacingUserId,
+              status: STANDIN_REQUEST_STATUS.PENDING,
+              id: notThis,
+            },
+            include: { standin: { select: { name: true } } },
+          })
+        : Promise.resolve(null),
+      findClashingCover(prisma, { matchId, standinUserId, seasonId: season.id }),
+    ]);
   if (already)
     return { ok: false, error: "That standin is already assigned to this match" };
+  if (standinAsked) return { ok: false, error: STANDIN_ASKED_ERROR };
   // "Remove that assignment first" is only honest advice while the series
   // hasn't started — once a game imports, removeStandinGuarded refuses the
   // removal, so pointing at it sends the captain in a circle. Mid-series the
@@ -392,9 +487,319 @@ export async function assignStandinGuarded(opts: {
       ok: false,
       error: `${replacedName} is already covered by ${seatTaken.standin.name} — ${swapHint}`,
     };
+  if (seatAsked)
+    return {
+      ok: false,
+      error: seatAskedError(replacedName, seatAsked.standin.name),
+    };
   const clash = otherNights.find((o) => standinConflict(match, o.match));
   if (clash)
     return { ok: false, error: clashError(standinUser?.name, clash) };
+
+  return {
+    ok: true,
+    cover: {
+      season,
+      match,
+      standinMmr: standinReg.mmr,
+      standinUser,
+      coverTeamId,
+      coverTeamName,
+      coverTeamCaptainId,
+      replacedName,
+      replacedMmr,
+      swapHint,
+    },
+  };
+}
+
+const STANDIN_ASKED_ERROR =
+  "That standin is already waiting for the other captain's OK in this match — that request has to be answered or cancelled first";
+
+function seatAskedError(replacedName: string | null, standinName: string) {
+  return `${replacedName}'s seat is waiting for the other captain's OK on ${standinName} — that request has to be answered or cancelled first`;
+}
+
+function openSeatAskedError(teamName: string) {
+  return `${teamName}'s open seat is waiting for the other captain's OK on a standin — that request has to be answered or cancelled first`;
+}
+
+/**
+ * Re-assert, INSIDE the caller's Serializable transaction, everything
+ * judgeCover checked that a rival could change. Throws StandinRaceError,
+ * never returns a refusal: past a write the callback resolving would commit.
+ */
+async function recheckCover(
+  tx: Prisma.TransactionClient,
+  target: CoverTarget,
+  cover: JudgedCover,
+  excludeRequestId?: string,
+): Promise<void> {
+  const { matchId, standinUserId, replacingUserId } = target;
+  const { season, match, coverTeamId, coverTeamName, replacedName } = cover;
+  const notThis = otherThan(excludeRequestId);
+  // EVERY precondition is re-read in here, not just the registration.
+  // Two reasons, both load-bearing:
+  //
+  // (1) Re-assertion. `already`, `seatTaken` and `standinRoster` were
+  // read above, outside this transaction, and StandinAssignment has NO
+  // unique constraint (only @@index([matchId])) — so nothing but these
+  // reads stops two concurrent assigns double-covering one seat, which
+  // inflates the match-night roster to six and double-counts the
+  // standin's box-score lines on import.
+  //
+  // (2) SSI needs them in this transaction's READ SET. Serializable
+  // detects a write-skew cycle only across what each side actually read;
+  // re-reading only the Registration left the assign-vs-signFreeAgent
+  // pair with no cycle to detect, so both could commit and a rostered
+  // player could hold live cover.
+  const [
+    fresh,
+    rostered,
+    replacedSeat,
+    already,
+    standinAsked,
+    seatTaken,
+    otherNights,
+  ] = await Promise.all([
+    tx.registration.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+      select: { status: true },
+    }),
+    tx.teamMember.findUnique({
+      where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
+      select: { id: true },
+    }),
+    // The REPLACED player's seat, re-read for the same two reasons as the
+    // rest: releasePlayer deletes it and CANCELS the cover in one
+    // transaction, so an assign racing a release could recreate exactly
+    // the stale-cover row that cleanup exists to prevent (the inflated
+    // six-player side); and it has to sit in this transaction's READ SET
+    // so SSI can see the assign-vs-release cycle at all — release reads
+    // the assignments and writes the TeamMember, this reads the
+    // TeamMember and writes an assignment.
+    replacingUserId
+      ? tx.teamMember.findUnique({
+          where: {
+            seasonId_userId: {
+              seasonId: season.id,
+              userId: replacingUserId,
+            },
+          },
+          select: { teamId: true },
+        })
+      : Promise.resolve(undefined),
+    tx.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
+    tx.standinRequest.findFirst({
+      where: {
+        matchId,
+        standinUserId,
+        status: STANDIN_REQUEST_STATUS.PENDING,
+        id: notThis,
+      },
+      select: { id: true },
+    }),
+    replacingUserId
+      ? Promise.all([
+          tx.standinAssignment.findFirst({
+            where: { matchId, replacingUserId },
+            include: { standin: { select: { name: true } } },
+          }),
+          tx.standinRequest.findFirst({
+            where: {
+              matchId,
+              replacingUserId,
+              status: STANDIN_REQUEST_STATUS.PENDING,
+              id: notThis,
+            },
+            include: { standin: { select: { name: true } } },
+          }),
+        ]).then(([taken, asked]) =>
+          taken
+            ? `${replacedName} is already covered by ${taken.standin.name} — ${cover.swapHint}`
+            : asked
+              ? seatAskedError(replacedName, asked.standin.name)
+              : null,
+        )
+      : // The empty-seat equivalent: re-assert the OPEN SEAT BUDGET in the
+        // read set, so two concurrent assigns can't both fill the last one
+        // and put six players on the side. A pending request holds a seat.
+        //
+        // Sabotage-tested honestly (2026-08-02): deleting ONLY this
+        // re-read stays green under standins-raced.itest.ts, because the
+        // `already` findFirst's SIREAD range on the matchId index
+        // incidentally conflicts with the rival's insert — belt-and-
+        // braces under the CURRENT query plan, kept because a plan is
+        // not a guarantee. Dropping the Serializable isolation level is
+        // what the raced tests fail on, deterministically.
+        Promise.all([
+          tx.standinAssignment.count({
+            where: { matchId, teamId: coverTeamId, replacingUserId: null },
+          }),
+          tx.standinRequest.count({
+            where: {
+              matchId,
+              teamId: coverTeamId,
+              replacingUserId: null,
+              status: STANDIN_REQUEST_STATUS.PENDING,
+              id: notThis,
+            },
+          }),
+          tx.team.findUnique({
+            where: { id: coverTeamId },
+            select: { _count: { select: { members: true } } },
+          }),
+        ]).then(([filled, asked, seats]) => {
+          const open =
+            season.teamSize - (seats?._count.members ?? season.teamSize);
+          return filled >= open
+            ? `${coverTeamName}'s open seat(s) are already covered for this match`
+            : filled + asked >= open
+              ? openSeatAskedError(coverTeamName)
+              : null;
+        }),
+    // Same reasoning as the other re-reads: two concurrent assigns for
+    // the same standin on two fixtures the same night would each see a
+    // clear field outside the transaction.
+    findClashingCover(tx, { matchId, standinUserId, seasonId: season.id }),
+  ]);
+  if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
+    throw new StandinRaceError("That standin has no active signup this season");
+  if (rostered)
+    throw new StandinRaceError(
+      "That player is on a roster — they can't stand in",
+    );
+  if (replacingUserId && replacedSeat?.teamId !== coverTeamId)
+    throw new StandinRaceError(
+      `${replacedName} just left that roster — reload and pick again`,
+    );
+  if (already)
+    throw new StandinRaceError(
+      "That standin is already assigned to this match",
+    );
+  if (standinAsked) throw new StandinRaceError(STANDIN_ASKED_ERROR);
+  if (seatTaken) throw new StandinRaceError(seatTaken);
+  const clash = otherNights.find((o) => standinConflict(match, o.match));
+  if (clash)
+    throw new StandinRaceError(clashError(cover.standinUser?.name, clash));
+}
+
+/**
+ * The MMR the standin rule measures this cover against (`coverBaselineMmr`):
+ * the covered player's, or for an empty seat the lowest on the team.
+ */
+async function coverBaseline(
+  target: CoverTarget,
+  cover: JudgedCover,
+): Promise<number | null> {
+  if (target.replacingUserId) {
+    return coverBaselineMmr({ replacedMmr: cover.replacedMmr });
+  }
+  const members = await prisma.teamMember.findMany({
+    where: { teamId: cover.coverTeamId },
+    select: { userId: true },
+  });
+  const regs = await prisma.registration.findMany({
+    where: {
+      seasonId: cover.season.id,
+      userId: { in: members.map((m) => m.userId) },
+    },
+    select: { mmr: true },
+  });
+  return coverBaselineMmr({ rosterMmrs: regs.map((r) => r.mmr) });
+}
+
+/** One side of the match, with its captain. */
+function side(match: CoverMatch, teamId: string) {
+  return teamId === match.homeTeamId
+    ? { id: match.homeTeamId, ...match.homeTeam }
+    : { id: match.awayTeamId, ...match.awayTeam };
+}
+
+/** The match's other side: the team whose captain agrees to a request. */
+function otherSide(match: CoverMatch, coverTeamId: string) {
+  return side(
+    match,
+    coverTeamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId,
+  );
+}
+
+function fixtureFacts(match: CoverMatch) {
+  return {
+    homeName: match.homeTeam.name,
+    awayName: match.awayTeam.name,
+    week: match.week,
+    isPlayoff: isPlayoffPhase(match.phase),
+    isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+  };
+}
+
+function coverLogLabel(match: CoverMatch) {
+  return fixtureLogLabel({
+    ...match,
+    homeName: match.homeTeam.name,
+    awayName: match.awayTeam.name,
+  });
+}
+
+export async function assignStandinGuarded(opts: {
+  matchId: string;
+  standinUserId: string;
+  /**
+   * The rostered player being covered, or NULL to fill an EMPTY SEAT on a short
+   * roster — in which case `teamId` says which side.
+   *
+   * The empty-seat case is why a 4-of-5 team could not be covered at all.
+   * `matchNightRoster` has always kept a null-replacement assignment (it adds a
+   * player without removing one) and CLAUDE.md documented it as working, but
+   * nothing could ever CREATE one: this parameter was typed `string` and the
+   * guard below refused empty. So the one roster state that most needs cover —
+   * a team that lost a player mid-season — was the one state with no way to
+   * arrange it.
+   */
+  replacingUserId: string | null;
+  /** Required when `replacingUserId` is null: which team's seat is being filled. */
+  teamId?: string;
+  /** null = admin (either team); a userId must captain the covered team. */
+  actingCaptainId: string | null;
+  /**
+   * Who pressed the button (defaults to actingCaptainId). The covered team's
+   * captain is mentioned unless they are the one acting.
+   */
+  actingUserId?: string;
+  /**
+   * A standin the MMR rule doesn't let a captain lock in alone
+   * (`standinNeedsApproval`): "ask" files a StandinRequest for the other
+   * captain instead of booking; "book" books anyway, which is the admin
+   * panel's ruling. Defaults to "ask" for a captain and "book" for an admin;
+   * the captain's card always asks, even when its captain is an admin.
+   */
+  overLimit?: "ask" | "book";
+}): Promise<StandinServiceResult> {
+  const { matchId, standinUserId, replacingUserId, actingCaptainId } = opts;
+  const target: CoverTarget = {
+    matchId,
+    standinUserId,
+    replacingUserId,
+    teamId: opts.teamId,
+  };
+  const judged = await judgeCover(target, { actingCaptainId });
+  if (!judged.ok) return judged;
+  const cover = judged.cover;
+  const { match, standinUser } = cover;
+
+  // The MMR rule is judged here, at read time, on purpose: a later MMR edit
+  // never re-judges a booking, so an edit that lands mid-booking is the same
+  // history as one landing just after it. The transaction re-reads only what
+  // a rival can make wrong (the seat, the signup, the night).
+  const baselineMmr = await coverBaseline(target, cover);
+  const overRule = standinNeedsApproval(cover.standinMmr, baselineMmr);
+  const overLimit = opts.overLimit ?? (actingCaptainId ? "ask" : "book");
+  if (overRule && overLimit === "ask") {
+    const requestedById = opts.actingUserId ?? actingCaptainId;
+    if (!requestedById) return { ok: false, error: "Sign in required" };
+    return requestStandinApproval(target, cover, { baselineMmr, requestedById });
+  }
 
   // SERIALIZABLE, not a plain create: this and a WITHDRAWAL of the same standin
   // are a write-skew pair. Assign reads the standin's Registration and writes a
@@ -409,114 +814,11 @@ export async function assignStandinGuarded(opts: {
   try {
     await prisma.$transaction(
       async (tx) => {
-        // EVERY precondition is re-read in here, not just the registration.
-        // Two reasons, both load-bearing:
-        //
-        // (1) Re-assertion. `already`, `seatTaken` and `standinRoster` were
-        // read above, outside this transaction, and StandinAssignment has NO
-        // unique constraint (only @@index([matchId])) — so nothing but these
-        // reads stops two concurrent assigns double-covering one seat, which
-        // inflates the match-night roster to six and double-counts the
-        // standin's box-score lines on import.
-        //
-        // (2) SSI needs them in this transaction's READ SET. Serializable
-        // detects a write-skew cycle only across what each side actually read;
-        // re-reading only the Registration left the assign-vs-signFreeAgent
-        // pair with no cycle to detect, so both could commit and a rostered
-        // player could hold live cover.
-        const [fresh, rostered, replacedSeat, already, seatTaken, otherNights] = await Promise.all([
-          tx.registration.findUnique({
-            where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
-            select: { status: true },
-          }),
-          tx.teamMember.findUnique({
-            where: { seasonId_userId: { seasonId: season.id, userId: standinUserId } },
-            select: { id: true },
-          }),
-          // The REPLACED player's seat, re-read for the same two reasons as the
-          // rest: releasePlayer deletes it and CANCELS the cover in one
-          // transaction, so an assign racing a release could recreate exactly
-          // the stale-cover row that cleanup exists to prevent (the inflated
-          // six-player side); and it has to sit in this transaction's READ SET
-          // so SSI can see the assign-vs-release cycle at all — release reads
-          // the assignments and writes the TeamMember, this reads the
-          // TeamMember and writes an assignment.
-          replacingUserId
-            ? tx.teamMember.findUnique({
-                where: {
-                  seasonId_userId: {
-                    seasonId: season.id,
-                    userId: replacingUserId,
-                  },
-                },
-                select: { teamId: true },
-              })
-            : Promise.resolve(undefined),
-          tx.standinAssignment.findFirst({ where: { matchId, standinUserId } }),
-          replacingUserId
-            ? tx.standinAssignment.findFirst({
-                where: { matchId, replacingUserId },
-                include: { standin: { select: { name: true } } },
-              })
-            : // The empty-seat equivalent: re-assert the OPEN SEAT BUDGET in the
-              // read set, so two concurrent assigns can't both fill the last one
-              // and put six players on the side. Shaped as a findFirst-style
-              // result so the branch below stays one check.
-              //
-              // Sabotage-tested honestly (2026-08-02): deleting ONLY this
-              // re-read stays green under standins-raced.itest.ts, because the
-              // `already` findFirst's SIREAD range on the matchId index
-              // incidentally conflicts with the rival's insert — belt-and-
-              // braces under the CURRENT query plan, kept because a plan is
-              // not a guarantee. Dropping the Serializable isolation level is
-              // what the raced tests fail on, deterministically.
-              tx.standinAssignment
-                .count({
-                  where: { matchId, teamId: coverTeamId, replacingUserId: null },
-                })
-                .then(async (filled) => {
-                  const seats = await tx.team.findUnique({
-                    where: { id: coverTeamId },
-                    select: { _count: { select: { members: true } } },
-                  });
-                  const open =
-                    season.teamSize - (seats?._count.members ?? season.teamSize);
-                  return filled >= open
-                    ? { standin: { name: "another standin" } }
-                    : null;
-                }),
-          // Same reasoning as the other re-reads: two concurrent assigns for
-          // the same standin on two fixtures the same night would each see a
-          // clear field outside the transaction.
-          findClashingCover(tx, { matchId, standinUserId, seasonId: season.id }),
-        ]);
-        if (!fresh || fresh.status !== REGISTRATION_STATUS.ACTIVE)
-          throw new StandinRaceError("That standin has no active signup this season");
-        if (rostered)
-          throw new StandinRaceError(
-            "That player is on a roster — they can't stand in",
-          );
-        if (replacingUserId && replacedSeat?.teamId !== coverTeamId)
-          throw new StandinRaceError(
-            `${replacedName} just left that roster — reload and pick again`,
-          );
-        if (already)
-          throw new StandinRaceError(
-            "That standin is already assigned to this match",
-          );
-        if (seatTaken)
-          throw new StandinRaceError(
-            replacingUserId
-              ? `${replacedName} is already covered by ${seatTaken.standin.name} — ${swapHint}`
-              : `${coverTeamName}'s open seat(s) are already covered for this match`,
-          );
-        const clash = otherNights.find((o) => standinConflict(match, o.match));
-        if (clash)
-          throw new StandinRaceError(clashError(standinUser?.name, clash));
+        await recheckCover(tx, target, cover);
         await tx.standinAssignment.create({
           data: {
             matchId,
-            teamId: coverTeamId,
+            teamId: cover.coverTeamId,
             standinUserId,
             replacingUserId,
           },
@@ -534,14 +836,15 @@ export async function assignStandinGuarded(opts: {
     throw e;
   }
 
-  // ADVISORY only, computed from the reads the guards already made — a 4.9k
-  // standin covering a 1.8k seat is a fairness incident the assigner should
-  // commit to knowingly, but the maxMmr rule says warn-and-name, never block.
-  const mmrNote = standinMmrNote({
-    standinMmr: standinReg.mmr,
-    replacedMmr,
-    maxMmr: season.maxMmr,
-  });
+  // Only an admin's booking gets here over the rule. Say so in the toast and
+  // the log, so the ruling is on the record.
+  const overNote = overRule
+    ? `booked over the standin MMR rule (${standinApprovalReason({
+        standinMmr: cover.standinMmr,
+        baselineMmr,
+        emptySeat: replacingUserId === null,
+      })}) without the other captain's OK`
+    : null;
   return {
     ok: true,
     message:
@@ -549,15 +852,14 @@ export async function assignStandinGuarded(opts: {
       (match.games.length > 0
         ? " — heads up: already-imported games keep their original attribution"
         : "") +
-      (mmrNote ? ` — ${mmrNote}` : ""),
+      (overNote ? ` — ${overNote}` : ""),
     summary: `Assigned ${standinUser?.name ?? "a standin"} to cover ${
-      replacedName ?? "an open seat"
-    } for ${coverTeamName} in ${fixtureLogLabel({
-      ...match,
-      homeName: match.homeTeam.name,
-      awayName: match.awayTeam.name,
-    })}${mmrNote ? ` — ${mmrNote}` : ""}`,
+      cover.replacedName ?? "an open seat"
+    } for ${cover.coverTeamName} in ${coverLogLabel(match)}${
+      overNote ? ` — ${overNote}` : ""
+    }`,
     seasonId: match.seasonId,
+    reachUserId: standinUserId,
     // Being assigned is the single most action-demanding event a standin can
     // get — the action layer posts this so they hear about it without
     // happening to visit the site. Which is why it MENTIONS them: a plain
@@ -569,25 +871,581 @@ export async function assignStandinGuarded(opts: {
     mentions: mentionsOf([
       standinUser?.discordId,
       await captainToNotify(
-        coverTeamCaptainId,
+        cover.coverTeamCaptainId,
         opts.actingUserId ?? actingCaptainId,
       ),
     ]),
     announcement: standinAssignedMessage({
       standinName: standinUser?.name ?? "A standin",
-      replacedName,
-      teamName: coverTeamName,
-      homeName: match.homeTeam.name,
-      awayName: match.awayTeam.name,
-      week: match.week,
-      isPlayoff: isPlayoffPhase(match.phase),
-      isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+      replacedName: cover.replacedName,
+      teamName: cover.coverTeamName,
+      ...fixtureFacts(match),
       // Named by its round, like the OUT ping the booking answers.
       roundLabel: (await roundLabelsForPost([match])).get(match.id),
       whenMs: match.scheduledAt?.getTime() ?? null,
       matchId: match.id,
     }),
   };
+}
+
+/**
+ * File a StandinRequest instead of a booking: the standin is more than
+ * STANDIN_MMR_ALLOWANCE above the seat (or an MMR is unknown), so the other
+ * captain has to agree first. It re-checks everything a booking would, in
+ * the same Serializable shape, so a request is only ever filed for a seat
+ * that could be booked, and two clicks can't file two.
+ */
+async function requestStandinApproval(
+  target: CoverTarget,
+  cover: JudgedCover,
+  ask: { baselineMmr: number | null; requestedById: string },
+): Promise<StandinServiceResult> {
+  const { match, standinUser } = cover;
+  const other = otherSide(match, cover.coverTeamId);
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        await recheckCover(tx, target, cover);
+        await tx.standinRequest.create({
+          data: {
+            matchId: target.matchId,
+            teamId: cover.coverTeamId,
+            standinUserId: target.standinUserId,
+            replacingUserId: target.replacingUserId,
+            requestedById: ask.requestedById,
+            standinMmr: cover.standinMmr,
+            baselineMmr: ask.baselineMmr,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if (e instanceof StandinRaceError) return { ok: false, error: e.message };
+    if (isSerializationConflict(e))
+      return {
+        ok: false,
+        error: "That standin's signup just changed — check it and try again",
+      };
+    throw e;
+  }
+
+  const [requester, otherCaptain] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: ask.requestedById },
+      select: { name: true },
+    }),
+    prisma.user.findUnique({
+      where: { id: other.captainId },
+      select: { name: true, discordId: true },
+    }),
+  ]);
+  const standinName = standinUser?.name ?? "The standin";
+  const reason = standinApprovalReason({
+    standinMmr: cover.standinMmr,
+    baselineMmr: ask.baselineMmr,
+    emptySeat: target.replacingUserId === null,
+  });
+  const otherName = otherCaptain?.name ?? `the ${other.name} captain`;
+  return {
+    ok: true,
+    pending: true,
+    message: `Asked ${otherName} (the ${other.name} captain) to agree, since ${reason}. ${standinName} is booked once they say yes`,
+    summary: `Asked the ${other.name} captain to agree to ${standinName} covering ${
+      cover.replacedName ?? "an open seat"
+    } for ${cover.coverTeamName} in ${coverLogLabel(match)} (${reason})`,
+    seasonId: match.seasonId,
+    // The other captain is the one who must act, and the only one pinged:
+    // the standin isn't booked yet and hears once it's agreed.
+    reachUserId: other.captainId,
+    mentions: mentionsOf([otherCaptain?.discordId]),
+    announcement: standinApprovalRequestedMessage({
+      requesterName: requester?.name ?? `The ${cover.coverTeamName} captain`,
+      standinName,
+      replacedName: cover.replacedName,
+      teamName: cover.coverTeamName,
+      otherTeamName: other.name,
+      ...fixtureFacts(match),
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
+      whenMs: match.scheduledAt?.getTime() ?? null,
+      standinMmr: cover.standinMmr,
+      baselineMmr: ask.baselineMmr,
+      matchId: match.id,
+    }),
+  };
+}
+
+/** A request as the answer paths read it. */
+async function loadStandinRequest(requestId: string) {
+  if (!requestId) return null;
+  return prisma.standinRequest.findUnique({
+    where: { id: requestId },
+    include: {
+      match: { include: COVER_MATCH_INCLUDE },
+      standin: { select: { name: true, discordId: true } },
+      replaced: { select: { name: true } },
+    },
+  });
+}
+
+function requestClosedError(status: string): string {
+  return status === STANDIN_REQUEST_STATUS.APPROVED
+    ? "That request was already agreed to — the standin is booked"
+    : status === STANDIN_REQUEST_STATUS.DECLINED
+      ? "That request was already declined"
+      : "That request was withdrawn";
+}
+
+const REQUEST_JUST_ANSWERED =
+  "That request was just answered or withdrawn — reload to see where it stands";
+
+/**
+ * The other captain agrees to a standin request: the standin is booked, in
+ * the same Serializable transaction that marks the request APPROVED, after
+ * every booking check runs again (the seat, the standin's signup and their
+ * night may all have moved since it was asked). Only the OTHER team's captain
+ * may agree (never the asking side), or an admin (`actingCaptainId: null`).
+ */
+export async function approveStandinRequest(opts: {
+  requestId: string;
+  /** null = admin; a userId must captain the match's OTHER team. */
+  actingCaptainId: string | null;
+  /** Who pressed the button (defaults to actingCaptainId). */
+  actingUserId?: string;
+}): Promise<StandinServiceResult> {
+  const request = await loadStandinRequest(opts.requestId);
+  if (!request) return { ok: false, error: "That request is gone" };
+  if (request.status !== STANDIN_REQUEST_STATUS.PENDING)
+    return { ok: false, error: requestClosedError(request.status) };
+  const other = otherSide(request.match, request.teamId);
+  if (opts.actingCaptainId && other.captainId !== opts.actingCaptainId) {
+    return {
+      ok: false,
+      error: `Only the ${other.name} captain (or an admin) can agree to this standin`,
+    };
+  }
+  const target: CoverTarget = {
+    matchId: request.matchId,
+    standinUserId: request.standinUserId,
+    replacingUserId: request.replacingUserId,
+    teamId: request.teamId,
+  };
+  const judged = await judgeCover(target, {
+    actingCaptainId: null,
+    excludeRequestId: request.id,
+  });
+  if (!judged.ok) return judged;
+  const cover = judged.cover;
+  // judgeCover resolves the team from the covered player's roster today; a
+  // player moved to the other side since the ask is not what was agreed to.
+  if (cover.coverTeamId !== request.teamId) {
+    return {
+      ok: false,
+      error: `${cover.replacedName} has changed teams since this was asked — decline it and ask again`,
+    };
+  }
+  const actorId = opts.actingUserId ?? opts.actingCaptainId;
+  // Test seam: the read-time status check above and the claim below.
+  await raceHook("standin.approveRequest.beforeTx");
+  try {
+    await prisma.$transaction(
+      async (tx) => {
+        if (opts.actingCaptainId) {
+          const current = await tx.team.findUnique({
+            where: { id: other.id },
+            select: { captainId: true },
+          });
+          if (current?.captainId !== opts.actingCaptainId) {
+            throw new StandinRaceError(
+              `The ${other.name} captain just changed — reload before answering`,
+            );
+          }
+        }
+        // The claim: only a request still PENDING turns into a booking, so an
+        // answer racing a cancel (or a second answer) books nobody twice.
+        const claimed = await tx.standinRequest.updateMany({
+          where: { id: request.id, status: STANDIN_REQUEST_STATUS.PENDING },
+          data: {
+            status: STANDIN_REQUEST_STATUS.APPROVED,
+            decidedAt: new Date(),
+            decidedById: actorId,
+          },
+        });
+        if (claimed.count === 0) throw new StandinRaceError(REQUEST_JUST_ANSWERED);
+        await recheckCover(tx, target, cover, request.id);
+        await tx.standinAssignment.create({
+          data: {
+            matchId: request.matchId,
+            teamId: request.teamId,
+            standinUserId: request.standinUserId,
+            replacingUserId: request.replacingUserId,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if (e instanceof StandinRaceError) return { ok: false, error: e.message };
+    if (isSerializationConflict(e))
+      return {
+        ok: false,
+        error: "That standin or seat just changed — reload and check it again",
+      };
+    throw e;
+  }
+
+  const match = request.match;
+  const byCaptain = opts.actingCaptainId !== null;
+  const reason = standinApprovalReason({
+    standinMmr: request.standinMmr,
+    baselineMmr: request.baselineMmr,
+    emptySeat: request.replacingUserId === null,
+  });
+  const agreedName = byCaptain
+    ? ((
+        await prisma.user.findUnique({
+          where: { id: other.captainId },
+          select: { name: true },
+        })
+      )?.name ?? `the ${other.name} captain`)
+    : null;
+  return {
+    ok: true,
+    message: `Agreed — ${request.standin.name} is booked`,
+    summary: `${byCaptain ? `The ${other.name} captain` : "An admin"} agreed to ${
+      request.standin.name
+    } covering ${cover.replacedName ?? "an open seat"} for ${
+      cover.coverTeamName
+    } in ${coverLogLabel(match)} (${reason})`,
+    seasonId: match.seasonId,
+    reachUserId: request.standinUserId,
+    // The standin hears it's their game night; the asking captain hears
+    // their request went through (they didn't press this button).
+    mentions: mentionsOf([
+      request.standin.discordId,
+      await captainToNotify(cover.coverTeamCaptainId, actorId),
+    ]),
+    announcement: standinAssignedMessage({
+      standinName: request.standin.name,
+      replacedName: cover.replacedName,
+      teamName: cover.coverTeamName,
+      ...fixtureFacts(match),
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
+      whenMs: match.scheduledAt?.getTime() ?? null,
+      matchId: match.id,
+      agreedBy: { name: agreedName },
+    }),
+  };
+}
+
+/**
+ * The other captain (or an admin) says no. Nothing is booked; the asking
+ * captain is told to line up someone else. No read-time status check: the
+ * claim's WHERE is the one place a closed request is refused.
+ */
+export async function declineStandinRequest(opts: {
+  requestId: string;
+  /** null = admin; a userId must captain the match's OTHER team. */
+  actingCaptainId: string | null;
+  /** Who pressed the button (defaults to actingCaptainId). */
+  actingUserId?: string;
+}): Promise<StandinServiceResult> {
+  const request = await loadStandinRequest(opts.requestId);
+  if (!request) return { ok: false, error: "That request is gone" };
+  const other = otherSide(request.match, request.teamId);
+  if (opts.actingCaptainId && other.captainId !== opts.actingCaptainId) {
+    return {
+      ok: false,
+      error: `Only the ${other.name} captain (or an admin) can answer this request`,
+    };
+  }
+  const actorId = opts.actingUserId ?? opts.actingCaptainId;
+  let declined;
+  try {
+    declined = await prisma.$transaction(
+      async (tx) => {
+        if (opts.actingCaptainId) {
+          const current = await tx.team.findUnique({
+            where: { id: other.id },
+            select: { captainId: true },
+          });
+          if (current?.captainId !== opts.actingCaptainId) {
+            throw new StandinRaceError(
+              `The ${other.name} captain just changed — reload before answering`,
+            );
+          }
+        }
+        return tx.standinRequest.updateMany({
+          where: { id: request.id, status: STANDIN_REQUEST_STATUS.PENDING },
+          data: {
+            status: STANDIN_REQUEST_STATUS.DECLINED,
+            decidedAt: new Date(),
+            decidedById: actorId,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if (e instanceof StandinRaceError) return { ok: false, error: e.message };
+    if (isSerializationConflict(e))
+      return { ok: false, error: REQUEST_JUST_ANSWERED };
+    throw e;
+  }
+  if (declined.count === 0) {
+    return { ok: false, error: requestClosedError(await currentStatus(request.id)) };
+  }
+
+  const match = request.match;
+  const coverTeam = side(match, request.teamId);
+  const byCaptain = opts.actingCaptainId !== null;
+  const declinedByName = byCaptain
+    ? ((
+        await prisma.user.findUnique({
+          where: { id: other.captainId },
+          select: { name: true },
+        })
+      )?.name ?? `the ${other.name} captain`)
+    : null;
+  return {
+    ok: true,
+    message: `Declined — ${request.standin.name} isn't booked, and the ${coverTeam.name} captain is told to find someone else`,
+    summary: `${byCaptain ? `The ${other.name} captain` : "An admin"} declined ${
+      request.standin.name
+    } covering ${request.replaced?.name ?? "an open seat"} for ${
+      coverTeam.name
+    } in ${coverLogLabel(match)}`,
+    seasonId: match.seasonId,
+    reachUserId: coverTeam.captainId,
+    mentions: mentionsOf([
+      await captainToNotify(coverTeam.captainId, actorId),
+    ]),
+    announcement: standinRequestDeclinedMessage({
+      declinedByName,
+      standinName: request.standin.name,
+      replacedName: request.replaced?.name ?? null,
+      teamName: coverTeam.name,
+      ...fixtureFacts(match),
+      roundLabel: (await roundLabelsForPost([match])).get(match.id),
+      matchId: match.id,
+    }),
+  };
+}
+
+/**
+ * The asking captain withdraws their request, freeing the seat to book
+ * someone else. No Discord post: nobody has to do anything about it. As with
+ * decline, the claim's WHERE alone refuses a request already answered.
+ */
+export async function cancelStandinRequest(opts: {
+  requestId: string;
+  /** null = admin; a userId must captain the covered team. */
+  actingCaptainId: string | null;
+  /** Who pressed the button (defaults to actingCaptainId). */
+  actingUserId?: string;
+}): Promise<StandinServiceResult> {
+  const request = await loadStandinRequest(opts.requestId);
+  if (!request) return { ok: false, error: "That request is gone" };
+  const coverTeam = side(request.match, request.teamId);
+  if (opts.actingCaptainId && coverTeam.captainId !== opts.actingCaptainId) {
+    return {
+      ok: false,
+      error: `Only the ${coverTeam.name} captain (or an admin) can withdraw this request`,
+    };
+  }
+  let cancelled;
+  try {
+    cancelled = await prisma.$transaction(
+      async (tx) => {
+        if (opts.actingCaptainId) {
+          const current = await tx.team.findUnique({
+            where: { id: coverTeam.id },
+            select: { captainId: true },
+          });
+          if (current?.captainId !== opts.actingCaptainId) {
+            throw new StandinRaceError(
+              "The team captain changed — reload before withdrawing this request",
+            );
+          }
+        }
+        return tx.standinRequest.updateMany({
+          where: { id: request.id, status: STANDIN_REQUEST_STATUS.PENDING },
+          data: {
+            status: STANDIN_REQUEST_STATUS.CANCELLED,
+            decidedAt: new Date(),
+            decidedById: opts.actingUserId ?? opts.actingCaptainId,
+          },
+        });
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+    );
+  } catch (e) {
+    if (e instanceof StandinRaceError) return { ok: false, error: e.message };
+    if (isSerializationConflict(e))
+      return { ok: false, error: REQUEST_JUST_ANSWERED };
+    throw e;
+  }
+  if (cancelled.count === 0) {
+    return { ok: false, error: requestClosedError(await currentStatus(request.id)) };
+  }
+  return {
+    ok: true,
+    message: `Request withdrawn — the seat is free to book someone else`,
+    summary: `Withdrew the request for ${request.standin.name} to cover ${
+      request.replaced?.name ?? "an open seat"
+    } for ${coverTeam.name} in ${coverLogLabel(request.match)}`,
+    seasonId: request.match.seasonId,
+    announcement: "",
+  };
+}
+
+/** A PENDING request the league closed, with what its post names. */
+export type CancelledStandinRequest = {
+  id: string;
+  matchId: string;
+  teamId: string;
+  standinName: string;
+  /** null = an empty-seat request. */
+  replacedName: string | null;
+  match: {
+    id: string;
+    seasonId: string;
+    week: number;
+    phase: string;
+    bracketSlot: string | null;
+    homeTeamId: string;
+    awayTeamId: string;
+    homeTeam: { name: string; captainId: string };
+    awayTeam: { name: string; captainId: string };
+  };
+};
+
+/**
+ * Close the PENDING standin requests a roster or schedule change has made
+ * impossible to agree to, inside the caller's Serializable transaction, after
+ * the change itself. A request is not cover, so nothing else needs undoing.
+ * It reads the rows, then claims exactly those, still PENDING; the read and
+ * the claim share the transaction's snapshot, so a short count means a rival
+ * answered in between, and it throws (past the caller's first write).
+ * `standinRequestCancellations` builds the posts for after the commit.
+ */
+export async function cancelPendingStandinRequests(
+  tx: Prisma.TransactionClient,
+  where: Prisma.StandinRequestWhereInput,
+  actorId: string | null,
+): Promise<CancelledStandinRequest[]> {
+  const rows = await tx.standinRequest.findMany({
+    where: { ...where, status: STANDIN_REQUEST_STATUS.PENDING },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: {
+      id: true,
+      matchId: true,
+      teamId: true,
+      standin: { select: { name: true } },
+      replaced: { select: { name: true } },
+      match: {
+        select: {
+          id: true,
+          seasonId: true,
+          week: true,
+          phase: true,
+          bracketSlot: true,
+          homeTeamId: true,
+          awayTeamId: true,
+          homeTeam: { select: { name: true, captainId: true } },
+          awayTeam: { select: { name: true, captainId: true } },
+        },
+      },
+    },
+  });
+  if (rows.length === 0) return [];
+  const claimed = await tx.standinRequest.updateMany({
+    where: {
+      id: { in: rows.map((row) => row.id) },
+      status: STANDIN_REQUEST_STATUS.PENDING,
+    },
+    data: {
+      status: STANDIN_REQUEST_STATUS.CANCELLED,
+      decidedAt: new Date(),
+      decidedById: actorId,
+    },
+  });
+  if (claimed.count !== rows.length) {
+    throw new StandinRequestsChangedError();
+  }
+  return rows.map((row) => ({
+    id: row.id,
+    matchId: row.matchId,
+    teamId: row.teamId,
+    standinName: row.standin.name,
+    replacedName: row.replaced?.name ?? null,
+    match: row.match,
+  }));
+}
+
+/** A standin request was answered while a change was closing it. */
+export class StandinRequestsChangedError extends Error {
+  constructor() {
+    super("A standin request was just answered — reload and try again");
+  }
+}
+
+/**
+ * The posts that tell each asking captain their request is off and why, for
+ * the action to send after the commit (the house shape for standin posts).
+ * Each mentions only that request's team captain, the one who has to line up
+ * someone else.
+ */
+export async function standinRequestCancellations(
+  cancelled: CancelledStandinRequest[],
+  reason: StandinRequestCancelReason,
+): Promise<{ announcement: string; mentions?: MentionAllowlist }[]> {
+  if (cancelled.length === 0) return [];
+  const captainIds = cancelled.map((request) =>
+    request.teamId === request.match.homeTeamId
+      ? request.match.homeTeam.captainId
+      : request.match.awayTeam.captainId,
+  );
+  const [captains, roundLabels] = await Promise.all([
+    prisma.user.findMany({
+      where: { id: { in: [...new Set(captainIds)] } },
+      select: { id: true, discordId: true },
+    }),
+    roundLabelsForPost(cancelled.map((request) => request.match)),
+  ]);
+  const discordIdOf = new Map(captains.map((c) => [c.id, c.discordId]));
+  return cancelled.map((request, index) => {
+    const { match } = request;
+    const teamName =
+      request.teamId === match.homeTeamId
+        ? match.homeTeam.name
+        : match.awayTeam.name;
+    return {
+      announcement: standinRequestCancelledMessage({
+        reason,
+        standinName: request.standinName,
+        replacedName: request.replacedName,
+        teamName,
+        homeName: match.homeTeam.name,
+        awayName: match.awayTeam.name,
+        week: match.week,
+        isPlayoff: isPlayoffPhase(match.phase),
+        isTiebreaker: match.phase === MATCH_PHASE.TIEBREAKER,
+        roundLabel: roundLabels.get(match.id),
+        matchId: match.id,
+      }),
+      mentions: mentionsOf([discordIdOf.get(captainIds[index])]),
+    };
+  });
+}
+
+/** A request's status now, for wording a claim that lost. */
+async function currentStatus(requestId: string): Promise<string> {
+  const row = await prisma.standinRequest.findUnique({
+    where: { id: requestId },
+    select: { status: true },
+  });
+  return row?.status ?? STANDIN_REQUEST_STATUS.CANCELLED;
 }
 
 /**

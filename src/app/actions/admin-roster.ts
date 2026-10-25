@@ -11,7 +11,9 @@ import { raceHook } from "@/lib/race-hook";
 import { captureRosterTenure, closeRosterTenure } from "@/lib/roster-history";
 import { getActiveSeason } from "@/lib/season";
 import {
+  approveStandinRequest,
   assignStandinGuarded,
+  declineStandinRequest,
   removeStandinGuarded,
 } from "@/lib/standin-service";
 import {
@@ -1796,6 +1798,9 @@ export async function assignStandin(
     teamId: seat ?? undefined,
     actingCaptainId: null, // admin override — either team
     actingUserId: admin.id,
+    // The league's ruling: a standin over the MMR allowance is booked
+    // without the other captain, and the toast and the log say so.
+    overLimit: "book",
   });
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
@@ -1815,6 +1820,60 @@ export async function assignStandin(
       await reachabilityNote(str(formData, "standinUserId")),
     ),
   };
+}
+
+/**
+ * Agree to a captain's standin request in the other captain's place (an
+ * unanswered request on match night), which books the standin.
+ */
+export async function approveStandinRequestAsAdmin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await approveStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: null,
+    actingUserId: admin.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  await logAdminAction({
+    action: "approveStandinRequestAsAdmin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
+  refresh();
+  return {
+    message: withReachabilityNote(
+      res.message,
+      res.reachUserId ? await reachabilityNote(res.reachUserId) : "",
+    ),
+  };
+}
+
+/** Decline a captain's standin request in the other captain's place. */
+export async function declineStandinRequestAsAdmin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await declineStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: null,
+    actingUserId: admin.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  await logAdminAction({
+    action: "declineStandinRequestAsAdmin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
+  refresh();
+  return { message: res.message };
 }
 
 /** Remove a standin assignment. */

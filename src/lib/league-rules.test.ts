@@ -37,6 +37,7 @@ import { registrationGate } from "./registration";
 import { nextRoundPairings } from "./schedule";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
+import { coverBaselineMmr, standinNeedsApproval } from "./standin";
 
 const US = createLeagueConfig({});
 const EU = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" });
@@ -344,7 +345,10 @@ describe("leagueRules", () => {
       "A standin can't be booked for two matches within 4 hours of each other.",
     );
     expect(section(rules, "rosters")).toContain(
-      "Booking a standin 500 or more MMR above the player they cover shows a warning",
+      "A standin can be at most 100 MMR above the player they cover, by signup MMR.",
+    );
+    expect(section(rules, "rosters")).toContain(
+      "A standin more than 100 MMR above needs the other captain to agree on the match page.",
     );
     expect(section(rules, "results")).toContain(
       "it started between 3 days before and 6 days after the scheduled kickoff",
@@ -448,6 +452,25 @@ describe("the rules page's claims hold in the code", () => {
         [game("y", "x", 1, 0), game("x", "p", 1, 0), game("q", "y", 1, 0)],
       ),
     ).toEqual(["y", "x"]);
+  });
+
+  it("asks the other captain for a standin more than the allowance above", () => {
+    // "at most 100 MMR above … books straight away", "more than 100 … agree".
+    expect(standinNeedsApproval(2500, 2400)).toBe(false);
+    expect(standinNeedsApproval(2501, 2400)).toBe(true);
+    // "An empty roster seat counts as covering the team's lowest-MMR player."
+    expect(coverBaselineMmr({ rosterMmrs: [3000, 2400, 2800] })).toBe(2400);
+    // "When the site doesn't know either MMR, the other captain decides."
+    expect(standinNeedsApproval(0, 2400)).toBe(true);
+    expect(standinNeedsApproval(2400, null)).toBe(true);
+    // "Admins can book any standin themselves": the admin panel books over
+    // the rule, the captain's card always asks.
+    expect(
+      stripLineComments(sourceFile("src/app/actions/admin-roster.ts").text),
+    ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "book"/);
+    expect(
+      stripLineComments(sourceFile("src/app/actions/standins.ts").text),
+    ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "ask"/);
   });
 
   it("counts only regular-season series toward the table", () => {

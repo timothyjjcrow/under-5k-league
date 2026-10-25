@@ -82,6 +82,9 @@ model User {
   bids                   Bid[]
   standinAssignments     StandinAssignment[]  @relation("StandinUser")
   replacedAssignments    StandinAssignment[]  @relation("ReplacedUser")
+  standinRequests        StandinRequest[]     @relation("StandinRequestStandin")
+  replacedRequests       StandinRequest[]     @relation("StandinRequestReplaced")
+  requestedStandins      StandinRequest[]     @relation("StandinRequestRequester")
   inhouseQueue           InhouseQueueEntry?
   inhouseNightRsvps      InhouseNightRsvp[]
   inhouseTimeRsvps       InhouseTimeRsvp[]
@@ -458,6 +461,7 @@ model Match {
   homeTeam     Team                @relation("HomeTeam", fields: [homeTeamId], references: [id])
   awayTeam     Team                @relation("AwayTeam", fields: [awayTeamId], references: [id])
   standins     StandinAssignment[]
+  standinRequests StandinRequest[]
   games        Game[]
   availability MatchAvailability[]
   predictions  Prediction[]
@@ -552,6 +556,40 @@ model StandinAssignment {
   replaced User? @relation("ReplacedUser", fields: [replacingUserId], references: [id])
 
   @@index([matchId])
+}
+
+// A captain's standin booking that waits for the OTHER captain to agree: the
+// standin is more than STANDIN_MMR_ALLOWANCE above the seat, or an MMR is
+// unknown (standin.ts). It is not cover: nothing that reads StandinAssignment
+// sees it. Agreeing creates the StandinAssignment in the same transaction that
+// marks the request APPROVED. A PENDING request holds its seat, so nobody else
+// is booked into it until it is answered or cancelled.
+model StandinRequest {
+  id              String    @id @default(cuid())
+  matchId         String
+  // The covered team. No relation, like StandinAssignment.teamId.
+  teamId          String
+  standinUserId   String
+  // null = an empty seat on a short roster, as on StandinAssignment.
+  replacingUserId String?
+  requestedById   String
+  // What the other captain was asked about: the standin's signup MMR when it
+  // was asked (0 = unknown) and the seat's (the covered player's, or the
+  // team's lowest for an empty seat; null = unknown).
+  standinMmr      Int
+  baselineMmr     Int?
+  status          String    @default("PENDING") // PENDING | APPROVED | DECLINED | CANCELLED
+  createdAt       DateTime  @default(now())
+  // Who answered and when. A plain id, like the admin log's.
+  decidedAt       DateTime?
+  decidedById     String?
+
+  match       Match @relation(fields: [matchId], references: [id], onDelete: Cascade)
+  standin     User  @relation("StandinRequestStandin", fields: [standinUserId], references: [id], onDelete: Cascade)
+  replaced    User? @relation("StandinRequestReplaced", fields: [replacingUserId], references: [id], onDelete: Cascade)
+  requestedBy User  @relation("StandinRequestRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+
+  @@index([matchId, status])
 }
 
 // An individual Dota 2 game fetched from OpenDota, rolled up into a league Match.

@@ -5,10 +5,12 @@ import { GAME_VIEW_COLUMNS } from "@/lib/game-participants";
 import { prisma } from "@/lib/prisma";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { getSeasonDraftStatus } from "@/lib/queries";
+import { STANDIN_REQUEST_STATUS } from "@/lib/constants";
+import { STANDIN_REQUEST_VIEW } from "@/lib/standin-service";
 
 /**
  * The match page's shared reads. The page loads the match once, with its
- * teams, games, standin bookings and season, and passes it and the viewer to
+ * teams, games, standin bookings and requests, and season, and passes it and the viewer to
  * every card; no card reads the season or the match again.
  *
  * The reads only some cards need (the draft status, both teams' rosters and
@@ -26,6 +28,13 @@ export async function loadMatch(id: string) {
       // score stays in the database.
       games: { orderBy: { startTime: "asc" }, select: GAME_VIEW_COLUMNS },
       standins: { include: { standin: true, replaced: true } },
+      // Bookings waiting for the other captain's OK (the MMR rule): the
+      // Standins card, Captain to-dos and Admin tools show them.
+      standinRequests: {
+        where: { status: STANDIN_REQUEST_STATUS.PENDING },
+        include: STANDIN_REQUEST_VIEW,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      },
       season: {
         select: {
           isActive: true,

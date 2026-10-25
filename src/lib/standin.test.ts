@@ -1,11 +1,14 @@
 import { describe, it, expect } from "vitest";
 import {
+  coverBaselineMmr,
   coverChoices,
+  standinApprovalReason,
   standinConflict,
-  standinMmrNote,
+  standinMmrLabel,
+  standinNeedsApproval,
   standinPickerBlock,
   STANDIN_CONFLICT_HOURS,
-  STANDIN_MMR_FLAG_GAP,
+  STANDIN_MMR_ALLOWANCE,
 } from "./standin";
 
 const at = (iso: string) => new Date(iso);
@@ -69,71 +72,75 @@ describe("standinConflict", () => {
   });
 });
 
-// Advisory, never a block (the maxMmr house rule): the assigner just gets told
-// what they're doing. Named cover judges against the REPLACED player — the
-// strength the team was already fielding; only an empty seat, which has no
-// baseline, falls back to the season's soft cap.
-describe("standinMmrNote", () => {
-  // Pins the named-cover flag itself — and that the line NAMES both numbers,
-  // because "heads up" with no figures is not something a captain can act on.
-  it("flags a standin towering over the player they cover, naming both MMRs", () => {
-    const note = standinMmrNote({ standinMmr: 4900, replacedMmr: 1800, maxMmr: 0 });
-    expect(note).toMatch(/4900/);
-    expect(note).toMatch(/1800/);
+// Tim's rule (2026-10-21): a captain books a standin up to the allowance
+// above the seat; past it, or with an MMR the site doesn't know, the other
+// captain has to agree.
+describe("standinNeedsApproval", () => {
+  // Pins the boundary the rules page states: "at most 100 above" is fine.
+  it("lets a captain book up to the allowance above, and asks past it", () => {
+    expect(standinNeedsApproval(2400 + STANDIN_MMR_ALLOWANCE, 2400)).toBe(false);
+    expect(standinNeedsApproval(2400 + STANDIN_MMR_ALLOWANCE + 1, 2400)).toBe(true);
   });
 
-  // Pins the gap threshold: comparable cover is silent, or every routine
-  // assignment toasts a warning and the real ones drown.
-  it("stays silent on comparable named cover", () => {
-    expect(
-      standinMmrNote({ standinMmr: 2600, replacedMmr: 2500, maxMmr: 0 }),
-    ).toBeNull();
+  // Covering down or level is the ordinary case and never asks anyone.
+  it("never asks for a standin at or below the seat", () => {
+    expect(standinNeedsApproval(1800, 2400)).toBe(false);
+    expect(standinNeedsApproval(2400, 2400)).toBe(false);
   });
 
-  // Pins the >= boundary — exactly the flag gap up is already a flag.
-  it("is inclusive at the boundary: exactly the gap up gets flagged", () => {
-    expect(
-      standinMmrNote({
-        standinMmr: 2500 + STANDIN_MMR_FLAG_GAP,
-        replacedMmr: 2500,
-        maxMmr: 0,
-      }),
-    ).not.toBeNull();
+  // Pins the unknown rule: 0 must not pass as "close enough", or leaving the
+  // MMR blank would make anyone a free ringer; the other captain judges it.
+  it("asks whenever either MMR is unknown", () => {
+    expect(standinNeedsApproval(0, 2400)).toBe(true);
+    expect(standinNeedsApproval(2400, null)).toBe(true);
+    expect(standinNeedsApproval(2400, 0)).toBe(true);
+  });
+});
+
+describe("coverBaselineMmr", () => {
+  it("named cover: the covered player's MMR, with 0 or none as unknown", () => {
+    expect(coverBaselineMmr({ replacedMmr: 2400 })).toBe(2400);
+    expect(coverBaselineMmr({ replacedMmr: 0 })).toBeNull();
+    expect(coverBaselineMmr({ replacedMmr: null })).toBeNull();
   });
 
-  // Pins the unknown rule: 0 must not dress up as "fine" OR as "too strong" —
-  // an absolute-gap comparison would flag an unknown covering a known player.
-  it("never flags an unknown standin MMR, even against known cover", () => {
+  // Pins the empty-seat yardstick: the team's lowest KNOWN MMR, so a short
+  // side can't field a stronger fifth than covering its weakest seat allows.
+  it("empty seat: the roster's lowest known MMR", () => {
+    expect(coverBaselineMmr({ rosterMmrs: [3100, 2400, 0, 2900] })).toBe(2400);
+    expect(coverBaselineMmr({ rosterMmrs: [0, 0] })).toBeNull();
+    expect(coverBaselineMmr({ rosterMmrs: [] })).toBeNull();
+  });
+});
+
+describe("standinApprovalReason", () => {
+  // Every branch is a clause that reads after "since", and carries no player
+  // name, so the same words are safe in a Discord post.
+  it("says how far above, measured against the right seat", () => {
     expect(
-      standinMmrNote({ standinMmr: 0, replacedMmr: 1800, maxMmr: 3500 }),
-    ).toBeNull();
+      standinApprovalReason({ standinMmr: 3100, baselineMmr: 2400, emptySeat: false }),
+    ).toBe("the standin is 700 MMR above the player they cover");
+    expect(
+      standinApprovalReason({ standinMmr: 3500, baselineMmr: 2400, emptySeat: true }),
+    ).toBe("the standin is 1,100 MMR above the team's lowest-MMR player");
   });
 
-  // Pins the empty-seat fallback: no replaced player, so the season's review
-  // threshold is the only yardstick — null and 0 both mean "no baseline".
-  it("empty seat: measures against the season's review threshold", () => {
+  it("names which MMR is unknown", () => {
     expect(
-      standinMmrNote({ standinMmr: 4000, replacedMmr: null, maxMmr: 3500 }),
-    ).toMatch(/review threshold/);
+      standinApprovalReason({ standinMmr: 0, baselineMmr: 2400, emptySeat: false }),
+    ).toBe("the standin's MMR is unknown");
     expect(
-      standinMmrNote({ standinMmr: 4000, replacedMmr: 0, maxMmr: 3500 }),
-    ).toMatch(/review threshold/);
+      standinApprovalReason({ standinMmr: 2400, baselineMmr: null, emptySeat: false }),
+    ).toBe("the covered player's MMR is unknown");
+    expect(
+      standinApprovalReason({ standinMmr: 2400, baselineMmr: null, emptySeat: true }),
+    ).toBe("nobody on the team has a known MMR to compare with");
   });
 
-  // Pins that maxMmr 0 = no threshold set, never "a threshold of zero".
-  it("empty seat with no cap set is silent — nothing to measure against", () => {
-    expect(
-      standinMmrNote({ standinMmr: 4000, replacedMmr: null, maxMmr: 0 }),
-    ).toBeNull();
-  });
-
-  // Pins the branch ORDER: a known replaced player IS the baseline, so a small
-  // gap stays silent even in a capped season with the standin above the cap —
-  // the team was already fielding that strength.
-  it("named-cover baseline beats the cap: small gap above maxMmr is silent", () => {
-    expect(
-      standinMmrNote({ standinMmr: 4000, replacedMmr: 3900, maxMmr: 3500 }),
-    ).toBeNull();
+  it("formats numbers with a fixed locale", () => {
+    expect(standinMmrLabel(3100)).toBe("3,100 MMR");
+    expect(standinMmrLabel(0)).toBe("MMR unknown");
+    expect(standinMmrLabel(null)).toBe("MMR unknown");
   });
 });
 
@@ -189,6 +196,21 @@ describe("standinPickerBlock", () => {
   it("only reads the candidate's own bookings", () => {
     expect(
       standinPickerBlock("bob", target, [booking({ matchId: "m1" })]),
+    ).toBeNull();
+  });
+
+  // The server refuses a standin with a request waiting in this match, but a
+  // request elsewhere isn't a booking yet: agreeing to it re-checks the night.
+  it("holds a standin with a request in this match, not one elsewhere", () => {
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({ matchId: "m1", pending: true }),
+      ]),
+    ).toBe("waiting for the other captain's OK in this match");
+    expect(
+      standinPickerBlock("alice", target, [
+        booking({ scheduledAt: at("2026-08-02T20:00:00Z"), week: 3, pending: true }),
+      ]),
     ).toBeNull();
   });
 });

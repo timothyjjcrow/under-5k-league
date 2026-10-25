@@ -25,6 +25,8 @@ import {
   type StandinBooking,
   coverChoices,
   seatValue,
+  standinApprovalReason,
+  standinMmrLabel,
   standinPickerBlock,
 } from "@/lib/standin";
 import {
@@ -32,7 +34,13 @@ import {
   parseTiebreakerStage,
 } from "@/lib/tiebreaker-format";
 import { cn } from "@/lib/utils";
-import { assignStandin, removeStandin } from "@/app/actions/admin-roster";
+import {
+  approveStandinRequestAsAdmin,
+  assignStandin,
+  declineStandinRequestAsAdmin,
+  removeStandin,
+} from "@/app/actions/admin-roster";
+import type { StandinRequestView } from "@/lib/standin-service";
 import {
   autoDetectAction,
   importGameAction,
@@ -629,7 +637,8 @@ export function MatchResultRow({
 }
 
 // One match's any-team standin controls: an OUT-players alert, current
-// assignments, and the assign form. /admin's Standin assignments card renders
+// assignments, captains' requests waiting for the other captain's OK (with
+// the admin's Agree and Decline in that captain's place), and the assign form. /admin's Standin assignments card renders
 // one per upcoming fixture; the match page's Admin tools render the same block.
 export function StandinMatchBlock({
   m,
@@ -638,6 +647,7 @@ export function StandinMatchBlock({
   bookings,
   outRsvps,
   assignments,
+  requests,
   teamName,
   label,
   teamSize,
@@ -665,6 +675,8 @@ export function StandinMatchBlock({
   /** OUT answers for the fixture's current schedule revision. */
   outRsvps: { matchId: string; userId: string; user: { name: string } }[];
   assignments: StandinBlockAssignment[];
+  /** This match's PENDING standin requests (the MMR rule). */
+  requests: StandinRequestView[];
   teamName: Map<string, string>;
   label: React.ReactNode;
   teamSize: number;
@@ -680,7 +692,9 @@ export function StandinMatchBlock({
   // second cover for one seat), so don't offer them — the captain-facing card
   // has always filtered these and the admin one didn't.
   const coveredIds = new Set(
-    asg.map((a) => a.replacingUserId).filter(Boolean) as string[],
+    [...asg, ...requests]
+      .map((a) => a.replacingUserId)
+      .filter(Boolean) as string[],
   );
   // The captain picker's rules, not a second copy of them: a standin already
   // booked in this match or on another fixture that night is listed last,
@@ -688,9 +702,23 @@ export function StandinMatchBlock({
   // leads with the players who said they can't make it (coverChoices). The
   // server still refuses both at submit.
   const target = { matchId: m.id, scheduledAt: m.scheduledAt, week: m.week };
+  // A pending request holds its standin in this match, as the server does.
+  const withRequests = [
+    ...bookings,
+    ...requests.map((r) => ({
+      standinUserId: r.standinUserId,
+      matchId: m.id,
+      replacedName: r.replaced?.name ?? null,
+      homeName: home?.name ?? "?",
+      awayName: away?.name ?? "?",
+      scheduledAt: m.scheduledAt,
+      week: m.week,
+      pending: true,
+    })),
+  ];
   const poolChoices = pool.map((s) => ({
     reg: s,
-    blocked: standinPickerBlock(s.userId, target, bookings),
+    blocked: standinPickerBlock(s.userId, target, withRequests),
   }));
   const pickerOptions = [
     ...poolChoices.filter((c) => !c.blocked),
@@ -713,7 +741,7 @@ export function StandinMatchBlock({
   // seat, already-filled ones subtracted.
   const openSeats = [home, away].flatMap((t) => {
     if (!t) return [];
-    const filled = asg.filter(
+    const filled = [...asg, ...requests].filter(
       (a) => a.teamId === t.id && a.replacingUserId == null,
     ).length;
     const open = teamSize - t.members.length - filled;
@@ -791,6 +819,68 @@ export function StandinMatchBlock({
           ))}
         </ul>
       ) : null}
+      {requests.length > 0 ? (
+        <ul className="space-y-1.5">
+          {requests.map((r) => {
+            const descId = `admin-standin-request-${r.id}`;
+            const otherTeamId =
+              r.teamId === m.homeTeamId ? m.awayTeamId : m.homeTeamId;
+            return (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs"
+              >
+                <span id={descId} className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+                  ⏳ {r.standin.name} ({standinMmrLabel(r.standinMmr)}){" "}
+                  {r.replaced
+                    ? `in for ${r.replaced.name} (${standinMmrLabel(r.baselineMmr)})`
+                    : "for an open seat"}{" "}
+                  · {teamName.get(r.teamId)}: {r.requestedBy.name} asked, and the{" "}
+                  {teamName.get(otherTeamId)} captain hasn&apos;t answered (
+                  {standinApprovalReason({
+                    standinMmr: r.standinMmr,
+                    baselineMmr: r.baselineMmr,
+                    emptySeat: r.replacingUserId === null,
+                  })}
+                  ).
+                </span>
+                <span className="ml-auto flex shrink-0 gap-1">
+                  {assignOpen ? (
+                    <ActionForm
+                      action={approveStandinRequestAsAdmin}
+                      hidden={{ requestId: r.id }}
+                    >
+                      <SubmitButton
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs"
+                        aria-describedby={descId}
+                        confirm={`Agree to ${r.standin.name} in place of the ${teamName.get(otherTeamId) ?? "other team's"} captain? The standin is booked and told on Discord.`}
+                      >
+                        agree
+                      </SubmitButton>
+                    </ActionForm>
+                  ) : null}
+                  <ActionForm
+                    action={declineStandinRequestAsAdmin}
+                    hidden={{ requestId: r.id }}
+                  >
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-danger-soft"
+                      aria-describedby={descId}
+                      confirm={`Decline ${r.standin.name} in place of the ${teamName.get(otherTeamId) ?? "other team's"} captain? The ${teamName.get(r.teamId) ?? "asking"} captain is told on Discord to find someone else.`}
+                    >
+                      decline
+                    </SubmitButton>
+                  </ActionForm>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {!assignOpen ? null : (
         <ActionForm
           action={assignStandin}
@@ -813,7 +903,7 @@ export function StandinMatchBlock({
               <option key={s.userId} value={s.userId} disabled={!!blocked}>
                 {blocked
                   ? `${s.user.name} (${blocked})`
-                  : `${s.user.name} (${s.mmr} MMR)`}
+                  : `${s.user.name} (${standinMmrLabel(s.mmr)})`}
               </option>
             ))}
           </select>
@@ -892,6 +982,8 @@ export async function AdminMatchTools({
     week: number;
     scheduleRevision: number;
     standins: StandinBlockAssignment[];
+    /** PENDING standin requests, as load.ts reads them. */
+    standinRequests: StandinRequestView[];
     season: {
       isActive: boolean;
       status: string;
@@ -999,7 +1091,9 @@ export async function AdminMatchTools({
   );
   const showStandins =
     match.status !== MATCH_STATUS.COMPLETED &&
-    (assignOpen || match.standins.length > 0);
+    (assignOpen ||
+      match.standins.length > 0 ||
+      match.standinRequests.length > 0);
   // A server component renders once per request; the auto-check line is a
   // snapshot, like the same line on /admin.
   // eslint-disable-next-line react-hooks/purity
@@ -1103,6 +1197,7 @@ export async function AdminMatchTools({
               bookings={bookings}
               outRsvps={outRsvps}
               assignments={match.standins}
+              requests={match.standinRequests}
               teamName={teamName}
               teamSize={season.teamSize}
               assignOpen={assignOpen}

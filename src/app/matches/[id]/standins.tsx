@@ -1,15 +1,27 @@
 import { prisma } from "@/lib/prisma";
 import { MATCH_STATUS } from "@/lib/constants";
-import { coverChoices, seatValue, standinPickerBlock } from "@/lib/standin";
+import {
+  coverBaselineMmr,
+  coverChoices,
+  seatValue,
+  STANDIN_MMR_ALLOWANCE,
+  standinApprovalReason,
+  standinMmrLabel,
+  standinPickerBlock,
+} from "@/lib/standin";
 import { roleShort } from "@/lib/roles";
 import { standinAssignmentOpen } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import {
+  captainApproveStandinRequest,
   captainAssignStandin,
+  captainCancelStandinRequest,
+  captainDeclineStandinRequest,
   captainRemoveStandin,
 } from "@/app/actions/standins";
 import { ActionForm, SubmitButton } from "@/components/action-form";
-import { Card, CardBody, CardHeader } from "@/components/ui";
+import Link from "@/components/app-link";
+import { Card, CardBody, CardHeader, textLink } from "@/components/ui";
 import {
   loadDraftStatus,
   loadOutUserIds,
@@ -20,7 +32,9 @@ import {
 
 // Captain-facing standin management (guards in standin-service): current
 // cover for both sides, remove for your own team, and an assign form scoped
-// to your roster + the season's unrostered ACTIVE signups.
+// to your roster + the season's unrostered ACTIVE signups. A standin over the
+// MMR allowance waits for the other captain: their requests show here, with
+// Agree and Decline for the other captain and Withdraw for the asking one.
 export async function StandinSection({
   match,
   viewer,
@@ -60,8 +74,13 @@ export async function StandinSection({
     match.status,
   );
 
-  // This match's standin bookings, loaded with the match.
+  // This match's standin bookings, loaded with the match, and the requests
+  // still waiting for a captain's OK (moot once the match is played).
   const assignments = match.standins;
+  const requests =
+    match.status === MATCH_STATUS.COMPLETED ? [] : match.standinRequests;
+  const otherTeamId =
+    myTeamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId;
   const [members, registrations, rostered, outIds] =
     await Promise.all([
       loadRosters(match),
@@ -139,31 +158,55 @@ export async function StandinSection({
     scheduledAt: b.match.scheduledAt,
     week: b.match.week,
   }));
+  // A request in this match holds its standin, as the server does.
+  const requestRows = requests.map((r) => ({
+    standinUserId: r.standinUserId,
+    matchId: match.id,
+    replacedName: r.replaced?.name ?? null,
+    homeName: match.homeTeam.name,
+    awayName: match.awayTeam.name,
+    scheduledAt: match.scheduledAt,
+    week: match.week,
+    pending: true,
+  }));
   const poolChoices = pool.map((r) => ({
     reg: r,
-    blocked: standinPickerBlock(r.userId, pickerTarget, bookingRows),
+    blocked: standinPickerBlock(r.userId, pickerTarget, [
+      ...bookingRows,
+      ...requestRows,
+    ]),
   }));
   const pickerOptions = [
     ...poolChoices.filter((c) => !c.blocked),
     ...poolChoices.filter((c) => c.blocked),
   ];
-  // One seat, one standin — players already covered leave the Covers list.
-  const coveredIds = new Set(
-    assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
-  );
+  // One seat, one standin — players already covered, or whose cover waits
+  // for the other captain, leave the Covers list (the server refuses both).
+  const coveredIds = new Set([
+    ...assignments.flatMap((a) => (a.replaced ? [a.replaced.id] : [])),
+    ...requests.flatMap((r) => (r.replacingUserId ? [r.replacingUserId] : [])),
+  ]);
   // OPEN SEATS on this captain's own roster. A team that lost a player
   // mid-season is short, and a standin filling that seat replaces nobody — the
   // case that previously had no UI anywhere, so a 4-of-5 side could not be
   // covered at all. Already-filled open seats are subtracted.
-  const openSeatsFilled = assignments.filter(
-    (a) => a.teamId === myTeamId && a.replaced == null,
-  ).length;
+  const openSeatsFilled =
+    assignments.filter((a) => a.teamId === myTeamId && a.replaced == null)
+      .length +
+    requests.filter((r) => r.teamId === myTeamId && r.replacingUserId == null)
+      .length;
   const openSeats = Math.max(
     0,
     season.teamSize - roster.length - openSeatsFilled,
   );
   const teamNameOf = (teamId: string) =>
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
+  // Signup MMRs for the Covers list: the number the MMR rule measures a
+  // standin against (an empty seat: the roster's lowest).
+  const mmrOf = new Map(registrations.map((r) => [r.userId, r.mmr]));
+  const seatBaseline = coverBaselineMmr({
+    rosterMmrs: roster.map((m) => mmrOf.get(m.userId) ?? 0),
+  });
   // OUT-and-uncovered on MY roster: the admin card has always alerted on
   // this; the captain — who owns the assign form below — saw only the small
   // ✗ in the preview grid. They also lead the Covers list, pre-selected when
@@ -177,9 +220,10 @@ export async function StandinSection({
     .filter((c) => c.out)
     .map((c) => c.member);
 
-  // A phase where assignment is closed and nothing is booked has nothing to
-  // say — don't render an empty card with a disabled story.
-  if (!assignOpen && assignments.length === 0) return null;
+  // A phase where assignment is closed and nothing is booked or asked has
+  // nothing to say — don't render an empty card with a disabled story.
+  if (!assignOpen && assignments.length === 0 && requests.length === 0)
+    return null;
 
   return (
     <Card id={MATCH_ANCHOR.standins} className="scroll-mt-24">
@@ -242,9 +286,109 @@ export async function StandinSection({
               </li>
             ))}
           </ul>
-        ) : (
+        ) : requests.length === 0 ? (
           <p className="text-sm text-muted">No standins assigned yet.</p>
-        )}
+        ) : null}
+        {requests.length > 0 ? (
+          <ul className="space-y-1.5 text-sm">
+            {requests.map((r) => {
+              const mine = r.teamId === myTeamId;
+              const descId = `standin-request-${r.id}`;
+              const reason = standinApprovalReason({
+                standinMmr: r.standinMmr,
+                baselineMmr: r.baselineMmr,
+                emptySeat: r.replacingUserId === null,
+              });
+              const who = (
+                <>
+                  <strong>{r.standin.name}</strong> (
+                  {standinMmrLabel(r.standinMmr)}){" "}
+                  {r.replaced ? (
+                    <>
+                      in for <strong>{r.replaced.name}</strong> (
+                      {standinMmrLabel(r.baselineMmr)})
+                    </>
+                  ) : (
+                    "for an open seat"
+                  )}
+                </>
+              );
+              return (
+                <li
+                  key={r.id}
+                  className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-accent/40 bg-accent/10 px-3 py-2"
+                >
+                  {mine ? (
+                    <span id={descId} className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+                      <span aria-hidden>⏳ </span>
+                      {who}{" "}
+                      <span className="text-muted">
+                        · waiting for the {teamNameOf(otherTeamId)} captain to
+                        agree, since {reason}.
+                      </span>
+                    </span>
+                  ) : (
+                    <span id={descId} className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+                      <strong>{r.requestedBy.name}</strong> wants {who} on{" "}
+                      {teamNameOf(r.teamId)}. Your OK is needed, since {reason}.
+                    </span>
+                  )}
+                  <span className="ml-auto flex shrink-0 gap-2">
+                    {mine ? (
+                      <ActionForm
+                        action={captainCancelStandinRequest}
+                        hidden={{ requestId: r.id }}
+                      >
+                        <SubmitButton
+                          variant="ghost"
+                          size="sm"
+                          className="text-danger-soft"
+                          aria-describedby={descId}
+                        >
+                          Withdraw
+                        </SubmitButton>
+                      </ActionForm>
+                    ) : (
+                      <>
+                        {/* Agreeing books the standin, so it shows only
+                            where a booking would be accepted; Decline is
+                            cleanup and always shows. */}
+                        {assignOpen ? (
+                          <ActionForm
+                            action={captainApproveStandinRequest}
+                            hidden={{ requestId: r.id }}
+                          >
+                            <SubmitButton
+                              variant="secondary"
+                              size="sm"
+                              aria-describedby={descId}
+                            >
+                              Agree
+                            </SubmitButton>
+                          </ActionForm>
+                        ) : null}
+                        <ActionForm
+                          action={captainDeclineStandinRequest}
+                          hidden={{ requestId: r.id }}
+                        >
+                          <SubmitButton
+                            variant="ghost"
+                            size="sm"
+                            className="text-danger-soft"
+                            aria-describedby={descId}
+                            confirm={`Decline ${r.standin.name}? ${r.requestedBy.name} is told on Discord to find someone else.`}
+                          >
+                            Decline
+                          </SubmitButton>
+                        </ActionForm>
+                      </>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
         {!assignOpen ? (
           <p className="text-sm text-muted">
             {season.status === "COMPLETE"
@@ -291,7 +435,7 @@ export async function StandinSection({
                   <option key={r.userId} value={r.userId} disabled={!!blocked}>
                     {blocked
                       ? `${r.user.name} (${blocked})`
-                      : `${r.user.name} (${r.mmr} MMR${roles ? ` · ${roles}` : ""}${unreachable ? " · no Discord" : ""})`}
+                      : `${r.user.name} (${standinMmrLabel(r.mmr)}${roles ? ` · ${roles}` : ""}${unreachable ? " · no Discord" : ""})`}
                   </option>
                 );
               })}
@@ -313,19 +457,21 @@ export async function StandinSection({
                 .filter((c) => c.out)
                 .map(({ member: m }) => (
                   <option key={m.userId} value={m.userId}>
-                    {m.user.name} (can&apos;t make it)
+                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)}
+                    {" · can't make it"})
                   </option>
                 ))}
               {openSeats > 0 ? (
                 <option value={seatValue(myTeamId)}>
-                  an empty roster seat ({openSeats} unfilled)
+                  an empty roster seat ({openSeats} unfilled · counts as{" "}
+                  {standinMmrLabel(seatBaseline)})
                 </option>
               ) : null}
               {cover.choices
                 .filter((c) => !c.out)
                 .map(({ member: m }) => (
                   <option key={m.userId} value={m.userId}>
-                    {m.user.name}
+                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)})
                   </option>
                 ))}
             </select>
@@ -334,6 +480,17 @@ export async function StandinSection({
             </SubmitButton>
           </ActionForm>
         )}
+        {assignOpen && poolChoices.some((c) => !c.blocked) ? (
+          <p className="text-xs text-muted">
+            A standin up to {STANDIN_MMR_ALLOWANCE} MMR above the player they
+            cover is booked straight away. Any higher, or with an MMR the site
+            doesn&apos;t know, and the {teamNameOf(otherTeamId)} captain has to
+            agree first; an empty seat counts as your lowest-MMR player.{" "}
+            <Link href="/rules#rosters" className={textLink("whitespace-nowrap")}>
+              Standin rules
+            </Link>
+          </p>
+        ) : null}
       </CardBody>
     </Card>
   );

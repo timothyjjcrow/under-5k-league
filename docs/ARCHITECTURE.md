@@ -902,6 +902,10 @@ enums, so every status column is a string whose allowed values live in
 - `MatchAvailability` — RSVPs, `@@unique([matchId, userId])`.
 - `StandinAssignment` — cover rows; null `replacingUserId` = filling an empty
   seat.
+- `StandinRequest` — a captain's booking over the standin MMR rule, waiting
+  for the other captain (PENDING/APPROVED/DECLINED/CANCELLED). Not cover:
+  agreeing creates the `StandinAssignment` in the same transaction. Cascades
+  with its match and users.
 - `Game` — an imported Dota game; `dotaMatchId` @unique is the import dedupe;
   per-player stats live in the `players` JSON column (hence the whole-table
   scans in `cached-queries.ts`).

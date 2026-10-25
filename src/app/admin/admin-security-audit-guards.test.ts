@@ -61,6 +61,8 @@ describe("security and league configuration audit trail", () => {
     "setRegistrationMmr",
     "setPlayerRank",
     "assignStandin",
+    "approveStandinRequestAsAdmin",
+    "declineStandinRequestAsAdmin",
     "removeStandin",
     "setMatchTime",
     "importGameAction",

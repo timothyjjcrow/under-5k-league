@@ -37,8 +37,10 @@ import {
   REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
+  STANDIN_REQUEST_STATUS,
   type SeasonStatus,
 } from "@/lib/constants";
+import { STANDIN_REQUEST_VIEW } from "@/lib/standin-service";
 import {
   AUTO_CHECK_BACKED_OFF_SCANS,
   autoCheckStatus,
@@ -1246,7 +1248,16 @@ function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
 }
 
 async function loadSeasonAdminData(seasonId: string) {
-  const [players, standins, removed, teams, matches, draft, assignments] =
+  const [
+    players,
+    standins,
+    removed,
+    teams,
+    matches,
+    draft,
+    assignments,
+    standinRequests,
+  ] =
     await Promise.all([
       prisma.registration.findMany({
         where: { seasonId, status: "ACTIVE", type: "PLAYER" },
@@ -1303,6 +1314,16 @@ async function loadSeasonAdminData(seasonId: string) {
       prisma.standinAssignment.findMany({
         where: { match: { seasonId } },
         include: { standin: true, replaced: true },
+      }),
+      // Captains' standin requests waiting for the other captain's OK (the
+      // MMR rule), for the Standin assignments card's Agree and Decline.
+      prisma.standinRequest.findMany({
+        where: {
+          status: STANDIN_REQUEST_STATUS.PENDING,
+          match: { seasonId, status: { not: "COMPLETED" } },
+        },
+        include: STANDIN_REQUEST_VIEW,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       }),
     ]);
   const outRsvps = await prisma.matchAvailability.findMany({
@@ -1362,6 +1383,7 @@ async function loadSeasonAdminData(seasonId: string) {
     matches: matches.map((match) => ({ ...match, availability: match.availability.filter((rsvp) => rsvp.scheduleRevision === match.scheduleRevision) })),
     draft,
     assignments,
+    standinRequests,
     outRsvps: outRsvps.filter((rsvp) => rsvp.scheduleRevision === matches.find((match) => match.id === rsvp.matchId)?.scheduleRevision),
     playoffArchive: parsePlayoffArchive(playoffArchive),
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
@@ -4705,6 +4727,12 @@ function StandinControls({
     arr.push(a);
     byMatch.set(a.matchId, arr);
   }
+  const requestsByMatch = new Map<string, AdminData["standinRequests"]>();
+  for (const r of data.standinRequests) {
+    const arr = requestsByMatch.get(r.matchId) ?? [];
+    arr.push(r);
+    requestsByMatch.set(r.matchId, arr);
+  }
   // Mirror the service's phase gate (render/guard pairing): assignment is
   // open mid-season and in the post-auction DRAFT window; the card still
   // renders elsewhere because REMOVAL is legal cleanup in every phase.
@@ -4758,10 +4786,12 @@ function StandinControls({
     clashes,
   });
   const problems = upcoming.filter((m) => problemIds.has(m.id));
-  // Outside the assign window only matches with a booking have anything to
-  // show (removal); an empty block there is noise.
+  // Outside the assign window only matches with a booking or a request have
+  // anything to show (removal, decline); an empty block there is noise.
   const rest = upcoming.filter(
-    (m) => !problemIds.has(m.id) && (assignOpen || byMatch.has(m.id)),
+    (m) =>
+      !problemIds.has(m.id) &&
+      (assignOpen || byMatch.has(m.id) || requestsByMatch.has(m.id)),
   );
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
@@ -4796,6 +4826,7 @@ function StandinControls({
       bookings={bookings}
       outRsvps={data.outRsvps}
       assignments={byMatch.get(m.id) ?? []}
+      requests={requestsByMatch.get(m.id) ?? []}
       teamName={teamName}
       teamSize={season.teamSize}
       assignOpen={assignOpen}
