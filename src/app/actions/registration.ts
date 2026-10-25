@@ -20,7 +20,9 @@ import {
   seenScheduleIsCurrent,
 } from "@/lib/draft-readiness";
 import {
+  keepsStoredMmr,
   medalProvesIneligible,
+  mmrFrozenDuringDraftLine,
   mmrLockedAfterDraftNote,
   mmrSelfEditLocked,
   registrationGate,
@@ -290,15 +292,25 @@ export async function saveRegistration(
   await raceHook("registration.saveRegistration.afterExistingRead");
   // After the draft an existing signup keeps its stored MMR, PLAYER and
   // STANDIN alike (mmrSelfEditLocked says why); a new signup still sets its
-  // own. Decided before the gate, so the ceiling judges the number that will
-  // be stored. Both facts it reads are the snapshot the transaction below
+  // own. Both facts the lock reads are the snapshot the transaction below
   // re-asserts (season status and version, draft status and version), so a
   // phase change in between refuses the save instead of slipping past the
   // lock. /me disables the box here, and a disabled box submits nothing: no
-  // field is "unchanged", never an attempt to clear it, so it gets no note.
+  // field is "unchanged", never an attempt to clear it, in EVERY phase
+  // (keepsStoredMmr), so a tab left open across a lock that has since
+  // lifted keeps the number too. A missing field gets no note. Decided
+  // before the gate, which then leaves the typed-MMR ceiling to numbers the
+  // player entered (mmrKept): an admin's number over it stands.
   let lockedMmrNote = "";
-  if (existing && mmrSelfEditLocked(season.status, draftSnapshot?.status)) {
-    if (formData.has("mmr") && mmr !== existing.mmr) {
+  const mmrLocked =
+    !!existing && mmrSelfEditLocked(season.status, draftSnapshot?.status);
+  const mmrKept = keepsStoredMmr({
+    hasExisting: !!existing,
+    locked: mmrLocked,
+    mmrSubmitted: formData.has("mmr"),
+  });
+  if (existing && mmrKept) {
+    if (mmrLocked && formData.has("mmr") && mmr !== existing.mmr) {
       lockedMmrNote = mmrLockedAfterDraftNote(existing.mmr);
     }
     mmr = existing.mmr;
@@ -348,6 +360,7 @@ export async function saveRegistration(
     // a medal it merely flagged must not brick their form). existingStatus is
     // what tells the gate which of the two this submit is.
     existingStatus: existing?.status ?? null,
+    mmrKept,
   };
   // Refuse what no medal could change (an MMR over the ceiling, player
   // signups closed) before the provider call: a refused submit stores
@@ -477,7 +490,7 @@ export async function saveRegistration(
           };
         }
         mmr = existing.mmr;
-        lockedMmrNote = ` · MMR is locked while the draft runs — kept ${existing.mmr}`;
+        lockedMmrNote = ` · ${mmrFrozenDuringDraftLine(existing.mmr)}`;
       }
     }
   }
