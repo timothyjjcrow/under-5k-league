@@ -3174,7 +3174,7 @@ function CaptainControls({
                             <SubmitButton
                               variant="ghost"
                               size="sm"
-                              confirm={`Reinstate ${t.name}? They rejoin playoff-seeding contention. Forfeited fixtures stay as recorded — reverse any you want undone with "Reopen for import" on each row.`}
+                              confirm={`Reinstate ${t.name}? They rejoin playoff-seeding contention. Forfeited fixtures stay as recorded — reverse any you want undone with "Reopen for import" on each row, then rebook any standin cover (the withdrawal cancelled it).`}
                             >
                               reinstate
                             </SubmitButton>
@@ -3261,7 +3261,7 @@ function CaptainControls({
                     "Standins booked on those fixtures — either side's — are stood down with an @-mention.",
                     "The team is excluded from playoff seeding — its played results and roster are kept.",
                   ]}
-                  recovery={`"Reinstate" (beside the team above) undoes the exclusion, and each forfeited fixture is individually reversible with "Reopen for import" — forfeits carry no games.`}
+                  recovery={`"Reinstate" (beside the team above) undoes the exclusion, and each forfeited fixture without games is individually reversible with "Reopen for import". Standin bookings on those fixtures are cancelled, so rebook cover after reopening one.`}
                 >
                   Withdraw team
                 </DangerSubmit>
@@ -6805,16 +6805,17 @@ function DiscordControls({
           <p className="text-xs text-muted">
             {board.pingRoleId ? (
               <>
-                <b>The ping role is on.</b> Two inhouse posts ping this role:
-                the queue filling up, and a match being found. Nothing else
-                pings it, and board edits never notify anyone.
+                <b>The ping role is on.</b> Three inhouse posts ping this role:
+                the queue filling up, and the inhouse night&apos;s planned and
+                start posts. &ldquo;Match found&rdquo; mentions only the ten
+                players in the lobby, and board edits never notify anyone.
               </>
             ) : (
               <>
                 <b>No ping role set</b>, so the &ldquo;queue is
                 filling&rdquo; post pings nobody. Set a role here and that post
-                and &ldquo;match found&rdquo; will ping it. Board edits never
-                notify anyone.
+                and the inhouse night&apos;s planned and start posts will ping
+                it. Board edits never notify anyone.
               </>
             )}{" "}
             Make the role <b>self-assignable</b> (Server Settings → Onboarding,

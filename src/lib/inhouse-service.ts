@@ -350,13 +350,13 @@ async function formOneLobby(pingAfterResponse: boolean): Promise<boolean> {
     const deadline = acceptEndsAt;
     const label = gameLabel;
     const ping = async () => {
-      const roleId = await getInhousePingRoleId();
       await sendInhouseDiscordMessage(
-        inhouseLobbyMessage(players, roleId, deadline, label),
+        inhouseLobbyMessage(players, deadline, label),
         {
           // Only these exact ids may ring anyone — a Steam persona in the
-          // same message still can't ping (see MentionAllowlist).
-          roles: roleId ? [roleId] : [],
+          // same message still can't ping (see MentionAllowlist). The ten
+          // who must accept, never the ping role: the queue-filling ping is
+          // the role's call to join.
           users: players
             .map((p) => p.discordId)
             .filter((id): id is string => !!id),

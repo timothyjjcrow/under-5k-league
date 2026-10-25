@@ -1281,11 +1281,7 @@ describe("inhouse messages", () => {
     // countdown that moves without the message being edited.
     const endsAt = new Date(Date.UTC(2026, 8, 28, 19, 1, 30, 400));
     const epoch = Math.floor(endsAt.getTime() / 1000);
-    const msg = inhouseLobbyMessage(
-      [{ name: "A", discordId: null }],
-      null,
-      endsAt,
-    );
+    const msg = inhouseLobbyMessage([{ name: "A", discordId: null }], endsAt);
     expect(msg).toContain(`<t:${epoch}:T>`);
     expect(msg).toContain(`<t:${epoch}:R>`);
     expect(msg).toContain("or you lose your spot");
@@ -1298,7 +1294,6 @@ describe("inhouse messages", () => {
   it("names the game when another one is already live", () => {
     const second = inhouseLobbyMessage(
       [{ name: "A", discordId: null }],
-      null,
       null,
       "Game 2",
     );
@@ -1328,10 +1323,8 @@ describe("inhouse messages", () => {
     expect(rolePrefix(undefined)).toBe("");
     expect(inhouseQueueMessage(4, 10, "999")).toContain("<@&999>");
     expect(inhouseQueueMessage(4, 10)).not.toContain("<@&");
-    expect(
-      inhouseLobbyMessage([{ name: "A", discordId: null }], "999"),
-    ).toContain("<@&999>");
   });
+
 
   it("links straight into the queue, not just to the page", () => {
     // One tap from a phone notification to actually being queued.
