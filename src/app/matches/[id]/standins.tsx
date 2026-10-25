@@ -3,11 +3,13 @@ import { MATCH_STATUS } from "@/lib/constants";
 import {
   coverBaselineMmr,
   coverChoices,
+  namedCoverBaseline,
   seatValue,
   STANDIN_MMR_ALLOWANCE,
   standinApprovalReason,
   standinMmrLabel,
   standinPickerBlock,
+  type StandinBooking,
 } from "@/lib/standin";
 import { roleShort } from "@/lib/roles";
 import { standinAssignmentOpen } from "@/lib/league-lifecycle";
@@ -23,6 +25,7 @@ import { ActionForm, SubmitButton } from "@/components/action-form";
 import Link from "@/components/app-link";
 import { Card, CardBody, CardHeader, textLink } from "@/components/ui";
 import {
+  loadDeclinedStandinIds,
   loadDraftStatus,
   loadOutUserIds,
   loadRosters,
@@ -81,7 +84,9 @@ export async function StandinSection({
     match.status === MATCH_STATUS.COMPLETED ? [] : match.standinRequests;
   const otherTeamId =
     myTeamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId;
-  const [members, registrations, rostered, outIds] =
+  const teamNameOf = (teamId: string) =>
+    teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
+  const [members, registrations, rostered, outIds, declinedIds] =
     await Promise.all([
       loadRosters(match),
       prisma.registration.findMany({
@@ -112,6 +117,9 @@ export async function StandinSection({
       // fix (the assign form right below), had to notice a small ✗ in the
       // preview grid instead.
       loadOutUserIds(match),
+      // Standins the other captain declined for my team here: asking again
+      // is refused, so the picker greys them out.
+      loadDeclinedStandinIds(match, myTeamId),
     ]);
   const roster = members.filter((m) => m.teamId === myTeamId);
   const rosteredIds = new Set(rostered.map((m) => m.userId));
@@ -158,8 +166,22 @@ export async function StandinSection({
     scheduledAt: b.match.scheduledAt,
     week: b.match.week,
   }));
+  // A standin the other captain declined for my team here can't be asked
+  // for again, as the server refuses it.
+  const declinedRows: StandinBooking[] = [...declinedIds].map(
+    (standinUserId) => ({
+      standinUserId,
+      matchId: match.id,
+      replacedName: null,
+      homeName: match.homeTeam.name,
+      awayName: match.awayTeam.name,
+      scheduledAt: match.scheduledAt,
+      week: match.week,
+      declinedBy: teamNameOf(otherTeamId),
+    }),
+  );
   // A request in this match holds its standin, as the server does.
-  const requestRows = requests.map((r) => ({
+  const requestRows = requests.map((r): StandinBooking => ({
     standinUserId: r.standinUserId,
     matchId: match.id,
     replacedName: r.replaced?.name ?? null,
@@ -168,7 +190,7 @@ export async function StandinSection({
     scheduledAt: match.scheduledAt,
     week: match.week,
     pending: true,
-  }));
+  })).concat(declinedRows);
   const poolChoices = pool.map((r) => ({
     reg: r,
     blocked: standinPickerBlock(r.userId, pickerTarget, [
@@ -199,14 +221,28 @@ export async function StandinSection({
     0,
     season.teamSize - roster.length - openSeatsFilled,
   );
-  const teamNameOf = (teamId: string) =>
-    teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
   // Signup MMRs for the Covers list: the number the MMR rule measures a
   // standin against (an empty seat: the roster's lowest).
   const mmrOf = new Map(registrations.map((r) => [r.userId, r.mmr]));
   const seatBaseline = coverBaselineMmr({
     rosterMmrs: roster.map((m) => mmrOf.get(m.userId) ?? 0),
   });
+  // A named player counts as a lower teammate who said they can't make it
+  // and has no cover yet, as the server judges it (namedCoverBaseline).
+  const teammates = roster.map((m) => ({
+    userId: m.userId,
+    name: m.user.name,
+    mmr: mmrOf.get(m.userId) ?? 0,
+  }));
+  const countsAs = (userId: string) => {
+    const { lowerOut } = namedCoverBaseline({
+      replaced: { userId, mmr: mmrOf.get(userId) ?? 0 },
+      teammates,
+      outUserIds: outIds,
+      coveredUserIds: coveredIds,
+    });
+    return lowerOut ? ` · counts as ${standinMmrLabel(lowerOut.mmr)}` : "";
+  };
   // OUT-and-uncovered on MY roster: the admin card has always alerted on
   // this; the captain — who owns the assign form below — saw only the small
   // ✗ in the preview grid. They also lead the Covers list, pre-selected when
@@ -294,20 +330,30 @@ export async function StandinSection({
             {requests.map((r) => {
               const mine = r.teamId === myTeamId;
               const descId = `standin-request-${r.id}`;
+              // A lower teammate who said they're out may have set the
+              // baseline: the reason names them, and the covered player's
+              // line then carries no number (the request didn't store theirs).
               const reason = standinApprovalReason({
                 standinMmr: r.standinMmr,
                 baselineMmr: r.baselineMmr,
                 emptySeat: r.replacingUserId === null,
+                lowerOutName: r.baselinePlayer?.name,
               });
               const who = (
                 <>
                   <strong>{r.standin.name}</strong> (
                   {standinMmrLabel(r.standinMmr)}){" "}
                   {r.replaced ? (
-                    <>
-                      in for <strong>{r.replaced.name}</strong> (
-                      {standinMmrLabel(r.baselineMmr)})
-                    </>
+                    r.baselinePlayer ? (
+                      <>
+                        in for <strong>{r.replaced.name}</strong>
+                      </>
+                    ) : (
+                      <>
+                        in for <strong>{r.replaced.name}</strong> (
+                        {standinMmrLabel(r.baselineMmr)})
+                      </>
+                    )
                   ) : (
                     "for an open seat"
                   )}
@@ -403,8 +449,8 @@ export async function StandinSection({
         ) : poolChoices.every((c) => c.blocked) ? (
           <p className="text-sm text-muted">
             Everyone in the standin pool is already booked for this match or
-            another one that night — ask around the Discord; late joiners can
-            still sign up as standins.
+            another one that night, or was declined for this one — ask around
+            the Discord; late joiners can still sign up as standins.
           </p>
         ) : (
           <ActionForm
@@ -458,7 +504,8 @@ export async function StandinSection({
                 .map(({ member: m }) => (
                   <option key={m.userId} value={m.userId}>
                     {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)}
-                    {" · can't make it"})
+                    {" · can't make it"}
+                    {countsAs(m.userId)})
                   </option>
                 ))}
               {openSeats > 0 ? (
@@ -471,7 +518,8 @@ export async function StandinSection({
                 .filter((c) => !c.out)
                 .map(({ member: m }) => (
                   <option key={m.userId} value={m.userId}>
-                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)})
+                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)}
+                    {countsAs(m.userId)})
                   </option>
                 ))}
             </select>
@@ -483,9 +531,12 @@ export async function StandinSection({
         {assignOpen && poolChoices.some((c) => !c.blocked) ? (
           <p className="text-xs text-muted">
             A standin up to {STANDIN_MMR_ALLOWANCE} MMR above the player they
-            cover is booked straight away. Any higher, or with an MMR the site
-            doesn&apos;t know, and the {teamNameOf(otherTeamId)} captain has to
-            agree first; an empty seat counts as your lowest-MMR player.{" "}
+            cover is booked straight away; if a lower-MMR teammate said they
+            can&apos;t make it and has no cover yet, it&apos;s measured against
+            them instead. Any higher, or with an MMR the site doesn&apos;t
+            know, and the {teamNameOf(otherTeamId)} captain has to agree first;
+            an empty seat counts as your lowest-MMR player. Someone they
+            decline can&apos;t be asked for again for this match.{" "}
             <Link href="/rules#rosters" className={textLink("whitespace-nowrap")}>
               Standin rules
             </Link>

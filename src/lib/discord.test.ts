@@ -2391,6 +2391,36 @@ describe("standin requests (the MMR rule)", () => {
     expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
   });
 
+  // namedCoverBaseline: a lower teammate who said they're out set the
+  // baseline, so the post says whose MMR it was, and the covered player's
+  // line keeps their own.
+  it("names the lower teammate who's out when they set the baseline", () => {
+    const msg = standinApprovalRequestedMessage({
+      ...fixture,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 2300,
+      baselineMmr: 2000,
+      lowerOut: { name: "Low Lou", replacedMmr: 3200 },
+    });
+    expect(msg).toContain("for **Home Carry** (3,200 MMR)");
+    expect(msg).toContain(
+      "since the standin is 300 MMR above **Low Lou** (2,000), who said they can't make it",
+    );
+    const escaped = standinApprovalRequestedMessage({
+      ...fixture,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 2300,
+      baselineMmr: 2000,
+      lowerOut: { name: "**[x](https://evil.example)**", replacedMmr: 3200 },
+    });
+    expect(escaped).not.toContain("[x](https://evil.example)");
+    expect(escaped).not.toContain("****");
+  });
+
   it("explains an empty seat and an unknown MMR without numbers it doesn't have", () => {
     const msg = standinApprovalRequestedMessage({
       ...fixture,

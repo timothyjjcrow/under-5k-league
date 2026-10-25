@@ -85,6 +85,7 @@ model User {
   standinRequests        StandinRequest[]     @relation("StandinRequestStandin")
   replacedRequests       StandinRequest[]     @relation("StandinRequestReplaced")
   requestedStandins      StandinRequest[]     @relation("StandinRequestRequester")
+  baselineRequests       StandinRequest[]     @relation("StandinRequestBaseline")
   inhouseQueue           InhouseQueueEntry?
   inhouseNightRsvps      InhouseNightRsvp[]
   inhouseTimeRsvps       InhouseTimeRsvp[]
@@ -574,10 +575,15 @@ model StandinRequest {
   replacingUserId String?
   requestedById   String
   // What the other captain was asked about: the standin's signup MMR when it
-  // was asked (0 = unknown) and the seat's (the covered player's, or the
-  // team's lowest for an empty seat; null = unknown).
+  // was asked (0 = unknown) and the seat's (the covered player's, or a lower
+  // teammate's who said they're out, or the team's lowest for an empty seat;
+  // null = unknown).
   standinMmr      Int
   baselineMmr     Int?
+  // Set when the baseline was a lower teammate who said they can't make it,
+  // not the covered player (namedCoverBaseline), so every surface can say
+  // whose MMR the standin was judged against.
+  baselineUserId  String?
   status          String    @default("PENDING") // PENDING | APPROVED | DECLINED | CANCELLED
   createdAt       DateTime  @default(now())
   // Who answered and when. A plain id, like the admin log's.
@@ -588,6 +594,7 @@ model StandinRequest {
   standin     User  @relation("StandinRequestStandin", fields: [standinUserId], references: [id], onDelete: Cascade)
   replaced    User? @relation("StandinRequestReplaced", fields: [replacingUserId], references: [id], onDelete: Cascade)
   requestedBy User  @relation("StandinRequestRequester", fields: [requestedById], references: [id], onDelete: Cascade)
+  baselinePlayer User? @relation("StandinRequestBaseline", fields: [baselineUserId], references: [id], onDelete: SetNull)
 
   @@index([matchId, status])
 }

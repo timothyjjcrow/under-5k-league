@@ -37,7 +37,11 @@ import { registrationGate } from "./registration";
 import { nextRoundPairings } from "./schedule";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
-import { coverBaselineMmr, standinNeedsApproval } from "./standin";
+import {
+  coverBaselineMmr,
+  namedCoverBaseline,
+  standinNeedsApproval,
+} from "./standin";
 
 const US = createLeagueConfig({});
 const EU = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" });
@@ -471,6 +475,47 @@ describe("the rules page's claims hold in the code", () => {
     expect(
       stripLineComments(sourceFile("src/app/actions/standins.ts").text),
     ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "ask"/);
+  });
+
+  it("measures a standin against a lower teammate who said they can't make it", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "If a teammate with a lower MMR has said they can't make the match and has no cover yet, the standin is measured against them instead of the player they cover.",
+    );
+    const teammates = [
+      { userId: "high", name: "High", mmr: 3200 },
+      { userId: "low", name: "Low", mmr: 2000 },
+    ];
+    const judged = (out: string[], covered: string[] = []) =>
+      namedCoverBaseline({
+        replaced: { userId: "high", mmr: 3200 },
+        teammates,
+        outUserIds: new Set(out),
+        coveredUserIds: new Set(covered),
+      }).baselineMmr;
+    // "a lower MMR … said they can't make the match … no cover yet".
+    expect(judged(["low"])).toBe(2000);
+    expect(judged([])).toBe(3200);
+    expect(judged(["low"], ["low"])).toBe(3200);
+  });
+
+  it("states the declined and own-request refusals the server gives", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "Once the other captain declines a standin, that team can't ask for them again for the same match.",
+    );
+    expect(rules).toContain(
+      "An admin can't agree to a request from a team they captain or that they made themselves.",
+    );
+    const service = stripLineComments(sourceFile("src/lib/standin-service.ts").text);
+    // The ask path refuses a standin already DECLINED for the team here…
+    expect(service).toMatch(
+      /status: STANDIN_REQUEST_STATUS\.DECLINED,[\s\S]*?standinDeclinedError\(/,
+    );
+    // …and agreeing refuses the asking team's captain and the requester.
+    expect(service).toMatch(
+      /asking\?\.captainId === actorId[\s\S]*?request\.requestedById === actorId/,
+    );
   });
 
   it("counts only regular-season series toward the table", () => {

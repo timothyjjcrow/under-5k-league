@@ -169,3 +169,23 @@ const outUserIds = cache(async function outUserIds(
 export function loadOutUserIds(match: { id: string; scheduleRevision: number }) {
   return outUserIds(match.id, match.scheduleRevision);
 }
+
+const declinedStandinIds = cache(async function declinedStandinIds(
+  matchId: string,
+  teamId: string,
+): Promise<ReadonlySet<string>> {
+  const rows = await prisma.standinRequest.findMany({
+    where: { matchId, teamId, status: STANDIN_REQUEST_STATUS.DECLINED },
+    select: { standinUserId: true },
+  });
+  return new Set(rows.map((r) => r.standinUserId));
+});
+
+/**
+ * Standins the other captain declined for this team in this match: the
+ * server refuses to ask for them again, so the captain's picker greys them
+ * out (`standinPickerBlock`).
+ */
+export function loadDeclinedStandinIds(match: { id: string }, teamId: string) {
+  return declinedStandinIds(match.id, teamId);
+}

@@ -68,6 +68,10 @@ describe("match page standins card", () => {
       /blocked: standinPickerBlock\(r\.userId, pickerTarget, \[\s*\.\.\.bookingRows,\s*\.\.\.requestRows,\s*\]\)/,
     );
     expect(PAGE).toMatch(/const requestRows = requests\.map\(/);
+    // …and a standin the other captain declined for this team here: the
+    // server refuses asking for them again.
+    expect(PAGE).toContain("loadDeclinedStandinIds(match, myTeamId)");
+    expect(PAGE).toMatch(/\}\)\)\.concat\(declinedRows\);/);
     expect(PAGE).toMatch(
       /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
     );
