@@ -1727,7 +1727,7 @@ describe("inhouse — discord announcements", () => {
     expect(queuePings()).toBe(0);
   });
 
-  it("pings the configured role, and mentions the ten by verified id", async () => {
+  it("mentions the ten by verified id, never the configured role", async () => {
     await setSetting(SETTING_KEYS.INHOUSE_PING_ROLE_ID, "555000111222333444");
     // One player links Discord BEFORE the lobby forms — maybeFormLobby reads
     // discordId in the same transaction that empties the queue.
@@ -1744,15 +1744,17 @@ describe("inhouse — discord announcements", () => {
     );
     expect(lobby).toBeTruthy();
     const [content, mentions] = lobby!;
-    expect(content).toContain("<@&555000111222333444>");
+    // A game nobody else can join is not the role's news: it used to ring
+    // every role member on every lobby, re-formations included.
+    expect(content).not.toContain("<@&");
     expect(content).toContain("<@777000111222333444>");
     // Unlinked players are still named, just not pinged.
     expect(content).toContain("IH1");
     // Only ids the SERVER chose may ring anyone.
-    expect(mentions).toEqual({
-      roles: ["555000111222333444"],
-      users: ["777000111222333444"],
-    });
+    expect(mentions).toEqual({ users: ["777000111222333444"] });
+    // The queue-filling ping still calls the role to come and join.
+    const filling = mockSend.mock.calls.find(([m]) => m.includes("Inhouse queue"));
+    expect(filling![1]).toEqual({ roles: ["555000111222333444"] });
   });
 
   it("pings nobody when no role is configured — the old behaviour", async () => {

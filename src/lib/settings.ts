@@ -93,8 +93,9 @@ export const SETTING_KEYS = {
   // changed nothing it shows (claimThrottle): what only time changes, such as
   // a poll closing, reaches the card without a snapshot read every minute.
   LEAGUE_STATUS_CHECK_AT: "leagueStatusCheckAt",
-  // Discord role id pinged by the two inhouse messages that are SUPPOSED to
-  // interrupt someone (queue filling, match found). Unset = no ping, which is
+  // Discord role id pinged by the inhouse posts that are SUPPOSED to
+  // interrupt someone (the queue filling up, and the inhouse night's planned
+  // and start posts; never match found). Unset = no ping, which is
   // the pre-existing behaviour. The role must be SELF-ASSIGNABLE in Discord:
   // a ping people can't opt out of gets the whole channel muted, which is
   // permanently worse than silence.
@@ -134,7 +135,7 @@ export const SETTING_KEYS = {
 // playoffRoundAnnounced:<season>:<round>, signupsOpenAnnounced:<season>), JSON
 // state blobs (playoffGamesArchive:<season>, importSkip:<season>,
 // leagueSyncSkip:<season>) and per-pair throttles
-// (outPing:<matchId>:<userId>, providerCooldown:*), plus tiebreakerDraw:
+// (outPing:<matchId>:<scheduleRevision>:<userId>, providerCooldown:*), plus tiebreakerDraw:
 // <season>:<group> opening draws and the inhouse night's start post
 // (inhouseNightStart:<nightId>:<startsAtMs>).
 // Every key format is built ONLY through the helpers below — a prefix that
