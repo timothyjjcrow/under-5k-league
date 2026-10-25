@@ -9,6 +9,7 @@ import { str } from "@/lib/form";
 import {
   CHECKIN_REFUSAL_MESSAGE,
   checkinClosedReason,
+  legacyOutPingThrottleKey,
   outBackPingThrottleKey,
   outPingThrottleKey,
   parseAvailabilityStatus,
@@ -30,7 +31,7 @@ import {
   playerOutMessage,
   sendDiscordMessage,
 } from "@/lib/discord";
-import { mentionUsers } from "@/lib/discord-mentions";
+import { mentionsOf, mentionUsers } from "@/lib/discord-mentions";
 import { claimThrottle, claimThrottleAnswer } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
 import { isPlayoffPhase } from "@/lib/league-lifecycle";
@@ -197,43 +198,51 @@ export async function setAvailability(
       // Standins card, not on the front door.
       matchId: match.id,
     };
+    const goingOut = status === "OUT" && priorStatus !== "OUT";
+    const comingBack = status === "IN" && priorStatus === "OUT";
+    // Both messages are for the captain who has to find (or stop finding)
+    // cover, so they go to that captain rather than to a channel and hope.
+    // Nobody else is mentioned: a withdrawal is not the rest of the league's
+    // problem. Never ping the captain about their OWN answer — they just
+    // clicked the button and are looking at the toast. Resolved BEFORE any
+    // throttle claim: a lookup that threw after the claim spent the window
+    // on a ping that never went out.
+    const mentions =
+      goingOut || comingBack
+        ? await mentionUsers([
+            affectedCaptainId === user.id ? null : affectedCaptainId,
+          ])
+        : undefined;
+    const revision = match.scheduleRevision;
     let content: string | null = null;
     if (
-      status === "OUT" &&
-      priorStatus !== "OUT" &&
+      goingOut &&
       (await claimThrottle(
-        outPingThrottleKey(matchId, user.id),
+        outPingThrottleKey(matchId, revision, user.id),
         RSVP_OUT_PING_THROTTLE_SECONDS,
         Date.now(),
       ))
     ) {
       content = playerOutMessage(fixture);
     } else if (
-      status === "IN" &&
-      priorStatus === "OUT" &&
-      (await claimThrottleAnswer(
-        outPingThrottleKey(matchId, user.id),
-        outBackPingThrottleKey(matchId, user.id),
+      comingBack &&
+      ((await claimThrottleAnswer(
+        outPingThrottleKey(matchId, revision, user.id),
+        outBackPingThrottleKey(matchId, revision, user.id),
         RSVP_OUT_PING_THROTTLE_SECONDS,
         Date.now(),
-      ))
+      )) ||
+        // An OUT announced before the key carried the revision.
+        (await claimThrottleAnswer(
+          legacyOutPingThrottleKey(matchId, user.id),
+          outBackPingThrottleKey(matchId, revision, user.id),
+          RSVP_OUT_PING_THROTTLE_SECONDS,
+          Date.now(),
+        )))
     ) {
       content = playerBackInMessage(fixture);
     }
-    if (content) {
-      // Both messages are for the captain who has to find (or stop finding)
-      // cover, so they go to that captain rather than to a channel and hope.
-      // Nobody else is mentioned: a withdrawal is not the rest of the
-      // league's problem.
-      await sendDiscordMessage(
-        content,
-        // Never ping the captain about their OWN answer — they just clicked
-        // the button and are looking at the toast.
-        await mentionUsers([
-          affectedCaptainId === user.id ? null : affectedCaptainId,
-        ]),
-      );
-    }
+    if (content) await sendDiscordMessage(content, mentions);
   } catch {
     // The RSVP is already committed. A throttle-store or mention lookup
     // outage must not turn that successful write into a misleading 500 that
@@ -307,11 +316,30 @@ export async function markAwayDates(
   // a fixture that lost its claim is left out of the message entirely.
   // Best-effort like setAvailability: nothing here can undo the save.
   try {
+    // Every captain who now has a seat to fill (a standin's bookings can span
+    // teams), never the player themselves, who is a captain only when they
+    // are the one reading the toast. Read BEFORE the claims, as in
+    // setAvailability, so a failed lookup spends no captain's window.
+    const captainIds = [
+      ...new Set(
+        outcome.marked.map((f) => f.captainId).filter((id) => id !== user.id),
+      ),
+    ];
+    const discordIdOf = new Map(
+      captainIds.length
+        ? (
+            await prisma.user.findMany({
+              where: { id: { in: captainIds } },
+              select: { id: true, discordId: true },
+            })
+          ).map((u) => [u.id, u.discordId])
+        : [],
+    );
     const announce = [];
     for (const fixture of outcome.marked) {
       if (
         await claimThrottle(
-          outPingThrottleKey(fixture.matchId, user.id),
+          outPingThrottleKey(fixture.matchId, fixture.scheduleRevision, user.id),
           RSVP_OUT_PING_THROTTLE_SECONDS,
           Date.now(),
         )
@@ -334,12 +362,7 @@ export async function markAwayDates(
             matchId: f.matchId,
           })),
         ),
-        // Every captain who now has a seat to fill (a standin's bookings can
-        // span teams) — never the player themselves, who is a captain only
-        // when they are the one reading the toast.
-        await mentionUsers(
-          announce.map((f) => (f.captainId === user.id ? null : f.captainId)),
-        ),
+        mentionsOf(announce.map((f) => discordIdOf.get(f.captainId))),
       );
     }
   } catch {

@@ -67,12 +67,13 @@ describe("stored Setting key formats", () => {
     expect(outPingPrefix("m1")).toBe("outPing:m1:");
     expect(resultNudgeKey("m1", 3)).toBe("resultNudge:m1:3");
     expect(resultNudgePrefix("m1")).toBe("resultNudge:m1:");
-    expect(outPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1"))).toBe(
+    expect(outPingThrottleKey("m1", 2, "u1")).toBe("outPing:m1:2:u1");
+    expect(outPingThrottleKey("m1", 2, "u1").startsWith(outPingPrefix("m1"))).toBe(
       true,
     );
-    expect(outBackPingThrottleKey("m1", "u1")).toBe("outPing:m1:u1:back");
+    expect(outBackPingThrottleKey("m1", 2, "u1")).toBe("outPing:m1:2:u1:back");
     expect(
-      outBackPingThrottleKey("m1", "u1").startsWith(outPingPrefix("m1")),
+      outBackPingThrottleKey("m1", 2, "u1").startsWith(outPingPrefix("m1")),
     ).toBe(true);
     expect(checkinNudgePrefix("m1")).toBe("checkinNudge:m1:");
     expect(checkinNudgeKey("m1", "t1", 2)).toBe("checkinNudge:m1:t1:2");

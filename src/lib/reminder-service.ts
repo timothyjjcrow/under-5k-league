@@ -28,6 +28,7 @@ import { draftReminderDue } from "./draft-setup";
 import { DRAFT_READINESS, draftReadiness } from "./draft-readiness";
 import { raceHook } from "./race-hook";
 import { mentionsOf } from "./discord-mentions";
+import { firstFixtureBySide, kickoffIsRoutine } from "./kickoff-routine";
 import { weekReminderExpiresAt } from "./league-delivery";
 import {
   announcementDedupeKey,
@@ -233,7 +234,7 @@ export async function maybeAnnounceUpcomingWeek(season: {
     ...new Set(matches.flatMap((m) => [m.homeTeamId, m.awayTeamId])),
   ];
   const matchIds = matches.map((m) => m.id);
-  const [members, rsvps, assignments] = await Promise.all([
+  const [members, rsvps, assignments, regularFixtures] = await Promise.all([
     prisma.teamMember.findMany({
       where: { seasonId: season.id, teamId: { in: teamIds } },
       select: { teamId: true, userId: true },
@@ -251,7 +252,34 @@ export async function maybeAnnounceUpcomingWeek(season: {
         replacingUserId: true,
       },
     }),
+    // Each side's first regular fixture, which kickoffIsRoutine always pings.
+    // A no-game forfeit never put a game in front of anyone, so it doesn't
+    // count; a tiebreaker or playoff cluster is never routine, so it skips
+    // the read.
+    next.phase === MATCH_PHASE.REGULAR
+      ? prisma.match.findMany({
+          where: {
+            seasonId: season.id,
+            phase: MATCH_PHASE.REGULAR,
+            scheduledAt: { not: null },
+            OR: [{ homeTeamId: { in: teamIds } }, { awayTeamId: { in: teamIds } }],
+            NOT: { forfeit: true, games: { none: {} } },
+          },
+          select: {
+            id: true,
+            week: true,
+            scheduledAt: true,
+            homeTeamId: true,
+            awayTeamId: true,
+          },
+        })
+      : Promise.resolve([]),
   ]);
+  const firstFixtureOf = firstFixtureBySide(
+    regularFixtures.flatMap((f) =>
+      f.scheduledAt ? [{ ...f, scheduledAt: f.scheduledAt }] : [],
+    ),
+  );
   const rosterByTeam = new Map<string, string[]>();
   for (const m of members) {
     const arr = rosterByTeam.get(m.teamId) ?? [];
@@ -282,12 +310,24 @@ export async function maybeAnnounceUpcomingWeek(season: {
       awayIn: awayAv.confirmed,
       awaySize: expectedSideSize(season.teamSize, away.length),
       waitingIds: [...homeAv.unansweredUserIds, ...awayAv.unansweredUserIds],
+      // A side on its usual weekly slot already knows this kickoff.
+      quietIds: new Set([
+        ...(kickoffIsRoutine(m, firstFixtureOf.get(m.homeTeamId))
+          ? homeAv.unansweredUserIds
+          : []),
+        ...(kickoffIsRoutine(m, firstFixtureOf.get(m.awayTeamId))
+          ? awayAv.unansweredUserIds
+          : []),
+      ]),
     };
   });
 
   // Name the people who owe an answer, and MENTION the ones who linked
-  // Discord. The counts above state a number into a channel; the people who
-  // haven't checked in are by definition the ones not reading it.
+  // Discord when this kickoff is news to them: their first fixture, a moved
+  // one, a tiebreaker or a playoff round. On a routine kickoff they're named
+  // without a ping (Tim's call, 2026-10-24: ping on a change, not on the
+  // calendar); Home, the match page and the captain's "Remind the N who
+  // haven't answered" still reach them.
   const waitingIds = [...new Set(draft.flatMap((d) => d.waitingIds))];
   const waitingUsers = waitingIds.length
     ? await prisma.user.findMany({
@@ -296,11 +336,13 @@ export async function maybeAnnounceUpcomingWeek(season: {
       })
     : [];
   const userById = new Map(waitingUsers.map((u) => [u.id, u]));
-  const fixtures = draft.map(({ waitingIds: ids, ...f }) => ({
+  const fixtures = draft.map(({ waitingIds: ids, quietIds, ...f }) => ({
     ...f,
     waitingOn: ids.flatMap((id) => {
       const u = userById.get(id);
-      return u ? [{ name: u.name, discordId: u.discordId }] : [];
+      return u
+        ? [{ name: u.name, discordId: quietIds.has(id) ? null : u.discordId }]
+        : [];
     }),
   }));
 

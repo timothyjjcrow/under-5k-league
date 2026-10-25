@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { prisma } from "@/lib/prisma";
-import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { DRAFT_STATUS, MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { maybeAnnounceUpcomingWeek } from "@/lib/reminder-service";
 import { makeSeason, makeTeam, makeUser } from "./factories";
-import { setMatchTime } from "@/app/actions/admin-schedule-results";
+import { generateSchedule, setMatchTime } from "@/app/actions/admin-schedule-results";
 import {
   proposeReschedule,
   respondReschedule,
@@ -399,6 +399,168 @@ describe("week reminder — reaching the people who owe an answer", () => {
     const pinged = calls.flatMap(([, mentions]) => mentions?.users ?? []);
     expect(pinged).toHaveLength(discordIds.length);
     expect(new Set(pinged)).toEqual(new Set(discordIds));
+  });
+});
+
+// Tim's call, 2026-10-24: ping on a change, not on the calendar. A side on
+// the weekly slot its schedule gave it already knows the kickoff, so the
+// reminder names who owes an answer without pinging them.
+describe("week reminder — only a kickoff that is news pings", () => {
+  let linked = 0;
+  /** One linked, unanswered player on `teamId`; returns their snowflake. */
+  async function linkedPlayer(seasonId: string, teamId: string, name: string) {
+    linked += 1;
+    const discordId = `7770000000000${String(linked).padStart(5, "0")}`;
+    const user = await makeUser(name);
+    await prisma.user.update({ where: { id: user.id }, data: { discordId } });
+    await prisma.teamMember.create({
+      data: { seasonId, teamId, userId: user.id, price: 0 },
+    });
+    return discordId;
+  }
+
+  /** A played week-1 fixture, so week 2 is not either side's first. */
+  async function playedWeek1(
+    seasonId: string,
+    homeTeamId: string,
+    awayTeamId: string,
+    forfeit = false,
+  ) {
+    await prisma.match.create({
+      data: {
+        seasonId,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        status: MATCH_STATUS.COMPLETED,
+        forfeit,
+        homeTeamId,
+        awayTeamId,
+        scheduledAt: new Date(Date.now() - 7 * 864e5),
+      },
+    });
+  }
+
+  async function week2(
+    seasonId: string,
+    homeTeamId: string,
+    awayTeamId: string,
+    scheduleRevision = 0,
+  ) {
+    return prisma.match.create({
+      data: {
+        seasonId,
+        week: 2,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId,
+        awayTeamId,
+        scheduleRevision,
+        scheduledAt: new Date(Date.now() + 4 * 3600_000),
+      },
+    });
+  }
+
+  it("names the unanswered on a routine weekly kickoff without pinging them", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    await linkedPlayer(season.id, home.id, "Routine H");
+    await linkedPlayer(season.id, away.id, "Routine A");
+    await playedWeek1(season.id, home.id, away.id);
+    await week2(season.id, home.id, away.id);
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+    expect(content).toContain("Week 2 matches coming up");
+    expect(content).toContain("Still waiting on:");
+    expect(content).toContain("Routine H");
+    expect(content).toContain("Routine A");
+    expect(content).not.toContain("<@");
+    expect(mentions).toBeUndefined();
+  });
+
+  it("pings a side whose first fixture this is, after a week-1 bye", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const bye = await makeTeam(season.id, "Bye", 2);
+    const homeId = await linkedPlayer(season.id, home.id, "Played H");
+    const byeId = await linkedPlayer(season.id, bye.id, "Rested B");
+    await linkedPlayer(season.id, away.id, "Played A");
+    await playedWeek1(season.id, home.id, away.id);
+    await week2(season.id, home.id, bye.id);
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [content, mentions] = mockSend.mock.calls[0];
+    // The rested team hears about its first opponent and kickoff...
+    expect(mentions).toEqual({ users: [byeId] });
+    expect(content).toContain(`<@${byeId}>`);
+    // ...while the side that already played names its waiter plainly.
+    expect(content).toContain("Played H");
+    expect(content).not.toContain(`<@${homeId}>`);
+  });
+
+  it("pings a side whose only earlier fixture was a forfeit nobody played", async () => {
+    // An opponent withdrew before week 1: the forfeit never put a game in
+    // front of anyone, so week 2 is still the first one they're told about.
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeId = await linkedPlayer(season.id, home.id, "Forfeit H");
+    const awayId = await linkedPlayer(season.id, away.id, "Forfeit A");
+    await playedWeek1(season.id, home.id, away.id, true);
+    await week2(season.id, home.id, away.id);
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [, mentions] = mockSend.mock.calls[0];
+    expect(new Set(mentions?.users)).toEqual(new Set([homeId, awayId]));
+  });
+
+  it("pings both sides when the kickoff moved", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeId = await linkedPlayer(season.id, home.id, "Moved H");
+    const awayId = await linkedPlayer(season.id, away.id, "Moved A");
+    await playedWeek1(season.id, home.id, away.id);
+    await week2(season.id, home.id, away.id, 1);
+
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    const [, mentions] = mockSend.mock.calls[0];
+    expect(new Set(mentions?.users)).toEqual(new Set([homeId, awayId]));
+  });
+
+  it("a regenerated schedule's first week pings everyone again", async () => {
+    // Regenerate rebuilds every fixture at revision 0 and posts nothing, even
+    // after week 1's reminder went out. Its new week 1 is each side's first
+    // fixture, so the reminder that names the new kickoff pings again.
+    const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+    const ids = [];
+    for (let i = 0; i < 4; i++) {
+      const team = await makeTeam(season.id, `Regen${i}`, i + 1);
+      ids.push(await linkedPlayer(season.id, team.id, `Regen P${i}`));
+    }
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.COMPLETE },
+    });
+    const generate = (first: Date) => {
+      const fd = new FormData();
+      fd.set("expectedActiveSeasonId", season.id);
+      fd.set("firstNight", "2026-10-25T20:00");
+      fd.set("firstNightTs", String(first.getTime()));
+      return generateSchedule({}, fd);
+    };
+    const pinged = () =>
+      new Set(mockSend.mock.calls.flatMap(([, m]) => m?.users ?? []));
+    expect((await generate(new Date(Date.now() + 3 * 3600_000)))?.error).toBeUndefined();
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(pinged()).toEqual(new Set(ids));
+
+    // The admin moves the whole schedule two hours later.
+    mockSend.mockClear();
+    expect((await generate(new Date(Date.now() + 5 * 3600_000)))?.error).toBeUndefined();
+    expect(await maybeAnnounceUpcomingWeek(season)).toBe(true);
+    expect(mockSend.mock.calls[0][0]).toContain("Week 1 matches coming up");
+    expect(pinged()).toEqual(new Set(ids));
   });
 });
 

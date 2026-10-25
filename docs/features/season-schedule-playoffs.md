@@ -267,6 +267,20 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   the season). Each proposal used to ring nine people; players still see the
   open check on Home and the match page. A lock moves the kickoff and opens a
   fresh window. `reschedule-pings.itest.ts` pins it.
+- **A committed proposal or move is never reported as failed.** A move's
+  follow-up reads (`acceptedFromCommit`: standin clashes, the round label, the
+  out names) fall back instead of throwing; a clash check that couldn't run is
+  said so in the toast, never read as "no clash". A failed mention lookup posts
+  unpinged (`mentionsAfterCommit`). Propose reads its audience after the commit
+  as unknown on failure (`readyCheckUserIds: null`: the other captain alone)
+  and resolves both mention lists before it claims the roster window, so a
+  failed read leaves the window for the next post. A throw there used to tell
+  the captain the move failed and lose the "Rescheduled" post for good
+  (`reschedule-pings.itest.ts`).
+- **A lock's carried OUT is an announced OUT.** The "Rescheduled" post names
+  who can't make it, so `announceLock` claims each one's OUT ping
+  (`outPingThrottleKey` at the new revision) once the post is queued. A later
+  IN then posts "can make it after all" to their captain.
 - **Decline is cleanup.** "None of these work" (the opposing captain) and
   Withdraw (the proposer, or an admin's Clear) leave kickoff, check-ins and
   the reminder marker alone (pinned in the itest). The decline post says
@@ -546,8 +560,9 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   in playoffs, rule the match). After claiming the Season row it flags
   `Team.withdrawn`, forfeits every unplayed REGULAR fixture 0-N, cancels open
   proposals and scrims, posts one withdrawal message instead of per-series
-  results, and stands standins down. Each forfeit is undone with "Reopen for
-  import".
+  results, and stands standins down (deleting the bookings on fixtures with no
+  games, so Reopen can't bring them back). Each forfeit is undone with "Reopen
+  for import".
 - **The flag, not the table, removes a team from seeding.** A team that banked
   points can out-rank the cut and its results are real, so the table keeps it
   ("Withdrawn") while `projectPlayoffField` drops it.
