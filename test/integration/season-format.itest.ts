@@ -32,7 +32,16 @@ import { matchNightForWeek } from "@/lib/schedule";
 import { DRAFT_STATUS, MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
 import { setRaceHook } from "@/lib/race-hook";
-import { makePlayer, makeSeason, makeTeam, ON_POSTGRES, raceAll, recordMatch, resetDb } from "./factories";
+import {
+  makePlayer,
+  makeSeason,
+  makeTeam,
+  ON_POSTGRES,
+  raceAll,
+  recordMatch,
+  resetDb,
+  scheduleClaim,
+} from "./factories";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -89,7 +98,7 @@ describe("generateSchedule draws two groups from ten teams", () => {
     const { season, teams } = await draftedSeason(10);
     const res = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
     );
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/Two groups of 5, drawn by roster MMR/);
@@ -119,7 +128,7 @@ describe("generateSchedule draws two groups from ten teams", () => {
     const { season } = await draftedSeason(13);
     const res = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
     );
     expect(res?.message).toMatch(/Two groups of 7 and 6/);
     const teams = await prisma.team.findMany({ where: { seasonId: season.id } });
@@ -135,12 +144,12 @@ describe("generateSchedule draws two groups from ten teams", () => {
 
   it("clears the groups when a regenerate finds a one-table team count", async () => {
     const { season, teams } = await draftedSeason(10);
-    await generateSchedule(empty, fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }));
+    await generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }));
     await prisma.match.deleteMany({ where: { seasonId: season.id } });
     await prisma.team.delete({ where: { id: teams[9].id } });
     const res = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
     );
     expect(res?.message).toMatch(/One table · 36 matches over 9 week\(s\)/);
     expect((await groupsOf(season.id)).none).toHaveLength(9);
@@ -150,15 +159,47 @@ describe("generateSchedule draws two groups from ten teams", () => {
 describe("swapGroupTeams", () => {
   async function grouped() {
     const { season, teams } = await draftedSeason(10);
-    await generateSchedule(empty, fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }));
+    await generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }));
     return { season, teams };
   }
+
+  it("refuses a swap or regenerate from a tab opened before another admin rebuilt", async () => {
+    const { season, teams } = await grouped();
+    const oldTab = await scheduleClaim(season.id);
+    // Another admin regenerates: every fixture gets a new id.
+    const rebuilt = await generateSchedule(
+      empty,
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
+    );
+    expect(rebuilt?.error).toBeUndefined();
+    const fixturesNow = async () =>
+      (
+        await prisma.match.findMany({
+          where: { seasonId: season.id },
+          select: { id: true },
+          orderBy: { id: "asc" },
+        })
+      ).map((match) => match.id);
+    const before = { fixtures: await fixturesNow(), groups: await groupsOf(season.id) };
+    const stale =
+      "The schedule was generated or rebuilt while this page was open. Nothing was changed; reload to see it.";
+
+    // Teams 0 and 1 are in different groups, so only the claim can refuse.
+    const swap = await swapGroupTeams(
+      empty,
+      fd({ ...oldTab, teamA: teams[0].id, teamB: teams[1].id }),
+    );
+    expect(swap?.error).toBe(stale);
+    const regenerate = await generateSchedule(empty, fd({ ...firstNightFields(), ...oldTab }));
+    expect(regenerate?.error).toBe(stale);
+    expect({ fixtures: await fixturesNow(), groups: await groupsOf(season.id) }).toEqual(before);
+  });
 
   it("trades one team from each group and rebuilds the fixtures around them", async () => {
     const { season, teams } = await grouped();
     const res = await swapGroupTeams(
       empty,
-      fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[1].id }),
+      fd({ ...(await scheduleClaim(season.id)), teamA: teams[0].id, teamB: teams[1].id }),
     );
     expect(res?.error).toBeUndefined();
     expect(res?.message).toMatch(/Groups swapped and schedule regenerated/);
@@ -180,16 +221,16 @@ describe("swapGroupTeams", () => {
 
   it("keeps a swap through a plain regenerate, and redraws only when asked", async () => {
     const { season, teams } = await grouped();
-    await swapGroupTeams(empty, fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[1].id }));
+    await swapGroupTeams(empty, fd({ ...(await scheduleClaim(season.id)), teamA: teams[0].id, teamB: teams[1].id }));
     const kept = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
     );
     expect(kept?.message).toMatch(/the groups kept as they were/);
     expect((await groupsOf(season.id)).A).toEqual(names([1, 3, 4, 7, 8]));
     const redrawn = await generateSchedule(
       empty,
-      fd({ ...firstNightFields(), redrawGroups: "on", expectedActiveSeasonId: season.id }),
+      fd({ ...firstNightFields(), redrawGroups: "on", ...(await scheduleClaim(season.id)) }),
     );
     expect(redrawn?.message).toMatch(/drawn by roster MMR/);
     expect((await groupsOf(season.id)).A).toEqual(names([0, 3, 4, 7, 8]));
@@ -200,7 +241,7 @@ describe("swapGroupTeams", () => {
     const before = await prisma.match.findMany({ where: { seasonId: season.id }, orderBy: { id: "asc" } });
     const res = await swapGroupTeams(
       empty,
-      fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[3].id }),
+      fd({ ...(await scheduleClaim(season.id)), teamA: teams[0].id, teamB: teams[3].id }),
     );
     expect(res?.error).toMatch(/aren't in different groups/);
     expect(await prisma.match.findMany({ where: { seasonId: season.id }, orderBy: { id: "asc" } })).toEqual(before);
@@ -212,7 +253,7 @@ describe("swapGroupTeams", () => {
     await recordMatch(first.id, 2, 0);
     const res = await swapGroupTeams(
       empty,
-      fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[1].id }),
+      fd({ ...(await scheduleClaim(season.id)), teamA: teams[0].id, teamB: teams[1].id }),
     );
     expect(res?.error).toMatch(/Results are already recorded/);
     expect((await groupsOf(season.id)).A).toEqual(names([0, 3, 4, 7, 8]));
@@ -220,10 +261,10 @@ describe("swapGroupTeams", () => {
 
   it("refuses a one-table season", async () => {
     const { season, teams } = await draftedSeason(6);
-    await generateSchedule(empty, fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }));
+    await generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }));
     const res = await swapGroupTeams(
       empty,
-      fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[1].id }),
+      fd({ ...(await scheduleClaim(season.id)), teamA: teams[0].id, teamB: teams[1].id }),
     );
     expect(res?.error).toMatch(/aren't in different groups/);
   });
@@ -236,9 +277,11 @@ describe("swapGroupTeams", () => {
     for (let attempt = 0; attempt < 4; attempt++) {
       await resetDb();
       const { season, teams } = await grouped();
+      // Both admins' pages showed the same schedule.
+      const claim = await scheduleClaim(season.id);
       const results = await raceAll([
-        () => swapGroupTeams(empty, fd({ expectedActiveSeasonId: season.id, teamA: teams[0].id, teamB: teams[1].id })),
-        () => swapGroupTeams(empty, fd({ expectedActiveSeasonId: season.id, teamA: teams[3].id, teamB: teams[2].id })),
+        () => swapGroupTeams(empty, fd({ ...claim, teamA: teams[0].id, teamB: teams[1].id })),
+        () => swapGroupTeams(empty, fd({ ...claim, teamA: teams[3].id, teamB: teams[2].id })),
       ]);
       expect(results.some((r) => !r?.error)).toBe(true);
       const groupOf = new Map(
@@ -255,7 +298,7 @@ describe("a group season's playoffs", () => {
   /** Ten teams in two groups; in each group the stronger roster wins 2–0. */
   async function playedGroupStage(overrides: (a: number, b: number) => [number, number] | null = () => null) {
     const { season, teams } = await draftedSeason(10);
-    await generateSchedule(empty, fd({ ...firstNightFields(), expectedActiveSeasonId: season.id }));
+    await generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }));
     await prisma.season.update({ where: { id: season.id }, data: { status: SEASON_STATUS.REGULAR_SEASON } });
     const rank = new Map(teams.map((t, i) => [t.id, i]));
     for (const m of await prisma.match.findMany({ where: { seasonId: season.id } })) {

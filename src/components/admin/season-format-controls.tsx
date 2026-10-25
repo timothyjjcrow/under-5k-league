@@ -25,6 +25,7 @@ export function SeasonFormatControls({
   teams,
   firstMatchNight,
   lastRegularWeek,
+  scheduleRevision,
   regenerateOpen,
   regenerateConsequences,
 }: {
@@ -34,6 +35,8 @@ export function SeasonFormatControls({
   firstMatchNight: Date | null;
   /** The schedule's last regular week, 0 before one is generated. */
   lastRegularWeek: number;
+  /** The fixtures shown (`regularScheduleRevision`), for the swap's claim. */
+  scheduleRevision: string;
   /** Whether the schedule can be regenerated now (no result yet). */
   regenerateOpen: boolean;
   /** What a regenerate destroys, for the swap's confirm. */
@@ -106,7 +109,7 @@ export function SeasonFormatControls({
       {drawn && regenerateOpen ? (
         <ActionForm
           action={swapGroupTeams}
-          hidden={{ expectedActiveSeasonId: season.id }}
+          hidden={{ expectedActiveSeasonId: season.id, expectedSchedule: scheduleRevision }}
           className="mt-3 flex flex-wrap items-end gap-2"
         >
           <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">
