@@ -119,14 +119,21 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   Sections are `<Card id>` with `scroll-mt-24` under the `h-16` header.
   `e2e/rules.spec.ts` checks the sections, the jump links and no overflow at
   320, 390 and 768px.
+- **Admin-ruled rules are written policy, not code.** Tim approved them on
+  2026-10-25, adapted from the RD2L rulebook with its penalty ladders
+  dropped: Being on time (`#match-day`: lateness forfeits, the forfeit-claim
+  screenshot, the gap between games), Pauses and remakes (`#pauses`),
+  Accounts and fair play (`#fair-play`) and Conduct and commitment
+  (`#conduct`). Their numbers are `WRITTEN_RULES` in `league-rules.ts`,
+  pinned by a test; nothing on the site enforces them, and an admin records
+  any forfeit they lead to. A double no-show is "an admin rules on the
+  series".
 - **Rules nothing encodes yet, so the page doesn't state them** (Tim's to
-  write; until then the closing line covers them): a no-show grace period and
-  when a no-show becomes a forfeit; double forfeits (a 0–0 ruling counts as a
-  draw, so both teams get a draw's points); a cap on standins per match or
-  season (the standin MMR rule is written: more than `STANDIN_MMR_ALLOWANCE`
-  above the seat needs the other captain's OK); pauses,
-  disconnects and remakes; side and first-pick choice; hero or patch bans;
-  conduct, smurfing, account sharing, disputes and appeals; a roster lock
+  write; until then the closing line covers them): double-forfeit scoring
+  (a 0–0 ruling counts as a draw, so both teams get a draw's points); a cap
+  on standins per match or season (Tim chose none on 2026-10-25); side and
+  first-pick choice; hero or patch bans; smurfing, disputes and appeals; a
+  roster lock
   (admin signings stay open through the playoffs); reschedule notice and how
   many reschedules a team gets; prizes, lobby passwords and spectators; and
   the away captain as backup host, which only the ticketed checklist says.

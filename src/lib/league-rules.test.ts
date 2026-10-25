@@ -25,6 +25,7 @@ import {
 } from "./league-lifecycle";
 import {
   RULES_CLOSING,
+  WRITTEN_RULES,
   leagueRules,
   rulesSeasonFormat,
   type LeagueRules,
@@ -90,7 +91,7 @@ function everything(rules: LeagueRules): string {
 }
 
 describe("leagueRules", () => {
-  it("covers the eleven sections in reading order and ends on the closing line", () => {
+  it("covers the fifteen sections in reading order and ends on the closing line", () => {
     const rules = build();
     expect(rules.sections.map((s) => s.id)).toEqual([
       "format",
@@ -101,9 +102,13 @@ describe("leagueRules", () => {
       "rosters",
       "match-night",
       "hosting",
+      "match-day",
+      "pauses",
       "signups",
       "draft",
       "results",
+      "fair-play",
+      "conduct",
     ]);
     const titles = rules.sections.map((s) => s.title);
     expect(new Set(titles).size).toBe(titles.length);
@@ -408,6 +413,30 @@ describe("leagueRules", () => {
     expect(section(rules, "results")).toContain(
       "after the scheduled kickoff. Admins can add a game from outside that window.",
     );
+  });
+
+  it("writes the admin-ruled rules from WRITTEN_RULES, in words", () => {
+    const sections = build().sections;
+    const text = (id: string) =>
+      sections.find((s) => s.id === id)!.rules.join(" ");
+    expect(WRITTEN_RULES).toEqual({
+      ARRIVE_EARLY_MINUTES: 15,
+      LATE_GAME_FORFEIT_MINUTES: 15,
+      LATE_SERIES_FORFEIT_MINUTES: 30,
+      NEXT_GAME_MINUTES: 15,
+      PAUSE_MINUTES_PER_TEAM: 15,
+      STREAM_DELAY_MINUTES: 2,
+      MAX_MISSED_NIGHTS: 3,
+    });
+    expect(text("match-day")).toContain(
+      "A team that isn't ready 15 minutes after kickoff loses game 1. At 30 minutes it forfeits the series.",
+    );
+    expect(text("match-day")).toContain("Only admins record forfeits.");
+    expect(text("pauses")).toContain(
+      "Each team gets 15 minutes of pause time per game, or more if both teams agree.",
+    );
+    expect(text("fair-play")).toContain("at least 2 minutes of delay");
+    expect(text("conduct")).toContain("more than about 3 match nights");
   });
 
   it("keeps the league's copy rules", () => {
