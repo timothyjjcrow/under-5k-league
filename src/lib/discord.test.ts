@@ -646,6 +646,37 @@ describe("discord message formatters", () => {
       "Late Joiner: the **Short Squad** match nights are yours now",
     );
     expect(msg).not.toContain("their schedule");
+    // Within the MMR rule the post says nothing about it.
+    expect(msg).not.toContain("MMR");
+  });
+
+  it("says when an admin signed over the 100-MMR rule, with both MMRs", () => {
+    const msg = freeAgentSignedMessage("Late Joiner", "Short Squad", {
+      freeAgentMmr: 4500,
+      baseline: { kind: "replaced", name: "Bob", mmr: 2000 },
+    });
+    expect(msg).toContain(
+      "Signed over the 100-MMR rule: 4,500 MMR, replacing Bob's 2,000.",
+    );
+    // Still ends with the signed player's next move.
+    expect(msg).toMatch(/check in on your match pages: <[^>]+\/schedule>$/);
+    expect(
+      freeAgentSignedMessage("Late Joiner", "Short Squad", {
+        freeAgentMmr: 4500,
+        baseline: { kind: "lowest", teamName: "Short Squad", mmr: 2100 },
+      }),
+    ).toContain(
+      "Signed over the 100-MMR rule: 4,500 MMR, against Short Squad's lowest MMR of 2,100.",
+    );
+  });
+
+  it("escapes the names in the over-rule sentence", () => {
+    const msg = freeAgentSignedMessage("A", "T", {
+      freeAgentMmr: 4500,
+      baseline: { kind: "replaced", name: "[Bob](https://evil.test)", mmr: 2000 },
+    });
+    expect(msg).not.toContain("[Bob](https://evil.test)");
+    expect(msg).toContain("\\[Bob\\]\\(");
   });
 
   it("announces a release", () => {
@@ -2606,6 +2637,10 @@ describe("no message unfurls a link preview", () => {
         gamesFound: 1,
       }),
       freeAgentSignedMessage("A", "T"),
+      freeAgentSignedMessage("A", "T", {
+        freeAgentMmr: 4500,
+        baseline: { kind: "replaced", name: "B", mmr: 2000 },
+      }),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
       teamIdentityChangedMessage({

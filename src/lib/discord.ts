@@ -31,6 +31,7 @@ import { POLL_ANCHOR } from "./match-night-poll";
 import { INHOUSE_NIGHT_INVITE_PATH } from "./inhouse-night";
 import { INHOUSE_QUEUE_INVITE_PATH } from "./inhouse-queue-invite";
 import { standinApprovalReason, standinMmrLabel } from "./standin";
+import { freeAgentOverRuleNote, type FreeAgentBaseline } from "./free-agent-rule";
 
 export { materializeAllowedMentions } from "./discord-payload";
 export type { MentionAllowlist } from "./discord-payload";
@@ -699,13 +700,17 @@ export function championMessage(
 export function freeAgentSignedMessage(
   playerName: string,
   teamName: string,
+  /** Set only when an admin signed them over the 100-MMR rule: both MMRs. */
+  overRule?: { freeAgentMmr: number; baseline: FreeAgentBaseline },
 ): string {
   // Ends by naming the signed player's next move — a signing is a season-long
   // obligation (every remaining match night), so the send mentions them and
   // the copy tells them what being signed asks of them, the standin-assign rule.
   // It names the team rather than saying "their schedule", which read as the
-  // player's own.
-  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>. ${name(playerName)}: the **${name(teamName)}** match nights are yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
+  // player's own. A signing over the MMR rule says so in the channel, with
+  // both numbers, the same sentence the toast and the admin log carry.
+  const ruling = overRule ? ` ${freeAgentOverRuleNote(overRule, name)}` : "";
+  return `🖊️ **${name(playerName)}** signs with **${name(teamName)}** as a free agent — roster updated: <${resolveSiteUrl()}/teams>.${ruling} ${name(playerName)}: the **${name(teamName)}** match nights are yours now — check in on your match pages: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function playerReleasedMessage(

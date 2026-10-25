@@ -182,6 +182,8 @@ import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
 import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
+import { loadFreeAgentBaselines } from "@/lib/free-agent-rule-service";
+import { freeAgentSeatLabel } from "@/lib/free-agent-rule";
 import { leagueFeedWaitText } from "@/lib/league-feed-wait";
 import {
   AUTOMATION_BACKLOG_STUCK_MS,
@@ -388,7 +390,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
   // Delivery health is database-only, so it can sit on the blocking path.
   const [data, delivery] = await Promise.all([
-    season ? loadSeasonAdminData(season.id) : null,
+    season ? loadSeasonAdminData(season.id, season.teamSize) : null,
     season ? loadLeagueDeliveryHealth().catch(() => null) : null,
   ]);
   // Async server component: it renders once per request, so Date.now() has
@@ -1247,7 +1249,7 @@ function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
   }
 }
 
-async function loadSeasonAdminData(seasonId: string) {
+async function loadSeasonAdminData(seasonId: string, teamSize: number) {
   const [
     players,
     standins,
@@ -1354,7 +1356,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting, freeAgentBaselines] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -1374,6 +1376,17 @@ async function loadSeasonAdminData(seasonId: string) {
     }),
     // Feed games the last automatic league-feed pass stopped on.
     loadLeagueFeedWaiting(seasonId),
+    // Who a signing onto each short team would replace, for the sign form's
+    // team options (Roster moves). Short teams only, all in one batch.
+    loadFreeAgentBaselines(
+      prisma,
+      seasonId,
+      shortTeams(teams, teamSize).map(({ team }) => ({
+        id: team.id,
+        name: team.name,
+        memberUserIds: team.members.map((m) => m.userId),
+      })),
+    ),
   ]);
   return {
     players,
@@ -1392,6 +1405,7 @@ async function loadSeasonAdminData(seasonId: string) {
     importsNeedingReview,
     feedWaiting,
     captainsInRoom,
+    freeAgentBaselines,
   };
 }
 
@@ -5718,12 +5732,33 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Team…
               </option>
-              {short.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.members.length}/{season.teamSize})
-                </option>
-              ))}
+              {/* Each team's yardstick for the 100-MMR rule, so the gap
+                  shows before submitting (the free agents show their MMR). */}
+              {short.map((t) => {
+                const baseline = data.freeAgentBaselines[t.id];
+                return (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.members.length}/{season.teamSize})
+                    {baseline ? ` · ${freeAgentSeatLabel(baseline)}` : ""}
+                  </option>
+                );
+              })}
             </select>
+            {/* The free agent is held to 100 MMR above the player they
+                replace (or the team's lowest MMR); over it, or with an MMR
+                unknown, signFreeAgent refuses unless this is ticked, and the
+                toast, the log and the Discord post say so with both MMRs. */}
+            <label
+              className="flex items-center gap-1.5 text-xs text-muted"
+              title="Over 100 MMR above the player they replace (or the team's lowest MMR), or with an MMR unknown, a signing needs this ticked. The announcement then shows both MMRs."
+            >
+              <input
+                type="checkbox"
+                name="overMmrRule"
+                className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+              />
+              Sign over the 100-MMR rule
+            </label>
             {/* Additive and undoable by Release — but Release permanently
                 erases the player's draft price, so the round trip is lossy. */}
             <SubmitButton

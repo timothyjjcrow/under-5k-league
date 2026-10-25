@@ -38,6 +38,11 @@ import { nextRoundPairings } from "./schedule";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
 import { coverBaselineMmr, standinNeedsApproval } from "./standin";
+import {
+  freeAgentBaseline,
+  freeAgentOverRule,
+  unrefilledDeparture,
+} from "./free-agent-rule";
 
 const US = createLeagueConfig({});
 const EU = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" });
@@ -471,6 +476,38 @@ describe("the rules page's claims hold in the code", () => {
     expect(
       stripLineComments(sourceFile("src/app/actions/standins.ts").text),
     ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "ask"/);
+  });
+
+  it("holds a free-agent signing to the same allowance over the player it replaces", () => {
+    expect(section(build(), "rosters")).toContain(
+      "A signed player can be at most 100 MMR above the player they replace (the latest to leave that team whose seat is still open), or the team's lowest MMR when nobody has left. An admin can sign them over that, and the announcement shows both MMRs.",
+    );
+    const replaced = { kind: "replaced" as const, name: "Bob", mmr: 2000 };
+    // "at most 100 MMR above the player they replace"
+    expect(freeAgentOverRule(2100, replaced)).toBe(false);
+    expect(freeAgentOverRule(2101, replaced)).toBe(true);
+    // "the latest to leave that team whose seat is still open"
+    const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
+    expect(
+      unrefilledDeparture([
+        { id: "a", userId: "a", name: "A", joinedAt: at(0), endedAt: at(10), acquisitionMmr: 2000 },
+        { id: "b", userId: "b", name: "B", joinedAt: at(0), endedAt: at(20), acquisitionMmr: 3000 },
+        { id: "c", userId: "c", name: "C", joinedAt: at(30), endedAt: null, acquisitionMmr: 3050 },
+      ])?.name,
+    ).toBe("A");
+    // "or the team's lowest MMR when nobody has left"
+    expect(
+      freeAgentBaseline({
+        teamName: "T",
+        tenures: [],
+        rosterUserIds: ["x", "y"],
+        signupMmr: new Map([["x", 2600], ["y", 2100]]),
+      }),
+    ).toEqual({ kind: "lowest", teamName: "T", mmr: 2100 });
+    // "An admin can sign them over that": the action reads the box.
+    expect(
+      stripLineComments(sourceFile("src/app/actions/admin-roster.ts").text),
+    ).toContain("bool(formData, FREE_AGENT_OVER_RULE_FIELD)");
   });
 
   it("counts only regular-season series toward the table", () => {
