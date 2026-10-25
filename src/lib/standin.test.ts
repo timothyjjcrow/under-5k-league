@@ -325,7 +325,7 @@ describe("standinPickerBlock", () => {
   it("greys out a standin the other captain declined here, and only here", () => {
     const declined = booking({ matchId: "m1", replacedName: null, declinedBy: "Techies" });
     expect(standinPickerBlock("alice", target, [declined])).toBe(
-      "the Techies captain already declined them for this match",
+      "already declined for your team in this match",
     );
     expect(
       standinPickerBlock("alice", target, [

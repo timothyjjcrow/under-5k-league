@@ -284,7 +284,8 @@ export function standinPickerBlock(
   }
   const declined = inThisMatch.find((b) => b.declinedBy);
   if (declined) {
-    return `the ${declined.declinedBy} captain already declined them for this match`;
+    // Not attributed to a captain: an admin may have declined in their place.
+    return "already declined for your team in this match";
   }
   // A request elsewhere isn't a booking yet: agreeing to it re-checks the
   // night, so it doesn't hide the standin here.

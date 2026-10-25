@@ -1138,7 +1138,7 @@ function requestClosedError(status: string): string {
 }
 
 const REQUEST_JUST_ANSWERED =
-  "That request was just answered or withdrawn — reload to see where it stands";
+  "That request was just answered, withdrawn or closed — reload to see where it stands";
 
 /**
  * The other captain agrees to a standin request: the standin is booked, in

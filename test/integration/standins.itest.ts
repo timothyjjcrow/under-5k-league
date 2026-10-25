@@ -1493,7 +1493,7 @@ describe("standin MMR rule", () => {
         requestId: request.id,
         actingCaptainId: fx.away.captainId,
       });
-      expect(!res.ok && res.error).toMatch(/just answered or withdrawn/);
+      expect(!res.ok && res.error).toMatch(/just answered, withdrawn or closed/);
     } finally {
       setRaceHook(null);
     }

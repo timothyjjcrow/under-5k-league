@@ -76,7 +76,9 @@ standin cover, and match-night check-ins. Main files:
 - **A signing reconciles empty-seat cover.** Filling the LAST seat cancels the
   team's `replacingUserId: null` bookings on unstarted fixtures ("no games" in the
   delete's WHERE) and stands them down; started series keep theirs, and the toast
-  says so. A partial refill cancels nothing: it reports per match the bookings
+  says so. A partial refill cancels no booking (it closes only the waiting
+  open-seat requests past the seats left, newest first; see the standin MMR
+  rule): it reports per match the bookings
   that exceed the open seats (bookings live on matches, seats on the roster).
 - **`releasePlayer` is three things in one transaction; keep it that way.** Free
   the seat, refund `member.price`, and cancel cover naming the player on unstarted
@@ -183,7 +185,8 @@ standin cover, and match-night check-ins. Main files:
   Profiles credit "Stood in for N matches" from COMPLETED matches. /schedule lists
   standins.
 - **Deliberately not built:** a mid-series swap tool (only if a real season needs
-  it twice), auto-cancelling partial-refill surplus.
+  it twice), auto-cancelling partial-refill surplus bookings (surplus waiting
+  requests are closed: a request is not cover, so nobody was told to show up).
 
 ## The standin MMR rule
 
@@ -241,7 +244,9 @@ the rows in `StandinRequest`.
   the log. Admins agree, decline or withdraw in a captain's place from the
   standin block on /admin and in the match page's Admin tools (logged;
   `withdrawStandinRequestAsAdmin` posts nothing). Agree shows only while booking
-  is open; decline and withdraw always show.
+  is open, and never to an admin who captains the asking team or filed the
+  request (`adminMayAgreeToRequest`, `admin-sections.ts`; /admin and the match
+  page pass the viewer as `viewerId`); decline and withdraw always show.
 - **No captain agrees to their own side's request.** `approveStandinRequest`
   refuses an actor who captains the asking team (read inside the transaction,
   so a captaincy handed over since is judged) or who filed the request, and
@@ -261,7 +266,9 @@ the rows in `StandinRequest`.
   claim a failure throws, so a standin who withdrew in the gap leaves the
   request PENDING, not APPROVED with nobody booked. `recheckCover` re-reads the
   match in the transaction too, so a ruling or a retime in the gap is judged
-  (a played match refuses; the same-night clash uses the fresh kickoff). Seam
+  (a played or deleted match refuses; the same-night clash uses the fresh
+  kickoff). Seam `standin.assign.afterJudge` sits between the read-time checks
+  and a booking's or an ask's transaction. Seam
   `standin.approveRequest.beforeTx` sits between the read-time status check and
   the claim. A failed check speaks to the approver, at read time or in the
   transaction (`agreeTooLateError`): "This can't be agreed to any more: <reason>
@@ -283,7 +290,7 @@ the rows in `StandinRequest`.
   list shows each player's MMR. The admin cover banner still counts that player
   as uncovered (a request is not cover) but reads "<P> — waiting on the <other
   team> captain's OK for <S> (agree, decline or withdraw below)", dropping
-  "agree" once booking is closed (`uncoveredByRequest`, `admin-sections.ts`).
+  "agree" wherever the row hides it (`uncoveredByRequest`'s `canAgree`).
 - **Close a request the moment nobody can agree to it.** Inside the change's
   own Serializable transaction, `cancelPendingStandinRequests` reads the
   PENDING rows and claims exactly those to CANCELLED. Every caller is
