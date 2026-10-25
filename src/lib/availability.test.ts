@@ -156,7 +156,7 @@ describe("matchNightRoster — stale cover can't inflate a side", () => {
   });
 });
 
-describe("unansweredUserIds — who the week reminder pings", () => {
+describe("unansweredUserIds — who the week reminder names", () => {
   const roster = ["a", "b", "c", "d", "e"];
 
   it("names exactly the people with no answer", () => {
@@ -273,7 +273,12 @@ describe("checkinClosedReason — the fixture half of the check-in gate", () => 
 describe("outPingThrottleKey", () => {
   it("is the one key both the single OUT and an away range claim", () => {
     // Changing it strands every live throttle row and lets one OUT ping twice.
-    expect(outPingThrottleKey("m1", "u1")).toBe("outPing:m1:u1");
+    expect(outPingThrottleKey("m1", 0, "u1")).toBe("outPing:m1:0:u1");
+  });
+
+  it("gives a moved kickoff a fresh window", () => {
+    // A retime wipes the answers, so an OUT for the new time is news.
+    expect(outPingThrottleKey("m1", 1, "u1")).not.toBe(outPingThrottleKey("m1", 0, "u1"));
   });
 });
 

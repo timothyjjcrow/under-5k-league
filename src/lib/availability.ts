@@ -94,7 +94,7 @@ export function teamAvailability(
   const confirmed = rosterUserIds.filter(
     (id) => byUser.get(id) === AVAILABILITY.IN,
   ).length;
-  // The ids, not just the count: the week reminder pings exactly these people,
+  // The ids, not just the count: the week reminder names exactly these people,
   // which is the difference between stating "3/5" into a channel and reaching
   // the two players who actually owe an answer.
   // Anything that isn't a valid IN or OUT is "no answer" — including a row
@@ -120,11 +120,30 @@ export function parseAvailabilityStatus(
 }
 
 /**
- * The per-match, per-player claimThrottle key behind every OUT announcement.
- * One-match OUTs and "I'm away" ranges claim the SAME key, so saying it both
- * ways inside RSVP_OUT_PING_THROTTLE_SECONDS pings the captain once.
+ * The per-match, per-kickoff, per-player claimThrottle key behind every OUT
+ * announcement. One-match OUTs and "I'm away" ranges claim the SAME key, so
+ * saying it both ways inside RSVP_OUT_PING_THROTTLE_SECONDS pings the captain
+ * once. The schedule revision is part of the key for checkinNudgeKey's
+ * reason: every retime wipes the answers, so an OUT for the new kickoff is
+ * news the captain must hear, not a repeat of the old kickoff's OUT.
  */
-export function outPingThrottleKey(matchId: string, userId: string): string {
+export function outPingThrottleKey(
+  matchId: string,
+  scheduleRevision: number,
+  userId: string,
+): string {
+  return `${outPingPrefix(matchId)}${scheduleRevision}:${userId}`;
+}
+
+/**
+ * The OUT ping's key before it carried the schedule revision (until
+ * 2026-10-24). An OUT announced under it can still be answered with "can make
+ * it after all" (setAvailability tries it second; user ids hold no colon, so
+ * it never matches a revision key). Delete it, and that fallback, once no
+ * season with such a row is still being played: the season sweep removes
+ * them under outPingPrefix.
+ */
+export function legacyOutPingThrottleKey(matchId: string, userId: string): string {
   return `${outPingPrefix(matchId)}${userId}`;
 }
 
@@ -133,8 +152,12 @@ export function outPingThrottleKey(matchId: string, userId: string): string {
  * (setAvailability, via claimThrottleAnswer). Under outPingPrefix, so it is
  * swept with the match like the OUT row it answers.
  */
-export function outBackPingThrottleKey(matchId: string, userId: string): string {
-  return `${outPingThrottleKey(matchId, userId)}:back`;
+export function outBackPingThrottleKey(
+  matchId: string,
+  scheduleRevision: number,
+  userId: string,
+): string {
+  return `${outPingThrottleKey(matchId, scheduleRevision, userId)}:back`;
 }
 
 /**

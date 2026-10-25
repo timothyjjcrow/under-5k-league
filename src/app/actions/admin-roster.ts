@@ -1397,8 +1397,9 @@ export async function releasePlayer(
  * out-rank the cut).
  * Rosters, results and history are KEPT: the games happened.
  *
- * Recovery: reinstateTeam flips the flag back, and each forfeited fixture is
- * individually reversible via "Reopen for import" (forfeits have no games).
+ * Recovery: reinstateTeam flips the flag back, and each forfeited fixture
+ * without games is individually reversible via "Reopen for import". Standin
+ * cover on those fixtures is cancelled for good and must be rebooked.
  */
 export async function withdrawTeam(
   _prev: ActionResult,
@@ -1500,9 +1501,10 @@ export async function withdrawTeam(
           data: { status: SCRIM_STATUS.CANCELLED },
         });
 
-        // Standins booked on the doomed fixtures become inert history when
-        // those matches are ruled. Carry the rows out so the post-commit path
-        // can stand each person down by name.
+        // Standins booked on the doomed fixtures are stood down when those
+        // matches are ruled. Carry the rows out so the post-commit path can
+        // stand each person down by name; the loop below deletes those on
+        // fixtures with no games.
         const mootCover = await tx.standinAssignment.findMany({
           where: { matchId: { in: open.map((match) => match.id) } },
           select: {
@@ -1558,6 +1560,15 @@ export async function withdrawTeam(
               );
             }
             await invalidateMatchNudges(tx, match.id);
+            // recordResult's no-game forfeit rule: the ruling cancels the
+            // fixture, so its cover goes with it. A kept row would credit the
+            // stood-down standin with a series nobody played ("Stood in for
+            // N" counts bookings on COMPLETED matches), and Reopen would bring
+            // the booking back after they were told they were off. A series
+            // with games keeps its cover as the record of who played.
+            await tx.standinAssignment.deleteMany({
+              where: { matchId: match.id, match: { games: { none: {} } } },
+            });
             // The single team-withdrawal broadcast replaces noisy per-series
             // result posts. Persist that decision with the result so generic
             // completedAt crash recovery cannot replay these ruled fixtures;
@@ -1690,7 +1701,8 @@ export async function withdrawTeam(
 }
 
 /** The undo for the flag half of withdrawTeam. The forfeited fixtures are
- *  reversed individually ("Reopen for import" — forfeits carry no games). */
+ *  reversed individually ("Reopen for import"); their cancelled standin cover
+ *  is rebooked by hand. */
 export async function reinstateTeam(
   _prev: ActionResult,
   formData: FormData,
@@ -1761,7 +1773,7 @@ export async function reinstateTeam(
   });
   refresh();
   return {
-    message: `${teamName} reinstated — reverse any forfeits you want undone with "Reopen for import" on each fixture`,
+    message: `${teamName} reinstated — reverse any forfeits you want undone with "Reopen for import" on each fixture, then rebook any standin cover the withdrawal cancelled`,
   };
 }
 

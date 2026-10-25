@@ -152,7 +152,7 @@ async function archivedSeasonWithHistory() {
       { key: `importSkip:${season.id}`, value: "[]" },
       { key: `leagueSyncSkip:${season.id}`, value: "[]" },
       { key: `resultAnnounced:${match.id}`, value: "sent" },
-      { key: `outPing:${match.id}:player-1`, value: "sent" },
+      { key: `outPing:${match.id}:0:player-1`, value: "sent" },
       { key: `checkinNudge:${match.id}:team-1:0`, value: "2026-01-01T00:00:00.000Z" },
       { key: "discordWebhookUrl", value: "global-setting-survives" },
     ],

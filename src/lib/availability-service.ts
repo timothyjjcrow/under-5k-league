@@ -268,6 +268,8 @@ export type AwayMarkedFixture = AwayFixtureRef & {
   homeName: string;
   awayName: string;
   whenMs: number;
+  /** The kickoff this OUT answers, which keys the captain's OUT ping. */
+  scheduleRevision: number;
   captainId: string;
 };
 
@@ -439,6 +441,7 @@ export async function markAwayRange(opts: {
               homeName: match.homeTeam.name,
               awayName: match.awayTeam.name,
               whenMs: kickoffMs!,
+              scheduleRevision: match.scheduleRevision,
               captainId: seat.captainId,
             },
           });

@@ -860,7 +860,10 @@ export function inhouseNightStartMessage(m: {
  * Lobby formed — the scarcest event the league produces, on a short accept
  * clock. Players who linked Discord are mentioned by id so the ping reaches a
  * PHONE; the rest are named as plain text. Queueing earlier is the consent
- * here, which is why this needs no opt-in role (don't "fix" that later).
+ * here, which is why this needs no opt-in role (don't "fix" that later). It
+ * never carries the ping role either: a game nobody else can join is not news
+ * to them, and every lobby (re-formations after a failed ready check too)
+ * used to ring the whole role (Tim's call, 2026-10-24).
  *
  * `acceptEndsAt` is the ready check's own deadline. It renders as Discord
  * timestamps (`<t:…:T>` and `<t:…:R>`), so every reader sees the cutoff in
@@ -873,7 +876,6 @@ export function inhouseNightStartMessage(m: {
  */
 export function inhouseLobbyMessage(
   players: { name: string; discordId: string | null }[],
-  roleId?: string | null,
   acceptEndsAt?: Date | null,
   gameLabel?: string | null,
 ): string {
@@ -888,7 +890,7 @@ export function inhouseLobbyMessage(
   const found = gameLabel
     ? `Inhouse match found (${gameLabel})!`
     : "Inhouse match found!";
-  return `${rolePrefix(roleId)}🚨 **${found}** ${deadline} — <${resolveSiteUrl()}/inhouse>\n${who}`;
+  return `🚨 **${found}** ${deadline} — <${resolveSiteUrl()}/inhouse>\n${who}`;
 }
 
 export function inhouseResultMessage(m: {
@@ -1243,7 +1245,8 @@ export type WeekReminderFixture = {
   awaySize: number;
   /** Roster members with no RSVP yet. Linked players are mentioned by id so
    *  their phone actually buzzes; the rest are named so a captain still
-   *  knows who to chase. */
+   *  knows who to chase. `discordId` is null for an unlinked player and for
+   *  one whose kickoff is routine (`kickoffIsRoutine`): named, never pinged. */
   waitingOn: { name: string; discordId: string | null }[];
 };
 
@@ -1971,8 +1974,9 @@ export async function getInhouseAlertWebhookUrl(): Promise<string | null> {
 }
 
 /**
- * The role the two interrupting inhouse messages may ping. Null = nobody gets
- * notified, which is exactly what the league had before this existed.
+ * The role the interrupting inhouse posts may ping: the queue filling up, and
+ * the inhouse night's planned and start posts. Null = nobody gets notified,
+ * which is exactly what the league had before this existed.
  */
 export async function getInhousePingRoleId(): Promise<string | null> {
   return (
