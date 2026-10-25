@@ -1755,9 +1755,11 @@ describe("the auction can't be bypassed before it runs", () => {
       data: { seasonId: season.id, status: "COMPLETE" },
     });
 
+    // An empty roster has no known MMR to judge against, so the free-agent
+    // MMR rule needs the admin's box (roster-moves.itest.ts covers the rule).
     const res = await signFreeAgent(
       empty,
-      fd({ teamId: team.id, userId: free.id }),
+      fd({ teamId: team.id, userId: free.id, overMmrRule: "on" }),
     );
 
     expect(res?.error).toBeUndefined();

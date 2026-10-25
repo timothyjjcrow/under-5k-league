@@ -13,9 +13,20 @@ import { getActiveSeason } from "@/lib/season";
 import {
   approveStandinRequest,
   assignStandinGuarded,
+  cancelPendingStandinRequests,
   declineStandinRequest,
   removeStandinGuarded,
+  standinRequestCancellations,
+  StandinRequestsChangedError,
+  type CancelledStandinRequest,
 } from "@/lib/standin-service";
+import {
+  FREE_AGENT_OVER_RULE_FIELD,
+  freeAgentOverRule,
+  freeAgentOverRuleNote,
+  freeAgentRuleRefusal,
+} from "@/lib/free-agent-rule";
+import { loadFreeAgentBaselines } from "@/lib/free-agent-rule-service";
 import {
   SEASON_STATUS,
   REGISTRATION_TYPE,
@@ -42,7 +53,7 @@ import {
   dotaAccountLinkSnapshot,
   effectiveDotaAccountId,
 } from "@/lib/dota-account";
-import { clampInt, str } from "@/lib/form";
+import { bool, clampInt, str } from "@/lib/form";
 import {
   freeAgentSignedMessage,
   playerReleasedMessage,
@@ -742,7 +753,7 @@ export async function signFreeAgent(
   const teamId = str(formData, "teamId");
   const userId = str(formData, "userId");
 
-  const [team, registration, existingSeat, memberCount, pendingAssignments] =
+  const [team, registration, existingSeat, members, pendingAssignments] =
     await Promise.all([
       prisma.team.findFirst({
         where: { id: teamId, seasonId: season.id },
@@ -755,7 +766,10 @@ export async function signFreeAgent(
       prisma.teamMember.findFirst({
         where: { seasonId: season.id, userId },
       }),
-      prisma.teamMember.count({ where: { teamId } }),
+      prisma.teamMember.findMany({
+        where: { teamId },
+        select: { userId: true },
+      }),
       // Same guard promoteStandinToPlayer already applies: an outstanding
       // standin assignment on an unplayed match would put this account in BOTH
       // teams' account sets for that match, so classifyGame sees the same
@@ -796,9 +810,39 @@ export async function signFreeAgent(
       error: `${registration.user.name} is standing in on an upcoming match — remove that assignment first, then sign them`,
     };
   }
-  if (memberCount >= season.teamSize) {
+  if (members.length >= season.teamSize) {
     return { error: `${team.name} has no open roster seats` };
   }
+
+  // The standin MMR rule, applied to a permanent seat (Tim's call,
+  // 2026-10-25): the free agent is judged against the player they replace
+  // (the newest departure no signing has refilled), else the team's lowest
+  // MMR. Over it, or with an MMR unknown on either side, only the admin's
+  // ticked box signs them. Judged here, at read time, like a standin booking:
+  // a later MMR edit never re-judges a signing, and the transaction re-reads
+  // only what a rival can make wrong.
+  const baseline = (
+    await loadFreeAgentBaselines(prisma, season.id, [
+      {
+        id: team.id,
+        name: team.name,
+        memberUserIds: members.map((m) => m.userId),
+      },
+    ])
+  )[team.id];
+  const overRule = freeAgentOverRule(registration.mmr, baseline);
+  if (overRule && !bool(formData, FREE_AGENT_OVER_RULE_FIELD)) {
+    return {
+      error: freeAgentRuleRefusal({
+        playerName: registration.user.name,
+        freeAgentMmr: registration.mmr,
+        baseline,
+      }),
+    };
+  }
+  const overRuleNote = overRule
+    ? freeAgentOverRuleNote({ freeAgentMmr: registration.mmr, baseline })
+    : null;
 
   // SERIALIZABLE, not a plain transaction: on Postgres a plain one reads at
   // read-committed, so this count locks nothing and two concurrent signs into
@@ -825,7 +869,21 @@ export async function signFreeAgent(
      *  auto-cancelled: which booking dies is the captain's call (the
      *  withdrawGateError refuse-don't-auto-cancel precedent). */
     overbooked: string[];
-  } = { cancelled: 0, kept: 0, standDowns: [], overbooked: [] };
+    /** Waiting requests to book this player as someone's standin: a
+     *  rostered player can never cover, so they are off, and each asking
+     *  captain hears why after the commit. */
+    standinRequests: CancelledStandinRequest[];
+    /** Waiting requests for this team's open seats, off once the last seat
+     *  fills. Nobody has to act on that, so nothing posts. */
+    emptySeatRequests: number;
+  } = {
+    cancelled: 0,
+    kept: 0,
+    standDowns: [],
+    overbooked: [],
+    standinRequests: [],
+    emptySeatRequests: 0,
+  };
   try {
     coverCleanup = await prisma.$transaction(
       async (tx) => {
@@ -891,6 +949,19 @@ export async function signFreeAgent(
         });
         await captureRosterTenure(tx, member, { kind: "FREE_AGENT", mmr: currentRegistration.mmr || null,
           roles: currentRegistration.roles, actorId: actor.id });
+        // Past the first write: the helper throws if an answer lands
+        // between its read and its claim.
+        const standinRequests = await cancelPendingStandinRequests(
+          tx,
+          {
+            standinUserId: userId,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          actor.id,
+        );
         // The reverse of releasePlayer's stale-cover rule: an EMPTY-SEAT
         // assignment (replacingUserId null) is permanently "live" to
         // matchNightRoster, so once this signing fills the team's LAST seat
@@ -941,6 +1012,21 @@ export async function signFreeAgent(
               },
             }));
           }
+          // A waiting request for an open seat has no seat left to fill. A
+          // request is not cover, so this is all it takes; the asking captain
+          // has nothing to line up, so no post.
+          const emptySeatRequests = await cancelPendingStandinRequests(
+            tx,
+            {
+              teamId,
+              replacingUserId: null,
+              match: {
+                seasonId: season.id,
+                status: { not: MATCH_STATUS.COMPLETED },
+              },
+            },
+            actor.id,
+          );
           return {
             cancelled,
             kept: emptySeatCovers.length - cancelled,
@@ -949,6 +1035,8 @@ export async function signFreeAgent(
             // worse than silence.
             standDowns: cancelled === removable.length ? removable : [],
             overbooked: [],
+            standinRequests,
+            emptySeatRequests: emptySeatRequests.length,
           };
         }
         // PARTIAL refill — the team is still short, so open-seat cover stays
@@ -995,11 +1083,19 @@ export async function signFreeAgent(
             (m) =>
               `${m.count} open-seat booking(s) on ${m.label} now exceed the team's ${newOpen} open seat(s) — remove the extra on the match page`,
           );
-        return { cancelled: 0, kept: 0, standDowns: [], overbooked };
+        return {
+          cancelled: 0,
+          kept: 0,
+          standDowns: [],
+          overbooked,
+          standinRequests,
+          emptySeatRequests: 0,
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
+    if (e instanceof StandinRequestsChangedError) return { error: e.message };
     if ((e as Error).message === "ROSTER_LIFECYCLE_CHANGED") {
       return {
         error:
@@ -1035,19 +1131,36 @@ export async function signFreeAgent(
   }
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
+  const requestsOff = coverCleanup.standinRequests.length;
   await logAdminAction({
     action: "signFreeAgent",
-    summary: `Signed ${registration.user.name} to ${team.name}; cancelled ${coverCleanup.cancelled} redundant open-seat cover booking(s)`,
+    summary:
+      `Signed ${registration.user.name} to ${team.name}; cancelled ${coverCleanup.cancelled} redundant open-seat cover booking(s), ` +
+      `${requestsOff} waiting standin request(s) for ${registration.user.name} and ${coverCleanup.emptySeatRequests} waiting open-seat request(s)` +
+      (overRuleNote ? `. ${overRuleNote}` : ""),
     seasonId: season.id,
   });
   await sendDiscordMessage(
-    freeAgentSignedMessage(registration.user.name, team.name),
+    freeAgentSignedMessage(
+      registration.user.name,
+      team.name,
+      overRule ? { freeAgentMmr: registration.mmr, baseline } : undefined,
+    ),
     // @-mention the signed player: a signing is a season-long obligation —
     // every remaining match night is now theirs — and this was a bare
     // broadcast while the one-night standin assign has always mentioned its
     // subject. The message ends by naming their next move (check in).
     mentionsOf([registration.user.discordId]),
   );
+  // Each captain who asked for this player as a standin lines up someone
+  // else; the post mentions only them. Best-effort, after the commit.
+  const requestPosts = await standinRequestCancellations(
+    coverCleanup.standinRequests,
+    "STANDIN_SIGNED",
+  ).catch(() => []);
+  for (const post of requestPosts) {
+    await sendDiscordMessage(post.announcement, post.mentions);
+  }
   // Post-commit, best-effort, one stand-down per cancelled empty-seat booking —
   // the same shape releasePlayer and both removeStandin paths send, so a
   // standin is never left holding an instruction for a seat that just filled.
@@ -1075,13 +1188,20 @@ export async function signFreeAgent(
       ? `${coverCleanup.kept} open-seat booking(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports)`
       : null,
     ...coverCleanup.overbooked,
+    requestsOff > 0
+      ? `${requestsOff} waiting standin request(s) for ${registration.user.name} cancelled, and the asking captain(s) told`
+      : null,
+    coverCleanup.emptySeatRequests > 0
+      ? `${coverCleanup.emptySeatRequests} waiting open-seat standin request(s) for ${team.name} cancelled: the roster is full`
+      : null,
   ].filter(Boolean);
   return {
     // A permanent signing that structurally can't be reached on Discord is
     // discovered on match night — the assign-standin garnish, same reason.
     message: withReachabilityNote(
       `${registration.user.name} signed to ${team.name}` +
-        (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : ""),
+        (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : "") +
+        (overRuleNote ? `. ${overRuleNote}` : ""),
       await reachabilityNote(userId),
     ),
   };
