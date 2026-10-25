@@ -263,10 +263,15 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   RSVP; the actual standin can.
 - _Standins_: guards in `src/lib/standin-service.ts` (Serializable
   transactions forming a deliberate write-skew triad with the withdraw and
-  sign-free-agent paths), the pure same-night conflict rule in
+  sign-free-agent paths), the pure same-night conflict and MMR rules in
   `src/lib/standin.ts`. Captains self-serve on the match page
   (`src/app/actions/standins.ts`); admins get the any-team override. Assign
-  and remove both Discord-mention the standin.
+  and remove both Discord-mention the standin. Past the 100-MMR allowance a
+  captain's booking is a `StandinRequest` the other captain answers;
+  `cancelPendingStandinRequests` closes the ones a roster or schedule change
+  makes impossible. Free-agent signings follow the same allowance against the
+  player they replace (`src/lib/free-agent-rule.ts`,
+  `src/lib/free-agent-rule-service.ts`).
 - _Reschedules_: a ready check. `src/lib/reschedule-service.ts` (one PENDING
   proposal per match offering up to three times; current captain/season/Draft/
   match authority is re-read; every answer, captain lock and accept that moves

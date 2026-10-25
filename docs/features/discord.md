@@ -140,7 +140,12 @@ actions: `src/app/actions/admin-discord.ts`.
   where the kickoff is news to that side: on a routine one (`kickoffIsRoutine`:
   a regular fixture never retimed, past the side's first) they are named
   without a ping (Tim's call, 2026-10-24: ping on a change, not on the
-  calendar). Free-agent signing or release: that player. Draft
+  calendar). Free-agent signing or release: that player (a signing over the
+  100-MMR rule names both MMRs in the post, still pinging only them). Standin
+  request closed because the standin left or was signed, or the covered player
+  was released (`standinRequestCancelledMessage`): that team's captain, who has
+  to line up someone else; a request closed by a filled seat, a forfeit, a
+  reopen or a teardown posts nothing. Draft
   started (`draftStartedAnnouncement`, sent by `startDraft`): the linked
   captains only, in draft order, unlinked captains named in plain text; a
   captain who misses the start loses turns to auto-nomination, while everyone

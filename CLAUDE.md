@@ -313,7 +313,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Make copy name controls that exist, by their real names**
   (`src/app/admin/admin-copy-guard.test.ts` checks the admin panel).
 - **Never silently rewrite what a player typed.** When the server adjusts a
-  value (an MMR clamp, a draft-night freeze), the toast says what was stored.
+  value (an MMR clamp, a draft-night freeze, the post-draft MMR lock), the toast
+  says what was stored.
 - **Read query values with `singleSearchParam`** (`src/lib/search-params.ts`): a
   repeated key is "unavailable", never an array handed to Prisma.
 - **Make writes unreachable on an archived season.** Pages take `?season=`
