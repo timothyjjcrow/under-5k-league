@@ -9,7 +9,11 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { matchCoverIssues, uncoveredByRequest } from "@/lib/admin-sections";
+import {
+  adminMayAgreeToRequest,
+  matchCoverIssues,
+  uncoveredByRequest,
+} from "@/lib/admin-sections";
 import {
   matchCorrectionContext,
   matchLogisticsOpen,
@@ -98,6 +102,9 @@ export type AdminResultRowMatch = {
 type StandinBlockTeam = {
   id: string;
   name: string;
+  /** Who captains it: an admin captaining the asking team gets no "agree"
+   *  (adminMayAgreeToRequest). Both callers load it. */
+  captainId?: string;
   members: { userId: string; user: { name: string } }[];
 };
 
@@ -654,6 +661,7 @@ export function StandinMatchBlock({
   label,
   teamSize,
   assignOpen,
+  viewerId,
 }: {
   /** `games` decides the lock: once one is imported, removeStandinGuarded
    *  refuses every removal (it would strip the standin from the rest of the
@@ -685,6 +693,10 @@ export function StandinMatchBlock({
   /** The card-level phase gate — the assign form hides where the service
    *  would refuse; removal stays rendered (cleanup is legal everywhere). */
   assignOpen: boolean;
+  /** The admin viewing the block. approveStandinRequest refuses one who
+   *  captains the asking team or filed the request, so their "agree" hides
+   *  (adminMayAgreeToRequest); decline and withdraw stay. */
+  viewerId?: string;
 }) {
   const home = teams.find((t) => t.id === m.homeTeamId);
   const away = teams.find((t) => t.id === m.awayTeamId);
@@ -737,6 +749,15 @@ export function StandinMatchBlock({
     (c) => c.out,
   );
   const preselect = outChoices.length === 1 ? outChoices[0].member.userId : "";
+  // One answer for the row's "agree" and the banner that names it: booking
+  // must be open, and the service refuses the asking side's own admin.
+  const mayAgree = (r: StandinRequestView) =>
+    adminMayAgreeToRequest({
+      agreeOpen: assignOpen,
+      viewerId,
+      request: r,
+      askingCaptainId: teams.find((t) => t.id === r.teamId)?.captainId,
+    });
   // OPEN SEATS. A short roster is filled by a standin who replaces NOBODY, so
   // it needs its own option — this is the case that had no UI at all, which is
   // why a 4-of-5 team simply could not be covered. One entry per still-open
@@ -772,7 +793,7 @@ export function StandinMatchBlock({
           uncovered,
           requests,
           teamName,
-          agreeOpen: assignOpen,
+          canAgree: mayAgree,
         });
         return (
           <>
@@ -871,7 +892,7 @@ export function StandinMatchBlock({
                   ).
                 </span>
                 <span className="ml-auto flex shrink-0 gap-1">
-                  {assignOpen ? (
+                  {mayAgree(r) ? (
                     <ActionForm
                       action={approveStandinRequestAsAdmin}
                       hidden={{ requestId: r.id }}
@@ -1018,6 +1039,7 @@ export async function AdminMatchTools({
   match,
   label,
   viewerHasCaptainTools = false,
+  viewerId,
 }: {
   match: AdminResultRowMatch & {
     seasonId: string;
@@ -1039,6 +1061,8 @@ export async function AdminMatchTools({
   /** The admin also captains this match and the page shows their Captain
    *  tools, whose import form this card then points at instead of repeating. */
   viewerHasCaptainTools?: boolean;
+  /** The admin viewing the page, for the standin block's "agree". */
+  viewerId?: string;
 }) {
   const season = { ...match.season, id: match.seasonId };
   if (!season.isActive) return null;
@@ -1056,6 +1080,7 @@ export async function AdminMatchTools({
         select: {
           id: true,
           name: true,
+          captainId: true,
           members: {
             select: { userId: true, user: { select: { name: true } } },
             orderBy: { createdAt: "asc" },
@@ -1243,6 +1268,7 @@ export async function AdminMatchTools({
               teamName={teamName}
               teamSize={season.teamSize}
               assignOpen={assignOpen}
+              viewerId={viewerId}
               label="Standins"
             />
           ) : null}

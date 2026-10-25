@@ -393,11 +393,13 @@ export async function withdrawSignup(
     }
   }
   refresh();
+  // Reinstate restores the signup only: a closed request stays closed (its
+  // captain was told it's off), so the undo hint says so where they meet.
   return {
     message:
       `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo` +
       (requestCount > 0
-        ? ` · ${requests} for them ${requestCount === 1 ? "was" : "were"} cancelled`
+        ? ` · ${requests} for them ${requestCount === 1 ? "was" : "were"} cancelled (Reinstate doesn't bring ${requestCount === 1 ? "it" : "requests"} back)`
         : ""),
   };
 }
