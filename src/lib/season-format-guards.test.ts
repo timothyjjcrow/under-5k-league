@@ -66,6 +66,17 @@ describe("the season format is read through its resolver", () => {
     expect(callCount(outside, /\bresolveSeasonFormat\s*\(/)).toBeGreaterThanOrEqual(5);
     // Schedule generation, the fixture seeder and /rules' fallback.
     expect(callCount(outside, /\bplannedSeasonFormat\s*\(/)).toBeGreaterThanOrEqual(3);
+    // Every printed plan follows a bracket withdrawals shrank: /schedule,
+    // Home, the admin format box and /rules.
+    for (const path of [
+      "src/app/schedule/page.tsx",
+      "src/components/home/season-view.tsx",
+      "src/components/admin/season-format-controls.tsx",
+      "src/lib/league-rules.ts",
+    ]) {
+      const file = SOURCE.find((candidate) => candidate.path === path)!;
+      expect(stripLineComments(file.text), path).toMatch(/\bwithBracket\s*\(/);
+    }
   });
 
   it("stays importable from client code", () => {

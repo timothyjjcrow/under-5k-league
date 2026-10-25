@@ -39,15 +39,18 @@ import {
   describeSeasonFormat,
   formatSteps,
   formatBracketSize,
+  parseFormatConfig,
   plannedSeasonFormat,
   playoffEntrantsPhrase,
   playoffSteps,
   recommendedKnobs,
   resolveSeasonFormat,
   seasonLengthPhrase,
+  withBracket,
   type FormatSource,
   type SeasonFormat,
 } from "./season-format";
+import { formatProblems } from "./season-builder";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 import { MATCH_NIGHT_POLL_LABEL } from "./season-copy";
 import {
@@ -226,7 +229,18 @@ export function rulesSeasonFormat(
   teams: readonly { groupKey: string | null }[],
   fixtures: readonly { phase: string }[],
 ): SeasonFormat | null {
-  return resolveSeasonFormat(season, teams, regularScheduleMade(fixtures));
+  const scheduled = regularScheduleMade(fixtures);
+  // A saved layout today's captains can't fill isn't a plan yet: say
+  // nothing about this season rather than print one that can't be built.
+  const stored = parseFormatConfig(season.formatConfig);
+  if (
+    !scheduled &&
+    stored.kind === "CUSTOM" &&
+    formatProblems(stored.knobs, teams.length).errors.length > 0
+  ) {
+    return null;
+  }
+  return resolveSeasonFormat(season, teams, scheduled);
 }
 
 /** The regular-season schedule exists, so the format is settled. */
@@ -511,7 +525,14 @@ export function leagueRules({
     basis: basisLine(season, config.name),
     defaults: season === null,
     sections: [
-      formatSection(activeFormat, formatFinal),
+      // Withdrawals can shrink the bracket below the format's: the length
+      // and rounds printed are the ones Start playoffs will build.
+      formatSection(
+        activeFormat && activeTeams !== null
+          ? withBracket(activeFormat, formatBracketSize(activeFormat, activeTeams))
+          : activeFormat,
+        formatFinal,
+      ),
       seriesSection(settings),
       standingsSection(settings),
       playoffsSection(activeTeams, activeFormat),

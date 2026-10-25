@@ -326,6 +326,25 @@ export function seasonBracketSize(
 }
 
 /**
+ * The format as its playoffs will run once withdrawals have shrunk the
+ * bracket to `bracketSize` (`projectPlayoffField().bracketSize`): fewer
+ * places, rounds and weeks, so a printed plan or sentence matches what Start
+ * playoffs builds. The format itself never changes with a withdrawal
+ * (`resolveSeasonFormat` counts every team); only what is shown does.
+ */
+export function withBracket(format: SeasonFormat, bracketSize: number): SeasonFormat {
+  if (bracketSize < 2 || bracketSize >= format.playoffSpots) return format;
+  const playoffRounds = Math.round(Math.log2(bracketSize));
+  return {
+    ...format,
+    playoffSpots: bracketSize,
+    qualifiersPerGroup: bracketSize / format.groupSizes.length,
+    playoffRounds,
+    totalWeeks: format.firstPlayoffWeek + playoffRounds - 1,
+  };
+}
+
+/**
  * The bracket a resolved format seeds from `eligibleCount` teams: its
  * playoff places, shrunk the same way (`seasonBracketSize`).
  */

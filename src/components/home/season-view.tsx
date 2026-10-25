@@ -16,6 +16,7 @@ import {
   formatName,
   resolveSeasonFormat,
   seasonPlan,
+  withBracket,
 } from "@/lib/season-format";
 import {
   bracketSeedLabels,
@@ -318,7 +319,10 @@ export async function SeasonView({
   const lastRegularWeek = matches
     .filter((m) => m.phase === "REGULAR")
     .reduce((max, m) => Math.max(max, m.week), 0);
-  const planFormat = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
+  // Withdrawals can shrink the bracket below the format's: print the rounds
+  // Start playoffs will build.
+  const resolvedFormat = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
+  const planFormat = resolvedFormat && withBracket(resolvedFormat, playoffField.bracketSize);
   const seasonPlanView =
     planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
       ? {

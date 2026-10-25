@@ -16,6 +16,21 @@ export function parseSingleTiebreakerSlot(slot: string | null | undefined) {
 }
 
 export const TIEBREAKER_SUMMARY = "Best of 1 · One loss ends your run · Up to 3 games per team";
+
+/**
+ * The season archive's line over its tiebreaker games, from how they were
+ * played: archived seasons kept best-of-three series, current ones play BO1
+ * knockout games.
+ */
+export function tiebreakerArchiveIntro(bestOfs: readonly number[]): string {
+  if (bestOfs.length > 0 && bestOfs.every((bestOf) => bestOf === 1)) {
+    return "Best-of-one knockout games settled playoff qualification and seed order.";
+  }
+  if (bestOfs.length > 0 && bestOfs.every((bestOf) => bestOf === 3)) {
+    return "Best-of-three series settled playoff qualification and seed order.";
+  }
+  return "Tiebreaker games settled playoff qualification and seed order.";
+}
 export const TIEBREAKER_RULES = "Normal standings rules come first. Remaining ties use BO1 brackets. Qualification uses one bracket per available place; seeding brackets decide order. If more than eight teams are tied per place, the published draw selects the entrants before play; the rest are eliminated. Byes and equal finishes use draw order. Ready games run in parallel. No extra deciders.";
 
 export function parseTiebreakerStage(slot: string | null | undefined): {

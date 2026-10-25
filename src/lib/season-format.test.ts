@@ -24,6 +24,7 @@ import {
   seasonPlan,
   seedGroups,
   teamCountSeasonNote,
+  withBracket,
 } from "./season-format";
 import { playoffFirstRound } from "./schedule";
 
@@ -224,6 +225,33 @@ describe("playoffBracketSize", () => {
 
   it("shrinks a table's bracket to what its eligible teams can fill", () => {
     expect(playoffBracketSize("TABLE", 5, 3)).toBe(2);
+  });
+});
+
+describe("withBracket", () => {
+  it("prints the rounds a bracket shrunk by withdrawals will play", () => {
+    // A table of 9 sending 8, two teams withdrawn: Start playoffs seeds 4.
+    const topEight = buildSeasonFormat({ groups: 1, meet: 1, playoffs: 8 }, 9)!;
+    const shown = withBracket(topEight, 4);
+    expect(shown).toMatchObject({ playoffSpots: 4, playoffRounds: 2, totalWeeks: 12, teamCount: 9 });
+    expect(describeSeasonFormat(shown)).toContain("the top 4 play the semifinals and the grand final");
+    const first = new Date("2026-11-07T22:00:00Z");
+    expect(
+      seasonPlan(shown, first, undefined, null)
+        .filter((step) => step.kind === "PLAYOFF")
+        .map((step) => [step.label, step.fromWeek]),
+    ).toEqual([
+      ["Semifinals", 11],
+      ["Grand final", 12],
+    ]);
+    // Groups share the shrunk bracket.
+    expect(withBracket(buildSeasonFormat({ groups: 2, meet: 1, playoffs: 8 }, 8)!, 4).qualifiersPerGroup).toBe(2);
+  });
+
+  it("leaves a full or empty bracket as the format printed it", () => {
+    const topEight = buildSeasonFormat({ groups: 1, meet: 1, playoffs: 8 }, 9)!;
+    expect(withBracket(topEight, 8)).toBe(topEight);
+    expect(withBracket(topEight, 0)).toBe(topEight);
   });
 });
 

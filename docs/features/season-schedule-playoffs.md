@@ -108,6 +108,20 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   playoff places, else the Recommended ones, shrunk to what the eligible teams
   fill. The argument is required, as `FieldTeam.groupKey` is, so tsc lists
   every caller; narrow selects spread `SEASON_FORMAT_SELECT`.
+- **A printed plan follows a bracket withdrawals shrank.** The format never
+  changes with a withdrawal, but a chosen top 8 of 8 that loses a team seeds
+  4, so /schedule's and Home's plan, the admin format box and /rules print
+  `withBracket(format, field.bracketSize)`: the semifinals and the final a
+  week earlier, not quarterfinals. /rules prints no plan at all for a saved
+  layout today's captains can't fill (`rulesSeasonFormat` returns null until
+  the schedule exists).
+- **Every layout is played end to end in a test.**
+  `season-builder-lifecycle.itest.ts` takes each layout from Generate to a
+  champion twice, once with decided results and once with every match drawn
+  so the tiebreaker week settles every place, and checks the fixtures, the
+  season-start post, each group's cut, the bracket's shape and its weeks
+  against the plan. `e2e-postseason/season-layouts.spec.ts` walks the pages
+  of seasons in chosen layouts (`FIXTURE_FORMAT` in `scripts/seed-fixture.ts`).
   `playoffSetupRevision` hashes the stored format and every team's group.
   `season-format-guards.test.ts` keeps `seasonFormat(`, the count constants,
   `playoffBracketSize(` and `pickBracketSize(` inside the modules that own

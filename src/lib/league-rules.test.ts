@@ -351,6 +351,35 @@ describe("leagueRules", () => {
     expect(regularScheduleMade([{ phase: "REGULAR" }])).toBe(true);
   });
 
+  it("prints no plan for a saved layout today's captains can't fill", () => {
+    // A top 8 saved during signups with 6 captains: the builder says it
+    // can't be generated yet, so /rules makes no claim about this season.
+    const stored = { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' };
+    const six = Array.from({ length: 6 }, () => ({ groupKey: null }));
+    expect(rulesSeasonFormat(stored, six, [])).toBeNull();
+    const rules = build({ teamCount: 6, format: rulesSeasonFormat(stored, six, []) });
+    expect(section(rules, "format")).not.toContain("This season has");
+    expect(section(rules, "playoffs")).not.toContain("This season");
+    // With eight captains it fits, and is the plan.
+    const eight = Array.from({ length: 8 }, () => ({ groupKey: null }));
+    expect(rulesSeasonFormat(stored, eight, [])?.playoffSpots).toBe(8);
+  });
+
+  it("prints the rounds a bracket shrunk by withdrawals will play", () => {
+    const topEight = rulesSeasonFormat(
+      { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' },
+      Array.from({ length: 9 }, () => ({ groupKey: null })),
+      [{ phase: "REGULAR" }],
+    );
+    // Two of nine withdrawn: seven teams still in seed a bracket of 4.
+    const format = section(build({ teamCount: 7, format: topEight, formatFinal: true }), "format");
+    expect(format).toContain("the top 4 play the semifinals and the grand final");
+    expect(format).toContain("That's 12 weeks in all: 9 regular weeks, the tiebreaker week and 2 playoff weeks.");
+    // The general rule names quarterfinals for 10+ teams; this season's
+    // own sentence doesn't.
+    expect(format.slice(format.indexOf("This season has"))).not.toContain("quarterfinals");
+  });
+
   it("states an admin's chosen cut instead of crediting the team count", () => {
     const topEight = rulesSeasonFormat(
       { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' },
