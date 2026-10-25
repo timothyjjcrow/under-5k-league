@@ -1510,7 +1510,12 @@ export async function reopenMatch(
   const matchId = str(formData, "matchId");
   const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
 
-  let reopened: { seasonId: string; week: number; uncrownedFinal: boolean };
+  let reopened: {
+    seasonId: string;
+    week: number;
+    uncrownedFinal: boolean;
+    requestsCancelled: number;
+  };
   try {
     reopened = await prisma.$transaction(
       async (tx) => {
@@ -1652,6 +1657,16 @@ export async function reopenMatch(
             "That match or its games just changed — reload before reopening it.",
           );
         }
+        // A standin request still waiting when the match was marked final
+        // asked about a fixture that has since been decided. Reopening for an
+        // import must not hand the other captain an Agree for it again (the
+        // no-game forfeit closes its own; a manual score never did). No post:
+        // nobody has to act on a request for a decided match.
+        const staleRequests = await cancelPendingStandinRequests(
+          tx,
+          { matchId: match.id },
+          admin.id,
+        );
 
         if (match.scheduledAt) {
           await invalidatePendingAnnouncementMarkers(
@@ -1702,12 +1717,16 @@ export async function reopenMatch(
           seasonId: match.seasonId,
           week: match.week,
           uncrownedFinal: crownedFinalCorrection,
+          requestsCancelled: staleRequests.length,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (error) {
     if (error instanceof ResultWriteError) return { error: error.message };
+    if (error instanceof StandinRequestsChangedError) {
+      return { error: error.message };
+    }
     if (isSerializationConflict(error)) {
       return {
         error:
@@ -1717,16 +1736,20 @@ export async function reopenMatch(
     throw error;
   }
 
+  const requestNote = reopened.requestsCancelled
+    ? ` · ${reopened.requestsCancelled} standin request(s) cancelled`
+    : "";
   await logAdminAction({
     action: "reopenMatch",
-    summary: `${reopened.uncrownedFinal ? "Un-crowned the champion and reopened the grand final" : `Reopened a week ${reopened.week} match that had been marked final`}`,
+    summary: `${reopened.uncrownedFinal ? "Un-crowned the champion and reopened the grand final" : `Reopened a week ${reopened.week} match that had been marked final`}${requestNote}`,
     seasonId: reopened.seasonId,
   });
   refreshGames();
   return {
-    message: reopened.uncrownedFinal
-      ? "Champion retracted and grand final reopened — correct the result to crown the winner again"
-      : "Match reopened — its games can be imported now",
+    message:
+      (reopened.uncrownedFinal
+        ? "Champion retracted and grand final reopened — correct the result to crown the winner again"
+        : "Match reopened — its games can be imported now") + requestNote,
   };
 }
 

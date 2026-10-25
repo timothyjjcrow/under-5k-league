@@ -70,6 +70,7 @@ import {
   makeTeam,
   makeUser,
   recordMatch,
+  scheduleClaim,
   startDraftState,
 } from "./factories";
 
@@ -244,6 +245,46 @@ async function askForCover(
   });
 }
 
+describe("reopenMatch closes a request left waiting by a manual score", () => {
+  it("a manual score keeps the request out of sight; Reopen cancels it and says so", async () => {
+    const fx = await regularSeasonWithCover();
+    const waiting = await askForCover(fx, fx.weekOne.id, fx.subOne.id);
+
+    // A typed score for a series that happened with no imports: not a
+    // forfeit, so the ruling leaves the request alone.
+    expect(
+      (
+        await recordResult(
+          empty,
+          fd({ matchId: fx.weekOne.id, homeScore: "2", awayScore: "1" }),
+        )
+      )?.error,
+    ).toBeUndefined();
+    expect(
+      (await prisma.standinRequest.findUniqueOrThrow({ where: { id: waiting.id } }))
+        .status,
+    ).toBe(STANDIN_REQUEST_STATUS.PENDING);
+
+    // Reopening for an import must not hand the other captain an Agree for
+    // a fixture that was decided.
+    const reopened = await reopenMatch(empty, fd({ matchId: fx.weekOne.id }));
+    expect(reopened?.error).toBeUndefined();
+    expect(reopened?.message).toContain("1 standin request(s) cancelled");
+    expect(await lastLog("reopenMatch")).toContain("1 standin request(s) cancelled");
+    expect(
+      await prisma.standinRequest.findUniqueOrThrow({ where: { id: waiting.id } }),
+    ).toMatchObject({
+      status: STANDIN_REQUEST_STATUS.CANCELLED,
+      decidedById: "test-admin",
+    });
+    const lateAgree = await approveStandinRequest({
+      requestId: waiting.id,
+      actingCaptainId: fx.away.captainId,
+    });
+    expect(lateAgree.ok).toBe(false);
+  });
+});
+
 describe("recordResult — a no-game forfeit closes the match's waiting requests", () => {
   it("cancels the pending request, says so, posts nothing, and Reopen doesn't revive it", async () => {
     const fx = await regularSeasonWithCover();
@@ -372,7 +413,7 @@ describe("fixture teardowns report the waiting standin requests they remove", ()
     const res = await generateSchedule(
       empty,
       fd({
-        expectedActiveSeasonId: fx.season.id,
+        ...(await scheduleClaim(fx.season.id)),
         firstNight: "2026-11-01T20:00",
         firstNightTs: String(first.getTime()),
       }),
@@ -401,7 +442,7 @@ describe("fixture teardowns report the waiting standin requests they remove", ()
     const res = await generateSchedule(
       empty,
       fd({
-        expectedActiveSeasonId: fx.season.id,
+        ...(await scheduleClaim(fx.season.id)),
         firstNight: "2026-11-01T20:00",
         firstNightTs: String(first.getTime()),
       }),
