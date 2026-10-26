@@ -188,6 +188,10 @@ model Season {
   dotaLeagueId    String? // optional Valve league id, if the league is ticketed
   matchSchedule   String? // weekly match slot shown before signup (null = app default)
   firstMatchNight DateTime? // week 1's match time; later weeks (incl. playoffs) are +7d each
+  // The season format an admin chose (season-format.ts): versioned JSON,
+  // {"v":1,"groups":2,"meet":1,"playoffs":4}. Null is the Recommended format,
+  // the team-count rule. While regular fixtures exist it describes them.
+  formatConfig    String?
   // Durable competitive lock for Fantasy. The first imported Game stamps this
   // in the SAME transaction as the game/series projection. It deliberately
   // survives game removal: once real performance data was visible, deleting a
@@ -320,8 +324,8 @@ model Team {
   // banked points could otherwise seed a dead team into the bracket. Rows,
   // rosters and history are kept; standings badge it.
   withdrawn  Boolean  @default(false)
-  // "A" or "B" when the season plays two groups (10+ teams; season-format.ts).
-  // Written for every team by generateSchedule, null for a one-table season.
+  // "A" or "B" when the season plays two groups (season-format.ts). Written
+  // for every team by generateSchedule, null for a one-table season.
   groupKey   String?
   createdAt  DateTime @default(now())
 
