@@ -181,6 +181,43 @@ test("players check in and captains bring in standins without any lineup confirm
   });
 });
 
+// The standin MMR rule: a standin more than 100 MMR above the player they
+// cover waits for the other captain, who agrees from their own match page.
+test("a standin over the MMR allowance waits for the other captain, who agrees on the match page", async ({ page, request }) => {
+  test.setTimeout(90_000);
+  await withFixture(request, false, async (f) => {
+    const noErrors = trackPageErrors(page);
+    const path = `/matches/${f.matchId}`;
+    const standin = f.users[f.teamSize * 2];
+    // Everyone signed up at 2800: 3000 is 200 above the covered player.
+    await db.registration.update({ where: { seasonId_userId: { seasonId: f.seasonId, userId: standin.id } }, data: { mmr: 3000 } });
+
+    await login(page, f.users[0], path);
+    await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(standin.id);
+    await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
+    await page.getByRole("button", { name: "Assign standin", exact: true }).click();
+    const waiting = page.locator("#match-standins li").filter({ hasText: `waiting for the ${f.awayName} captain to agree` });
+    await expect(waiting).toContainText("200 MMR above the player they cover");
+    await expect(waiting.getByRole("button", { name: "Withdraw", exact: true })).toBeVisible();
+    expect(await db.standinRequest.count({ where: { matchId: f.matchId, status: "PENDING" } })).toBe(1);
+    expect(await db.standinAssignment.count({ where: { matchId: f.matchId } })).toBe(0);
+
+    await login(page, f.users[f.teamSize], path);
+    await expect(page.getByRole("list", { name: "Waiting on you" })).toContainText(`wants ${standin.name} to stand in and needs your OK.`);
+    const ask = page.locator("#match-standins li").filter({ hasText: "Your OK is needed" });
+    await ask.getByRole("button", { name: "Agree", exact: true }).click();
+    await expect.poll(() => db.standinAssignment.count({ where: {
+      matchId: f.matchId, teamId: f.homeId, standinUserId: standin.id, replacingUserId: f.users[1].id,
+    } })).toBe(1);
+    expect((await db.standinRequest.findFirstOrThrow({ where: { matchId: f.matchId } })).status).toBe("APPROVED");
+    await expect(page.locator("#match-standins")).toContainText(`${standin.name} in for ${f.users[1].name}`);
+    await expect(page.getByRole("list", { name: "Waiting on you" })).toHaveCount(0);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expectNoHorizontalOverflow(page, "standins card at 390px");
+    noErrors();
+  });
+});
+
 test("former players retain actual appearances and auction receipts while identity correction stays admin-only", async ({ page, request }) => {
   test.setTimeout(90_000);
   await withFixture(request, true, async (f) => {

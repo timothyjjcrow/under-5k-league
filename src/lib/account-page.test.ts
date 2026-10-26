@@ -516,8 +516,13 @@ describe("MMR field copy", () => {
     expect(preview("", { storedMmr: 0 })).toBe("You're listed at an unknown MMR.");
     // A changed number is judged like a new one.
     expect(preview("4401", { storedMmr: 4400 })).toMatch(/listed at 2965 MMR/);
+    // The freeze promises no edit window after the auction: the post-draft
+    // lock follows it, so only an admin changes the number from there.
     expect(preview("1500", { storedMmr: 4400, frozen: true })).toBe(
-      "The draft is running, so you stay listed at 4400 MMR until it ends.",
+      "The draft is running, so you stay listed at 4,400 MMR. After the draft only a league admin can change it.",
+    );
+    expect(preview("", { storedMmr: 0, frozen: true })).toBe(
+      "The draft is running, so you stay listed at an unknown MMR. After the draft only a league admin can change it.",
     );
   });
 });

@@ -6,10 +6,12 @@ import { prisma } from "@/lib/prisma";
 import { parseGamePlayers } from "@/lib/player-stats";
 import { getSeasonDraftStatus } from "@/lib/queries";
 import { SEASON_FORMAT_SELECT } from "@/lib/season-format";
+import { STANDIN_REQUEST_STATUS } from "@/lib/constants";
+import { STANDIN_REQUEST_VIEW } from "@/lib/standin-service";
 
 /**
  * The match page's shared reads. The page loads the match once, with its
- * teams, games, standin bookings and season, and passes it and the viewer to
+ * teams, games, standin bookings and requests, and season, and passes it and the viewer to
  * every card; no card reads the season or the match again.
  *
  * The reads only some cards need (the draft status, both teams' rosters and
@@ -27,6 +29,13 @@ export async function loadMatch(id: string) {
       // score stays in the database.
       games: { orderBy: { startTime: "asc" }, select: GAME_VIEW_COLUMNS },
       standins: { include: { standin: true, replaced: true } },
+      // Bookings waiting for the other captain's OK (the MMR rule): the
+      // Standins card, Captain to-dos and Admin tools show them.
+      standinRequests: {
+        where: { status: STANDIN_REQUEST_STATUS.PENDING },
+        include: STANDIN_REQUEST_VIEW,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      },
       season: {
         select: {
           isActive: true,
@@ -162,4 +171,24 @@ const outUserIds = cache(async function outUserIds(
  */
 export function loadOutUserIds(match: { id: string; scheduleRevision: number }) {
   return outUserIds(match.id, match.scheduleRevision);
+}
+
+const declinedStandinIds = cache(async function declinedStandinIds(
+  matchId: string,
+  teamId: string,
+): Promise<ReadonlySet<string>> {
+  const rows = await prisma.standinRequest.findMany({
+    where: { matchId, teamId, status: STANDIN_REQUEST_STATUS.DECLINED },
+    select: { standinUserId: true },
+  });
+  return new Set(rows.map((r) => r.standinUserId));
+});
+
+/**
+ * Standins the other captain declined for this team in this match: the
+ * server refuses to ask for them again, so the captain's picker greys them
+ * out (`standinPickerBlock`).
+ */
+export function loadDeclinedStandinIds(match: { id: string }, teamId: string) {
+  return declinedStandinIds(match.id, teamId);
 }

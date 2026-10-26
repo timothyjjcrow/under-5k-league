@@ -1,7 +1,7 @@
 import { Prisma } from "@prisma/client";
 import { randomInt } from "node:crypto";
 import { prisma } from "./prisma";
-import { DOTA_MATCH_KIND, MATCH_PHASE, SEASON_STATUS } from "./constants";
+import { DOTA_MATCH_KIND, MATCH_PHASE, SEASON_STATUS, STANDIN_REQUEST_STATUS } from "./constants";
 import { projectPlayoffField } from "./playoff-field";
 import { playoffSetupRevision } from "./playoff-command";
 import { regularSeasonStatus } from "./schedule-status";
@@ -220,6 +220,11 @@ export async function clearTiebreakerWeek(seasonId: string, expectedRevision?: s
     const games: ArchivedGame[] = extra.flatMap((m) => m.games.map((game) => ({
       dotaMatchId: game.dotaMatchId, slot: m.bracketSlot, week: m.week,
     })));
+    // Waiting standin requests cascade with the slate; counted for the
+    // admin's toast and log, never posted (nobody has to act on a reset).
+    const standinRequests = await tx.standinRequest.count({
+      where: { matchId: { in: ids }, status: STANDIN_REQUEST_STATUS.PENDING },
+    });
     const key = tiebreakerGamesArchiveKey(seasonId);
     const prior = await tx.setting.findUnique({ where: { key } });
     let archive: ArchivedGame[] = [];
@@ -250,6 +255,7 @@ export async function clearTiebreakerWeek(seasonId: string, expectedRevision?: s
     return { matchCount: extra.length, removedGameCount: games.length, standDowns,
       checkins: extra.reduce((n, m) => n + m.availability.length, 0),
       standins: extra.reduce((n, m) => n + m.standins.length, 0),
+      standinRequests,
       predictions: extra.reduce((n, m) => n + m.predictions.length, 0),
       reschedules: extra.reduce((n, m) => n + m.reschedules.length, 0) };
   });

@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 
 export const metadata = shareMetadata(
   "Rules",
-  "Series lengths, standings and tiebreakers, forfeits, standins and match night, in one place.",
+  "Series lengths, standings and tiebreakers, forfeits, standins, match night, pauses and conduct, in one place.",
   "/rules",
 );
 

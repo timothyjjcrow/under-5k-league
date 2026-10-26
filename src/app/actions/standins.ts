@@ -13,7 +13,10 @@ import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
 import { parseSeatTarget } from "@/lib/standin";
 import {
+  approveStandinRequest,
   assignStandinGuarded,
+  cancelStandinRequest,
+  declineStandinRequest,
   removeStandinGuarded,
 } from "@/lib/standin-service";
 import { sendDiscordMessage } from "@/lib/discord";
@@ -50,19 +53,98 @@ export async function captainAssignStandin(
     teamId: seat ?? undefined,
     actingCaptainId: user.role === "ADMIN" ? null : user.id,
     actingUserId: user.id,
+    // The captain's card follows the captains' rule even for an admin who
+    // captains: a standin over the MMR allowance waits for the other
+    // captain. Only the admin panel books over it.
+    overLimit: "ask",
   });
   if (!res.ok) return { error: res.error };
   await sendDiscordMessage(res.announcement, res.mentions);
   refresh();
-  // If the announcement structurally can't reach the standin (unlinked, not
-  // in the server, stuck behind the rules screen), the captain arranging the
-  // cover finds out NOW, not on match night. "" when reachable or unknowable.
+  // If the announcement structurally can't reach whoever must act on it (the
+  // standin, or the other captain for a request: unlinked, not in the server,
+  // stuck behind the rules screen), the captain finds out NOW, not on match
+  // night. "" when reachable or unknowable.
   return {
     message: withReachabilityNote(
       res.message,
-      await reachabilityNote(str(formData, "standinUserId")),
+      await reachabilityNote(res.reachUserId ?? str(formData, "standinUserId")),
     ),
   };
+}
+
+/**
+ * The other captain agrees to a standin over the MMR allowance, which books
+ * them. Always as a captain, never the admin override: an admin agrees from
+ * the admin panel, where it is logged.
+ */
+export async function captainApproveStandinRequest(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const res = await approveStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: user.id,
+    actingUserId: user.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  refresh();
+  return {
+    message: withReachabilityNote(
+      res.message,
+      res.reachUserId ? await reachabilityNote(res.reachUserId) : "",
+    ),
+  };
+}
+
+/** The other captain declines a standin request; the asking captain is told. */
+export async function captainDeclineStandinRequest(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const res = await declineStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: user.id,
+    actingUserId: user.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  refresh();
+  return { message: res.message };
+}
+
+/** The asking captain withdraws their request, freeing the seat. */
+export async function captainCancelStandinRequest(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  let user;
+  try {
+    user = await requireUser();
+  } catch {
+    return { error: "Sign in required" };
+  }
+  const res = await cancelStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: user.id,
+    actingUserId: user.id,
+  });
+  if (!res.ok) return { error: res.error };
+  refresh();
+  return { message: res.message };
 }
 
 /** A captain removes a standin assignment from their own team. */

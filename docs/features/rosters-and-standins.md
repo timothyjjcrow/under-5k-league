@@ -44,9 +44,10 @@ standin cover, and match-night check-ins. Main files:
   with zero games (never someone who played a manually scored series);
   `abortDraft` deletes the fixtures and their bookings.
 - **Return the announcement; let the action send it.** Services return
-  `announcement` + `mentions` so a webhook failure can't touch the write. Assign
-  and remove send from BOTH the captain action (`standins.ts`) and the admin
-  action (`admin-roster.ts`); miss one and that path stops notifying.
+  `announcement` + `mentions` so a webhook failure can't touch the write. Assign,
+  remove, and agreeing to or declining a standin request send from BOTH the
+  captain action (`standins.ts`) and the admin action (`admin-roster.ts`); miss
+  one and that path stops notifying.
 
 ## Permanent roster moves
 
@@ -55,10 +56,29 @@ standin cover, and match-night check-ins. Main files:
   PLAYER signup (promote standins first), no roster seat, no pending cover (one
   account in both import sets fails every `classifyGame`) and an open seat, all
   re-read in the transaction (else two signings into the last seat make six).
+- **A signing is held to the standin MMR rule** (Tim's call, 2026-10-25). The
+  free agent is judged at read time against the player they replace: the newest
+  player released from that team this season whose seat no later free-agent
+  signing has refilled (`unrefilledDeparture`, `free-agent-rule.ts`; paired
+  last in, first out). Only releases count as departures and only free-agent
+  signings as refills, since both happen only after the draft: an auction
+  Undo, an abort or a pre-draft captain change is no departure, so a team
+  short from the draft uses its lowest MMR. Its MMR is the tenure's
+  `acquisitionMmr`, else that player's signup MMR; with nothing waiting to be
+  refilled, the team's lowest signup MMR (the empty-seat yardstick). Over
+  `STANDIN_MMR_ALLOWANCE`, or with an MMR unknown on either side
+  (`freeAgentOverRule`), the action refuses unless the form's "Sign over the
+  100-MMR rule" box (`overMmrRule`) is ticked; the refusal names both MMRs, the
+  gap and the box. A ticked signing over the rule says so with both MMRs in the
+  toast, the admin log and the Discord post (`freeAgentOverRuleNote`). The sign
+  form labels each short team with its yardstick ("· replaces Bob, 2,000 MMR",
+  `freeAgentSeatLabel`, loaded by `loadFreeAgentBaselines` for short teams only).
 - **A signing reconciles empty-seat cover.** Filling the LAST seat cancels the
   team's `replacingUserId: null` bookings on unstarted fixtures ("no games" in the
   delete's WHERE) and stands them down; started series keep theirs, and the toast
-  says so. A partial refill cancels nothing: it reports per match the bookings
+  says so. A partial refill cancels no booking (it closes only the waiting
+  open-seat requests past the seats left, newest first; see the standin MMR
+  rule): it reports per match the bookings
   that exceed the open seats (bookings live on matches, seats on the roster).
 - **`releasePlayer` is three things in one transaction; keep it that way.** Free
   the seat, refund `member.price`, and cancel cover naming the player on unstarted
@@ -80,8 +100,9 @@ standin cover, and match-night check-ins. Main files:
   that also reads Season and Draft, so a racing `startDraft` wins. Seams
   `admin.promoteStandin.beforeTx` and `.afterGate` (Postgres only) in
   `test/integration/roster-moves.itest.ts`.
-- **Withdrawal goes through `withdrawGateError`.** `leaveLeague` passes
-  `pendingAssignments` (`pendingCoverWhere`), captain, roster and
+- **Withdrawal goes through `withdrawGateError`.** Both withdrawal paths also
+  close the leaving standin's pending requests (see the standin MMR rule).
+  `leaveLeague` passes `pendingAssignments` (`pendingCoverWhere`), captain, roster and
   `isOnTheBlock`. Admin `withdrawSignup` passes the same facts except the
   block, which it checks inline, at read and again in its transaction, so the
   gate's unit test does not cover the admin refusal
@@ -142,10 +163,6 @@ standin cover, and match-night check-ins. Main files:
 - **`matchNightRoster` drops cover naming someone off the roster** and keeps a
   null `replacingUserId` (an empty-seat fill). Feed it, never the raw roster, into
   check-in counts.
-- **Flag a big MMR gap; never block.** `standinMmrNote` flags a standin at least
-  `STANDIN_MMR_FLAG_GAP` (500) above the replaced player; an empty seat compares
-  with `Season.maxMmr` (0 = silent); unknown (0) MMR never flags. Toast and log
-  only.
 - **Tell the standin, and the captain when someone else acted.** Assign mentions
   the standin plus the covered captain if they didn't book it; an admin removal
   mentions both. Assign toasts append `reachabilityNote` through
@@ -155,8 +172,10 @@ standin cover, and match-night check-ins. Main files:
   quoted the old time. Standins answer the ready check for the seat they cover;
   the player they cover doesn't.
 - **Make the picker mirror the server.** `standinPickerBlock` lists standins booked
-  here or that night last, disabled, with why; `coverChoices` puts uncovered OUT
-  players first. Pinned by `src/app/matches/[id]/match-page-guards.test.ts`.
+  here or that night, or with a request waiting in this match, last, disabled,
+  with why; `coverChoices` puts uncovered OUT players first, and a seat with a
+  waiting request leaves the Covers list. Pinned by
+  `src/app/matches/[id]/match-page-guards.test.ts`.
 - **Show cover problems where the fixer looks.** The admin card recomputes
   double-bookings live (`standinClashes`; any retime can create one, and
   `clashesAfterRetime` reports it in that toast) and lists uncovered OUTs and
@@ -166,8 +185,148 @@ standin cover, and match-night check-ins. Main files:
   Profiles credit "Stood in for N matches" from COMPLETED matches. /schedule lists
   standins.
 - **Deliberately not built:** a mid-series swap tool (only if a real season needs
-  it twice), an MMR advisory in the Discord post, auto-cancelling partial-refill
-  surplus.
+  it twice), auto-cancelling partial-refill surplus bookings (surplus waiting
+  requests are closed: a request is not cover, so nobody was told to show up).
+
+## The standin MMR rule
+
+Tim's rule (2026-10-21, loopholes closed 2026-10-25,
+[DECISIONS](../DECISIONS.md#product-decisions)): a standin more than
+`STANDIN_MMR_ALLOWANCE` (100) above the seat needs the other captain's OK. Pure
+rules in `standin.ts` (`coverBaselineMmr`, `namedCoverBaseline`,
+`standinNeedsApproval`, `standinApprovalReason`), the flow in
+`standin-service.ts` (`assignStandinGuarded`, `approveStandinRequest`,
+`declineStandinRequest`, `cancelStandinRequest`, `cancelPendingStandinRequests`),
+the rows in `StandinRequest`.
+
+- **Measure by signup MMR against the seat.** Named cover compares with the
+  covered player's `Registration.mmr`; an empty seat counts as covering the
+  team's lowest known MMR. Exactly the allowance above is fine. An unknown (0)
+  standin MMR, or an unknown seat, needs the OK too: an unknown must not pass as
+  "close enough".
+- **Measure a named cover against the lowest absentee too.** The baseline is
+  min(the covered player's MMR, the lowest KNOWN MMR among teammates who checked
+  in OUT for the match's current `scheduleRevision` and have no booking in it)
+  (`namedCoverBaseline`, fed by `coverBaseline`). A waiting request doesn't
+  count as their cover: asking for one, booking against the stronger player,
+  then withdrawing the ask would step round the rule.
+  Unknown MMRs never lower it, and an unknown named player stays unknown.
+  Otherwise a captain names their strongest player as "covered" while the
+  standin really takes a weaker absentee's seat. The request stores that
+  teammate (`StandinRequest.baselineUserId`, relation `baselinePlayer`), so the
+  toast, the post, the Standins card and the admin row say "… above <player>
+  (2,000), who said they can't make it" (`standinApprovalReason`'s
+  `lowerOutName`); the Covers list shows "counts as N MMR" for a player judged
+  lower.
+- **Signup MMR is fixed once the auction is done** (`mmrSelfEditLocked`,
+  `registration.ts`: DRAFT with the auction COMPLETE, then REGULAR_SEASON,
+  PLAYOFFS and COMPLETE). `saveRegistration` keeps the stored number on an
+  existing signup of any type and the toast says so (`mmrLockedAfterDraftNote`);
+  a new signup (a late standin) still sets its own; /me renders the box disabled
+  (`MmrField` `locked`, source-guarded in `registration.test.ts`). Admins correct
+  it with `setPlayerRank` or `setRegistrationMmr`. Otherwise a standin lowered
+  theirs, or a covered player raised theirs, to step round the other captain.
+- **A request is not cover.** Past the allowance a captain's booking files a
+  `StandinRequest` (PENDING) instead of a `StandinAssignment`, so nothing that
+  reads cover (`matchNightRoster`, imports, check-ins, reminders, withdrawals)
+  sees it. Agreeing creates the assignment in the same Serializable transaction
+  that marks the request APPROVED. Don't add a status to `StandinAssignment`
+  instead: every reader would have to learn to skip it.
+- **A waiting request holds its seat and its standin in that match,** like a
+  booking: `judgeCover` and `recheckCover` count PENDING requests (an empty
+  seat's budget too), and the error says the request has to be answered or
+  withdrawn first. A request elsewhere the same night doesn't block; agreeing
+  re-checks the night.
+- **Who decides.** Only the match's OTHER captain agrees or declines (never the
+  asking side; the seat's own captain withdraws). `overLimit: "ask"` is the
+  captain's card, always, even when its captain is an admin; `"book"` is the
+  admin panel's ruling, which books over the rule and says so in the toast and
+  the log. Admins agree, decline or withdraw in a captain's place from the
+  standin block on /admin and in the match page's Admin tools (logged;
+  `withdrawStandinRequestAsAdmin` posts nothing). Agree shows only while booking
+  is open, and never to an admin who captains the asking team or filed the
+  request (`adminMayAgreeToRequest`, `admin-sections.ts`; /admin and the match
+  page pass the viewer as `viewerId`); decline and withdraw always show.
+- **No captain agrees to their own side's request.** `approveStandinRequest`
+  refuses an actor who captains the asking team (read inside the transaction,
+  so a captaincy handed over since is judged) or who filed the request, and
+  the admin tools hide "agree" for that viewer. Admin callers must pass
+  `actingUserId` (typed). The admin panel's "book" stays the admin's own
+  ruling over the rule, logged as such.
+- **A no stands for the match.** On the captain path every booking or ask of
+  a standin already DECLINED for that team in this match is refused, inside
+  the Serializable transaction ("<S> was already declined for <team> in this
+  match — pick someone else, or ask an admin"). A withdrawn request doesn't
+  count, and the admin panel's "book" is unaffected. The picker greys them out
+  (`loadDeclinedStandinIds` → `standinPickerBlock` `declinedBy`).
+- **Agreeing re-runs every booking check.** `approveStandinRequest` runs
+  `judgeCover` again (phase, completed match, signup, roster, seat, night), then
+  in one Serializable transaction re-reads the other team's captain, claims the
+  request (`updateMany` on PENDING), runs `recheckCover` and books. Past the
+  claim a failure throws, so a standin who withdrew in the gap leaves the
+  request PENDING, not APPROVED with nobody booked. `recheckCover` re-reads the
+  match in the transaction too, so a ruling or a retime in the gap is judged
+  (a played or deleted match refuses; the same-night clash uses the fresh
+  kickoff). Seam `standin.assign.afterJudge` sits between the read-time checks
+  and a booking's or an ask's transaction. Seam
+  `standin.approveRequest.beforeTx` sits between the read-time status check and
+  the claim. A failed check speaks to the approver, at read time or in the
+  transaction (`agreeTooLateError`): "This can't be agreed to any more: <reason>
+  — decline it so <team> can line up someone else".
+- **Decline and withdraw read no status before their claim;** the WHERE is the
+  one refusal, worded from the row afterwards. Decline pings the asking captain;
+  withdraw posts nothing.
+- **Tell only who must act.** The request post mentions the other captain only
+  (`standinApprovalRequestedMessage`); the standin hears nothing until the
+  usual assignment post, which says who agreed (`agreedBy`) and mentions the
+  standin and the asking captain. Decline mentions the asking captain
+  (`standinRequestDeclinedMessage`). `reachUserId` tells the action whose
+  Discord reach to report in the toast.
+- **Show it where the answer happens.** The Standins card lists requests:
+  Withdraw for the asking captain; Agree (only while booking is open) and
+  Decline for the other. Captain to-dos tells the other captain an answer is
+  waiting, and an OUT player whose cover is waiting isn't listed as uncovered.
+  The form's note states the rule and links `/rules#rosters`, and the Covers
+  list shows each player's MMR. The admin cover banner still counts that player
+  as uncovered (a request is not cover) but reads "<P> — waiting on the <other
+  team> captain's OK for <S> (agree, decline or withdraw below)", dropping
+  "agree" wherever the row hides it (`uncoveredByRequest`'s `canAgree`).
+- **Close a request the moment nobody can agree to it.** Inside the change's
+  own Serializable transaction, `cancelPendingStandinRequests` reads the
+  PENDING rows and claims exactly those to CANCELLED. Every caller is
+  Serializable, so a rival answer aborts one side (P2034) before any short
+  count; the count check (`StandinRequestsChangedError`) is defense in depth.
+  Who closes what:
+  - `releasePlayer`: requests to cover that player on unfinished matches;
+  - `signFreeAgent`: requests naming the signed player as the standin, and the
+    open-seat requests the smaller seat budget can no longer hold (all of them
+    when the last seat fills; the newest beyond the budget on a partial
+    refill);
+  - `leaveLeague` and admin `withdrawSignup`: the leaving standin's requests
+    (bookings still refuse a withdrawal);
+  - `withdrawTeam`: each fixture whose forfeit claim won;
+  - `recordResult`'s no-game forfeit, and `reopenMatch` (a request a manual
+    score left waiting), so Reopen never hands the other captain an Agree for a
+    decided fixture.
+
+  Only the first three need the asking captain to line up someone else, so only
+  they post (a standin signed onto the very team that asked for them posts
+  nothing: they fill that seat) (`standinRequestCancellations`: `PLAYER_RELEASED`, `STANDIN_SIGNED`,
+  `STANDIN_LEFT`, mentioning that team's captain alone, after the commit). The
+  rest report the count in the toast and the admin log. Fixture teardowns
+  (`replaceRegularSchedule`, `removePostseason`, `clearTiebreakerWeek`,
+  `abortDraft`) cascade the rows away with the match and count the PENDING ones
+  in their toast and log; none posts.
+- **Tests:** `standins.itest.ts` ("standin MMR rule", including the seam and
+  the three claims; "a lower teammate who's out", "a declined standin can't be
+  asked for again", "an admin can't agree to their own side's request"),
+  `standins-raced.itest.ts` (agree vs withdraw, agree vs decline, two requests
+  for one seat; Postgres only), `standin-request-cleanup.itest.ts` (release,
+  admin Withdraw), `standin-request-teardown.itest.ts` (forfeit, Reopen,
+  teardowns), `registration-standin-mmr.itest.ts` (the MMR lock, a leaving
+  standin) and the request tests in `team-withdraw.itest.ts` and
+  `roster-moves.itest.ts`. The rules page pins its sentences to these functions
+  (`league-rules.test.ts`).
 
 ## Match-night check-in
 

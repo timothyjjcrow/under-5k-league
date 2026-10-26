@@ -1359,7 +1359,9 @@ describe("saveRegistration — draft-night locks (live auction)", () => {
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).toMatch(/MMR is locked/);
+    expect(res?.message).toBe(
+      "Signup updated · The draft is running, so you stay listed at 4,400 MMR. After the draft only a league admin can change it.",
+    );
     const reg = await regFor(season.id, user.id);
     expect(reg?.mmr).toBe(4400); // getDraftState re-reads this every poll
     expect(reg?.captainNote).toBe("new goals"); // the harmless edit still lands
@@ -1517,7 +1519,7 @@ describe("saveRegistration — draft-night lock scope", () => {
     );
 
     expect(res?.error).toBeUndefined();
-    expect(res?.message).not.toMatch(/MMR is locked/);
+    expect(res?.message).not.toMatch(/draft is running/);
     expect((await regFor(season.id, user.id))?.mmr).toBe(3200);
   });
 

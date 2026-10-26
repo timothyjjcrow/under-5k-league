@@ -14,7 +14,10 @@ import {
   mmrRangeForRankTier,
   rankMedalName,
 } from "./rank";
-import { effectiveSoftMmrLimit } from "./registration";
+import {
+  effectiveSoftMmrLimit,
+  mmrFrozenDuringDraftLine,
+} from "./registration";
 import { heroById, parseHeroList } from "./heroes";
 import { parsePubStats } from "./pub-stats";
 import { DOTA_ROLES, roleLabels } from "./roles";
@@ -488,10 +491,7 @@ export function mmrPreviewLine(
   const listed = (mmr: number) =>
     mmr > 0 ? `${mmr} MMR` : "an unknown MMR";
   if (input.frozen && input.storedMmr != null) {
-    return {
-      tone: "muted",
-      text: `The draft is running, so you stay listed at ${listed(input.storedMmr)} until it ends.`,
-    };
+    return { tone: "muted", text: mmrFrozenDuringDraftLine(input.storedMmr) };
   }
   if (input.storedMmr != null && typed === input.storedMmr) {
     return { tone: "muted", text: `You're listed at ${listed(typed)}.` };

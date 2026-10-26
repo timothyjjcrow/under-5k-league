@@ -263,10 +263,15 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   RSVP; the actual standin can.
 - _Standins_: guards in `src/lib/standin-service.ts` (Serializable
   transactions forming a deliberate write-skew triad with the withdraw and
-  sign-free-agent paths), the pure same-night conflict rule in
+  sign-free-agent paths), the pure same-night conflict and MMR rules in
   `src/lib/standin.ts`. Captains self-serve on the match page
   (`src/app/actions/standins.ts`); admins get the any-team override. Assign
-  and remove both Discord-mention the standin.
+  and remove both Discord-mention the standin. Past the 100-MMR allowance a
+  captain's booking is a `StandinRequest` the other captain answers;
+  `cancelPendingStandinRequests` closes the ones a roster or schedule change
+  makes impossible. Free-agent signings follow the same allowance against the
+  player they replace (`src/lib/free-agent-rule.ts`,
+  `src/lib/free-agent-rule-service.ts`).
 - _Reschedules_: a ready check. `src/lib/reschedule-service.ts` (one PENDING
   proposal per match offering up to three times; current captain/season/Draft/
   match authority is re-read; every answer, captain lock and accept that moves
@@ -906,6 +911,12 @@ enums, so every status column is a string whose allowed values live in
 - `MatchAvailability` — RSVPs, `@@unique([matchId, userId])`.
 - `StandinAssignment` — cover rows; null `replacingUserId` = filling an empty
   seat.
+- `StandinRequest` — a captain's booking over the standin MMR rule, waiting
+  for the other captain (PENDING/APPROVED/DECLINED/CANCELLED). Not cover:
+  agreeing creates the `StandinAssignment` in the same transaction. Cascades
+  with its match, the standin, the covered player and the requester;
+  `baselineUserId` (`baselinePlayer`, the lower OUT teammate it was measured
+  against) is set null when that user goes.
 - `Game` — an imported Dota game; `dotaMatchId` @unique is the import dedupe;
   per-player stats live in the `players` JSON column (hence the whole-table
   scans in `cached-queries.ts`).
@@ -1121,8 +1132,8 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Captains & draft           | `addCaptain` (confirm), **`removeCaptain` (DangerSubmit)**, `transferCaptaincy`, `randomizeDraftOrder`, `startDraft` (confirm names the seat math), `pauseDraft`/`resumeDraft`, `voidCurrentLot` (confirm, paused lot), `undoLastSale` (confirm), **`abortDraft` (DangerSubmit, enumerates roster/schedule/fantasy/reminder collateral)**, `setDraftNight`, `setRegistrationMmr`, `withdrawSignup`/`reinstateSignup`, `refreshPlayerData` (one "Refresh player data now" button: Steam names, signup medals, stalest scouting snapshots, a few games), `changeCaptain` (pre-draft swap that keeps the team row; plain confirm) |
 | Schedule & results         | Generate (confirm, only when empty) vs **Regenerate (DangerSubmit, names collateral)** as separate controls; `setWeekNight` (confirm); per match: phase-aware `recordResult`/ruling, `reopenMatch`, `setMatchTime`, `removeGame`, import/auto-detect, and pending-reschedule Clear. Imported scores and off-phase fixtures are read-only; archive corrections require reactivation/phase restoration (and regular corrections require playoff reseeding).                              |
 | Playoffs                   | Start (confirm) vs **Reset (DangerSubmit)** with explicit intent + revision claims; **Return to regular season (DangerSubmit)** removes the bracket/champion through the shared teardown; postseason-game archive listing. The result card separately supports grand-final-only reopen/import correction without discarding earlier rounds.                                                                                                                                            |
-| Roster moves               | `signFreeAgent`, `promoteStandinToPlayer`, `releasePlayer` (confirm — names refund + cover effects), REGULAR-only `withdrawTeam`/`reinstateTeam`                                                                                                                                                                                                                                                                                                                                   |
-| Standins                   | `assignStandin` (incl. empty-seat `seat:<teamId>` form), `removeStandin` (confirm)                                                                                                                                                                                                                                                                                                                                                                                                     |
+| Roster moves               | `signFreeAgent` (the 100-MMR rule against the player replaced; "Sign over the 100-MMR rule" box), `promoteStandinToPlayer`, `releasePlayer` (confirm — names refund + cover effects), REGULAR-only `withdrawTeam`/`reinstateTeam` |
+| Standins                   | `assignStandin` (incl. empty-seat `seat:<teamId>` form; books over the MMR rule), `removeStandin` (confirm), request agree/decline/withdraw (`approveStandinRequestAsAdmin`, `declineStandinRequestAsAdmin`, `withdrawStandinRequestAsAdmin`) |
 | Automation runner (evergreen) | Persisted last attempt/success/source/duration, failure streak, safe issue/deferred codes, active/expired lease signal, and expected one-minute/four-minute-stale cadence. **Run maintenance now** is admin-only and uses the same lease as cron: it can recover an expired owner but is visibly disabled and cannot force or overlap an active run. This card remains available in every phase and offseason. |
 | Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, league-feed games set aside, private-data players                                                                                                                                                                                                                                                                                                                                                                             |
 | Dota league integration    | `setLeagueId`, `syncLeagueAction`, history backfills; player data refreshes itself hourly (`refreshPlayerDataAutomatically`)                                                                                                                                                                                                                                                                                                                                                           |

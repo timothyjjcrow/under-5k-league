@@ -23,7 +23,12 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
   sendDiscordMessage: vi.fn(async () => true),
 }));
 
-import { assignStandinGuarded } from "@/lib/standin-service";
+import {
+  approveStandinRequest,
+  assignStandinGuarded,
+  cancelStandinRequest,
+  declineStandinRequest,
+} from "@/lib/standin-service";
 import { releasePlayer } from "@/app/actions/admin-roster";
 import { leaveLeague } from "@/app/actions/registration";
 import { requireUser } from "@/lib/auth";
@@ -286,5 +291,116 @@ describe("standin claims under contention (raced — meaningful on Postgres only
         });
       }
     }
+  });
+});
+
+// The standin MMR rule's requests. The answer paths claim the request with
+// updateMany(status PENDING) inside a Serializable transaction, so of two
+// answers racing each other exactly one lands, and an agree that loses books
+// nobody. On SQLite these run one after the other.
+describe("standin requests under contention (raced — meaningful on Postgres only)", () => {
+  /** A mid-season fixture with the home captain's request waiting. */
+  async function pendingRequestFixture() {
+    const fx = await midSeasonMatch();
+    // 2000-MMR rostered players: a 4000 standin is far over the allowance.
+    const standin = await makeStandin(fx.season.id, "Ringer Ryan", 4000);
+    return { ...fx, standin };
+  }
+
+  async function ask(fx: Awaited<ReturnType<typeof pendingRequestFixture>>) {
+    const res = await assignStandinGuarded({
+      matchId: fx.match.id,
+      standinUserId: fx.standin.id,
+      replacingUserId: fx.rostered[0].id,
+      actingCaptainId: fx.home.captainId,
+    });
+    expect(res.ok && res.pending).toBe(true);
+    return prisma.standinRequest.findFirstOrThrow({
+      where: { matchId: fx.match.id, status: "PENDING" },
+    });
+  }
+
+  async function reset(matchId: string) {
+    await prisma.standinAssignment.deleteMany({ where: { matchId } });
+    await prisma.standinRequest.deleteMany({ where: { matchId } });
+  }
+
+  it("an agree raced against a withdrawal books the standin only when agreeing won", async () => {
+    const fx = await pendingRequestFixture();
+    for (let round = 0; round < 4; round++) {
+      const request = await ask(fx);
+      const [agreed, withdrawn] = await raceAll<{ ok: boolean }>([
+        () =>
+          approveStandinRequest({
+            requestId: request.id,
+            actingCaptainId: fx.away.captainId,
+          }),
+        () =>
+          cancelStandinRequest({
+            requestId: request.id,
+            actingCaptainId: fx.home.captainId,
+          }),
+      ]);
+      expect(okCount([agreed, withdrawn])).toBe(1);
+      const after = await prisma.standinRequest.findUniqueOrThrow({
+        where: { id: request.id },
+      });
+      const booked = await prisma.standinAssignment.count({
+        where: { matchId: fx.match.id },
+      });
+      expect(after.status).toBe(agreed.ok ? "APPROVED" : "CANCELLED");
+      expect(booked).toBe(agreed.ok ? 1 : 0);
+      await reset(fx.match.id);
+    }
+  });
+
+  it("an agree raced against a decline leaves one answer, and a booking only for yes", async () => {
+    const fx = await pendingRequestFixture();
+    for (let round = 0; round < 4; round++) {
+      const request = await ask(fx);
+      const [agreed, declined] = await raceAll<{ ok: boolean }>([
+        () =>
+          approveStandinRequest({
+            requestId: request.id,
+            actingCaptainId: fx.away.captainId,
+          }),
+        () =>
+          declineStandinRequest({ requestId: request.id, actingCaptainId: null }),
+      ]);
+      expect(okCount([agreed, declined])).toBe(1);
+      const after = await prisma.standinRequest.findUniqueOrThrow({
+        where: { id: request.id },
+      });
+      expect(after.status).toBe(agreed.ok ? "APPROVED" : "DECLINED");
+      expect(
+        await prisma.standinAssignment.count({ where: { matchId: fx.match.id } }),
+      ).toBe(agreed.ok ? 1 : 0);
+      await reset(fx.match.id);
+    }
+  });
+
+  // Pins the tx re-read of pending requests for the seat: a double-click (or
+  // two standins asked for at once) must leave one request holding it.
+  it("two requests raced for one seat leave exactly one waiting", async () => {
+    const fx = await pendingRequestFixture();
+    const second = await makeStandin(fx.season.id, "Ringer Rita", 4000);
+    const results = await raceAll(
+      [fx.standin, second].map(
+        (s) => () =>
+          assignStandinGuarded({
+            matchId: fx.match.id,
+            standinUserId: s.id,
+            replacingUserId: fx.rostered[0].id,
+            actingCaptainId: fx.home.captainId,
+          }),
+      ),
+    );
+    expect(okCount(results)).toBe(1);
+    expect(
+      await prisma.standinRequest.count({
+        where: { matchId: fx.match.id, status: "PENDING" },
+      }),
+    ).toBe(1);
+    expect(await prisma.standinAssignment.count()).toBe(0);
   });
 });

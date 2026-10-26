@@ -11,9 +11,23 @@ import { raceHook } from "@/lib/race-hook";
 import { captureRosterTenure, closeRosterTenure } from "@/lib/roster-history";
 import { getActiveSeason } from "@/lib/season";
 import {
+  approveStandinRequest,
   assignStandinGuarded,
+  cancelPendingStandinRequests,
+  declineStandinRequest,
   removeStandinGuarded,
+  standinRequestCancellations,
+  StandinRequestsChangedError,
+  cancelStandinRequest,
+  type CancelledStandinRequest,
 } from "@/lib/standin-service";
+import {
+  FREE_AGENT_OVER_RULE_FIELD,
+  freeAgentOverRule,
+  freeAgentOverRuleNote,
+  freeAgentRuleRefusal,
+} from "@/lib/free-agent-rule";
+import { loadFreeAgentBaselines } from "@/lib/free-agent-rule-service";
 import {
   SEASON_STATUS,
   REGISTRATION_TYPE,
@@ -22,6 +36,7 @@ import {
   MATCH_STATUS,
   MATCH_PHASE,
   SCRIM_STATUS,
+  STANDIN_REQUEST_STATUS,
   HARD_MMR_CEILING,
 } from "@/lib/constants";
 import {
@@ -40,7 +55,7 @@ import {
   dotaAccountLinkSnapshot,
   effectiveDotaAccountId,
 } from "@/lib/dota-account";
-import { clampInt, str } from "@/lib/form";
+import { bool, clampInt, str } from "@/lib/form";
 import {
   freeAgentSignedMessage,
   playerReleasedMessage,
@@ -250,8 +265,9 @@ export async function withdrawSignup(
   // — fires BEFORE the tx (the leaveLeague placement) so the rival commits
   // before the snapshot and the test runs on SQLite too.
   await raceHook("admin.withdrawSignup.beforeTx");
+  let cancelledRequests: CancelledStandinRequest[] = [];
   try {
-    await prisma.$transaction(
+    cancelledRequests = await prisma.$transaction(
       async (tx) => {
         const [currentSeason, live, currentDraft] = await Promise.all([
           tx.season.findUnique({
@@ -302,10 +318,23 @@ export async function withdrawSignup(
           },
         });
         if (claimed.count === 0) throw new Error("STATUS_CHANGED");
+        // Their PENDING standin requests on this season's unplayed matches go
+        // with the signup, as in leaveLeague: each would hold a seat nobody
+        // can now agree to. Past the first write, a lost claim throws.
+        return cancelPendingStandinRequests(
+          tx,
+          pendingCoverWhere(reg.userId, season.id),
+          admin.id,
+        );
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
+    if (e instanceof StandinRequestsChangedError) {
+      return {
+        error: `A captain just answered a request for ${reg.user.name} to stand in — reload and try again.`,
+      };
+    }
     if (e instanceof SignupWithdrawalLockedError) {
       return {
         error:
@@ -340,14 +369,38 @@ export async function withdrawSignup(
   }
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
+  const requestCount = cancelledRequests.length;
+  const requests = `${requestCount} pending standin request${requestCount === 1 ? "" : "s"}`;
   await logAdminAction({
     action: "withdrawSignup",
-    summary: `Removed ${reg.user.name}'s ${reg.type.toLowerCase()} signup`,
+    summary:
+      `Removed ${reg.user.name}'s ${reg.type.toLowerCase()} signup` +
+      (requestCount > 0 ? `; cancelled ${requests} for them` : ""),
     seasonId: season.id,
   });
+  // After the commit, best-effort: each asking captain hears their request
+  // is off (the post mentions only them).
+  if (requestCount > 0) {
+    try {
+      for (const post of await standinRequestCancellations(
+        cancelledRequests,
+        "STANDIN_LEFT",
+      )) {
+        await sendDiscordMessage(post.announcement, post.mentions);
+      }
+    } catch {
+      // The requests are closed either way.
+    }
+  }
   refresh();
+  // Reinstate restores the signup only: a closed request stays closed (its
+  // captain was told it's off), so the undo hint says so where they meet.
   return {
-    message: `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo`,
+    message:
+      `Removed ${reg.user.name}'s signup — they can't re-add themselves; use Reinstate to undo` +
+      (requestCount > 0
+        ? ` · ${requests} for them ${requestCount === 1 ? "was" : "were"} cancelled (Reinstate doesn't bring ${requestCount === 1 ? "it" : "requests"} back)`
+        : ""),
   };
 }
 
@@ -740,7 +793,7 @@ export async function signFreeAgent(
   const teamId = str(formData, "teamId");
   const userId = str(formData, "userId");
 
-  const [team, registration, existingSeat, memberCount, pendingAssignments] =
+  const [team, registration, existingSeat, members, pendingAssignments] =
     await Promise.all([
       prisma.team.findFirst({
         where: { id: teamId, seasonId: season.id },
@@ -753,7 +806,10 @@ export async function signFreeAgent(
       prisma.teamMember.findFirst({
         where: { seasonId: season.id, userId },
       }),
-      prisma.teamMember.count({ where: { teamId } }),
+      prisma.teamMember.findMany({
+        where: { teamId },
+        select: { userId: true },
+      }),
       // Same guard promoteStandinToPlayer already applies: an outstanding
       // standin assignment on an unplayed match would put this account in BOTH
       // teams' account sets for that match, so classifyGame sees the same
@@ -794,9 +850,39 @@ export async function signFreeAgent(
       error: `${registration.user.name} is standing in on an upcoming match — remove that assignment first, then sign them`,
     };
   }
-  if (memberCount >= season.teamSize) {
+  if (members.length >= season.teamSize) {
     return { error: `${team.name} has no open roster seats` };
   }
+
+  // The standin MMR rule, applied to a permanent seat (Tim's call,
+  // 2026-10-25): the free agent is judged against the player they replace
+  // (the newest departure no signing has refilled), else the team's lowest
+  // MMR. Over it, or with an MMR unknown on either side, only the admin's
+  // ticked box signs them. Judged here, at read time, like a standin booking:
+  // a later MMR edit never re-judges a signing, and the transaction re-reads
+  // only what a rival can make wrong.
+  const baseline = (
+    await loadFreeAgentBaselines(prisma, season.id, [
+      {
+        id: team.id,
+        name: team.name,
+        memberUserIds: members.map((m) => m.userId),
+      },
+    ])
+  )[team.id];
+  const overRule = freeAgentOverRule(registration.mmr, baseline);
+  if (overRule && !bool(formData, FREE_AGENT_OVER_RULE_FIELD)) {
+    return {
+      error: freeAgentRuleRefusal({
+        playerName: registration.user.name,
+        freeAgentMmr: registration.mmr,
+        baseline,
+      }),
+    };
+  }
+  const overRuleNote = overRule
+    ? freeAgentOverRuleNote({ freeAgentMmr: registration.mmr, baseline })
+    : null;
 
   // SERIALIZABLE, not a plain transaction: on Postgres a plain one reads at
   // read-committed, so this count locks nothing and two concurrent signs into
@@ -823,7 +909,27 @@ export async function signFreeAgent(
      *  auto-cancelled: which booking dies is the captain's call (the
      *  withdrawGateError refuse-don't-auto-cancel precedent). */
     overbooked: string[];
-  } = { cancelled: 0, kept: 0, standDowns: [], overbooked: [] };
+    /** Waiting requests to book this player as someone's standin: a
+     *  rostered player can never cover, so they are off. Each OTHER team's
+     *  asking captain hears why after the commit; on this team the player
+     *  now fills the seat themselves, so its captain has nothing to do. */
+    standinRequests: CancelledStandinRequest[];
+    /** Waiting requests for this team's open seats that no seat is left
+     *  for: all of them once the last seat fills, and on a partial refill
+     *  the newest past the seats left per match. Nobody has to act on that
+     *  (the seat filled), so nothing posts. */
+    emptySeatRequests: number;
+    /** Open seats left after the signing (0 = the roster is full). */
+    openSeatsLeft: number;
+  } = {
+    cancelled: 0,
+    kept: 0,
+    standDowns: [],
+    overbooked: [],
+    standinRequests: [],
+    emptySeatRequests: 0,
+    openSeatsLeft: 0,
+  };
   try {
     coverCleanup = await prisma.$transaction(
       async (tx) => {
@@ -889,6 +995,19 @@ export async function signFreeAgent(
         });
         await captureRosterTenure(tx, member, { kind: "FREE_AGENT", mmr: currentRegistration.mmr || null,
           roles: currentRegistration.roles, actorId: actor.id });
+        // Past the first write: the helper throws if an answer lands
+        // between its read and its claim.
+        const standinRequests = await cancelPendingStandinRequests(
+          tx,
+          {
+            standinUserId: userId,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          actor.id,
+        );
         // The reverse of releasePlayer's stale-cover rule: an EMPTY-SEAT
         // assignment (replacingUserId null) is permanently "live" to
         // matchNightRoster, so once this signing fills the team's LAST seat
@@ -939,6 +1058,21 @@ export async function signFreeAgent(
               },
             }));
           }
+          // A waiting request for an open seat has no seat left to fill. A
+          // request is not cover, so this is all it takes; the asking captain
+          // has nothing to line up, so no post.
+          const emptySeatRequests = await cancelPendingStandinRequests(
+            tx,
+            {
+              teamId,
+              replacingUserId: null,
+              match: {
+                seasonId: season.id,
+                status: { not: MATCH_STATUS.COMPLETED },
+              },
+            },
+            actor.id,
+          );
           return {
             cancelled,
             kept: emptySeatCovers.length - cancelled,
@@ -947,6 +1081,9 @@ export async function signFreeAgent(
             // worse than silence.
             standDowns: cancelled === removable.length ? removable : [],
             overbooked: [],
+            standinRequests,
+            emptySeatRequests: emptySeatRequests.length,
+            openSeatsLeft: 0,
           };
         }
         // PARTIAL refill — the team is still short, so open-seat cover stays
@@ -993,11 +1130,57 @@ export async function signFreeAgent(
             (m) =>
               `${m.count} open-seat booking(s) on ${m.label} now exceed the team's ${newOpen} open seat(s) — remove the extra on the match page`,
           );
-        return { cancelled: 0, kept: 0, standDowns: [], overbooked };
+        // A waiting open-seat request holds a seat too, and agreeing to one
+        // refuses once bookings plus the other waiting requests fill the open
+        // seats (judgeCover, recheckCover): past the smaller budget nobody
+        // could ever agree to it, each counting the other. Per match, the
+        // oldest requests keep the seats the bookings leave; the newer ones
+        // close here. A request is not cover, so closing one cancels no
+        // booking (those stay reported above), and the seat filled, so nobody
+        // has to act and nothing posts. The signed player's own requests were
+        // closed above, so they hold no seat here.
+        const waitingForSeats = await tx.standinRequest.findMany({
+          where: {
+            teamId,
+            replacingUserId: null,
+            status: STANDIN_REQUEST_STATUS.PENDING,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+          select: { id: true, matchId: true },
+        });
+        const seatsKept = new Map<string, number>();
+        const surplusIds: string[] = [];
+        for (const request of waitingForSeats) {
+          const allowed = newOpen - (perMatch.get(request.matchId)?.count ?? 0);
+          const kept = seatsKept.get(request.matchId) ?? 0;
+          if (kept < allowed) seatsKept.set(request.matchId, kept + 1);
+          else surplusIds.push(request.id);
+        }
+        const surplusRequests = surplusIds.length
+          ? await cancelPendingStandinRequests(
+              tx,
+              { id: { in: surplusIds } },
+              actor.id,
+            )
+          : [];
+        return {
+          cancelled: 0,
+          kept: 0,
+          standDowns: [],
+          overbooked,
+          standinRequests,
+          emptySeatRequests: surplusRequests.length,
+          openSeatsLeft: newOpen,
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
+    if (e instanceof StandinRequestsChangedError) return { error: e.message };
     if ((e as Error).message === "ROSTER_LIFECYCLE_CHANGED") {
       return {
         error:
@@ -1033,19 +1216,44 @@ export async function signFreeAgent(
   }
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
+  const requestsOff = coverCleanup.standinRequests.length;
+  // A request this team made for the player it just signed needs no new
+  // standin: the player fills the seat themselves. Only other teams'
+  // captains have to line up someone else.
+  const otherTeamsRequests = coverCleanup.standinRequests.filter(
+    (request) => request.teamId !== team.id,
+  );
+  const ownTeamRequests = requestsOff - otherTeamsRequests.length;
   await logAdminAction({
     action: "signFreeAgent",
-    summary: `Signed ${registration.user.name} to ${team.name}; cancelled ${coverCleanup.cancelled} redundant open-seat cover booking(s)`,
+    summary:
+      `Signed ${registration.user.name} to ${team.name}; cancelled ${coverCleanup.cancelled} redundant open-seat cover booking(s), ` +
+      `${requestsOff} waiting standin request(s) for ${registration.user.name} and ${coverCleanup.emptySeatRequests} waiting open-seat request(s)` +
+      (overRuleNote ? `. ${overRuleNote}` : ""),
     seasonId: season.id,
   });
   await sendDiscordMessage(
-    freeAgentSignedMessage(registration.user.name, team.name),
+    freeAgentSignedMessage(
+      registration.user.name,
+      team.name,
+      overRule ? { freeAgentMmr: registration.mmr, baseline } : undefined,
+    ),
     // @-mention the signed player: a signing is a season-long obligation —
     // every remaining match night is now theirs — and this was a bare
     // broadcast while the one-night standin assign has always mentioned its
     // subject. The message ends by naming their next move (check in).
     mentionsOf([registration.user.discordId]),
   );
+  // Each other team's captain who asked for this player as a standin lines
+  // up someone else; the post mentions only them. Best-effort, after the
+  // commit.
+  const requestPosts = await standinRequestCancellations(
+    otherTeamsRequests,
+    "STANDIN_SIGNED",
+  ).catch(() => []);
+  for (const post of requestPosts) {
+    await sendDiscordMessage(post.announcement, post.mentions);
+  }
   // Post-commit, best-effort, one stand-down per cancelled empty-seat booking —
   // the same shape releasePlayer and both removeStandin paths send, so a
   // standin is never left holding an instruction for a seat that just filled.
@@ -1073,13 +1281,25 @@ export async function signFreeAgent(
       ? `${coverCleanup.kept} open-seat booking(s) on an already-started series were LEFT in place (removing a standin mid-series breaks the remaining imports)`
       : null,
     ...coverCleanup.overbooked,
+    otherTeamsRequests.length > 0
+      ? `${otherTeamsRequests.length} waiting standin request(s) for ${registration.user.name} cancelled, and the asking captain(s) told`
+      : null,
+    ownTeamRequests > 0
+      ? `${ownTeamRequests} waiting ${team.name} standin request(s) for ${registration.user.name} closed: they're on the roster now`
+      : null,
+    coverCleanup.emptySeatRequests > 0
+      ? coverCleanup.openSeatsLeft === 0
+        ? `${coverCleanup.emptySeatRequests} waiting open-seat standin request(s) for ${team.name} cancelled: the roster is full`
+        : `${coverCleanup.emptySeatRequests} newer waiting open-seat standin request(s) for ${team.name} cancelled: the ${coverCleanup.openSeatsLeft} open seat(s) left are already booked or asked for in those matches`
+      : null,
   ].filter(Boolean);
   return {
     // A permanent signing that structurally can't be reached on Discord is
     // discovered on match night — the assign-standin garnish, same reason.
     message: withReachabilityNote(
       `${registration.user.name} signed to ${team.name}` +
-        (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : ""),
+        (coverNotes.length ? ` · ${coverNotes.join(" · ")}` : "") +
+        (overRuleNote ? `. ${overRuleNote}` : ""),
       await reachabilityNote(userId),
     ),
   };
@@ -1148,9 +1368,13 @@ export async function releasePlayer(
   //    admin's uncovered-OUT alert can't catch it because it only looks at
   //    current roster members.
   // 3. Announce the release, as before.
+  // Captains' standin requests to cover the player (the MMR rule) close with
+  // the seat: nobody can agree to cover a player who is gone, and the asking
+  // captain is told to line up someone else.
   let releaseResult: {
     cancelled: number;
     kept: number;
+    closedRequests: CancelledStandinRequest[];
     standDowns: {
       id: string;
       standinUserId: string;
@@ -1268,10 +1492,24 @@ export async function releasePlayer(
             data: { budget: { increment: member.price } },
           });
         }
+        // A request is not cover, so a started series loses its request too:
+        // only a booking is load-bearing for the games left.
+        const closedRequests = await cancelPendingStandinRequests(
+          tx,
+          {
+            replacingUserId: member.userId,
+            match: {
+              seasonId: season.id,
+              status: { not: MATCH_STATUS.COMPLETED },
+            },
+          },
+          actor.id,
+        );
         return {
           // What the DELETE actually matched — never what the JS filter hoped.
           cancelled,
           kept: covering.length - cancelled,
+          closedRequests,
           // Only announce if the DELETE really took them all; if the predicate
           // refused some row we cannot tell which, and telling a standin to stand
           // down from a game they are still booked for is worse than silence.
@@ -1305,6 +1543,7 @@ export async function releasePlayer(
         error: `${member.user.name} was already released — reload to see the roster`,
       };
     }
+    if (e instanceof StandinRequestsChangedError) return { error: e.message };
     if (isSerializationConflict(e)) {
       return {
         error:
@@ -1313,13 +1552,14 @@ export async function releasePlayer(
     }
     throw e;
   }
-  const { cancelled, kept, standDowns, teamName } = releaseResult;
+  const { cancelled, kept, closedRequests, standDowns, teamName } =
+    releaseResult;
 
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
   await logAdminAction({
     action: "releasePlayer",
-    summary: `Released ${member.user.name} from ${member.team.name}; refunded $${member.price} and cancelled ${cancelled} standin assignment(s)`,
+    summary: `Released ${member.user.name} from ${member.team.name}; refunded $${member.price}, cancelled ${cancelled} standin assignment(s) and ${closedRequests.length} pending standin request(s)`,
     seasonId: season.id,
   });
 
@@ -1352,6 +1592,18 @@ export async function releasePlayer(
       mentionsOf([a.standin.discordId]),
     );
   }
+  // Each asking captain hears their request is off (only they must act).
+  // Best-effort: the release has committed whatever these posts do.
+  try {
+    for (const post of await standinRequestCancellations(
+      closedRequests,
+      "PLAYER_RELEASED",
+    )) {
+      await sendDiscordMessage(post.announcement, post.mentions);
+    }
+  } catch {
+    console.error("[releasePlayer] STANDIN_REQUEST_POSTS_FAILED");
+  }
   refresh();
   const extra = [
     member.price > 0
@@ -1359,6 +1611,9 @@ export async function releasePlayer(
       : null,
     cancelled > 0
       ? `${cancelled} standin assignment(s) covering them cancelled — re-cover those matches`
+      : null,
+    closedRequests.length > 0
+      ? `${closedRequests.length} standin request(s) waiting to cover them cancelled — each asking captain is told on Discord to line up someone else`
       : null,
     // Left in place on purpose; the admin still needs to know it's there.
     // NOT "remove by hand": removeStandinGuarded refuses once games are
@@ -1523,6 +1778,7 @@ export async function withdrawTeam(
         });
 
         const matchClaims: { count: number }[] = [];
+        let closedRequests = 0;
         for (const match of open) {
           const matchClaim = await tx.match.updateMany({
             where: {
@@ -1569,6 +1825,16 @@ export async function withdrawTeam(
             await tx.standinAssignment.deleteMany({
               where: { matchId: match.id, match: { games: { none: {} } } },
             });
+            // A standin request on a ruled fixture can never be agreed to.
+            // Nobody has to line up anyone else for a forfeit, so these
+            // close without a post; the toast and the log count them.
+            closedRequests += (
+              await cancelPendingStandinRequests(
+                tx,
+                { matchId: match.id },
+                admin.id,
+              )
+            ).length;
             // The single team-withdrawal broadcast replaces noisy per-series
             // result posts. Persist that decision with the result so generic
             // completedAt crash recovery cannot replay these ruled fixtures;
@@ -1595,6 +1861,7 @@ export async function withdrawTeam(
           open,
           mootCover,
           matchClaims,
+          closedRequests,
           cancelledScrims: cancelledScrims.count,
           // Matches that completed after the presentation read but before the
           // transaction are not in `open`; retain the old truthful toast note.
@@ -1613,6 +1880,9 @@ export async function withdrawTeam(
     if (error instanceof TeamAlreadyWithdrawnError) {
       return { error: `${error.message} has already withdrawn` };
     }
+    if (error instanceof StandinRequestsChangedError) {
+      return { error: error.message };
+    }
     if (
       error instanceof TeamWithdrawalLifecycleChangedError ||
       isSerializationConflict(error)
@@ -1630,6 +1900,7 @@ export async function withdrawTeam(
     open,
     mootCover,
     matchClaims,
+    closedRequests,
     cancelledScrims,
     completedBeforeClaim,
   } = withdrawal;
@@ -1676,7 +1947,7 @@ export async function withdrawTeam(
   await sendDiscordMessage(teamWithdrewMessage(team.name, forfeited));
   await logAdminAction({
     action: "withdrawTeam",
-    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents and ${cancelledScrims} unplayed scrim(s) cancelled${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
+    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents, ${closedRequests} pending standin request(s) on them cancelled and ${cancelledScrims} unplayed scrim(s) cancelled${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
     seasonId: season.id,
   });
   refresh();
@@ -1687,6 +1958,9 @@ export async function withdrawTeam(
       : null,
     stoodDown.length
       ? `${stoodDown.length} standin booking(s) on those fixtures stood down`
+      : null,
+    closedRequests
+      ? `${closedRequests} standin request(s) waiting on those fixtures cancelled`
       : null,
     cancelledScrims
       ? `${cancelledScrims} unplayed scrim(s) cancelled`
@@ -1796,6 +2070,9 @@ export async function assignStandin(
     teamId: seat ?? undefined,
     actingCaptainId: null, // admin override — either team
     actingUserId: admin.id,
+    // The league's ruling: a standin over the MMR allowance is booked
+    // without the other captain, and the toast and the log say so.
+    overLimit: "book",
   });
   if (!res.ok) return { error: res.error };
   // The standin must HEAR about their game night — best-effort, never blocks.
@@ -1815,6 +2092,86 @@ export async function assignStandin(
       await reachabilityNote(str(formData, "standinUserId")),
     ),
   };
+}
+
+/**
+ * Agree to a captain's standin request in the other captain's place (an
+ * unanswered request on match night), which books the standin.
+ */
+export async function approveStandinRequestAsAdmin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await approveStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: null,
+    actingUserId: admin.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  await logAdminAction({
+    action: "approveStandinRequestAsAdmin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
+  refresh();
+  return {
+    message: withReachabilityNote(
+      res.message,
+      res.reachUserId ? await reachabilityNote(res.reachUserId) : "",
+    ),
+  };
+}
+
+/** Decline a captain's standin request in the other captain's place. */
+export async function declineStandinRequestAsAdmin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await declineStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: null,
+    actingUserId: admin.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await sendDiscordMessage(res.announcement, res.mentions);
+  await logAdminAction({
+    action: "declineStandinRequestAsAdmin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
+  refresh();
+  return { message: res.message };
+}
+
+/**
+ * Withdraw a captain's standin request in the asking captain's place (one
+ * left hanging, or asked by mistake), which frees the seat. Posts nothing,
+ * like the captain's own Withdraw: nobody has to act on it.
+ */
+export async function withdrawStandinRequestAsAdmin(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const res = await cancelStandinRequest({
+    requestId: str(formData, "requestId"),
+    actingCaptainId: null,
+    actingUserId: admin.id,
+  });
+  if (!res.ok) return { error: res.error };
+  await logAdminAction({
+    action: "withdrawStandinRequestAsAdmin",
+    summary: res.summary,
+    seasonId: res.seasonId,
+  });
+  refresh();
+  return { message: res.message };
 }
 
 /** Remove a standin assignment. */

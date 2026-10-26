@@ -5,9 +5,12 @@
 // page itself holds no rule numbers; a source guard there checks that.
 //
 // It never invents a rule. A sentence that states what a function decides is
-// only included while that function still decides it (the probes below), and
-// anything the code doesn't decide at all (no-show grace, conduct, disputes)
-// is left to the closing line. docs/features/pages-and-ui.md lists those gaps.
+// only included while that function still decides it (the probes below). The
+// rules admins enforce by hand (lateness, pauses, remakes, fair play,
+// conduct) are Tim's written policy, approved 2026-10-25: their numbers are
+// the WRITTEN_RULES constants below, and their sections say admins rule on
+// them. Anything else is left to the closing line;
+// docs/features/pages-and-ui.md lists those gaps.
 
 import { MAX_RESCHEDULE_OPTIONS } from "./reschedule-ready-check";
 import {
@@ -53,13 +56,34 @@ import {
   carriedSeasonSettings,
   type CarriedSeasonSettings,
 } from "./season-handoff";
-import { STANDIN_CONFLICT_HOURS, STANDIN_MMR_FLAG_GAP } from "./standin";
+import { STANDIN_CONFLICT_HOURS, STANDIN_MMR_ALLOWANCE } from "./standin";
 import { computeStandings } from "./standings";
 import {
   teamWithdrawalLockedReason,
   withdrawalForfeitScore,
 } from "./team-withdrawal";
 import { TIEBREAKER_RULES, TIEBREAKER_SUMMARY } from "./tiebreaker-format";
+
+/**
+ * The numbers in the rules admins enforce by hand. No code checks them: an
+ * admin rules on a claim (and records any forfeit with `recordResult`).
+ */
+export const WRITTEN_RULES = {
+  /** Minutes before kickoff players are asked to be there. */
+  ARRIVE_EARLY_MINUTES: 15,
+  /** Minutes past kickoff a team not ready loses game 1. */
+  LATE_GAME_FORFEIT_MINUTES: 15,
+  /** Minutes past kickoff a team not ready forfeits the series. */
+  LATE_SERIES_FORFEIT_MINUTES: 30,
+  /** Minutes after a game for the series' next game to start. */
+  NEXT_GAME_MINUTES: 15,
+  /** Pause minutes each team gets per game. */
+  PAUSE_MINUTES_PER_TEAM: 15,
+  /** Minimum delay on a player's own stream, in minutes. */
+  STREAM_DELAY_MINUTES: 2,
+  /** Match nights a player may expect to miss before they shouldn't sign up. */
+  MAX_MISSED_NIGHTS: 3,
+} as const;
 
 /** The page's last line, word for word. */
 export const RULES_CLOSING = "Admins rule on anything not written here.";
@@ -352,11 +376,18 @@ function rostersSection(s: CarriedSeasonSettings): RuleSection {
     rules: [
       `Teams have ${plural(s.teamSize, "player")}, the captain included.`,
       "After the auction, admins can sign undrafted players into open seats and release players, until the season ends.",
+      `A signed player can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they replace (the latest player released from that team whose seat is still open), or the team's lowest MMR when no released player is waiting to be replaced. When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.`,
       "Anyone with an active signup who isn't on a roster can stand in: standins and undrafted players alike.",
       "Captains book standins for their own team on the match page, and admins can book for any team. One standin per seat.",
       `A standin can't be booked for two matches within ${plural(STANDIN_CONFLICT_HOURS, "hour")} of each other.`,
       "Cover can be booked from the end of the auction until the series is over, and removed until the series' first game is in.",
-      `Booking a standin ${STANDIN_MMR_FLAG_GAP.toLocaleString("en-US")} or more MMR above the player they cover shows a warning to check with the other captain. It never blocks the booking.`,
+      `A standin can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they cover, by signup MMR. A captain books a standin within that straight away.`,
+      `A standin more than ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above needs the other captain to agree on the match page. The standin isn't booked until they do, and the seat waits until they answer or the request is withdrawn.`,
+      "An empty roster seat counts as covering the team's lowest-MMR player. When the site doesn't know one of the two MMRs, the other captain decides.",
+      "If a teammate with a lower MMR has said they can't make the match and has no cover yet, the standin is measured against them instead of the player they cover.",
+      "Once a standin is declined for a team, that team's captain can't book or ask for them again for the same match.",
+      "Admins can book any standin themselves, and can agree, decline or withdraw a request in a captain's place.",
+      "An admin can't agree to a request from a team they captain or that they made themselves.",
     ],
   };
 }
@@ -405,6 +436,61 @@ function hostingSection(
     );
   }
   return { id: "hosting", title: "Hosting the lobby", rules };
+}
+
+function matchDaySection(): RuleSection {
+  const w = WRITTEN_RULES;
+  return {
+    id: "match-day",
+    title: "Being on time",
+    rules: [
+      `Be in the lobby at kickoff. Aim to be there ${plural(w.ARRIVE_EARLY_MINUTES, "minute")} early, so there's time to find a standin.`,
+      `A team that isn't ready ${plural(w.LATE_GAME_FORFEIT_MINUTES, "minute")} after kickoff loses game 1. At ${plural(w.LATE_SERIES_FORFEIT_MINUTES, "minute")} it forfeits the series.`,
+      `If neither team is ready ${plural(w.LATE_SERIES_FORFEIT_MINUTES, "minute")} after kickoff, an admin rules on the series.`,
+      "To claim a forfeit, post a screenshot of your full lineup seated in the lobby in the league Discord and tag an admin. Only admins record forfeits.",
+      `Each game after the first starts within ${plural(w.NEXT_GAME_MINUTES, "minute")} of the one before it ending.`,
+    ],
+  };
+}
+
+function pausesSection(): RuleSection {
+  return {
+    id: "pauses",
+    title: "Pauses and remakes",
+    rules: [
+      `Each team gets ${plural(WRITTEN_RULES.PAUSE_MINUTES_PER_TEAM, "minute")} of pause time per game, or more if both teams agree.`,
+      "In the hero draft, pause only when a drafter disconnects.",
+      "Pausing to reach an admin doesn't count toward your pause time. Pause spam is not allowed.",
+      "If a player doesn't make it back in time, the team plays on without them or forfeits the game.",
+      "A game can be remade for a major problem if both captains agree, before the first bounty runes. Picking the wrong hero isn't a major problem.",
+    ],
+  };
+}
+
+function fairPlaySection(): RuleSection {
+  return {
+    id: "fair-play",
+    title: "Accounts and fair play",
+    rules: [
+      "Play on the account you signed up with. Using another account needs an admin's OK, and the other captain must be told before the match.",
+      "Keep your Dota match data public, or your games can't import.",
+      "No coaches or other outsiders in the game or the hero draft.",
+      "No cheating tools and no exploiting bugs.",
+      `No stream sniping. If you stream your own game, use at least ${plural(WRITTEN_RULES.STREAM_DELAY_MINUTES, "minute")} of delay.`,
+    ],
+  };
+}
+
+function conductSection(): RuleSection {
+  return {
+    id: "conduct",
+    title: "Conduct and commitment",
+    rules: [
+      "No hate speech, personal attacks, harassment or doxxing, in games, in the Discord or in inhouses. Report it to an admin in a private message.",
+      `Don't sign up if you expect to miss more than about ${plural(WRITTEN_RULES.MAX_MISSED_NIGHTS, "match night")} in the season.`,
+      "Leaving your team mid-season without telling the admins can get you banned for the next season.",
+    ],
+  };
 }
 
 function signupsSection(s: CarriedSeasonSettings): RuleSection {
@@ -498,9 +584,13 @@ export function leagueRules({
       rostersSection(settings),
       matchNightSection(matchNight, matchNightPoll),
       hostingSection(ticket, config),
+      matchDaySection(),
+      pausesSection(),
       signupsSection(settings),
       draftSection(settings),
       resultsSection(settings, ticket),
+      fairPlaySection(),
+      conductSection(),
     ],
     closing: RULES_CLOSING,
   };
