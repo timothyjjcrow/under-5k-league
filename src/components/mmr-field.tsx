@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HARD_MMR_CEILING } from "@/lib/constants";
 import { mmrPreviewLine } from "@/lib/account-page";
+import { MMR_SELF_EDIT_LOCKED_HINT } from "@/lib/registration";
 import { cn } from "@/lib/utils";
 
 /**
@@ -17,12 +18,19 @@ export function MmrField({
   rankTier,
   storedMmr,
   frozen,
+  locked = false,
   describedBy,
 }: {
   defaultValue: string;
   rankTier: number | null;
   storedMmr: number | null;
   frozen: boolean;
+  /**
+   * An existing signup after the draft (mmrSelfEditLocked): the box renders
+   * disabled with the stored number and says who can change it. A disabled
+   * box submits nothing, which saveRegistration reads as "unchanged".
+   */
+  locked?: boolean;
   /** Id of the lead line above the box. */
   describedBy?: string;
 }) {
@@ -42,7 +50,9 @@ export function MmrField({
     return () => form.removeEventListener("reset", onReset);
   }, []);
 
-  const preview = mmrPreviewLine({ typed, rankTier, storedMmr, frozen });
+  const preview = locked
+    ? { tone: "muted" as const, text: MMR_SELF_EDIT_LOCKED_HINT }
+    : mmrPreviewLine({ typed, rankTier, storedMmr, frozen });
   return (
     <>
       <input
@@ -55,14 +65,15 @@ export function MmrField({
         min={1}
         max={HARD_MMR_CEILING}
         defaultValue={defaultValue}
-        placeholder="e.g. 3200"
+        disabled={locked}
+        placeholder={locked ? undefined : "e.g. 3200"}
         aria-describedby={
           [describedBy, preview ? "mmr-preview" : null]
             .filter(Boolean)
             .join(" ") || undefined
         }
         onChange={(event) => setTyped(event.currentTarget.value)}
-        className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+        className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60 disabled:cursor-not-allowed disabled:opacity-70"
       />
       {preview ? (
         <p

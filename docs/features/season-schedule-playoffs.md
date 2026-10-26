@@ -219,7 +219,8 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   no COMPLETED regular series AND no Game (both halves pinned in
   `admin-flow-audit.itest.ts`), no withdrawn team, 2+ teams, no confirmed-scrim
   clash. A regenerate replaces fixture ids, so it names the check-ins, picks,
-  bookings and proposals it wipes, before (confirm) and after (toast, log),
+  bookings and proposals it wipes, before (confirm) and after (toast, log;
+  waiting standin requests are counted there too, never posted),
   and drops the queued check-in reminders and result nudges of the fixtures
   it deletes (`invalidateMatchNudges`, as every retime does), or a reminder
   held by a Discord outage would ping players for a match that no longer

@@ -9,7 +9,11 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { matchCoverIssues } from "@/lib/admin-sections";
+import {
+  adminMayAgreeToRequest,
+  matchCoverIssues,
+  uncoveredByRequest,
+} from "@/lib/admin-sections";
 import {
   matchCorrectionContext,
   matchLogisticsOpen,
@@ -25,6 +29,8 @@ import {
   type StandinBooking,
   coverChoices,
   seatValue,
+  standinApprovalReason,
+  standinMmrLabel,
   standinPickerBlock,
 } from "@/lib/standin";
 import {
@@ -32,7 +38,14 @@ import {
   parseTiebreakerStage,
 } from "@/lib/tiebreaker-format";
 import { cn } from "@/lib/utils";
-import { assignStandin, removeStandin } from "@/app/actions/admin-roster";
+import {
+  approveStandinRequestAsAdmin,
+  assignStandin,
+  declineStandinRequestAsAdmin,
+  removeStandin,
+  withdrawStandinRequestAsAdmin,
+} from "@/app/actions/admin-roster";
+import type { StandinRequestView } from "@/lib/standin-service";
 import {
   autoDetectAction,
   importGameAction,
@@ -89,6 +102,9 @@ export type AdminResultRowMatch = {
 type StandinBlockTeam = {
   id: string;
   name: string;
+  /** Who captains it: an admin captaining the asking team gets no "agree"
+   *  (adminMayAgreeToRequest). Both callers load it. */
+  captainId?: string;
   members: { userId: string; user: { name: string } }[];
 };
 
@@ -629,7 +645,9 @@ export function MatchResultRow({
 }
 
 // One match's any-team standin controls: an OUT-players alert, current
-// assignments, and the assign form. /admin's Standin assignments card renders
+// assignments, captains' requests waiting for the other captain's OK (with
+// the admin's Agree and Decline in that captain's place, and Withdraw in the
+// asking captain's), and the assign form. /admin's Standin assignments card renders
 // one per upcoming fixture; the match page's Admin tools render the same block.
 export function StandinMatchBlock({
   m,
@@ -638,10 +656,12 @@ export function StandinMatchBlock({
   bookings,
   outRsvps,
   assignments,
+  requests,
   teamName,
   label,
   teamSize,
   assignOpen,
+  viewerId,
 }: {
   /** `games` decides the lock: once one is imported, removeStandinGuarded
    *  refuses every removal (it would strip the standin from the rest of the
@@ -665,12 +685,18 @@ export function StandinMatchBlock({
   /** OUT answers for the fixture's current schedule revision. */
   outRsvps: { matchId: string; userId: string; user: { name: string } }[];
   assignments: StandinBlockAssignment[];
+  /** This match's PENDING standin requests (the MMR rule). */
+  requests: StandinRequestView[];
   teamName: Map<string, string>;
   label: React.ReactNode;
   teamSize: number;
   /** The card-level phase gate — the assign form hides where the service
    *  would refuse; removal stays rendered (cleanup is legal everywhere). */
   assignOpen: boolean;
+  /** The admin viewing the block. approveStandinRequest refuses one who
+   *  captains the asking team or filed the request, so their "agree" hides
+   *  (adminMayAgreeToRequest); decline and withdraw stay. */
+  viewerId?: string;
 }) {
   const home = teams.find((t) => t.id === m.homeTeamId);
   const away = teams.find((t) => t.id === m.awayTeamId);
@@ -680,7 +706,9 @@ export function StandinMatchBlock({
   // second cover for one seat), so don't offer them — the captain-facing card
   // has always filtered these and the admin one didn't.
   const coveredIds = new Set(
-    asg.map((a) => a.replacingUserId).filter(Boolean) as string[],
+    [...asg, ...requests]
+      .map((a) => a.replacingUserId)
+      .filter(Boolean) as string[],
   );
   // The captain picker's rules, not a second copy of them: a standin already
   // booked in this match or on another fixture that night is listed last,
@@ -688,9 +716,23 @@ export function StandinMatchBlock({
   // leads with the players who said they can't make it (coverChoices). The
   // server still refuses both at submit.
   const target = { matchId: m.id, scheduledAt: m.scheduledAt, week: m.week };
+  // A pending request holds its standin in this match, as the server does.
+  const withRequests = [
+    ...bookings,
+    ...requests.map((r) => ({
+      standinUserId: r.standinUserId,
+      matchId: m.id,
+      replacedName: r.replaced?.name ?? null,
+      homeName: home?.name ?? "?",
+      awayName: away?.name ?? "?",
+      scheduledAt: m.scheduledAt,
+      week: m.week,
+      pending: true,
+    })),
+  ];
   const poolChoices = pool.map((s) => ({
     reg: s,
-    blocked: standinPickerBlock(s.userId, target, bookings),
+    blocked: standinPickerBlock(s.userId, target, withRequests),
   }));
   const pickerOptions = [
     ...poolChoices.filter((c) => !c.blocked),
@@ -707,13 +749,22 @@ export function StandinMatchBlock({
     (c) => c.out,
   );
   const preselect = outChoices.length === 1 ? outChoices[0].member.userId : "";
+  // One answer for the row's "agree" and the banner that names it: booking
+  // must be open, and the service refuses the asking side's own admin.
+  const mayAgree = (r: StandinRequestView) =>
+    adminMayAgreeToRequest({
+      agreeOpen: assignOpen,
+      viewerId,
+      request: r,
+      askingCaptainId: teams.find((t) => t.id === r.teamId)?.captainId,
+    });
   // OPEN SEATS. A short roster is filled by a standin who replaces NOBODY, so
   // it needs its own option — this is the case that had no UI at all, which is
   // why a 4-of-5 team simply could not be covered. One entry per still-open
   // seat, already-filled ones subtracted.
   const openSeats = [home, away].flatMap((t) => {
     if (!t) return [];
-    const filled = asg.filter(
+    const filled = [...asg, ...requests].filter(
       (a) => a.teamId === t.id && a.replacingUserId == null,
     ).length;
     const open = teamSize - t.members.length - filled;
@@ -729,8 +780,21 @@ export function StandinMatchBlock({
         // direction, an assigned STANDIN who has declared OUT, gets distinct
         // copy because the fix differs (remove/replace, not add). The same
         // matchCoverIssues decides which matches open /admin's card at the top.
-        const { uncovered: needing, standinsOut: standinOut } =
-          matchCoverIssues(m, teams, asg, outRsvps);
+        const { uncovered, standinsOut: standinOut } = matchCoverIssues(
+          m,
+          teams,
+          asg,
+          outRsvps,
+        );
+        // A seat with a waiting request is still uncovered, but the Covers
+        // list below hides it: point at the request row instead.
+        const { needCover: needing, waiting } = uncoveredByRequest({
+          match: m,
+          uncovered,
+          requests,
+          teamName,
+          canAgree: mayAgree,
+        });
         return (
           <>
             {needing.length > 0 ? (
@@ -740,6 +804,14 @@ export function StandinMatchBlock({
                 standin below.
               </div>
             ) : null}
+            {waiting.map(({ rsvp, note }) => (
+              <div
+                key={rsvp.userId}
+                className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs [overflow-wrap:anywhere]"
+              >
+                ✗ Can&apos;t make it: <b>{rsvp.user.name}</b> — {note}.
+              </div>
+            ))}
             {standinOut.length > 0 ? (
               <div className="rounded-md border border-danger/40 bg-danger/10 px-2.5 py-1.5 text-xs">
                 ✗ Assigned standin{" "}
@@ -791,6 +863,87 @@ export function StandinMatchBlock({
           ))}
         </ul>
       ) : null}
+      {requests.length > 0 ? (
+        <ul className="space-y-1.5">
+          {requests.map((r) => {
+            const descId = `admin-standin-request-${r.id}`;
+            const otherTeamId =
+              r.teamId === m.homeTeamId ? m.awayTeamId : m.homeTeamId;
+            return (
+              <li
+                key={r.id}
+                className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md border border-accent/40 bg-accent/10 px-2.5 py-1.5 text-xs"
+              >
+                <span id={descId} className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]">
+                  ⏳ {r.standin.name} ({standinMmrLabel(r.standinMmr)}){" "}
+                  {r.replaced
+                    ? r.baselinePlayer
+                      ? `in for ${r.replaced.name}`
+                      : `in for ${r.replaced.name} (${standinMmrLabel(r.baselineMmr)})`
+                    : "for an open seat"}{" "}
+                  · {teamName.get(r.teamId)}: {r.requestedBy.name} asked, and the{" "}
+                  {teamName.get(otherTeamId)} captain hasn&apos;t answered (
+                  {standinApprovalReason({
+                    standinMmr: r.standinMmr,
+                    baselineMmr: r.baselineMmr,
+                    emptySeat: r.replacingUserId === null,
+                    lowerOutName: r.baselinePlayer?.name,
+                  })}
+                  ).
+                </span>
+                <span className="ml-auto flex shrink-0 gap-1">
+                  {mayAgree(r) ? (
+                    <ActionForm
+                      action={approveStandinRequestAsAdmin}
+                      hidden={{ requestId: r.id }}
+                    >
+                      <SubmitButton
+                        variant="ghost"
+                        size="sm"
+                        className="text-xs"
+                        aria-describedby={descId}
+                        confirm={`Agree to ${r.standin.name} in place of the ${teamName.get(otherTeamId) ?? "other team's"} captain? The standin is booked and told on Discord.`}
+                      >
+                        agree
+                      </SubmitButton>
+                    </ActionForm>
+                  ) : null}
+                  <ActionForm
+                    action={declineStandinRequestAsAdmin}
+                    hidden={{ requestId: r.id }}
+                  >
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-danger-soft"
+                      aria-describedby={descId}
+                      confirm={`Decline ${r.standin.name} in place of the ${teamName.get(otherTeamId) ?? "other team's"} captain? The ${teamName.get(r.teamId) ?? "asking"} captain is told on Discord to find someone else.`}
+                    >
+                      decline
+                    </SubmitButton>
+                  </ActionForm>
+                  {/* The asking captain's Withdraw, in their place: cleanup,
+                      so it shows in every phase, like decline. */}
+                  <ActionForm
+                    action={withdrawStandinRequestAsAdmin}
+                    hidden={{ requestId: r.id }}
+                  >
+                    <SubmitButton
+                      variant="ghost"
+                      size="sm"
+                      className="text-xs text-danger-soft"
+                      aria-describedby={descId}
+                      confirm={`Withdraw the ${teamName.get(r.teamId) ?? "asking team's"} request for ${r.standin.name}, in their captain's place? The seat is free to book someone else, and nothing is posted on Discord.`}
+                    >
+                      withdraw
+                    </SubmitButton>
+                  </ActionForm>
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
       {!assignOpen ? null : (
         <ActionForm
           action={assignStandin}
@@ -813,7 +966,7 @@ export function StandinMatchBlock({
               <option key={s.userId} value={s.userId} disabled={!!blocked}>
                 {blocked
                   ? `${s.user.name} (${blocked})`
-                  : `${s.user.name} (${s.mmr} MMR)`}
+                  : `${s.user.name} (${standinMmrLabel(s.mmr)})`}
               </option>
             ))}
           </select>
@@ -886,12 +1039,15 @@ export async function AdminMatchTools({
   match,
   label,
   viewerHasCaptainTools = false,
+  viewerId,
 }: {
   match: AdminResultRowMatch & {
     seasonId: string;
     week: number;
     scheduleRevision: number;
     standins: StandinBlockAssignment[];
+    /** PENDING standin requests, as load.ts reads them. */
+    standinRequests: StandinRequestView[];
     season: {
       isActive: boolean;
       status: string;
@@ -905,6 +1061,8 @@ export async function AdminMatchTools({
   /** The admin also captains this match and the page shows their Captain
    *  tools, whose import form this card then points at instead of repeating. */
   viewerHasCaptainTools?: boolean;
+  /** The admin viewing the page, for the standin block's "agree". */
+  viewerId?: string;
 }) {
   const season = { ...match.season, id: match.seasonId };
   if (!season.isActive) return null;
@@ -922,6 +1080,7 @@ export async function AdminMatchTools({
         select: {
           id: true,
           name: true,
+          captainId: true,
           members: {
             select: { userId: true, user: { select: { name: true } } },
             orderBy: { createdAt: "asc" },
@@ -999,7 +1158,9 @@ export async function AdminMatchTools({
   );
   const showStandins =
     match.status !== MATCH_STATUS.COMPLETED &&
-    (assignOpen || match.standins.length > 0);
+    (assignOpen ||
+      match.standins.length > 0 ||
+      match.standinRequests.length > 0);
   // A server component renders once per request; the auto-check line is a
   // snapshot, like the same line on /admin.
   // eslint-disable-next-line react-hooks/purity
@@ -1103,9 +1264,11 @@ export async function AdminMatchTools({
               bookings={bookings}
               outRsvps={outRsvps}
               assignments={match.standins}
+              requests={match.standinRequests}
               teamName={teamName}
               teamSize={season.teamSize}
               assignOpen={assignOpen}
+              viewerId={viewerId}
               label="Standins"
             />
           ) : null}

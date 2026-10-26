@@ -37,8 +37,10 @@ import {
   REGISTRATION_TYPE,
   SEASON_PHASE_ORDER,
   SEASON_STATUS,
+  STANDIN_REQUEST_STATUS,
   type SeasonStatus,
 } from "@/lib/constants";
+import { STANDIN_REQUEST_VIEW } from "@/lib/standin-service";
 import {
   AUTO_CHECK_BACKED_OFF_SCANS,
   autoCheckStatus,
@@ -181,6 +183,9 @@ import { recentAdminActions } from "@/lib/admin-log";
 import { AUTOMATION_RUN_KEY } from "@/lib/automation-service";
 import { getAutomationGateDecision } from "@/lib/automation-gate";
 import { loadLeagueFeedWaiting } from "@/lib/league-feed-wait-service";
+import { loadFreeAgentBaselines } from "@/lib/free-agent-rule-service";
+import { freeAgentSeatLabel } from "@/lib/free-agent-rule";
+import { standinMmrLabel } from "@/lib/standin";
 import { leagueFeedWaitText } from "@/lib/league-feed-wait";
 import {
   AUTOMATION_BACKLOG_STUCK_MS,
@@ -388,7 +393,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
 
   // Delivery health is database-only, so it can sit on the blocking path.
   const [data, delivery] = await Promise.all([
-    season ? loadSeasonAdminData(season.id) : null,
+    season ? loadSeasonAdminData(season.id, season.teamSize) : null,
     season ? loadLeagueDeliveryHealth().catch(() => null) : null,
   ]);
   // Async server component: it renders once per request, so Date.now() has
@@ -669,7 +674,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
               </AdminAnchor>
               {cards?.standins ? (
                 <AdminAnchor id="adm-standins">
-                  <StandinControls season={season} data={data} />
+                  <StandinControls
+                    season={season}
+                    data={data}
+                    viewerId={user.id}
+                  />
                 </AdminAnchor>
               ) : null}
               {setupControls}
@@ -734,7 +743,11 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </AdminAnchor>
           {cards?.standins ? (
             <AdminAnchor id="adm-standins">
-              <StandinControls season={season} data={data} />
+              <StandinControls
+                season={season}
+                data={data}
+                viewerId={user.id}
+              />
             </AdminAnchor>
           ) : null}
           {setupFirst ? null : reachCard}
@@ -1262,8 +1275,17 @@ function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
   }
 }
 
-async function loadSeasonAdminData(seasonId: string) {
-  const [players, standins, removed, teams, matches, draft, assignments] =
+async function loadSeasonAdminData(seasonId: string, teamSize: number) {
+  const [
+    players,
+    standins,
+    removed,
+    teams,
+    matches,
+    draft,
+    assignments,
+    standinRequests,
+  ] =
     await Promise.all([
       prisma.registration.findMany({
         where: { seasonId, status: "ACTIVE", type: "PLAYER" },
@@ -1321,6 +1343,16 @@ async function loadSeasonAdminData(seasonId: string) {
         where: { match: { seasonId } },
         include: { standin: true, replaced: true },
       }),
+      // Captains' standin requests waiting for the other captain's OK (the
+      // MMR rule), for the Standin assignments card's Agree and Decline.
+      prisma.standinRequest.findMany({
+        where: {
+          status: STANDIN_REQUEST_STATUS.PENDING,
+          match: { seasonId, status: { not: "COMPLETED" } },
+        },
+        include: STANDIN_REQUEST_VIEW,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      }),
     ]);
   const outRsvps = await prisma.matchAvailability.findMany({
     where: { match: { seasonId }, status: "OUT" },
@@ -1350,7 +1382,7 @@ async function loadSeasonAdminData(seasonId: string) {
   // this number and then points at that card ("names them"); counting only
   // data.players (type PLAYER) made the two disagree whenever an unlinked
   // standin existed. DB-only, so the blocking path stays Discord-free.
-  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting] = await Promise.all([
+  const [rsvps, picks, covers, proposals, unlinkedDiscord, importsNeedingReview, feedWaiting, freeAgentBaselines] = await Promise.all([
     prisma.matchAvailability.count({ where: regularWhere }),
     prisma.prediction.count({ where: regularWhere }),
     prisma.standinAssignment.count({ where: regularWhere }),
@@ -1370,7 +1402,30 @@ async function loadSeasonAdminData(seasonId: string) {
     }),
     // Feed games the last automatic league-feed pass stopped on.
     loadLeagueFeedWaiting(seasonId),
+    // Who a signing onto each short team would replace, for the sign form's
+    // team options (Roster moves). Short teams only, all in one batch.
+    loadFreeAgentBaselines(
+      prisma,
+      seasonId,
+      shortTeams(teams, teamSize).map(({ team }) => ({
+        id: team.id,
+        name: team.name,
+        memberUserIds: team.members.map((m) => m.userId),
+      })),
+    ),
   ]);
+  // The waiting standin requests a regenerate cascades away with the regular
+  // fixtures (replaceRegularSchedule counts them in its toast and log), from
+  // the requests already loaded. Those skip COMPLETED matches, which can't
+  // matter here: any regular-season result locks the regenerate.
+  const regularMatchIds = new Set(
+    matches
+      .filter((match) => match.phase === MATCH_PHASE.REGULAR)
+      .map((match) => match.id),
+  );
+  const requests = standinRequests.filter((request) =>
+    regularMatchIds.has(request.matchId),
+  ).length;
   return {
     players,
     standins,
@@ -1379,14 +1434,16 @@ async function loadSeasonAdminData(seasonId: string) {
     matches: matches.map((match) => ({ ...match, availability: match.availability.filter((rsvp) => rsvp.scheduleRevision === match.scheduleRevision) })),
     draft,
     assignments,
+    standinRequests,
     outRsvps: outRsvps.filter((rsvp) => rsvp.scheduleRevision === matches.find((match) => match.id === rsvp.matchId)?.scheduleRevision),
     playoffArchive: parsePlayoffArchive(playoffArchive),
     tiebreakerArchive: parsePlayoffArchive(tiebreakerArchive),
-    collateral: { rsvps, picks, covers, proposals },
+    collateral: { rsvps, picks, covers, proposals, requests },
     unlinkedDiscord,
     importsNeedingReview,
     feedWaiting,
     captainsInRoom,
+    freeAgentBaselines,
   };
 }
 
@@ -3898,6 +3955,11 @@ function ScheduleControls({
           `${collateral.covers} standin booking(s) are cancelled — captains will have to arrange that cover again.`,
         ]
       : []),
+    ...(collateral.requests
+      ? [
+          `${collateral.requests} waiting standin request(s) are cancelled — captains will have to ask again.`,
+        ]
+      : []),
     ...(collateral.proposals
       ? [`${collateral.proposals} open reschedule proposal(s) are cancelled.`]
       : []),
@@ -4784,9 +4846,12 @@ function PlayoffControls({
 function StandinControls({
   season,
   data,
+  viewerId,
 }: {
   season: Season;
   data: AdminData;
+  /** The admin viewing the page: no "agree" on their own side's request. */
+  viewerId: string;
 }) {
   const upcoming = data.matches.filter((m) => m.status !== "COMPLETED");
   const teamName = new Map(data.teams.map((t) => [t.id, t.name]));
@@ -4795,6 +4860,12 @@ function StandinControls({
     const arr = byMatch.get(a.matchId) ?? [];
     arr.push(a);
     byMatch.set(a.matchId, arr);
+  }
+  const requestsByMatch = new Map<string, AdminData["standinRequests"]>();
+  for (const r of data.standinRequests) {
+    const arr = requestsByMatch.get(r.matchId) ?? [];
+    arr.push(r);
+    requestsByMatch.set(r.matchId, arr);
   }
   // Mirror the service's phase gate (render/guard pairing): assignment is
   // open mid-season and in the post-auction DRAFT window; the card still
@@ -4849,10 +4920,12 @@ function StandinControls({
     clashes,
   });
   const problems = upcoming.filter((m) => problemIds.has(m.id));
-  // Outside the assign window only matches with a booking have anything to
-  // show (removal); an empty block there is noise.
+  // Outside the assign window only matches with a booking or a request have
+  // anything to show (removal, decline, withdraw); an empty block there is noise.
   const rest = upcoming.filter(
-    (m) => !problemIds.has(m.id) && (assignOpen || byMatch.has(m.id)),
+    (m) =>
+      !problemIds.has(m.id) &&
+      (assignOpen || byMatch.has(m.id) || requestsByMatch.has(m.id)),
   );
   // Standins are assigned for the imminent night — group by week and only
   // expand the earliest open one so the current night isn't a scroll away.
@@ -4887,9 +4960,11 @@ function StandinControls({
       bookings={bookings}
       outRsvps={data.outRsvps}
       assignments={byMatch.get(m.id) ?? []}
+      requests={requestsByMatch.get(m.id) ?? []}
       teamName={teamName}
       teamSize={season.teamSize}
       assignOpen={assignOpen}
+      viewerId={viewerId}
       label={matchLabel(m)}
     />
   );
@@ -5761,9 +5836,11 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Free agent…
               </option>
+              {/* Worded like the team options beside it ("3,200 MMR",
+                  "MMR unknown"): an unknown is not 0. */}
               {freeAgents.map((p) => (
                 <option key={p.userId} value={p.userId}>
-                  {p.user.name} ({p.mmr} MMR)
+                  {p.user.name} ({standinMmrLabel(p.mmr)})
                 </option>
               ))}
             </select>
@@ -5778,12 +5855,33 @@ function RosterMoves({ season, data }: { season: Season; data: AdminData }) {
               <option value="" disabled>
                 Team…
               </option>
-              {short.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name} ({t.members.length}/{season.teamSize})
-                </option>
-              ))}
+              {/* Each team's yardstick for the 100-MMR rule, so the gap
+                  shows before submitting (the free agents show their MMR). */}
+              {short.map((t) => {
+                const baseline = data.freeAgentBaselines[t.id];
+                return (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.members.length}/{season.teamSize})
+                    {baseline ? ` · ${freeAgentSeatLabel(baseline)}` : ""}
+                  </option>
+                );
+              })}
             </select>
+            {/* The free agent is held to 100 MMR above the player they
+                replace (or the team's lowest MMR); over it, or with an MMR
+                unknown, signFreeAgent refuses unless this is ticked, and the
+                toast, the log and the Discord post say so with both MMRs. */}
+            <label
+              className="flex items-center gap-1.5 text-xs text-muted"
+              title="Over 100 MMR above the player they replace (or the team's lowest MMR), or with an MMR unknown, a signing needs this ticked. The announcement then shows both MMRs."
+            >
+              <input
+                type="checkbox"
+                name="overMmrRule"
+                className="h-3.5 w-3.5 accent-[var(--color-brand)]"
+              />
+              Sign over the 100-MMR rule
+            </label>
             {/* Additive and undoable by Release — but Release permanently
                 erases the player's draft price, so the round trip is lossy. */}
             <SubmitButton

@@ -28,7 +28,7 @@ note before changing that area: it is required reading, not background.
 | --- | --- |
 | [concurrency-and-testing](docs/features/concurrency-and-testing.md) | any guarded write, race test, race-hook seam, or the mutation ratchet |
 | [draft](docs/features/draft.md) | the auction engine, the draft admin controls, `/draft` or the draft room |
-| [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover, check-ins, the week reminder |
+| [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover and the standin MMR rule's requests, check-ins, the week reminder |
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
 | [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal (`/admin/inhouse-players`) |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
@@ -313,7 +313,8 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
 - **Make copy name controls that exist, by their real names**
   (`src/app/admin/admin-copy-guard.test.ts` checks the admin panel).
 - **Never silently rewrite what a player typed.** When the server adjusts a
-  value (an MMR clamp, a draft-night freeze), the toast says what was stored.
+  value (an MMR clamp, a draft-night freeze, the post-draft MMR lock), the toast
+  says what was stored.
 - **Read query values with `singleSearchParam`** (`src/lib/search-params.ts`): a
   repeated key is "unavailable", never an array handed to Prisma.
 - **Make writes unreachable on an archived season.** Pages take `?season=`

@@ -194,7 +194,8 @@ describe("durable draft and roster history", () => {
     const first = await prisma.teamMember.findUniqueOrThrow({ where: { seasonId_userId: { seasonId: f.season.id, userId: f.p.id } } });
     const second = await prisma.teamMember.findUniqueOrThrow({ where: { seasonId_userId: { seasonId: f.season.id, userId: f.q.id } } });
     for (const member of [first, second]) expect(await releasePlayer(null, form({ memberId: member.id }))).toHaveProperty("message");
-    expect(await signFreeAgent(null, form({ userId: f.p.id, teamId: second.teamId }))).toHaveProperty("message");
+    // 3,300 replacing a 2,800: over the free-agent MMR rule, so the box.
+    expect(await signFreeAgent(null, form({ userId: f.p.id, teamId: second.teamId, overMmrRule: "on" }))).toHaveProperty("message");
     const tenures = await prisma.rosterTenure.findMany({ where: { userId: f.p.id }, orderBy: { joinedAt: "asc" } });
     expect(tenures).toHaveLength(2);
     expect(tenures[0]).toMatchObject({ teamId: first.teamId, endReason: "RELEASE", acquisitionPrice: 7 });

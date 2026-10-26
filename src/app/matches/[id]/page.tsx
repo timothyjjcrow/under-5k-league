@@ -199,6 +199,7 @@ export default async function MatchDetailPage({
           match={match}
           label={postseasonLabel}
           viewerHasCaptainTools={showCaptainTools}
+          viewerId={viewer.id}
         />
       ) : null}
 

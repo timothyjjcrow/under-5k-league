@@ -7,6 +7,7 @@ import {
   MATCH_PHASE,
   MATCH_STATUS,
   SEASON_STATUS,
+  STANDIN_REQUEST_STATUS,
 } from "./constants";
 import { effectiveDotaAccountId } from "./dota-account";
 import {
@@ -985,6 +986,9 @@ export type AbortDraftSummary = {
   predictionsCleared: number;
   reschedulesCleared: number;
   fantasyRostersCleared: number;
+  /** PENDING standin requests on the deleted fixtures, gone by cascade.
+   *  Counted for the toast and the log only: nobody has to act on them. */
+  standinRequestsCancelled: number;
   /** Standin bookings deleted with the rosters they covered — the ACTION
    *  sends one stand-down per row post-commit (the generateSchedule shape). */
   coverStandDowns: {
@@ -1051,6 +1055,7 @@ export async function abortDraft(
           predictionsCleared,
           reschedulesCleared,
           fantasyRostersCleared,
+          standinRequestsCancelled,
         ] = await Promise.all([
           tx.match.count({ where: { seasonId, status: MATCH_STATUS.COMPLETED } }),
           tx.game.count({ where: { match: { seasonId } } }),
@@ -1062,6 +1067,12 @@ export async function abortDraft(
           tx.prediction.count({ where: { match: { seasonId } } }),
           tx.rescheduleRequest.count({ where: { match: { seasonId } } }),
           tx.fantasyRoster.count({ where: { seasonId } }),
+          tx.standinRequest.count({
+            where: {
+              match: { seasonId },
+              status: STANDIN_REQUEST_STATUS.PENDING,
+            },
+          }),
         ]);
         if (played > 0 || games > 0 || nonScheduled > 0) {
           return {
@@ -1149,8 +1160,9 @@ export async function abortDraft(
 
         // Every fixture-level artifact was composed against the rosters being
         // dissolved. Preserve none of that semantically stale schedule: Match
-        // cascades clear check-ins, predictions, cover and reschedules; fantasy
-        // lineups are season-level and need an explicit reset.
+        // cascades clear check-ins, predictions, cover, standin requests and
+        // reschedules; fantasy lineups are season-level and need an explicit
+        // reset.
         const staleCover = await tx.standinAssignment.findMany({
           where: { match: { seasonId } },
           select: {
@@ -1222,6 +1234,7 @@ export async function abortDraft(
           predictionsCleared,
           reschedulesCleared,
           fantasyRostersCleared,
+          standinRequestsCancelled,
           coverStandDowns: staleCover.map((assignment) => ({
             standinName: assignment.standin.name,
             discordId: assignment.standin.discordId,
