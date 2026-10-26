@@ -94,6 +94,7 @@ import {
   sessionFor,
   startDraftState,
 } from "./factories";
+import { sourceFile, stripLineComments } from "../support/source-files";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -923,6 +924,23 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
         where: { match: { seasonId: season.id } },
       }),
     ).toBe(0);
+  });
+
+  // The rebuild also cascades the waiting standin requests away (the toast
+  // and log count them: standin-request-teardown.itest.ts), so the confirm
+  // has to say so BEFORE the click, beside the bookings it already names.
+  it("states the waiting standin requests it cancels in both Regenerate confirms on /admin", () => {
+    const page = stripLineComments(sourceFile("src/app/admin/page.tsx").text);
+    // Counted per render from the PENDING requests the page already loads,
+    // on the regular-season fixtures only.
+    expect(page).toMatch(/collateral: \{[^}]*\brequests\b[^}]*\}/);
+    expect(page).toMatch(
+      /standinRequests\.filter\(\(request\) =>\s*regularMatchIds\.has\(request\.matchId\),?\s*\)\.length/,
+    );
+    const line =
+      "`${collateral.requests} waiting standin request(s) are cancelled — captains will have to ask again.`";
+    // The header's Regenerate schedule and the season-format rebuild.
+    expect(page.split(line).length - 1).toBe(2);
   });
 
   // Two admins open /admin before either generates. The second click came
@@ -1799,9 +1817,11 @@ describe("the auction can't be bypassed before it runs", () => {
       data: { seasonId: season.id, status: "COMPLETE" },
     });
 
+    // An empty roster has no known MMR to judge against, so the free-agent
+    // MMR rule needs the admin's box (roster-moves.itest.ts covers the rule).
     const res = await signFreeAgent(
       empty,
-      fd({ teamId: team.id, userId: free.id }),
+      fd({ teamId: team.id, userId: free.id, overMmrRule: "on" }),
     );
 
     expect(res?.error).toBeUndefined();

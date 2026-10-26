@@ -63,6 +63,21 @@ export const MATCH_PHASE = {
   FINAL: "FINAL",
 } as const;
 
+/** A StandinRequest: a booking waiting for the other captain's OK. */
+export const STANDIN_REQUEST_STATUS = {
+  PENDING: "PENDING",
+  /** Agreed: the same transaction created the StandinAssignment. */
+  APPROVED: "APPROVED",
+  /** The other captain (or an admin) said no. */
+  DECLINED: "DECLINED",
+  /**
+   * Withdrawn by the asking captain (or an admin), or closed by the league
+   * once nobody could agree to it: a release, a signing, a standin leaving,
+   * a forfeit ruling or a Reopen (`cancelPendingStandinRequests`).
+   */
+  CANCELLED: "CANCELLED",
+} as const;
+
 export const TEAM_STAFF_ROLE = {
   COACH: "COACH",
 } as const;

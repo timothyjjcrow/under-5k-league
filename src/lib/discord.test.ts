@@ -50,8 +50,11 @@ import {
   playerOutMessage,
   rescheduleDeclinedMessage,
   rescheduleProposedMessage,
+  standinApprovalRequestedMessage,
   standinAssignedMessage,
   standinRemovedMessage,
+  standinRequestCancelledMessage,
+  standinRequestDeclinedMessage,
   teamWithdrewMessage,
   teamIdentityChangedMessage,
   weekReminderAnnouncements,
@@ -643,6 +646,37 @@ describe("discord message formatters", () => {
       "Late Joiner: the **Short Squad** match nights are yours now",
     );
     expect(msg).not.toContain("their schedule");
+    // Within the MMR rule the post says nothing about it.
+    expect(msg).not.toContain("MMR");
+  });
+
+  it("says when an admin signed over the 100-MMR rule, with both MMRs", () => {
+    const msg = freeAgentSignedMessage("Late Joiner", "Short Squad", {
+      freeAgentMmr: 4500,
+      baseline: { kind: "replaced", name: "Bob", mmr: 2000 },
+    });
+    expect(msg).toContain(
+      "Signed over the 100-MMR rule: 4,500 MMR, replacing Bob's 2,000.",
+    );
+    // Still ends with the signed player's next move.
+    expect(msg).toMatch(/check in on your match pages: <[^>]+\/schedule>$/);
+    expect(
+      freeAgentSignedMessage("Late Joiner", "Short Squad", {
+        freeAgentMmr: 4500,
+        baseline: { kind: "lowest", teamName: "Short Squad", mmr: 2100 },
+      }),
+    ).toContain(
+      "Signed over the 100-MMR rule: 4,500 MMR, against Short Squad's lowest MMR of 2,100.",
+    );
+  });
+
+  it("escapes the names in the over-rule sentence", () => {
+    const msg = freeAgentSignedMessage("A", "T", {
+      freeAgentMmr: 4500,
+      baseline: { kind: "replaced", name: "[Bob](https://evil.test)", mmr: 2000 },
+    });
+    expect(msg).not.toContain("[Bob](https://evil.test)");
+    expect(msg).toContain("\\[Bob\\]\\(");
   });
 
   it("announces a release", () => {
@@ -2358,6 +2392,148 @@ describe("standinAssignedMessage", () => {
   });
 });
 
+describe("standin requests (the MMR rule)", () => {
+  const fixture = {
+    standinName: "Sub Sam",
+    replacedName: "Home Carry",
+    teamName: "Roshan's Rejects",
+    homeName: "Roshan's Rejects",
+    awayName: "Dire Straits",
+    week: 4,
+    isPlayoff: false,
+    matchId: "m1",
+  };
+
+  it("asks the other team's captain, with both MMRs and why, and links the card", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const msg = standinApprovalRequestedMessage({
+      ...fixture,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: 1_760_000_000_000,
+      standinMmr: 3100,
+      baselineMmr: 2400,
+    });
+    expect(msg).toContain("**Cap Ann** wants **Sub Sam** (3,100 MMR)");
+    expect(msg).toContain("for **Home Carry** (2,400 MMR)");
+    expect(msg).toContain("The **Dire Straits** captain has to agree first");
+    expect(msg).toContain("since the standin is 700 MMR above the player they cover");
+    expect(msg).toContain("<t:1760000000:F>");
+    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+  });
+
+  // namedCoverBaseline: a lower teammate who said they're out set the
+  // baseline, so the post says whose MMR it was, and the covered player's
+  // line keeps their own.
+  it("names the lower teammate who's out when they set the baseline", () => {
+    const msg = standinApprovalRequestedMessage({
+      ...fixture,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 2300,
+      baselineMmr: 2000,
+      lowerOut: { name: "Low Lou", replacedMmr: 3200 },
+    });
+    expect(msg).toContain("for **Home Carry** (3,200 MMR)");
+    expect(msg).toContain(
+      "since the standin is 300 MMR above **Low Lou** (2,000), who said they can't make it",
+    );
+    const escaped = standinApprovalRequestedMessage({
+      ...fixture,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 2300,
+      baselineMmr: 2000,
+      lowerOut: { name: "**[x](https://evil.example)**", replacedMmr: 3200 },
+    });
+    expect(escaped).not.toContain("[x](https://evil.example)");
+    expect(escaped).not.toContain("****");
+  });
+
+  it("explains an empty seat and an unknown MMR without numbers it doesn't have", () => {
+    const msg = standinApprovalRequestedMessage({
+      ...fixture,
+      replacedName: null,
+      requesterName: "Cap Ann",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 0,
+      baselineMmr: 2400,
+    });
+    expect(msg).toContain("**Sub Sam** (MMR unknown) to fill an open roster seat");
+    expect(msg).toContain("since the standin's MMR is unknown");
+    expect(msg).not.toContain("<t:");
+  });
+
+  // Player-chosen names are escaped: a webhook post renders markdown.
+  it("escapes every name it shows", () => {
+    const msg = standinApprovalRequestedMessage({
+      ...fixture,
+      standinName: "**Ringer**",
+      requesterName: "[click](https://evil.example)",
+      otherTeamName: "Dire Straits",
+      whenMs: null,
+      standinMmr: 3100,
+      baselineMmr: 2400,
+    });
+    expect(msg).not.toContain("****Ringer****");
+    expect(msg).not.toContain("[click](https://evil.example)");
+  });
+
+  it("says who agreed when a booking waited for the other captain", () => {
+    expect(
+      standinAssignedMessage({ ...fixture, whenMs: null, agreedBy: { name: "Cap Dee" } }),
+    ).toContain("**Cap Dee** agreed to it.");
+    expect(
+      standinAssignedMessage({ ...fixture, whenMs: null, agreedBy: { name: null } }),
+    ).toContain("An admin agreed to it.");
+    // An ordinary booking reads exactly as it always did.
+    expect(standinAssignedMessage({ ...fixture, whenMs: null })).not.toContain(
+      "agreed",
+    );
+  });
+
+  it("tells the asking captain who said no and where to find someone else", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const msg = standinRequestDeclinedMessage({
+      ...fixture,
+      declinedByName: "Cap Dee",
+    });
+    expect(msg).toContain(
+      "**Cap Dee** didn't agree to **Sub Sam** standing in for **Home Carry** on **Roshan's Rejects**",
+    );
+    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(
+      standinRequestDeclinedMessage({ ...fixture, replacedName: null, declinedByName: null }),
+    ).toContain("An admin didn't agree to **Sub Sam** filling an open seat");
+  });
+
+  it("tells the asking captain a request is off, and why", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const left = standinRequestCancelledMessage({ ...fixture, reason: "STANDIN_LEFT" });
+    expect(left).toContain(
+      "The request for **Sub Sam** standing in for **Home Carry** on **Roshan's Rejects**",
+    );
+    expect(left).toContain("is off: **Sub Sam** left the league. Line up someone else");
+    expect(left).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(
+      standinRequestCancelledMessage({ ...fixture, reason: "STANDIN_SIGNED" }),
+    ).toContain("is off: **Sub Sam** was signed to a team.");
+    expect(
+      standinRequestCancelledMessage({ ...fixture, reason: "PLAYER_RELEASED" }),
+    ).toContain("is off: **Home Carry** was released, so that seat is open now.");
+    expect(
+      standinRequestCancelledMessage({
+        ...fixture,
+        replacedName: null,
+        reason: "STANDIN_LEFT",
+      }),
+    ).toContain("**Sub Sam** filling an open seat on **Roshan's Rejects**");
+  });
+});
+
 describe("standinRemovedMessage", () => {
   it("stands the substitute down by name", () => {
     const msg = standinRemovedMessage({
@@ -2491,6 +2667,10 @@ describe("no message unfurls a link preview", () => {
         gamesFound: 1,
       }),
       freeAgentSignedMessage("A", "T"),
+      freeAgentSignedMessage("A", "T", {
+        freeAgentMmr: 4500,
+        baseline: { kind: "replaced", name: "B", mmr: 2000 },
+      }),
       playerReleasedMessage("A", "T"),
       teamWithdrewMessage("T", 3),
       teamIdentityChangedMessage({

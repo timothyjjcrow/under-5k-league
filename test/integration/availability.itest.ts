@@ -502,8 +502,10 @@ describe("setAvailability — retimes and live cover", () => {
   it("mid-series cover: the standin answers for the seat until the cover is removed", async () => {
     const { season, match, people } = await setupFullSides();
     const standin = await makeUser("Mid-series cover");
+    // Level with the roster's 2800, so the captain's booking locks in (an
+    // unknown MMR would wait for the other captain under the standin rule).
     await prisma.registration.create({
-      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", mmr: 0 },
+      data: { seasonId: season.id, userId: standin.id, type: "STANDIN", mmr: 2800 },
     });
     await prisma.match.update({ where: { id: match.id }, data: { status: MATCH_STATUS.LIVE } });
     expect(

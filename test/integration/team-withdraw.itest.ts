@@ -541,6 +541,19 @@ describe("withdrawTeam", () => {
           match.homeTeamId === quitter.id || match.awayTeamId === quitter.id,
       )!;
       const asHome = sniped.homeTeamId === quitter.id;
+      // A standin request there closes only where the forfeit claim won.
+      const standin = await makeUser("Trigger Ask");
+      const ask = await prisma.standinRequest.create({
+        data: {
+          matchId: sniped.id,
+          teamId: quitter.id,
+          standinUserId: standin.id,
+          replacingUserId: null,
+          requestedById: quitter.captainId,
+          standinMmr: 4000,
+          baselineMmr: 3000,
+        },
+      });
       await installWithdrawStatusTrigger({
         teamId: quitter.id,
         matchId: sniped.id,
@@ -567,6 +580,10 @@ describe("withdrawTeam", () => {
       expect(result).toMatchObject({
         message: expect.stringMatching(/completed for real while you clicked/),
       });
+      expect(
+        (await prisma.standinRequest.findUniqueOrThrow({ where: { id: ask.id } }))
+          .status,
+      ).toBe("PENDING");
     },
   );
 
@@ -853,6 +870,138 @@ describe("withdrawTeam — booked standins are stood down with their fixtures", 
       message: expect.stringMatching(
         /1 standin booking\(s\) on those fixtures stood down/,
       ),
+    });
+  });
+});
+
+describe("withdrawTeam — waiting standin requests close with their fixtures", () => {
+  /** A PENDING (or answered) request, as the MMR rule files one. */
+  async function requestOn(
+    matchId: string,
+    team: { id: string; captainId: string },
+    name: string,
+    status = "PENDING",
+  ) {
+    const standin = await makeUser(name);
+    return prisma.standinRequest.create({
+      data: {
+        matchId,
+        teamId: team.id,
+        standinUserId: standin.id,
+        replacingUserId: null,
+        requestedById: team.captainId,
+        standinMmr: 4000,
+        baselineMmr: 3000,
+        status,
+      },
+    });
+  }
+
+  async function statusOf(id: string) {
+    return (await prisma.standinRequest.findUniqueOrThrow({ where: { id } }))
+      .status;
+  }
+
+  it("cancels the requests on the forfeited fixtures only, without a post", async () => {
+    // Nobody has to line up anyone else for a ruled fixture, so these close
+    // in silence; the toast and the log count them for the admin.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const mine = matches.filter(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    );
+    const played = mine[0];
+    const doomed = mine[1];
+    await recordMatch(played.id, 2, 0);
+    const opponentId =
+      doomed.homeTeamId === quitter.id ? doomed.awayTeamId : doomed.homeTeamId;
+    const opponent = teams.find((t) => t.id === opponentId)!;
+    const elsewhere = matches.find(
+      (m) => m.homeTeamId !== quitter.id && m.awayTeamId !== quitter.id,
+    )!;
+    const elsewhereTeam = teams.find((t) => t.id === elsewhere.homeTeamId)!;
+
+    // Both sides of the doomed fixture lose theirs.
+    const quitterAsk = await requestOn(doomed.id, quitter, "Quitter Ask");
+    const opponentAsk = await requestOn(doomed.id, opponent, "Opponent Ask");
+    // Answered already: its answer is history.
+    const answered = await requestOn(
+      doomed.id,
+      opponent,
+      "Answered Ask",
+      "DECLINED",
+    );
+    // A series that was played, and a fixture the quitter isn't in.
+    const playedAsk = await requestOn(played.id, quitter, "Played Ask");
+    const otherAsk = await requestOn(elsewhere.id, elsewhereTeam, "Other Ask");
+    mockSend.mockClear();
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    for (const id of [quitterAsk.id, opponentAsk.id]) {
+      expect(
+        await prisma.standinRequest.findUniqueOrThrow({ where: { id } }),
+      ).toMatchObject({
+        status: "CANCELLED",
+        decidedById: "test-admin",
+        decidedAt: expect.any(Date),
+      });
+    }
+    expect(await statusOf(answered.id)).toBe("DECLINED");
+    expect(await statusOf(playedAsk.id)).toBe("PENDING");
+    expect(await statusOf(otherAsk.id)).toBe("PENDING");
+    expect(
+      mockSend.mock.calls.some(([m]) => String(m).includes("is off")),
+    ).toBe(false);
+    expect(res).toMatchObject({
+      message: expect.stringMatching(
+        /2 standin request\(s\) waiting on those fixtures cancelled/,
+      ),
+    });
+    const log = await prisma.adminAction.findFirstOrThrow({
+      where: { action: "withdrawTeam" },
+    });
+    expect(log.summary).toMatch(/2 pending standin request\(s\) on them cancelled/);
+  });
+
+  it("a fixture completed for real mid-click keeps its request (seam)", async () => {
+    // The rival is auto-sync completing the fixture in the gap: that series
+    // happened, so the withdrawal rules nothing there and closes nothing.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const mine = matches.filter(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    );
+    const sniped = mine[0];
+    const doomed = mine[1];
+    const snipedAsk = await requestOn(sniped.id, quitter, "Sniped Ask");
+    const doomedAsk = await requestOn(doomed.id, quitter, "Doomed Ask");
+    let fired = false;
+    setRaceHook(
+      onceAt("admin.withdrawTeam.beforeTx", async () => {
+        fired = true;
+        const asHome = sniped.homeTeamId === quitter.id;
+        await recordMatch(sniped.id, asHome ? 2 : 0, asHome ? 0 : 2);
+      }),
+    );
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    expect(fired).toBe(true);
+    expect(await statusOf(snipedAsk.id)).toBe("PENDING");
+    expect(await statusOf(doomedAsk.id)).toBe("CANCELLED");
+    expect(res).toMatchObject({
+      message: expect.stringMatching(
+        /1 standin request\(s\) waiting on those fixtures cancelled/,
+      ),
+    });
+  });
+
+  it("says nothing about requests when none were waiting", async () => {
+    const { teams } = await midSeason();
+    const res = await withdrawTeam(null, teamFd(teams[0]));
+    expect(res).toMatchObject({
+      message: expect.not.stringMatching(/standin request/),
     });
   });
 });

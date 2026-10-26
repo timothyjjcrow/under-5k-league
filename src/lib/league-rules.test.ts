@@ -25,6 +25,7 @@ import {
 } from "./league-lifecycle";
 import {
   RULES_CLOSING,
+  WRITTEN_RULES,
   leagueRules,
   rulesSeasonFormat,
   type LeagueRules,
@@ -39,6 +40,16 @@ import { nextRoundPairings } from "./schedule";
 import { seasonFormat } from "./season-format";
 import { carriedSeasonSettings } from "./season-handoff";
 import { computeStandings, type MatchLike } from "./standings";
+import {
+  coverBaselineMmr,
+  namedCoverBaseline,
+  standinNeedsApproval,
+} from "./standin";
+import {
+  freeAgentBaseline,
+  freeAgentOverRule,
+  unrefilledDeparture,
+} from "./free-agent-rule";
 
 const US = createLeagueConfig({});
 const EU = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" });
@@ -80,7 +91,7 @@ function everything(rules: LeagueRules): string {
 }
 
 describe("leagueRules", () => {
-  it("covers the eleven sections in reading order and ends on the closing line", () => {
+  it("covers the fifteen sections in reading order and ends on the closing line", () => {
     const rules = build();
     expect(rules.sections.map((s) => s.id)).toEqual([
       "format",
@@ -91,9 +102,13 @@ describe("leagueRules", () => {
       "rosters",
       "match-night",
       "hosting",
+      "match-day",
+      "pauses",
       "signups",
       "draft",
       "results",
+      "fair-play",
+      "conduct",
     ]);
     const titles = rules.sections.map((s) => s.title);
     expect(new Set(titles).size).toBe(titles.length);
@@ -364,7 +379,10 @@ describe("leagueRules", () => {
       "A standin can't be booked for two matches within 4 hours of each other.",
     );
     expect(section(rules, "rosters")).toContain(
-      "Booking a standin 500 or more MMR above the player they cover shows a warning",
+      "A standin can be at most 100 MMR above the player they cover, by signup MMR.",
+    );
+    expect(section(rules, "rosters")).toContain(
+      "A standin more than 100 MMR above needs the other captain to agree on the match page.",
     );
     expect(section(rules, "results")).toContain(
       "it started between 3 days before and 6 days after the scheduled kickoff",
@@ -395,6 +413,30 @@ describe("leagueRules", () => {
     expect(section(rules, "results")).toContain(
       "after the scheduled kickoff. Admins can add a game from outside that window.",
     );
+  });
+
+  it("writes the admin-ruled rules from WRITTEN_RULES, in words", () => {
+    const sections = build().sections;
+    const text = (id: string) =>
+      sections.find((s) => s.id === id)!.rules.join(" ");
+    expect(WRITTEN_RULES).toEqual({
+      ARRIVE_EARLY_MINUTES: 15,
+      LATE_GAME_FORFEIT_MINUTES: 15,
+      LATE_SERIES_FORFEIT_MINUTES: 30,
+      NEXT_GAME_MINUTES: 15,
+      PAUSE_MINUTES_PER_TEAM: 15,
+      STREAM_DELAY_MINUTES: 2,
+      MAX_MISSED_NIGHTS: 3,
+    });
+    expect(text("match-day")).toContain(
+      "A team that isn't ready 15 minutes after kickoff loses game 1. At 30 minutes it forfeits the series.",
+    );
+    expect(text("match-day")).toContain("Only admins record forfeits.");
+    expect(text("pauses")).toContain(
+      "Each team gets 15 minutes of pause time per game, or more if both teams agree.",
+    );
+    expect(text("fair-play")).toContain("at least 2 minutes of delay");
+    expect(text("conduct")).toContain("more than about 3 match nights");
   });
 
   it("keeps the league's copy rules", () => {
@@ -468,6 +510,107 @@ describe("the rules page's claims hold in the code", () => {
         [game("y", "x", 1, 0), game("x", "p", 1, 0), game("q", "y", 1, 0)],
       ),
     ).toEqual(["y", "x"]);
+  });
+
+  it("asks the other captain for a standin more than the allowance above", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "An empty roster seat counts as covering the team's lowest-MMR player. When the site doesn't know one of the two MMRs, the other captain decides.",
+    );
+    expect(rules).toContain(
+      "Admins can book any standin themselves, and can agree, decline or withdraw a request in a captain's place.",
+    );
+    // "at most 100 MMR above … books straight away", "more than 100 … agree".
+    expect(standinNeedsApproval(2500, 2400)).toBe(false);
+    expect(standinNeedsApproval(2501, 2400)).toBe(true);
+    // "An empty roster seat counts as covering the team's lowest-MMR player."
+    expect(coverBaselineMmr({ rosterMmrs: [3000, 2400, 2800] })).toBe(2400);
+    // "When the site doesn't know one of the two MMRs, the other captain decides."
+    expect(standinNeedsApproval(0, 2400)).toBe(true);
+    expect(standinNeedsApproval(2400, null)).toBe(true);
+    // "Admins can book any standin themselves": the admin panel books over
+    // the rule, the captain's card always asks.
+    expect(
+      stripLineComments(sourceFile("src/app/actions/admin-roster.ts").text),
+    ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "book"/);
+    expect(
+      stripLineComments(sourceFile("src/app/actions/standins.ts").text),
+    ).toMatch(/assignStandinGuarded\(\{[^}]*overLimit: "ask"/);
+  });
+
+  it("measures a standin against a lower teammate who said they can't make it", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "If a teammate with a lower MMR has said they can't make the match and has no cover yet, the standin is measured against them instead of the player they cover.",
+    );
+    const teammates = [
+      { userId: "high", name: "High", mmr: 3200 },
+      { userId: "low", name: "Low", mmr: 2000 },
+    ];
+    const judged = (out: string[], covered: string[] = []) =>
+      namedCoverBaseline({
+        replaced: { userId: "high", mmr: 3200 },
+        teammates,
+        outUserIds: new Set(out),
+        coveredUserIds: new Set(covered),
+      }).baselineMmr;
+    // "a lower MMR … said they can't make the match … no cover yet".
+    expect(judged(["low"])).toBe(2000);
+    expect(judged([])).toBe(3200);
+    expect(judged(["low"], ["low"])).toBe(3200);
+  });
+
+  it("states the declined and own-request refusals the server gives", () => {
+    const rules = section(build(), "rosters");
+    expect(rules).toContain(
+      "Once a standin is declined for a team, that team's captain can't book or ask for them again for the same match.",
+    );
+    expect(rules).toContain(
+      "An admin can't agree to a request from a team they captain or that they made themselves.",
+    );
+    const service = stripLineComments(sourceFile("src/lib/standin-service.ts").text);
+    // The ask path refuses a standin already DECLINED for the team here…
+    expect(service).toMatch(
+      /status: STANDIN_REQUEST_STATUS\.DECLINED,[\s\S]*?standinDeclinedError\(/,
+    );
+    // …and agreeing refuses the asking team's captain and the requester.
+    expect(service).toMatch(
+      /asking\?\.captainId === actorId[\s\S]*?request\.requestedById === actorId/,
+    );
+  });
+
+  it("holds a free-agent signing to the same allowance over the player it replaces", () => {
+    expect(section(build(), "rosters")).toContain(
+      "A signed player can be at most 100 MMR above the player they replace (the latest player released from that team whose seat is still open), or the team's lowest MMR when no released player is waiting to be replaced. When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.",
+    );
+    const replaced = { kind: "replaced" as const, name: "Bob", mmr: 2000 };
+    // "at most 100 MMR above the player they replace"
+    expect(freeAgentOverRule(2100, replaced)).toBe(false);
+    expect(freeAgentOverRule(2101, replaced)).toBe(true);
+    // "the latest player released from that team whose seat is still open":
+    // A and B were released, C was signed into B's seat.
+    const at = (minute: number) => new Date(Date.UTC(2026, 9, 1, 0, minute));
+    const left = { endReason: "RELEASE", acquisitionKind: "AUCTION" };
+    expect(
+      unrefilledDeparture([
+        { id: "a", userId: "a", name: "A", joinedAt: at(0), endedAt: at(10), acquisitionMmr: 2000, ...left },
+        { id: "b", userId: "b", name: "B", joinedAt: at(0), endedAt: at(20), acquisitionMmr: 3000, ...left },
+        { id: "c", userId: "c", name: "C", joinedAt: at(30), endedAt: null, acquisitionMmr: 3050, endReason: null, acquisitionKind: "FREE_AGENT" },
+      ])?.name,
+    ).toBe("A");
+    // "or the team's lowest MMR when nobody has left"
+    expect(
+      freeAgentBaseline({
+        teamName: "T",
+        tenures: [],
+        rosterUserIds: ["x", "y"],
+        signupMmr: new Map([["x", 2600], ["y", 2100]]),
+      }),
+    ).toEqual({ kind: "lowest", teamName: "T", mmr: 2100 });
+    // "An admin can sign them over that": the action reads the box.
+    expect(
+      stripLineComments(sourceFile("src/app/actions/admin-roster.ts").text),
+    ).toContain("bool(formData, FREE_AGENT_OVER_RULE_FIELD)");
   });
 
   it("counts only regular-season series toward the table", () => {

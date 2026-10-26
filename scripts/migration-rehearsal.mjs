@@ -37,6 +37,7 @@ const INHOUSE_ADMIN_MMR_MIGRATION = "20261017120000_inhouse_admin_mmr";
 const TEAM_GROUP_KEY_MIGRATION = "20261019120000_team_group_key";
 const ROLL_CALL_MIGRATION = "20261020120000_roll_call";
 const SEASON_FORMAT_MIGRATION = "20261024120000_season_format";
+const STANDIN_REQUEST_MIGRATION = "20261025120000_standin_request";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -177,6 +178,7 @@ async function rehearseFreshDatabase(url) {
           TEAM_GROUP_KEY_MIGRATION,
           ROLL_CALL_MIGRATION,
           SEASON_FORMAT_MIGRATION,
+          STANDIN_REQUEST_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -442,6 +444,7 @@ async function rehearseExistingLegacyDatabase(url) {
           TEAM_GROUP_KEY_MIGRATION,
           ROLL_CALL_MIGRATION,
           SEASON_FORMAT_MIGRATION,
+          STANDIN_REQUEST_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );
