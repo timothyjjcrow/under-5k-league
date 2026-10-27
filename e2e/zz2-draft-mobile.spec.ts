@@ -49,7 +49,14 @@ test("draft room on a phone: pool first, working anchor, unclipped clock bar", a
     await expect(dendiCard).toBeVisible({ timeout: 2_000 });
   }).toPass({ timeout: 20_000 });
   await expect(dendiCard).toContainText("Recent pubs");
-  await expect(dendiCard).toContainText(/Their last \d+ public games/);
+  // Compact on a phone: the /players row's pub line in a short card, so the
+  // pool around it stays in reach. The tiles are one tap away (opened in
+  // zz-admin-draft.spec.ts, where no running clock can shut the card).
+  await expect(dendiCard).toContainText(/Pubs: plays /);
+  await expect(
+    dendiCard.getByRole("button", { name: "Full scouting" }),
+  ).toBeVisible();
+  expect((await dendiCard.boundingBox())!.height).toBeLessThan(260);
   await expectNoHorizontalOverflow(
     page,
     "Draft room at 375px with a pool card open",

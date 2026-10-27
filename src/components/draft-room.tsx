@@ -390,6 +390,9 @@ export function DraftRoom({
     connectionUnavailable ||
     clockSettling;
   const [soundOn, setSoundOn] = usePersistedFlag("draftSound");
+  // Compact scouting cards by default, so the pool stays on a phone's first
+  // screen; "Full scouting" opens both cards, for this viewer, until closed.
+  const [scoutFull, setScoutFull] = usePersistedFlag("draftScoutFull", false);
   // Latched while the viewer's team has lost the high bid on the live
   // nomination — cleared by the poll once it's stale (re-took the bid, the
   // player sold, or bidding closed). A plain flag: the card's price block
@@ -2227,6 +2230,8 @@ export function DraftRoom({
                 about: nominatedAbout,
               }}
               nowMs={state.now}
+              full={scoutFull}
+              onFullChange={setScoutFull}
             />
             <div className="flex flex-wrap items-center gap-2 text-muted">
               <DiscordTag
@@ -2325,6 +2330,8 @@ export function DraftRoom({
               onRoleChange={setPoolRole}
               canPick={canLineUp}
               selected={selected}
+              scoutFull={scoutFull}
+              onScoutFullChange={setScoutFull}
               onPick={(userId) => {
                 setSelected(userId);
                 setNomAmount(state.minBid);
@@ -2484,6 +2491,8 @@ function AvailableList({
   canPick,
   selected,
   onPick,
+  scoutFull,
+  onScoutFullChange,
 }: {
   state: DraftState;
   /** The page's scouting map, or null when it isn't loaded. */
@@ -2495,6 +2504,9 @@ function AvailableList({
   canPick: boolean;
   selected: string | null;
   onPick: (userId: string) => void;
+  /** The viewer's compact-or-full scouting choice, shared with the lot card. */
+  scoutFull: boolean;
+  onScoutFullChange: (next: boolean) => void;
 }) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<PoolSort>("mmr");
@@ -2698,6 +2710,8 @@ function AvailableList({
                       player={p}
                       scout={scout?.[p.userId]}
                       nowMs={state.now}
+                      full={scoutFull}
+                      onFullChange={onScoutFullChange}
                     />
                   ) : null}
                 </li>

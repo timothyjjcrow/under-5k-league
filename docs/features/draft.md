@@ -507,10 +507,24 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     to read a tile's finding on a phone. MMR, medal and roles come from the
     live tick row, the nominee's favorites and about text from the tick
     too; the map's copy is as old as the tab's render plus 60s.
+  - **Compact until the viewer asks for more** (Tim, 2026-10-27: the full
+    card "takes up a ton of room"). Compact: the record line, the `/players`
+    row's pub line (`scoutingRowParts`, its hover `scoutingTitle`), one line
+    of the about text and one row of 18px hero icons (recent pubs, then
+    favorites; counts and win rates in each icon's hover). "Full scouting"
+    (`aria-expanded`) swaps in the tiles, the hero counts, more about text
+    and "More scouting"; it shows only when the full card has more
+    (`hasMore`: a caption, or an about text past
+    `DRAFT_ABOUT_COMPACT_CHARS`). One choice per viewer for both cards,
+    kept in their browser (`usePersistedFlag("draftScoutFull", false)`),
+    owned by the room, so the card stays presentational. Measured as a
+    captain at 390x844: the lot card 90px compact (473px full), the pool's
+    header on the first screen at 784px (1,167px with the full card).
   - **On the block** the card (`DraftPlayerCard`, presentational) sits under
     the bid controls, outside the action zone, then the Discord, Profile and
     Dotabuff links, then the bid trail last, since it grows through a lot.
-    Keyed by the nominee, so a new lot opens with "More" shut.
+    Keyed by the nominee, so a new lot opens with "More" shut (the
+    compact-or-full choice is the room's, so it carries over).
   - **In the pool** one card opens under its row at a time. A captain lining
     up a pick sees the lined-up player's (`poolPanelOpenId`); everyone else
     taps a row (`aria-expanded`, a second tap closes it). Their card closes
@@ -533,9 +547,11 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     map behind `draftScoutWanted`, and that `draft-service.ts` never reads
     `pubStats`. `draft-scout.itest.ts` covers the loader.
     `e2e/zz-admin-draft.spec.ts` opens the cards through the real room: the
-    lined-up pick's card arriving with the Start refresh, the lot card after
-    Nominate, a non-picker's toggle, and no horizontal overflow at 375px;
-    `zz2-draft-mobile.spec.ts` opens one on a phone. Both assert zero client
+    lined-up pick's card arriving compact with the Start refresh, "Full
+    scouting" opening it and holding for the lot card after Nominate, a
+    non-picker's toggle, another captain's compact card, and no horizontal
+    overflow at 375px; `zz2-draft-mobile.spec.ts` opens one on a phone and
+    checks it stays under 260px. Both assert zero client
     errors. Their pub snapshots come from `e2e/seed-draft-scouting.ts`,
     which `e2e/global-setup.ts` runs after the seed (a change under
     `prisma/` would force a database release).

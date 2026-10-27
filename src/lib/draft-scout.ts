@@ -26,10 +26,13 @@ import {
 } from "./player-pool";
 import {
   pubScoutCaption,
+  scoutingRowParts,
   scoutingSentences,
   scoutingTiles,
+  scoutingTitle,
   type PubScout,
   type ScoutContext,
+  type ScoutPart,
   type ScoutTile,
 } from "./pub-scout";
 import {
@@ -59,6 +62,22 @@ export type DraftScoutInfo = Record<string, DraftScout>;
 /** The pool card shows two lines of the about text and the profile has the
  *  rest, so the page never ships a 2,000-character box per player. */
 export const DRAFT_ABOUT_CLIP = 300;
+
+/** The compact card shows one line of the about text; past about this many
+ *  characters it may not fit, so the full card has the rest. */
+export const DRAFT_ABOUT_COMPACT_CHARS = 90;
+
+/** How many recent pub heroes each card shows, compact and full. */
+export const DRAFT_CARD_HEROES = {
+  lot: { compact: 5, full: 6 },
+  pool: { compact: 4, full: 4 },
+} as const;
+
+/** The toggle between the compact card and the full one, in both states. */
+export const DRAFT_SCOUT_TOGGLE = {
+  more: "Full scouting",
+  less: "Less scouting",
+} as const;
 
 export const DRAFT_SCOUT_NOTHING_ON_FILE =
   "Nothing on file yet from pubs, inhouses or past seasons.";
@@ -131,6 +150,11 @@ export type DraftCardView = {
   /** The map has an entry for this player (it may be empty). */
   known: boolean;
   record: DraftRecordToken[];
+  /** The compact card's pub line, the /players pool row's own words:
+   *  "plays Pos 2 · in Legend games · solo · US East". Empty without tiles. */
+  summary: ScoutPart[];
+  /** Every finding as a sentence, the summary's hover. */
+  summaryTitle: string;
   /** What the tiles and recent heroes rest on (the window, and the
    *  snapshot's age when no Pubs token says it); null without either. */
   caption: string | null;
@@ -147,6 +171,9 @@ export type DraftCardView = {
   moreScout: PubScout | null;
   /** In the map with nothing to show: say so, rather than a blank card. */
   nothingOnFile: boolean;
+  /** The full card shows more than the compact one: the tiles and findings,
+   *  or an about text too long for one line. Without it there is no toggle. */
+  hasMore: boolean;
 };
 
 /**
@@ -226,17 +253,22 @@ export function draftCardView(input: {
       : null;
   const findings =
     scoutCounts && tiles.length > 0 ? scoutingSentences(scoutCounts, ctx) : [];
+  const about = input.live ? input.live.about : (scout?.about ?? "");
 
   return {
     known: scout !== undefined,
     record,
+    summary:
+      scoutCounts && tiles.length > 0 ? scoutingRowParts(scoutCounts, ctx) : [],
+    summaryTitle:
+      scoutCounts && tiles.length > 0 ? scoutingTitle(scoutCounts, ctx) : "",
     caption,
     tiles,
     heroes,
     favoriteHeroes: input.live
       ? input.live.favoriteHeroes
       : (scout?.favoriteHeroes ?? ""),
-    about: input.live ? input.live.about : (scout?.about ?? ""),
+    about,
     findings,
     moreScout: findings.length > 0 ? scoutCounts : null,
     nothingOnFile:
@@ -244,6 +276,7 @@ export function draftCardView(input: {
       record.length === 0 &&
       tiles.length === 0 &&
       heroes === null,
+    hasMore: caption !== null || about.length > DRAFT_ABOUT_COMPACT_CHARS,
   };
 }
 

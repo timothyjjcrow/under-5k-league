@@ -90,6 +90,22 @@ describe("draft-room.tsx renders the cards where they move nothing", () => {
     expect(lotCard).toContain("nowMs={state.now}");
   });
 
+  it("both cards follow one per-viewer choice, compact until they open it", () => {
+    const src = room();
+    // Kept in the viewer's browser, compact by default: the pool stays on a
+    // phone's first screen until a viewer asks for the full card.
+    expect(src).toContain(
+      'const [scoutFull, setScoutFull] = usePersistedFlag("draftScoutFull", false);',
+    );
+    const cards = indexesOf(src, "<DraftPlayerCard");
+    const props = cards.map((at) => src.slice(at, src.indexOf("/>", at)));
+    expect(props[0]).toContain("full={scoutFull}");
+    expect(props[0]).toContain("onFullChange={setScoutFull}");
+    expect(props[1]).toContain("full={scoutFull}");
+    expect(props[1]).toContain("onFullChange={onScoutFullChange}");
+    expect(src).toContain("onScoutFullChange={setScoutFull}");
+  });
+
   it("'no Discord' shows only to a viewer allowed the contact", () => {
     const src = room();
     expect(src).toMatch(
@@ -105,6 +121,26 @@ describe("draft-player-card.tsx is presentational", () => {
     expect(src).toContain("draftCardView(");
     expect(src).toContain("<ScoutTileGrid");
     expect(src).toContain("<PubRecentHeroes");
+  });
+
+  it("shows the tiles and findings only in the full card", () => {
+    const src = card();
+    const compact = src.indexOf("{!showFull && view.summary.length > 0 ? (");
+    const tiles = src.indexOf("{showFull && view.caption ? (");
+    const fullBody = src.indexOf("{showFull ? (", tiles);
+    const compactBody = src.indexOf(") : (", fullBody);
+    for (const at of [compact, tiles, fullBody, compactBody]) {
+      expect(at).toBeGreaterThan(-1);
+    }
+    expect(src.indexOf("<ScoutTileGrid")).toBeGreaterThan(tiles);
+    expect(src.indexOf("<ScoutTileGrid")).toBeLessThan(fullBody);
+    // "More scouting" sits in the full body, not the compact one.
+    const more = src.indexOf("More scouting:");
+    expect(more).toBeGreaterThan(fullBody);
+    expect(more).toBeLessThan(compactBody);
+    // One toggle, drawn only when the full card shows more.
+    expect(src).toContain("const toggle = view.hasMore ? (");
+    expect(src).toContain("aria-expanded={full}");
   });
 
   it("holds no state, request, bell, contact or link", () => {

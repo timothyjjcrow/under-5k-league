@@ -3,6 +3,7 @@ import {
   buildDraftScoutInfo,
   clipAbout,
   DRAFT_ABOUT_CLIP,
+  DRAFT_ABOUT_COMPACT_CHARS,
   draftCardView,
   draftScoutWanted,
   inspectedAfterChange,
@@ -21,8 +22,10 @@ import {
   type PoolLastSeason,
 } from "./player-pool";
 import {
+  scoutingRowParts,
   scoutingSentences,
   scoutingTiles,
+  scoutingTitle,
   summarizePubMatches,
   type PubScout,
 } from "./pub-scout";
@@ -325,6 +328,45 @@ describe("draftCardView", () => {
     const live = view({ live: { favoriteHeroes: "", about: "Fresh." } });
     expect(live.favoriteHeroes).toBe("");
     expect(live.about).toBe("Fresh.");
+  });
+
+  it("gives the compact card the /players row's pub line and its hover", () => {
+    const counts = pub.scout!;
+    const ctx = { roles: "4,5", signupMmr: 3_200, rankTier: 63, league: "us" as const };
+    const v = view();
+    expect(v.summary).toEqual(scoutingRowParts(counts, ctx));
+    expect(v.summary.length).toBeGreaterThan(0);
+    expect(v.summaryTitle).toBe(scoutingTitle(counts, ctx));
+    // Too few games for a tile: no line either.
+    const thin = poolPubRecord(blob(scout(3)), new Date(NOW_MS))!;
+    expect(view({ scout: { pub: thin } }).summary).toEqual([]);
+    expect(view({ scout: { pub: thin } }).summaryTitle).toBe("");
+  });
+
+  it("offers the full card only when it shows more than the compact one", () => {
+    // Tiles and findings.
+    expect(view().hasMore).toBe(true);
+    // Nothing but a short about text: the compact card is the whole card.
+    const short = { about: "Pos 4 main." };
+    expect(view({ scout: short }).hasMore).toBe(false);
+    expect(view({ scout: {} }).hasMore).toBe(false);
+    // An about text too long for the compact card's one line.
+    const long = { about: "x".repeat(DRAFT_ABOUT_COMPACT_CHARS + 1) };
+    expect(view({ scout: long }).hasMore).toBe(true);
+    expect(
+      view({ scout: { about: "x".repeat(DRAFT_ABOUT_COMPACT_CHARS) } }).hasMore,
+    ).toBe(false);
+    // The live about text is the one measured.
+    expect(
+      view({ scout: long, live: { favoriteHeroes: "", about: "Short." } })
+        .hasMore,
+    ).toBe(false);
+    // A few Turbo games' heroes are captioned in the full card.
+    const turbo = poolPubRecord(
+      blob(scout(7, { game_mode: 23 }), { recentWins: 0, recentLosses: 0 }),
+      new Date(NOW_MS - 3 * DAY),
+    )!;
+    expect(view({ scout: { pub: turbo } }).hasMore).toBe(true);
   });
 
   it("tells an empty entry from a missing one", () => {

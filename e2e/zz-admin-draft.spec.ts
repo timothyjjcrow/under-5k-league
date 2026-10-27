@@ -254,8 +254,20 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     name: "Scouting: Topson",
   });
   await expect(topsonPoolCard).toBeVisible({ timeout: 15_000 });
+  // Compact first: the /players row's pub line and a row of hero icons.
   await expect(topsonPoolCard).toContainText("Recent pubs");
+  await expect(topsonPoolCard).toContainText(/Pubs: plays /);
+  await expect(topsonPoolCard).not.toContainText(/Their last \d+ public games/);
+  // "Full scouting" opens the tiles, and the choice holds for the lot card.
+  const fullScouting = topsonPoolCard.getByRole("button", {
+    name: "Full scouting",
+  });
+  await expect(fullScouting).toHaveAttribute("aria-expanded", "false");
+  await fullScouting.click();
   await expect(topsonPoolCard).toContainText(/Their last \d+ public games/);
+  await expect(
+    topsonPoolCard.getByRole("button", { name: "Less scouting" }),
+  ).toHaveAttribute("aria-expanded", "true");
   await expect(topsonRow).toHaveCount(1);
   await expect(topsonRow).toHaveAttribute("aria-pressed", "true");
   await expect(topsonRow).toHaveAttribute(
@@ -271,7 +283,8 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
   // On the block, Topson's scouting moves from the pool to the lot card:
   // the pool's card closes, and the lot's shows his pub record (from the
-  // page's map) and his about text (from the tick).
+  // page's map) and his about text (from the tick), still in full: Cap One
+  // opened the full card in the pool.
   await expect(topsonPoolCard).toHaveCount(0);
   const topsonLotCard = capOnePage.getByRole("group", {
     name: "Scouting: Topson",
@@ -280,6 +293,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(topsonLotCard).toBeVisible();
   await expect(topsonLotCard).toContainText(/Pubs \d+% in last \d+/);
   await expect(topsonLotCard).toContainText("About this player:");
+  await expect(topsonLotCard).toContainText(/Their last \d+ public games/);
 
   // With a lot live the admin can't line anyone up, so a pool row opens that
   // player's scouting instead: a disclosure, one tap open, the next shut.
@@ -353,7 +367,11 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     name: "Scouting: Dendi",
   });
   await expect(capTwoDendiCard).toBeVisible({ timeout: 15_000 });
-  await expect(capTwoDendiCard).toContainText(/Their last \d+ public games/);
+  // Compact for Cap Two, who never opened the full card.
+  await expect(capTwoDendiCard).toContainText(/Pubs: plays /);
+  await expect(
+    capTwoDendiCard.getByRole("button", { name: "Full scouting" }),
+  ).toBeVisible();
   // Topson is still on the block, his lot card on this page too.
   await expect(
     capTwoPage.getByRole("group", { name: "Scouting: Topson" }),
