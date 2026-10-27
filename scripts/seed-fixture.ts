@@ -2,9 +2,11 @@
 // server's, see scripts/fixture-server.ts) into a mid-season or mid-playoffs
 // state for UI verification. Every other target is refused.
 // Modes: FIXTURE_MODE=regular (last week open, clinch/bye demo, 6 teams or
-// FIXTURE_TEAMS=n) | complete (whole bracket played) | default (mid-playoffs).
+// FIXTURE_TEAMS=n) | complete (whole bracket played) | drafted (auction done,
+// no schedule, 13 teams) | default (mid-playoffs).
 // The playoff modes default to ten teams, which the season format plays as
 // two groups of five (season-format.ts) with an eight-team crossover bracket.
+// FIXTURE_FORMAT='{"v":1,...}' stores a season-builder layout and builds it.
 import { prisma } from "@/lib/prisma";
 import { SEASON_STATUS } from "@/lib/constants";
 import { assertExpectedFixtureDatabase } from "@/lib/fixture-database";
@@ -12,6 +14,7 @@ import { matchNightForWeek } from "@/lib/schedule";
 import {
   SEASON_GROUP_KEYS,
   drawGroups,
+  parseFormatConfig,
   plannedSeasonFormat,
   regularSeasonFixtures,
 } from "@/lib/season-format";
@@ -40,9 +43,15 @@ const NAMES = [
   "Feed & Seed",
   "Aegis Hoarders",
   "Ancient Defenders",
+  "Glimmer Cape Club",
+  "Bounty Hunters",
+  "Rapier Rush",
+  "Tango Traders",
 ];
 /** The playoff modes' league: two groups of five (season-format.ts). */
 const PLAYOFF_FIXTURE_TEAMS = 10;
+/** The drafted mode's league: Recommended plays it as groups of 7 and 6. */
+const DRAFTED_FIXTURE_TEAMS = 13;
 
 async function main() {
   const url = process.env.DATABASE_URL ?? "";
@@ -53,6 +62,27 @@ async function main() {
   );
 
   await resetDb();
+  // FIXTURE_MODE=drafted: the auction is over and no schedule exists yet, so
+  // /admin's season builder can lay the season out and generate it.
+  if (process.env.FIXTURE_MODE === "drafted") {
+    const drafted = await makeSeason({
+      name: "Season 9 (fixture)",
+      status: SEASON_STATUS.DRAFT,
+      teamSize: 5,
+    });
+    await prisma.draft.create({ data: { seasonId: drafted.id, status: "COMPLETE" } });
+    const count = Number(process.env.FIXTURE_TEAMS) || DRAFTED_FIXTURE_TEAMS;
+    for (let i = 0; i < count; i++) {
+      const team = await makeTeam(drafted.id, NAMES[i], i);
+      for (let j = 0; j < 5; j++) {
+        const user = await makeUser(`${team.name.split(" ")[0]} Player${j + 1}`);
+        await prisma.teamMember.create({
+          data: { seasonId: drafted.id, teamId: team.id, userId: user.id, isCaptain: j === 0, price: i },
+        });
+      }
+    }
+    return;
+  }
   const season = await makeSeason({
     name: "Season 9 (fixture)",
     status: SEASON_STATUS.REGULAR_SEASON,
@@ -76,9 +106,31 @@ async function main() {
   // FIXTURE_MODE=regular: 6 teams, last week left open — shows
   // clinched/eliminated marks. Default: 8 teams, mid-playoffs bracket.
   const regularMode = process.env.FIXTURE_MODE === "regular";
-  // The format the site would pick: from ten teams, two groups drawn by
+  // FIXTURE_FORMAT: a layout the season builder could save (its stored JSON,
+  // e.g. {"v":1,"groups":2,"meet":1,"playoffs":4}). Unset, the Recommended
+  // format for the team count, built exactly as before.
+  const fixtureFormat = process.env.FIXTURE_FORMAT ?? null;
+  if (fixtureFormat !== null) {
+    if (parseFormatConfig(fixtureFormat).kind !== "CUSTOM") {
+      throw new Error(`FIXTURE_FORMAT is not a layout this version reads: ${fixtureFormat}`);
+    }
+    await prisma.season.update({ where: { id: season.id }, data: { formatConfig: fixtureFormat } });
+  }
+  // The format the site would build: from ten teams, two groups drawn by
   // strength (team 0 strongest) and a round robin in each.
-  const format = plannedSeasonFormat(teams.length);
+  const format = plannedSeasonFormat({ formatConfig: fixtureFormat }, teams.length);
+  const fixtureRows = (groups: string[][]) =>
+    regularSeasonFixtures(
+      groups.map((ids) => [...ids].sort((a, b) => strengthOf(a) - strengthOf(b))),
+      format?.doubleRound ?? false,
+    ).map((fixture) => ({
+      seasonId: season.id,
+      week: fixture.week,
+      phase: "REGULAR",
+      homeTeamId: fixture.home,
+      awayTeamId: fixture.away,
+      bestOf: season.regularBestOf,
+    }));
   if (format?.kind === "GROUPS") {
     const groups = drawGroups(
       teams.map((team, i) => ({ id: team.id, averageMmr: 10_000 - i })),
@@ -89,22 +141,14 @@ async function main() {
         data: { groupKey: key },
       });
     }
-    await prisma.match.createMany({
-      data: regularSeasonFixtures(
-        groups.map((ids) => [...ids].sort((a, b) => strengthOf(a) - strengthOf(b))),
-        false,
-      ).map((fixture) => ({
-        seasonId: season.id,
-        week: fixture.week,
-        phase: "REGULAR",
-        homeTeamId: fixture.home,
-        awayTeamId: fixture.away,
-        bestOf: season.regularBestOf,
-      })),
-    });
+    await prisma.match.createMany({ data: fixtureRows(groups) });
+  } else if (fixtureFormat !== null) {
+    // A chosen one-table layout (played twice, say) through the generator's
+    // own round robin; the Recommended table keeps the factory's schedule.
+    await prisma.match.createMany({ data: fixtureRows([teams.map((team) => team.id)]) });
   }
   const matches =
-    format?.kind === "GROUPS"
+    format?.kind === "GROUPS" || fixtureFormat !== null
       ? await prisma.match.findMany({ where: { seasonId: season.id }, orderBy: { week: "asc" } })
       : await generateRegularSchedule(season.id);
   // Give every regular match its league-night time (playoff rounds get theirs
@@ -121,8 +165,10 @@ async function main() {
     if (regularMode && m.week === lastWeek) continue;
     const homeStronger =
       strength.get(m.homeTeamId)! < strength.get(m.awayTeamId)!;
-    // A couple of draws for standings variety.
-    const draw = m.week === 3 && Math.random() < 0.25;
+    // A couple of draws for standings variety. A chosen layout plays none:
+    // a draw on its cut would leave the playoff modes needing a tiebreaker
+    // week (season-builder-lifecycle.itest.ts plays those).
+    const draw = fixtureFormat === null && m.week === 3 && Math.random() < 0.25;
     await recordMatch(
       m.id,
       draw ? 1 : homeStronger ? 2 : 0,

@@ -104,7 +104,7 @@ describe("three-team BO1 result lifecycle", () => {
     expect(completed).toHaveLength(4);
     expect(completed.every((m) => m.bestOf === 1 && m.week === first.week && m.status === "COMPLETED")).toBe(true);
     const all = await prisma.match.findMany({ where: { seasonId: season.id } });
-    expect(projectPlayoffField(teams, all).tiebreakers.resolved).toBe(true);
+    expect(projectPlayoffField(teams, all, { formatConfig: null }).tiebreakers.resolved).toBe(true);
     expect(all.filter((m) => m.phase === "REGULAR")).toEqual(before);
     expect(all.filter((m) => ["PLAYOFF", "FINAL"].includes(m.phase))).toHaveLength(0);
     expect(await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
@@ -123,7 +123,7 @@ describe("three-team BO1 result lifecycle", () => {
     await advanceTiebreakerWeek(season.id);
     await advanceTiebreakerWeek(season.id);
     const all = await prisma.match.findMany({ where: { seasonId: season.id } });
-    const field = projectPlayoffField(teams, all);
+    const field = projectPlayoffField(teams, all, { formatConfig: null });
     expect(field.tiebreakers.resolved).toBe(true);
     expect(new Set(field.seededTeamIds).size).toBe(field.seededTeamIds.length);
     expect(await stages(season.id)).toHaveLength(5);

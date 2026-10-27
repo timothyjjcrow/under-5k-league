@@ -218,12 +218,15 @@ roster command.
 
 **Schedule generation.** `generateSchedule`
 (`src/app/actions/admin-schedule-results.ts`, over `replaceRegularSchedule`,
-shared with `swapGroupTeams`) takes the season's format from its team count
-(`plannedSeasonFormat`, `src/lib/season-format.ts`; readers print the format
-a season plays through `resolveSeasonFormat`, which is the same except for a
-table of ten or more generated before groups: one table up to nine teams,
-played twice up to four; two groups from ten, drawn by roster MMR and stored
-on `Team.groupKey`), runs the pure circle-method round robin per group
+shared with `swapGroupTeams`) builds the layout the season builder posted
+(saved to `Season.formatConfig` with the fixtures), else the stored one, else
+Recommended for the team count (`plannedSeasonFormat`,
+`src/lib/season-format.ts`; the builder's rules are `src/lib/season-builder.ts`
+and its save is `saveSeasonFormat`; readers print the format a season plays
+through `resolveSeasonFormat`, which is the same except for a table of ten or
+more generated before groups. Recommended is one table up to nine teams,
+played twice up to four, and two groups from ten; groups are drawn by roster
+MMR and stored on `Team.groupKey`), runs the pure circle-method round robin per group
 (`regularSeasonFixtures` over `roundRobin` in `src/lib/schedule.ts`,
 home/away fairness, rotating BYE, mirrored second leg for small tables) and
 stamps kickoffs as pure arithmetic off `Season.firstMatchNight`
@@ -881,14 +884,16 @@ enums, so every status column is a string whose allowed values live in
   Reads still fetch at most two rows and `singleActiveSeason` fails closed for
   pre-migration or manually corrupted data rather than silently choosing one;
   carries `draftBudget`, `budgetMmrWeight`, `maxMmr` (soft), series lengths,
-  `firstMatchNight`, `draftAt`, `dotaLeagueId`, `championTeamId`, and the
-  one-way `fantasyLockedAt` competitive-information marker.
+  `firstMatchNight`, `draftAt`, `dotaLeagueId`, `championTeamId`, the
+  `formatConfig` an admin chose (null: the Recommended format; read through
+  `parseFormatConfig`), and the one-way `fantasyLockedAt`
+  competitive-information marker.
 - `Registration` — `@@unique([seasonId, userId])`; type PLAYER/STANDIN,
   status ACTIVE/WITHDRAWN/REMOVED, MMR + questionnaire.
 - `Team` / `TeamMember` — rosters; `TeamMember @@unique([seasonId, userId])`
   stops double-drafting; `price > 0` is the exact auction-vs-free-agent
   discriminator `undoLastSale` relies on. `Team.groupKey` ("A"/"B") is the
-  team's group in a season of ten or more teams, null for one table.
+  team's group in a season that plays groups, null for one table.
 - `Draft` — one row per season: the whole auction state (status, rotation,
   live lot, both clocks). Every transition is a guarded `updateMany` claim on
   this row.

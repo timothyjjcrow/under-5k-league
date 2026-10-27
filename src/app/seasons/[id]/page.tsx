@@ -46,6 +46,7 @@ import {
 import { cn } from "@/lib/utils";
 import type { Match } from "@prisma/client";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
+import { tiebreakerArchiveIntro } from "@/lib/tiebreaker-format";
 
 export async function generateMetadata({
   params,
@@ -240,7 +241,7 @@ export default async function SeasonArchivePage({
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
-  const archiveField = projectPlayoffField(season.teams, season.matches);
+  const archiveField = projectPlayoffField(season.teams, season.matches, season);
   const standings = archiveField.standings;
   // One table (and grid) per group in a group-stage season.
   const tableSections = standingsSections(archiveField);
@@ -437,7 +438,7 @@ export default async function SeasonArchivePage({
         <section id="tiebreakers" className="scroll-mt-24 space-y-4">
           <SectionTitle>Tiebreaker results</SectionTitle>
           <p className="text-sm text-muted">
-            Best-of-three series used to settle playoff qualification and seed order.
+            {tiebreakerArchiveIntro(tiebreakers.map((match) => match.bestOf))}
           </p>
           <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-2">
             {[...new Set(tiebreakers.map((match) => match.week))]

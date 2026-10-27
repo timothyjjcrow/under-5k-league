@@ -6,6 +6,7 @@ import {
   tablePlaceOf,
   tiebreakersInPlay,
 } from "./playoff-field";
+import { serializeFormatConfig } from "./season-format";
 import type { MatchLike } from "./standings";
 
 function result(
@@ -43,7 +44,7 @@ describe("projectPlayoffField", () => {
       [
         result("played-winner", "withdrawn", 2, 0),
         result("withdrawn", "forfeit-winner", 0, 2, true),
-      ],
+      ], { formatConfig: null },
     );
 
     const playedWinner = projection.standings.find(
@@ -87,7 +88,7 @@ describe("projectPlayoffField", () => {
       }
     }
 
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
 
     expect(projection.eligibleTeamIds).toEqual(["t1", "t2", "t3", "t4", "t5"]);
     expect(projection.bracketSize).toBe(4);
@@ -109,7 +110,7 @@ describe("projectPlayoffField", () => {
   it("returns no bracket when fewer than two teams are eligible", () => {
     const projection = projectPlayoffField(
       [{ id: "alive", groupKey: null }, { id: "withdrawn", groupKey: null, withdrawn: true }],
-      [],
+      [], { formatConfig: null },
     );
 
     expect(projection.standings).toHaveLength(2);
@@ -134,7 +135,7 @@ describe("projectPlayoffField", () => {
       result("e", "f", 1, 1),
     ];
 
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
 
     expect(projection.bracketSize).toBe(4);
     expect(projection.seedingDeadHeatTeamIds).toEqual(["d", "e", "f"]);
@@ -151,7 +152,7 @@ describe("projectPlayoffField", () => {
       result("e", "f", 1, 1),
     ];
 
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
 
     expect(projection.seededTeamIds).toEqual(["a", "b", "c", "d"]);
     expect(projection.seedingDeadHeatTeamIds).toEqual([]);
@@ -173,14 +174,14 @@ describe("projectPlayoffField", () => {
       result("d", "e", 1, 1),
     ];
 
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
 
     expect(projection.seededTeamIds).toEqual(["a", "b", "c", "d"]);
     expect(projection.seedingDeadHeatTeamIds).toEqual([]);
   });
 
   it("returns no bracket for an empty league", () => {
-    const projection = projectPlayoffField([], []);
+    const projection = projectPlayoffField([], [], { formatConfig: null });
 
     expect(projection.standings).toEqual([]);
     expect(projection.eligibleTeamIds).toEqual([]);
@@ -219,7 +220,7 @@ describe("public tiebreaker badges", () => {
   it("keeps a mid-season dead heat off the public badges", () => {
     for (const status of ["SCHEDULED", "LIVE"]) {
       const matches = [...played, unplayed("a", "b", status)];
-      const projection = projectPlayoffField(teams, matches);
+      const projection = projectPlayoffField(teams, matches, { formatConfig: null });
       // The projection itself still sees the tie (admin tools read it)...
       expect(projection.seedingDeadHeatTeamIds).toEqual(["d", "e", "f"]);
       // ...but the public table and playoff picture do not badge it yet.
@@ -229,7 +230,7 @@ describe("public tiebreaker badges", () => {
   });
 
   it("badges the tie once every regular-season fixture is final", () => {
-    const projection = projectPlayoffField(teams, played);
+    const projection = projectPlayoffField(teams, played, { formatConfig: null });
     expect(tiebreakersInPlay(played)).toBe(true);
     expect(publicDeadHeatTeamIds(projection, played)).toEqual(["d", "e", "f"]);
   });
@@ -240,7 +241,7 @@ describe("public tiebreaker badges", () => {
       unplayed("a", "b", "SCHEDULED"),
       unplayed("d", "e", "SCHEDULED", "TIEBREAKER"),
     ];
-    const projection = projectPlayoffField(teams, matches);
+    const projection = projectPlayoffField(teams, matches, { formatConfig: null });
     expect(tiebreakersInPlay(matches)).toBe(true);
     expect(publicDeadHeatTeamIds(projection, matches)).toEqual(
       projection.seedingDeadHeatTeamIds,
@@ -248,7 +249,7 @@ describe("public tiebreaker badges", () => {
   });
 
   it("never badges a league with no regular-season results yet", () => {
-    const fresh = projectPlayoffField(teams, []);
+    const fresh = projectPlayoffField(teams, [], { formatConfig: null });
     expect(fresh.seedingDeadHeatTeamIds.length).toBeGreaterThan(0);
     expect(tiebreakersInPlay([])).toBe(false);
     expect(publicDeadHeatTeamIds(fresh, [])).toEqual([]);
@@ -278,7 +279,7 @@ describe("group-stage seasons", () => {
   }
 
   it("ranks each group on its own results and interleaves the seeds", () => {
-    const projection = projectPlayoffField(teams, [...ladder(groupA), ...ladder(groupB)]);
+    const projection = projectPlayoffField(teams, [...ladder(groupA), ...ladder(groupB)], { formatConfig: null });
     expect(projection.kind).toBe("GROUPS");
     expect(projection.groups?.map((g) => [g.key, g.standings.map((r) => r.teamId), g.qualifiers])).toEqual([
       ["A", groupA, 4],
@@ -304,7 +305,7 @@ describe("group-stage seasons", () => {
       ...ladder(groupA),
       ...ladder(groupB),
       result("a5", "b1", 2, 0),
-    ]);
+    ], { formatConfig: null });
     const a5 = projection.standings.find((row) => row.teamId === "a5")!;
     expect(a5.played).toBe(4);
     expect(a5.points).toBe(0);
@@ -315,14 +316,14 @@ describe("group-stage seasons", () => {
     const projection = projectPlayoffField(teams, [
       ...ladder(groupA, { "a4-a5": [1, 1] }),
       ...ladder(groupB),
-    ]);
+    ], { formatConfig: null });
     expect(projection.seedingDeadHeatTeamIds).toEqual(["a4", "a5"]);
     expect(projection.tiebreakers.needsMatches).toBe(true);
     expect(projection.tiebreakers.resolved).toBe(false);
     const groupBDraw = projectPlayoffField(teams, [
       ...ladder(groupA),
       ...ladder(groupB, { "b4-b5": [1, 1] }),
-    ]).tiebreakers.groups[0];
+    ], { formatConfig: null }).tiebreakers.groups[0];
     // Each group's draw is bound to its own results, so their keys differ.
     expect(projection.tiebreakers.groups[0].teamIds).toEqual(["a4", "a5"]);
     expect(groupBDraw.teamIds).toEqual(["b4", "b5"]);
@@ -334,7 +335,7 @@ describe("group-stage seasons", () => {
       ...ladder(groupA),
       ...ladder(groupB),
       { ...result("a4", "b4", 1, 0), phase: "TIEBREAKER", bracketSlot: "TBS:x:1:y:0" },
-    ]);
+    ], { formatConfig: null });
     expect(projection.tiebreakers.error).not.toBeNull();
     expect(projection.tiebreakers.resolved).toBe(false);
   });
@@ -344,7 +345,7 @@ describe("group-stage seasons", () => {
       teams.map((team) =>
         team.id === "a2" || team.id === "a3" ? { ...team, withdrawn: true } : team,
       ),
-      [...ladder(groupA), ...ladder(groupB)],
+      [...ladder(groupA), ...ladder(groupB)], { formatConfig: null },
     );
     expect(projection.groups?.map((g) => g.qualifiers)).toEqual([3, 5]);
     expect(projection.seededTeamIds).toEqual(["a1", "b1", "a4", "b2", "a5", "b3", "b5", "b4"]);
@@ -356,7 +357,7 @@ describe("group-stage seasons", () => {
   it("plays one table when any team has no group", () => {
     const projection = projectPlayoffField(
       teams.map((team) => (team.id === "b5" ? { id: team.id, groupKey: null } : team)),
-      [...ladder(groupA), ...ladder(groupB)],
+      [...ladder(groupA), ...ladder(groupB)], { formatConfig: null },
     );
     expect(projection.kind).toBe("TABLE");
     expect(projection.groups).toBeNull();
@@ -370,7 +371,7 @@ describe("one-table bracket size", () => {
     for (let i = 0; i < ids.length; i++) {
       for (let j = i + 1; j < ids.length; j++) matches.push(result(ids[i], ids[j], 2, 0));
     }
-    const projection = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), matches);
+    const projection = projectPlayoffField(ids.map((id) => ({ id, groupKey: null })), matches, { formatConfig: null });
     expect(projection.bracketSize).toBe(4);
     expect(projection.seededTeamIds).toEqual(["t1", "t2", "t3", "t4"]);
     expect(projection.seedLabelByTeam.get("t2")).toBe("2");
@@ -391,7 +392,7 @@ describe("bracketShapeProblem", () => {
     const ids = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4", "a5", "b5"];
     const projection = projectPlayoffField(
       ids.map((id) => ({ id, groupKey: id[0].toUpperCase() })),
-      roundRobin(ids),
+      roundRobin(ids), { formatConfig: null },
     );
     expect(projection.bracketSize).toBe(8);
     expect(bracketShapeProblem(projection)).toBeNull();
@@ -403,10 +404,57 @@ describe("bracketShapeProblem", () => {
     const ids = ["a", "b", "c"].flatMap((key) => [1, 2, 3, 4].map((n) => `${key}${n}`));
     const projection = projectPlayoffField(
       ids.map((id) => ({ id, groupKey: id[0].toUpperCase() })),
-      roundRobin(ids),
+      roundRobin(ids), { formatConfig: null },
     );
     expect(projection.seededTeamIds).toHaveLength(6);
     expect(projection.pairings).toHaveLength(2);
     expect(bracketShapeProblem(projection)).toBe("The bracket would seed 6 teams for 8 places.");
+  });
+});
+
+describe("a season that stores its format", () => {
+  function roundRobin(ids: string[]): MatchLike[] {
+    const matches: MatchLike[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) matches.push(result(ids[i], ids[j], 2, 0));
+    }
+    return matches;
+  }
+
+  it("sends only the group winners when that is the format", () => {
+    const groupA = ["a1", "a2", "a3", "a4"];
+    const groupB = ["b1", "b2", "b3", "b4"];
+    const teams = [
+      ...groupA.map((id) => ({ id, groupKey: "A" })),
+      ...groupB.map((id) => ({ id, groupKey: "B" })),
+    ];
+    const projection = projectPlayoffField(
+      teams,
+      [...roundRobin(groupA), ...roundRobin(groupB)],
+      { formatConfig: serializeFormatConfig({ groups: 2, meet: 1, playoffs: 2 }) },
+    );
+    expect(projection.bracketSize).toBe(2);
+    expect(projection.groups?.map((group) => group.qualifiers)).toEqual([1, 1]);
+    expect(projection.pairings).toEqual([{ home: "a1", away: "b1" }]);
+    expect(projection.seedLabelByTeam.get("b1")).toBe("B1");
+    expect(bracketShapeProblem(projection)).toBeNull();
+    // The Recommended rule would send the top 4 of each.
+    expect(
+      projectPlayoffField(teams, [...roundRobin(groupA), ...roundRobin(groupB)], {
+        formatConfig: null,
+      }).bracketSize,
+    ).toBe(8);
+  });
+
+  it("seeds eight from a table of nine when that is the format", () => {
+    const ids = ["t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t9"];
+    const projection = projectPlayoffField(
+      ids.map((id) => ({ id, groupKey: null })),
+      roundRobin(ids),
+      { formatConfig: serializeFormatConfig({ groups: 1, meet: 1, playoffs: 8 }) },
+    );
+    expect(projection.bracketSize).toBe(8);
+    expect(projection.seededTeamIds).toEqual(ids.slice(0, 8));
+    expect(projection.pairings).toHaveLength(4);
   });
 });

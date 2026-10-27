@@ -138,7 +138,7 @@ export default async function TeamsPage() {
     );
   }
 
-  const field = projectPlayoffField(teams, matches);
+  const field = projectPlayoffField(teams, matches, season);
   const standings = field.standings;
   // Level teams waiting on a tiebreaker match: the standings table swaps
   // their "Tied" chip for the tiebreaker badge, so these cards drop it too.

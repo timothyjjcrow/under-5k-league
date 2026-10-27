@@ -56,6 +56,7 @@ async function tape(
     match: {
       ...match,
       seasonId: "season",
+      season: { formatConfig: null },
       homeTeam: { name: `Team ${match.homeTeamId}`, logoUrl: null },
       awayTeam: { name: `Team ${match.awayTeamId}`, logoUrl: null },
     } as unknown as MatchPageMatch,

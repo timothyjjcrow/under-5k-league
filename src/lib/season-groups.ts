@@ -153,9 +153,18 @@ export function playoffPlacesPhrase(
   const places = `${field.bracketSize} playoff place${field.bracketSize === 1 ? "" : "s"}`;
   if (!field.groups) return places;
   const shares = [...new Set(field.groups.map((group) => group.qualifiers))];
-  return shares.length === 1
-    ? `${places}: the top ${shares[0]} of each group`
-    : `${places}: ${field.groups.map((group) => `the top ${group.qualifiers} of Group ${group.key}`).join(" and ")}`;
+  if (shares.length === 1) {
+    return shares[0] === 1
+      ? `${places}: the group winners`
+      : `${places}: the top ${shares[0]} of each group`;
+  }
+  return `${places}: ${field.groups
+    .map((group) =>
+      group.qualifiers === 1
+        ? `the winner of Group ${group.key}`
+        : `the top ${group.qualifiers} of Group ${group.key}`,
+    )
+    .join(" and ")}`;
 }
 
 /**

@@ -92,6 +92,7 @@ import {
   formatName,
   resolveSeasonFormat,
   seasonPlan,
+  withBracket,
 } from "@/lib/season-format";
 import {
   bracketSeedLabels,
@@ -409,7 +410,7 @@ export default async function SchedulePage() {
     arr.push(a);
     standinsByMatch.set(a.matchId, arr);
   }
-  const playoffField = projectPlayoffField(teams, matches);
+  const playoffField = projectPlayoffField(teams, matches, season);
   const standings = playoffField.standings;
   // A tie mid-season is just a tie. Only once the regular season is over (or
   // tiebreaker fixtures exist) does it get a tiebreaker badge that holds back
@@ -448,7 +449,10 @@ export default async function SchedulePage() {
   const hasFixtures = regular.length > 0;
   // The season's calendar from its schedule: the regular weeks, the reserved
   // tiebreaker week and each playoff round. Shown until the playoffs start.
-  const planFormat = resolveSeasonFormat(teams, hasFixtures);
+  // Withdrawals can shrink the bracket below the format's: print the rounds
+  // Start playoffs will build.
+  const resolvedFormat = resolveSeasonFormat(season, teams, hasFixtures);
+  const planFormat = resolvedFormat && withBracket(resolvedFormat, playoffField.bracketSize);
   const seasonPlanView =
     planFormat &&
     hasFixtures &&

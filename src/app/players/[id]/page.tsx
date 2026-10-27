@@ -397,8 +397,8 @@ export default async function PlayerProfilePage({
   // Team + record for this season, if drafted.
   const team = membership?.team ?? null;
   const field =
-    team && seasonTeams.length
-      ? projectPlayoffField(seasonTeams, seasonMatches)
+    season && team && seasonTeams.length
+      ? projectPlayoffField(seasonTeams, seasonMatches, season)
       : null;
   const teamRow = team
     ? field?.standings.find((s) => s.teamId === team.id)

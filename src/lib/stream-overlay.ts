@@ -26,6 +26,7 @@ import { parsePubStats } from "./pub-stats";
 import { rankMedalName, rankMedalTier, rankStars } from "./rank";
 import { roleLabels } from "./roles";
 import { groupPlayoffRounds, matchRoundLabel } from "./schedule";
+import type { FormatSource } from "./season-format";
 import { bracketSeedLabels, placeInTable, placeOfLabel } from "./season-groups";
 import type { MatchLike } from "./standings";
 import { crestInk, hashHue, seasonTeamHues } from "./team-hues";
@@ -197,6 +198,8 @@ export type StreamOverlayInput = {
   /** The season's id: the crest hues start the colour wheel from it. */
   seasonId: string;
   seasonName: string;
+  /** The season's stored format: it sets the playoff places. */
+  season: FormatSource;
   /** The fixture; it is also one of `seasonMatches`. */
   match: OverlaySeasonMatch & {
     homeTeam: { name: string; logoUrl: string | null };
@@ -436,7 +439,7 @@ export function buildStreamOverlay(input: StreamOverlayInput): StreamOverlayPayl
   const regularPlayed = input.seasonMatches.some(
     (m) => m.phase === MATCH_PHASE.REGULAR && m.status === MATCH_STATUS.COMPLETED,
   );
-  const field = projectPlayoffField([...input.teams], [...input.seasonMatches]);
+  const field = projectPlayoffField([...input.teams], [...input.seasonMatches], input.season);
   // The bracket's names for its seeds: "A1", "B4" in a group season.
   const seeds = postseason
     ? bracketSeedLabels(seedsFromFirstRound(playoffMatches), input.teams)

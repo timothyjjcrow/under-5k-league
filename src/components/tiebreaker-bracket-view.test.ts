@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectPlayoffField as projectCurrentPlayoffField } from "@/lib/playoff-field";
 // Historical fixture generation; production continues to recognize these stored formats.
-const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, "legacy");
+const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, { formatConfig: null }, "legacy");
 import { tiebreakerSlot, type TiebreakerGroup } from "@/lib/tiebreakers";
 import {
   buildTiebreakerBrackets,
@@ -46,13 +46,13 @@ function fixture(group: TiebreakerGroup, index = 0, homeWins = true): Tiebreaker
 }
 
 function next(matches: TiebreakerBracketFixture[], homeWins = true, roster = teams) {
-  const group = projectPlayoffField(roster, matches).tiebreakers.groups.find((entry) => entry.status === "needed");
+  const group = projectPlayoffField(roster, matches, { formatConfig: null }).tiebreakers.groups.find((entry) => entry.status === "needed");
   if (!group) throw new Error("The test needs an unresolved next stage");
   return [...matches, fixture(group, 0, homeWins)];
 }
 
 function view(matches: TiebreakerBracketFixture[], roster = teams) {
-  return buildTiebreakerBrackets({ teams: roster, matches, projection: projectPlayoffField(roster, matches) });
+  return buildTiebreakerBrackets({ teams: roster, matches, projection: projectPlayoffField(roster, matches, { formatConfig: null }) });
 }
 
 describe("complete tiebreaker bracket presentation", () => {
@@ -73,7 +73,7 @@ describe("complete tiebreaker bracket presentation", () => {
 
   it("makes the third team and all feeder paths visible when only the opening match is scheduled", () => {
     const regular = drawnSeason();
-    const initial = fixture(projectPlayoffField(teams, regular).tiebreakers.groups[0]);
+    const initial = fixture(projectPlayoffField(teams, regular, { formatConfig: null }).tiebreakers.groups[0]);
     const scheduled = { ...initial, status: "SCHEDULED", homeScore: 0, awayScore: 0, winnerTeamId: null };
     const [group] = view([...regular, scheduled]).groups;
     expect(group).toMatchObject({ byeTeamId: "c", week: 6, openingAt: kickoff, status: "pending" });
@@ -150,10 +150,10 @@ describe("complete tiebreaker bracket presentation", () => {
     for (let path = 0; path < 32; path++) {
       let matches = drawnSeason();
       for (let stage = 0; stage < 5; stage++) {
-        if (projectPlayoffField(teams, matches).tiebreakers.resolved) break;
+        if (projectPlayoffField(teams, matches, { formatConfig: null }).tiebreakers.resolved) break;
         matches = next(matches, Boolean(path & (1 << stage)));
       }
-      const projection = projectPlayoffField(teams, matches);
+      const projection = projectPlayoffField(teams, matches, { formatConfig: null });
       const [group] = view(matches).groups;
       expect(group.placements.map((place) => place.teamId)).toEqual(projection.eligibleTeamIds);
       expect(group.placements.filter((place) => place.qualifies).map((place) => place.teamId))
@@ -207,7 +207,7 @@ describe("complete tiebreaker bracket presentation", () => {
 
   it("keeps a published legacy three-team BO3 round robin and its successor BO1 bracket separate", () => {
     const regular = drawnSeason();
-    const opening = projectPlayoffField(teams, regular).tiebreakers.groups[0];
+    const opening = projectPlayoffField(teams, regular, { formatConfig: null }).tiebreakers.groups[0];
     const legacy: TiebreakerGroup = {
       ...opening, key: opening.key.replace(/^TBD:/, "TB:").replace(/:1$/, ""),
       stage: undefined, drawRequired: false, format: "BO3_ROUND_ROBIN", bestOf: 3,

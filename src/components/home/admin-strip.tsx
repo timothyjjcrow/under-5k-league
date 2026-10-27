@@ -53,6 +53,7 @@ export async function AdminStrip({ snapshot }: { snapshot: SeasonSnapshot }) {
   );
   const { step, attention: attentionLine } = adminHomeLine({
     seasonStatus: season.status,
+    season,
     draftStatus: snapshot.draftStatus,
     playerCount: snapshot.playerCount,
     minPlayers: snapshot.capacity.minPlayers,

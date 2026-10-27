@@ -39,6 +39,7 @@ import { playoffStatusChip, playoffStatuses } from "./playoff-status";
 import { prisma } from "./prisma";
 import { rankMedalName } from "./rank";
 import { seasonPhaseLabel } from "./season-copy";
+import { SEASON_FORMAT_SELECT } from "./season-format";
 import { bracketSeedLabels, placeInTable, placeOfLabel } from "./season-groups";
 import { seriesRecordText } from "./team-matches";
 import { hashHue, seasonTeamHues } from "./team-hues";
@@ -129,7 +130,7 @@ export async function loadTeamCard(
       captainId: true,
       captain: { select: { name: true } },
       season: {
-        select: { name: true, status: true, championTeamId: true },
+        select: { name: true, status: true, championTeamId: true, ...SEASON_FORMAT_SELECT },
       },
       members: {
         select: { userId: true, user: { select: { name: true } } },
@@ -155,7 +156,7 @@ export async function loadTeamCard(
   const postseason =
     team.season.status === SEASON_STATUS.PLAYOFFS ||
     team.season.status === SEASON_STATUS.COMPLETE;
-  const field = projectPlayoffField(teams, matches);
+  const field = projectPlayoffField(teams, matches, team.season);
   const row = field.standings.find((r) => r.teamId === id);
   // "2nd of 6 in Group A" in a group season, "2nd of 10" for one table.
   const place = placeInTable(field, id);

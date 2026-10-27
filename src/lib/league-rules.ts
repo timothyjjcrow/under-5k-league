@@ -41,13 +41,19 @@ import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
   formatSteps,
-  playoffBracketSize,
+  formatBracketSize,
+  parseFormatConfig,
   plannedSeasonFormat,
+  playoffEntrantsPhrase,
   playoffSteps,
+  recommendedKnobs,
   resolveSeasonFormat,
   seasonLengthPhrase,
+  withBracket,
+  type FormatSource,
   type SeasonFormat,
 } from "./season-format";
+import { formatProblems } from "./season-builder";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
 import { MATCH_NIGHT_POLL_LABEL } from "./season-copy";
 import {
@@ -111,9 +117,15 @@ export type LeagueRulesInput = {
   teamCount: number | null;
   /**
    * The active season's format (`resolveSeasonFormat` over every team,
-   * withdrawn ones included). Omitted, the format `teamCount` teams plan.
+   * withdrawn ones included). Omitted, the Recommended format for
+   * `teamCount` teams.
    */
   format?: SeasonFormat | null;
+  /**
+   * The active season's regular-season schedule exists, so its format is
+   * settled. Omitted, the format reads as a plan the admins can change.
+   */
+  formatFinal?: boolean;
   /** The deployment's identity. Tests pass `createLeagueConfig({...})`. */
   config?: Pick<typeof LEAGUE_CONFIG, "name" | "gameServerRegion">;
 };
@@ -205,6 +217,10 @@ function firstRoundRule(bracketSize: number | null, groups = false): string | nu
   }));
   const higherHosts = pairings.every((pair) => pair.home < pair.away);
   const hosts = higherHosts ? "; the higher seed hosts" : "";
+  if (groups && bracketSize === 2) {
+    // A1 and B1 (seedGroups): group A is seeded first.
+    return `The two group winners play the grand final${higherHosts ? ", and Group A's winner hosts" : ""}.`;
+  }
   if (groups && bracketSize && bracketSize >= 4) {
     // Seeds alternate between the groups place by place (seedGroups).
     const name = (seed: number) =>
@@ -228,27 +244,44 @@ function firstRoundRule(bracketSize: number | null, groups = false): string | nu
 }
 
 /**
- * The active season's format for /rules (`resolveSeasonFormat`): every team,
- * withdrawn ones included, and whether its regular-season fixtures exist.
+ * The active season's format for /rules (`resolveSeasonFormat`): its stored
+ * format, every team, withdrawn ones included, and whether its regular-season
+ * fixtures exist.
  */
 export function rulesSeasonFormat(
+  season: FormatSource,
   teams: readonly { groupKey: string | null }[],
   fixtures: readonly { phase: string }[],
 ): SeasonFormat | null {
-  return resolveSeasonFormat(
-    teams,
-    fixtures.some((fixture) => fixture.phase === MATCH_PHASE.REGULAR),
-  );
+  const scheduled = regularScheduleMade(fixtures);
+  // A saved layout today's captains can't fill isn't a plan yet: say
+  // nothing about this season rather than print one that can't be built.
+  const stored = parseFormatConfig(season.formatConfig);
+  if (
+    !scheduled &&
+    stored.kind === "CUSTOM" &&
+    formatProblems(stored.knobs, teams.length).errors.length > 0
+  ) {
+    return null;
+  }
+  return resolveSeasonFormat(season, teams, scheduled);
+}
+
+/** The regular-season schedule exists, so the format is settled. */
+export function regularScheduleMade(fixtures: readonly { phase: string }[]): boolean {
+  return fixtures.some((fixture) => fixture.phase === MATCH_PHASE.REGULAR);
 }
 
 /**
- * The season's structure: what the team count makes it (season-format.ts),
- * how groups are drawn, and the reserved tiebreaker week. `format` is the
- * active season's, from its whole field, withdrawn teams included.
+ * The season's structure: who chooses it, what the team count makes it
+ * unless they choose otherwise (season-format.ts), how groups are drawn, and
+ * the reserved tiebreaker week. `format` is the active season's, from its
+ * whole field, withdrawn teams included; until its schedule exists
+ * (`final`) it is a plan.
  */
-function formatSection(format: SeasonFormat | null): RuleSection {
+function formatSection(format: SeasonFormat | null, final: boolean): RuleSection {
   const rules = [
-    `The number of teams sets the season's format before it starts, so nobody designs a season by hand: ${formatSteps()}.`,
+    `The admins choose each season's format before its schedule is made. Unless they choose otherwise, the number of teams sets it: ${formatSteps()}.`,
     "Groups are drawn when the schedule is made: teams are ranked by their roster's average signup MMR and dealt A, B, B, A, A, B… so both groups get the same spread. An admin can swap one team from each group before the first result.",
     "In a group season each group's table counts only its own matches, and ties are played off inside the group.",
     "The week after the regular season is kept for tiebreakers, so the playoff dates are set the day the schedule is made. If no tie needs it, that week is off.",
@@ -256,7 +289,9 @@ function formatSection(format: SeasonFormat | null): RuleSection {
   if (format) {
     const described = describeSeasonFormat(format);
     rules.push(
-      `This season has ${plural(format.teamCount, "team")}: ${described.charAt(0).toLowerCase()}${described.slice(1)} That's ${seasonLengthPhrase(format)}.`,
+      `This season has ${plural(format.teamCount, "team")}: ${described.charAt(0).toLowerCase()}${described.slice(1)} That's ${seasonLengthPhrase(format)}.${
+        final ? "" : " It's the plan until the schedule is made, so the admins can still change it."
+      }`,
     );
   }
   return { id: "format", title: "Season format", rules };
@@ -318,16 +353,25 @@ function playoffsSection(
   const groups = format?.kind === "GROUPS";
   const size =
     teamCount !== null && teamCount >= 2 && format
-      ? playoffBracketSize(format.kind, format.teamCount, teamCount)
+      ? formatBracketSize(format, teamCount)
       : null;
   const rules = [
-    `The playoffs are a single-elimination bracket: ${playoffSteps()}. Withdrawals shrink the bracket to what the teams left can fill, and a group short of teams hands its spot to the other group's next team.`,
+    `The playoffs are a single-elimination bracket. Unless the admins choose otherwise, they take ${playoffSteps()}. Withdrawals shrink the bracket to what the teams left can fill, and a group short of teams hands its spot to the other group's next team.`,
   ];
-  if (size !== null && teamCount !== null) {
+  if (size !== null && teamCount !== null && format) {
+    // "So" only where the team count decided it: Recommended's own cut, or
+    // a bracket withdrawals shrank. An admin's chosen cut is just stated.
+    const recommended = recommendedKnobs(format.teamCount);
+    const byCount =
+      recommended !== null &&
+      recommended.groups === format.groupSizes.length &&
+      recommended.playoffs === format.playoffSpots;
     rules.push(
-      groups && size === 8
-        ? `This season plays two groups, so the top ${format!.qualifiersPerGroup} of each group make the playoffs.`
-        : `This season has ${plural(teamCount, "team")} in it, so the top ${size} make the playoffs.`,
+      groups && size === format.playoffSpots
+        ? `This season plays two groups, ${byCount ? "so" : "and"} ${playoffEntrantsPhrase(format)} make the playoffs.`
+        : byCount || size < format.playoffSpots
+          ? `This season has ${plural(teamCount, "team")} in it, so the top ${size} make the playoffs.`
+          : `This season's top ${size} make the playoffs.`,
     );
   }
   const firstRound = firstRoundRule(size, groups);
@@ -552,10 +596,12 @@ export function leagueRules({
   matchNightPoll = false,
   teamCount,
   format,
+  formatFinal = false,
   config = LEAGUE_CONFIG,
 }: LeagueRulesInput): LeagueRules {
   const activeTeams = season?.isActive ? teamCount : null;
-  const plannedFormat = teamCount !== null ? plannedSeasonFormat(teamCount) : null;
+  const plannedFormat =
+    teamCount !== null ? plannedSeasonFormat({ formatConfig: null }, teamCount) : null;
   const activeFormat = season?.isActive ? (format === undefined ? plannedFormat : format) : null;
   const settings: CarriedSeasonSettings = season ?? carriedSeasonSettings(null);
   // The ticket is the ACTIVE season's (How it works asks the same question);
@@ -565,7 +611,14 @@ export function leagueRules({
     basis: basisLine(season, config.name),
     defaults: season === null,
     sections: [
-      formatSection(activeFormat),
+      // Withdrawals can shrink the bracket below the format's: the length
+      // and rounds printed are the ones Start playoffs will build.
+      formatSection(
+        activeFormat && activeTeams !== null
+          ? withBracket(activeFormat, formatBracketSize(activeFormat, activeTeams))
+          : activeFormat,
+        formatFinal,
+      ),
       seriesSection(settings),
       standingsSection(settings),
       playoffsSection(activeTeams, activeFormat),

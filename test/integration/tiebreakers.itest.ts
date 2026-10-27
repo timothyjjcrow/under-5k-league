@@ -59,7 +59,7 @@ describe("tiebreaker week and playoff handoff", () => {
     await expect(createTiebreakerWeek(season.id)).rejects.toThrow(/Finish the scheduled/);
     await recordMatch(tb.id, 0, 1);
     const ready = await state(season.id);
-    expect(projectPlayoffField(ready.teams, ready.matches).seededTeamIds[3]).toBe(tb.awayTeamId);
+    expect(projectPlayoffField(ready.teams, ready.matches, { formatConfig: null }).seededTeamIds[3]).toBe(tb.awayTeamId);
     await createPlayoffBracket(season.id, { intent: "start", expectedSeasonStatus: "REGULAR_SEASON", expectedRevision: ready.revision });
     const seeded = await state(season.id);
     expect(seeded.season.status).toBe("PLAYOFFS");
