@@ -60,9 +60,12 @@ import { parseMatchId } from "@/lib/dota";
 import { bool, clampInt, localDate, str } from "@/lib/form";
 import { formatLeagueTime } from "@/lib/zoned-time";
 import {
+  FORMAT_UNREADABLE_MESSAGE,
+  SEASON_FORMAT_SELECT,
   SEASON_GROUP_KEYS,
   drawGroups,
   formatName,
+  parseFormatConfig,
   plannedSeasonFormat,
   regularSeasonFixtures,
   rosterAverageMmr,
@@ -244,6 +247,9 @@ class GroupSwapError extends Error {}
 /** The regular-season fixtures changed since the form rendered. */
 class ScheduleChangedError extends Error {}
 
+/** The season's stored format is one this version of the site can't read. */
+class FormatUnreadableError extends Error {}
+
 class FirstNightPassedError extends Error {
   constructor(readonly firstNight: Date | null) {
     super("The season's first match night is missing or past");
@@ -329,6 +335,7 @@ async function replaceRegularSchedule(input: {
               status: true,
               regularBestOf: true,
               firstMatchNight: true,
+              ...SEASON_FORMAT_SELECT,
             },
           }),
           tx.draft.findUnique({
@@ -380,7 +387,12 @@ async function replaceRegularSchedule(input: {
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
         }
-        const format = plannedSeasonFormat(teams.length);
+        // The season's stored format, or the Recommended one. A value this
+        // version can't read is never built as Recommended.
+        if (parseFormatConfig(currentSeason.formatConfig).kind === "UNREADABLE") {
+          throw new FormatUnreadableError();
+        }
+        const format = plannedSeasonFormat(currentSeason, teams.length);
         if (!format) throw new ScheduleNeedsTeamsError();
         const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
         if (!firstNight || firstNight.getTime() < Date.now()) {
@@ -615,6 +627,9 @@ async function replaceRegularSchedule(input: {
         error:
           "The schedule was generated or rebuilt while this page was open. Nothing was changed; reload to see it.",
       };
+    }
+    if (e instanceof FormatUnreadableError) {
+      return { error: FORMAT_UNREADABLE_MESSAGE };
     }
     if (e instanceof WithdrawnTeamsError) {
       return {

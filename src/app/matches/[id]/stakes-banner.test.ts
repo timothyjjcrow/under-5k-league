@@ -75,7 +75,7 @@ async function banner(groups: boolean): Promise<string> {
       awayTeamId: "a3",
       homeTeam: { name: "Team a2", logoUrl: null },
       awayTeam: { name: "Team a3", logoUrl: null },
-      season: { status: "REGULAR_SEASON" },
+      season: { status: "REGULAR_SEASON", formatConfig: null },
     },
     seasonMatches: matches,
     nowMs: Date.parse("2026-10-19T12:00:00Z"),

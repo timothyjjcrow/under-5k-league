@@ -41,11 +41,13 @@ import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
   formatSteps,
-  playoffBracketSize,
+  formatBracketSize,
   plannedSeasonFormat,
+  playoffEntrantsPhrase,
   playoffSteps,
   resolveSeasonFormat,
   seasonLengthPhrase,
+  type FormatSource,
   type SeasonFormat,
 } from "./season-format";
 import { SCRIM_COLLISION_WINDOW_MS } from "./scrim-schedule-conflict";
@@ -111,7 +113,8 @@ export type LeagueRulesInput = {
   teamCount: number | null;
   /**
    * The active season's format (`resolveSeasonFormat` over every team,
-   * withdrawn ones included). Omitted, the format `teamCount` teams plan.
+   * withdrawn ones included). Omitted, the Recommended format for
+   * `teamCount` teams.
    */
   format?: SeasonFormat | null;
   /** The deployment's identity. Tests pass `createLeagueConfig({...})`. */
@@ -205,6 +208,10 @@ function firstRoundRule(bracketSize: number | null, groups = false): string | nu
   }));
   const higherHosts = pairings.every((pair) => pair.home < pair.away);
   const hosts = higherHosts ? "; the higher seed hosts" : "";
+  if (groups && bracketSize === 2) {
+    // A1 and B1 (seedGroups): group A is seeded first.
+    return `The two group winners play the grand final${higherHosts ? ", and Group A's winner hosts" : ""}.`;
+  }
   if (groups && bracketSize && bracketSize >= 4) {
     // Seeds alternate between the groups place by place (seedGroups).
     const name = (seed: number) =>
@@ -228,14 +235,17 @@ function firstRoundRule(bracketSize: number | null, groups = false): string | nu
 }
 
 /**
- * The active season's format for /rules (`resolveSeasonFormat`): every team,
- * withdrawn ones included, and whether its regular-season fixtures exist.
+ * The active season's format for /rules (`resolveSeasonFormat`): its stored
+ * format, every team, withdrawn ones included, and whether its regular-season
+ * fixtures exist.
  */
 export function rulesSeasonFormat(
+  season: FormatSource,
   teams: readonly { groupKey: string | null }[],
   fixtures: readonly { phase: string }[],
 ): SeasonFormat | null {
   return resolveSeasonFormat(
+    season,
     teams,
     fixtures.some((fixture) => fixture.phase === MATCH_PHASE.REGULAR),
   );
@@ -318,15 +328,15 @@ function playoffsSection(
   const groups = format?.kind === "GROUPS";
   const size =
     teamCount !== null && teamCount >= 2 && format
-      ? playoffBracketSize(format.kind, format.teamCount, teamCount)
+      ? formatBracketSize(format, teamCount)
       : null;
   const rules = [
     `The playoffs are a single-elimination bracket: ${playoffSteps()}. Withdrawals shrink the bracket to what the teams left can fill, and a group short of teams hands its spot to the other group's next team.`,
   ];
-  if (size !== null && teamCount !== null) {
+  if (size !== null && teamCount !== null && format) {
     rules.push(
-      groups && size === 8
-        ? `This season plays two groups, so the top ${format!.qualifiersPerGroup} of each group make the playoffs.`
+      groups && size === format.playoffSpots
+        ? `This season plays two groups, so ${playoffEntrantsPhrase(format)} make the playoffs.`
         : `This season has ${plural(teamCount, "team")} in it, so the top ${size} make the playoffs.`,
     );
   }
@@ -555,7 +565,8 @@ export function leagueRules({
   config = LEAGUE_CONFIG,
 }: LeagueRulesInput): LeagueRules {
   const activeTeams = season?.isActive ? teamCount : null;
-  const plannedFormat = teamCount !== null ? plannedSeasonFormat(teamCount) : null;
+  const plannedFormat =
+    teamCount !== null ? plannedSeasonFormat({ formatConfig: null }, teamCount) : null;
   const activeFormat = season?.isActive ? (format === undefined ? plannedFormat : format) : null;
   const settings: CarriedSeasonSettings = season ?? carriedSeasonSettings(null);
   // The ticket is the ACTIVE season's (How it works asks the same question);

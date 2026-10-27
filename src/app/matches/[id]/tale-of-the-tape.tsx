@@ -86,7 +86,7 @@ export async function TaleOfTheTape({
   const field =
     !postseason &&
     seasonMatches.some((m) => m.phase === "REGULAR" && m.status === "COMPLETED")
-      ? projectPlayoffField(teams, seasonMatches)
+      ? projectPlayoffField(teams, seasonMatches, match.season)
       : null;
   const standing = (teamId: string): string | null => {
     if (seedLabels) {

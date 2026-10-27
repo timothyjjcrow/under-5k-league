@@ -135,6 +135,10 @@ describe("standingsCaption in a group-stage season", () => {
     expect(
       standingsCaption({ status: live as never, postseason: false, bracketSize: 8, eligibleTeams: 9, groupQualifiers: [3, 5] }),
     ).toBe("8 playoff places · 9 eligible teams");
+    // A format whose group winners play the final.
+    expect(
+      standingsCaption({ status: live as never, postseason: false, bracketSize: 2, eligibleTeams: 13, groupQualifiers: [1, 1] }),
+    ).toBe("The group winners make the playoffs · 13 eligible teams");
   });
 });
 

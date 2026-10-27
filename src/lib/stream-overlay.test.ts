@@ -222,6 +222,7 @@ function baseInput(over: Partial<StreamOverlayInput> = {}): StreamOverlayInput {
     leagueName: "GGD2L",
     seasonId: "season-1",
     seasonName: "Season 2",
+    season: { formatConfig: null },
     match: {
       ...live,
       homeTeam: { name: "Alpha Wolves", logoUrl: "https://i.imgur.com/alpha.png" },

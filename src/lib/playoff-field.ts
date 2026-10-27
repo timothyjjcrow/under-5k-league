@@ -2,9 +2,10 @@ import { MATCH_PHASE, MATCH_STATUS } from "./constants";
 import { playoffFirstRound, type Pairing } from "./schedule";
 import {
   groupShares,
-  playoffBracketSize,
+  seasonBracketSize,
   seasonGroupKeys,
   seedGroups,
+  type FormatSource,
   type SeasonFormatKind,
 } from "./season-format";
 import {
@@ -130,17 +131,24 @@ function withResolvedOrder(
  * results, its ties are played off against its own cut, and its tiebreaker
  * fixtures are bound to its own results. The seeds then interleave the groups
  * place by place (`seedGroups`).
+ *
+ * `season` is the row that owns `teams`: its stored format sets the playoff
+ * places (`seasonBracketSize`). It is required, as `FieldTeam.groupKey` is,
+ * so no caller can size a custom season's bracket by its team count.
  */
 export function projectPlayoffField(
   teams: readonly FieldTeam[],
   matches: MatchLike[],
-  format: "current" | "legacy" = "current",
+  season: FormatSource,
+  tiebreakerFormat: "current" | "legacy" = "current",
 ): PlayoffFieldProjection {
   const withdrawnIds = new Set(
     teams.filter((team) => team.withdrawn).map((team) => team.id),
   );
   const groupKeys = seasonGroupKeys(teams);
-  if (groupKeys) return projectGroups(teams, groupKeys, matches, withdrawnIds, format);
+  if (groupKeys) {
+    return projectGroups(teams, groupKeys, matches, withdrawnIds, season, tiebreakerFormat);
+  }
 
   let standings = computeStandings(
     teams.map((team) => team.id),
@@ -149,13 +157,14 @@ export function projectPlayoffField(
   let eligibleStandings = standings.filter(
     (row) => !withdrawnIds.has(row.teamId),
   );
-  const bracketSize = playoffBracketSize(
+  const bracketSize = seasonBracketSize(
+    season,
     "TABLE",
     teams.length,
     eligibleStandings.length,
   );
   const resolution = resolveTiebreakers(
-    eligibleStandings, matches, bracketSize, tiebreakerBasis([...teams], matches), format,
+    eligibleStandings, matches, bracketSize, tiebreakerBasis([...teams], matches), tiebreakerFormat,
   );
   eligibleStandings = resolution.standings;
   standings = withResolvedOrder(standings, eligibleStandings, withdrawnIds);
@@ -187,7 +196,8 @@ function projectGroups(
   groupKeys: string[],
   matches: MatchLike[],
   withdrawnIds: ReadonlySet<string>,
-  format: "current" | "legacy",
+  season: FormatSource,
+  tiebreakerFormat: "current" | "legacy",
 ): PlayoffFieldProjection {
   const tables = groupKeys.map((key) => {
     const members = teams.filter((team) => team.groupKey === key);
@@ -210,7 +220,7 @@ function projectGroups(
     };
   });
   const eligibleCount = tables.reduce((sum, t) => sum + t.eligible.length, 0);
-  const bracketSize = playoffBracketSize("GROUPS", teams.length, eligibleCount);
+  const bracketSize = seasonBracketSize(season, "GROUPS", teams.length, eligibleCount);
   const shares = groupShares(
     tables.map((t) => t.eligible.length),
     bracketSize,
@@ -222,7 +232,7 @@ function projectGroups(
       table.own,
       shares[index],
       tiebreakerBasis(table.members, table.own),
-      format,
+      tiebreakerFormat,
     );
     return {
       key: table.key,

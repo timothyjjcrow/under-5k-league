@@ -153,6 +153,7 @@ import { RollCallControls } from "@/components/admin/roll-call-controls";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
 import {
   formatName,
+  parseFormatConfig,
   plannedSeasonFormat,
   teamCountSeasonNote,
 } from "@/lib/season-format";
@@ -420,10 +421,10 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
             data.playoffArchive.length + data.tiebreakerArchive.length,
         })
       : null;
-  const showTiebreakers = data != null && (
+  const showTiebreakers = season != null && data != null && (
     data.matches.some((match) => match.phase === MATCH_PHASE.TIEBREAKER) ||
     (regularSeasonStatus(data.matches).allComplete &&
-      projectPlayoffField(data.teams, data.matches).tiebreakers.groups.length > 0)
+      projectPlayoffField(data.teams, data.matches, season).tiebreakers.groups.length > 0)
   );
   const handoffReadiness =
     season && data
@@ -1630,8 +1631,20 @@ function AdminAttention({
   const deliveryItems = (delivery ? leagueDeliveryAttention(delivery) : []).map(
     (text, index) => ({ key: `delivery-${index}`, text, href: "#adm-discord" }),
   );
+  // A format a newer release saved: every command that builds from it refuses.
+  const formatItems =
+    parseFormatConfig(season.formatConfig).kind === "UNREADABLE"
+      ? [
+          {
+            key: "format-unreadable",
+            text: "This season's format was saved by a newer version of the site, so generating the schedule, starting playoffs and scheduling tiebreakers are refused until that version is back.",
+            href: "#adm-schedule",
+          },
+        ]
+      : [];
   const items = [
     ...deliveryItems,
+    ...formatItems,
     ...adminAttention({
       seasonStatus: season.status,
       draftComplete: draftRostersReady(season, data),
@@ -1814,7 +1827,7 @@ function adminNextStepFor(
     existingTiebreakerCount: data.matches.filter(
       (match) => match.phase === MATCH_PHASE.TIEBREAKER,
     ).length,
-    unresolvedPlayoffTieCount: projectPlayoffField(data.teams, data.matches)
+    unresolvedPlayoffTieCount: projectPlayoffField(data.teams, data.matches, season)
       .seedingDeadHeatTeamIds.length,
     playoffMatchCount: playoff.length,
     unfinishedPlayoffCount: playoff.filter((m) => m.status !== "COMPLETED")
@@ -2785,7 +2798,7 @@ function CaptainControls({
               {captainCount >= 2 ? (
                 <li className="rounded-md border border-line/70 px-3 py-2 text-muted sm:col-span-2">
                   <b className="text-fg">Season format:</b>{" "}
-                  {teamCountSeasonNote(captainCount)} One captain is one team,
+                  {teamCountSeasonNote(season, captainCount)} One captain is one team,
                   and the site picks the format from that count.
                 </li>
               ) : null}
@@ -3646,7 +3659,7 @@ function TiebreakerControls({
   data: AdminData;
   nowMs: number;
 }) {
-  const projection = projectPlayoffField(data.teams, data.matches);
+  const projection = projectPlayoffField(data.teams, data.matches, season);
   const brackets = buildTiebreakerBrackets({ projection, teams: data.teams, matches: data.matches });
   const tiebreakerMatches = data.matches.filter((match) => match.phase === MATCH_PHASE.TIEBREAKER);
   const hasBo1Bracket = brackets.groups.some((bracket) => bracket.format === "BO1_DOUBLE_ELIMINATION");
@@ -3790,13 +3803,13 @@ function ScheduleControls({
   const tiebreakerMatches = data.matches.filter(
     (m) => m.phase === "TIEBREAKER",
   );
-  const playoffField = projectPlayoffField(data.teams, data.matches);
+  const playoffField = projectPlayoffField(data.teams, data.matches, season);
   const seasonGrouped = playoffField.kind === "GROUPS";
   // The fixtures these forms show: a rebuild refuses if another admin's
   // generate or rebuild replaced them since (regularScheduleRevision).
   const scheduleRevision = regularScheduleRevision(regularMatches.map((match) => match.id));
   // A table of ten or more generated before groups regenerates as groups.
-  const rebuildFormat = plannedSeasonFormat(data.teams.length);
+  const rebuildFormat = plannedSeasonFormat(season, data.teams.length);
   const rebuildChangesFormat =
     regularCount > 0 && rebuildFormat !== null && rebuildFormat.kind !== playoffField.kind;
   const collateral = data.collateral;
@@ -3944,7 +3957,7 @@ function ScheduleControls({
                   variant="secondary"
                   size="sm"
                   confirm={`Generate the regular-season schedule? ${
-                    teamCountSeasonNote(data.teams.length)?.split(". ")[0] ?? ""
+                    teamCountSeasonNote(season, data.teams.length)?.split(". ")[0] ?? ""
                   }.`}
                 >
                   Generate schedule
@@ -4289,7 +4302,7 @@ function PlayoffControls({
     season,
     data.matches,
   );
-  const playoffField = projectPlayoffField(data.teams, data.matches);
+  const playoffField = projectPlayoffField(data.teams, data.matches, season);
   const bracketSize = playoffField.bracketSize;
   const status = regularSeasonStatus(data.matches);
   const dueRegular = regularSeasonStatus(regularResultsDue(data.matches, nowMs));
@@ -4717,7 +4730,11 @@ function PlayoffControls({
             {playoffField.eligibleTeamIds.length < 2
               ? "At least two non-withdrawn teams are needed before a bracket can be seeded."
               : `${
-                  playoffField.groups
+                  playoffField.groups && bracketSize === 2
+                    ? `Will put the group winners into the grand final (${playoffField.pairings
+                        .map((pairing) => `${playoffField.seedLabelByTeam.get(pairing.home) ?? "?"}–${playoffField.seedLabelByTeam.get(pairing.away) ?? "?"}`)
+                        .join(", ")}), from ${playoffField.eligibleTeamIds.length} eligible team(s)`
+                    : playoffField.groups
                     ? `Will seed ${playoffPlacesPhrase(playoffField)}, crosswise (${playoffField.pairings
                         .map((pairing) => `${playoffField.seedLabelByTeam.get(pairing.home) ?? "?"}–${playoffField.seedLabelByTeam.get(pairing.away) ?? "?"}`)
                         .join(", ")}), from ${playoffField.eligibleTeamIds.length} eligible team(s)`

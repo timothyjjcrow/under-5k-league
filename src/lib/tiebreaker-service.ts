@@ -6,6 +6,7 @@ import { projectPlayoffField } from "./playoff-field";
 import { playoffSetupRevision } from "./playoff-command";
 import { regularSeasonStatus } from "./schedule-status";
 import { upcomingMatchNight } from "./schedule";
+import { FORMAT_UNREADABLE_MESSAGE, parseFormatConfig } from "./season-format";
 import { parseTiebreakerStage, tiebreakerSlot, type TiebreakerGroup } from "./tiebreakers";
 import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
@@ -88,7 +89,13 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
       if (automatic) return null;
       throw new UserFacingError("Complete every regular-season result before scheduling a tiebreaker week.");
     }
-    const field = projectPlayoffField(teams, matches);
+    // A stored format this version can't read: the automatic pass (every
+    // worker run, after every import) waits quietly; an admin is told why.
+    if (parseFormatConfig(season.formatConfig).kind === "UNREADABLE") {
+      if (automatic) return null;
+      throw new UserFacingError(FORMAT_UNREADABLE_MESSAGE);
+    }
+    const field = projectPlayoffField(teams, matches, season);
     if (field.tiebreakers.error) throw new UserFacingError(field.tiebreakers.error);
     const continuation = (g: TiebreakerGroup) =>
       g.format === "BO1_SINGLE_ELIMINATION" ? !g.drawRequired :

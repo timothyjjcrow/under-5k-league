@@ -132,7 +132,9 @@ export function standingsCaption({
     bracketSize <= 0
       ? null
       : groupQualifiers && evenShare
-        ? `Top ${evenShare} of each group make the playoffs`
+        ? evenShare === 1
+          ? "The group winners make the playoffs"
+          : `Top ${evenShare} of each group make the playoffs`
         : `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`;
   if (status.completed === 0)
     return ["No results yet", places].filter(Boolean).join(" · ");

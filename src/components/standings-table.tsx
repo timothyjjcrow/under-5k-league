@@ -280,7 +280,7 @@ export function StandingsTableView({
                           aria-hidden
                           className="h-px flex-1 border-t border-dashed border-success/35"
                         />
-                        Playoff cut · {playoffCut} places
+                        Playoff cut · {playoffCut} place{playoffCut === 1 ? "" : "s"}
                         <span
                           aria-hidden
                           className="h-px flex-1 border-t border-dashed border-success/35"

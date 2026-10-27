@@ -45,11 +45,13 @@ describe("the season format is read through its resolver", () => {
   });
 
   it("sizes brackets only where the format and the field are built", () => {
+    // The Recommended spots; everything else reads the season's stored
+    // format (seasonBracketSize, formatBracketSize).
+    expect(callers(/\bplayoffBracketSize\s*\(/, ["src/lib/season-format.ts"])).toEqual([]);
     expect(
-      callers(/\bplayoffBracketSize\s*\(/, [
+      callers(/\bseasonBracketSize\s*\(/, [
         "src/lib/season-format.ts",
         "src/lib/playoff-field.ts",
-        "src/lib/league-rules.ts",
       ]),
     ).toEqual([]);
     expect(
@@ -64,5 +66,23 @@ describe("the season format is read through its resolver", () => {
     expect(callCount(outside, /\bresolveSeasonFormat\s*\(/)).toBeGreaterThanOrEqual(5);
     // Schedule generation, the fixture seeder and /rules' fallback.
     expect(callCount(outside, /\bplannedSeasonFormat\s*\(/)).toBeGreaterThanOrEqual(3);
+  });
+
+  it("stays importable from client code", () => {
+    // The season builder previews formats in the browser. A value import of
+    // Prisma (or the database) here would pull Prisma's browser stub into a
+    // public chunk with every test still green.
+    for (const path of ["src/lib/season-format.ts", "src/lib/schedule.ts"]) {
+      const file = SOURCE.find((candidate) => candidate.path === path)!;
+      expect(file, path).toBeDefined();
+      const imports = [...file.text.matchAll(/^import\s+(type\s+)?[^;]*?from\s+"([^"]+)"/gm)];
+      expect(imports.length, path).toBeGreaterThan(0);
+      for (const [, typeOnly, specifier] of imports) {
+        if (typeOnly) continue;
+        expect(specifier, `${path} imports ${specifier}`).not.toMatch(
+          /@prisma\/client|\/prisma$|\/settings$|-service$/,
+        );
+      }
+    }
   });
 });

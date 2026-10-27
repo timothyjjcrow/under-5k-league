@@ -36,7 +36,7 @@ function goldenSnapshot() {
       name: format ? formatName(format) : null,
       description: format ? describeSeasonFormat(format) : null,
       length: format ? seasonLengthPhrase(format) : null,
-      note: teamCountSeasonNote(count),
+      note: teamCountSeasonNote({ formatConfig: null }, count),
       plans: format
         ? ZONES.map((zone) => ({
             zone,

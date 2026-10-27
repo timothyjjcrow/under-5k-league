@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { projectPlayoffField as projectCurrentPlayoffField } from "./playoff-field";
 // Historical fixture generation; production continues to recognize these stored formats.
-const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, "legacy");
+const projectPlayoffField: typeof projectCurrentPlayoffField = (teams, matches) => projectCurrentPlayoffField(teams, matches, { formatConfig: null }, "legacy");
 import { computeStandings, type MatchLike } from "./standings";
 import { tiebreakerSlot, type TiebreakerGroup } from "./tiebreakers";
 
@@ -31,7 +31,7 @@ function drawnRegularSeason(ids: string[]): MatchLike[] {
 function playBo1Bracket(ids: string[], matches: MatchLike[], outcomes = [true, true, true, true, true]) {
   const played = [...matches];
   for (let i = 0; i < 5; i++) {
-    const field = projectPlayoffField(teams(ids), played);
+    const field = projectPlayoffField(teams(ids), played, { formatConfig: null });
     const group = field.tiebreakers.groups.find((g) => g.status === "needed");
     if (!group) return { field, played };
     expect(group.format).toBe("BO1_DOUBLE_ELIMINATION");
@@ -40,11 +40,11 @@ function playBo1Bracket(ids: string[], matches: MatchLike[], outcomes = [true, t
     played.push({ ...result(pairing.home, pairing.away, outcomes[i] ? 1 : 0, outcomes[i] ? 0 : 1),
       phase: "TIEBREAKER", bestOf: 1, bracketSlot: tiebreakerSlot(group, 0) });
   }
-  return { field: projectPlayoffField(teams(ids), played), played };
+  return { field: projectPlayoffField(teams(ids), played, { formatConfig: null }), played };
 }
 
 function legacyThreeGroup(ids: string[], regular: MatchLike[]): TiebreakerGroup {
-  const next = projectPlayoffField(teams(ids), regular).tiebreakers.groups[0];
+  const next = projectPlayoffField(teams(ids), regular, { formatConfig: null }).tiebreakers.groups[0];
   return { ...next, key: next.key.replace(/^TBD:/, "TB:").replace(/:1$/, ""),
     drawRequired: false, stage: undefined, format: "BO3_ROUND_ROBIN", bestOf: 3,
     pairings: ids.flatMap((home, i) => ids.slice(i + 1).map((away) => ({ home, away }))) };
@@ -53,10 +53,10 @@ function legacyThreeGroup(ids: string[], regular: MatchLike[]): TiebreakerGroup 
 describe("playoff tiebreaker weeks", () => {
   it("resolves the last playoff place against ID order, without changing any regular points", () => {
     const { ids, matches } = cutoffTie();
-    const before = projectPlayoffField(teams(ids), matches);
+    const before = projectPlayoffField(teams(ids), matches, { formatConfig: null });
     expect(before.tiebreakers.groups[0].teamIds).toEqual(["d", "e"]);
     const extra = round(before.tiebreakers.groups[0], [[1, 2]]);
-    const after = projectPlayoffField(teams(ids), [...matches, ...extra]);
+    const after = projectPlayoffField(teams(ids), [...matches, ...extra], { formatConfig: null });
     expect(after.seededTeamIds).toEqual(["a", "b", "c", "e"]);
     expect(after.tiebreakers).toMatchObject({ resolved: true, pending: false, needsMatches: false, error: null });
     expect(after.seedingDeadHeatTeamIds).toEqual([]);
@@ -66,14 +66,14 @@ describe("playoff tiebreaker weeks", () => {
 
   it("requires tiebreakers for seed order even when both teams qualify", () => {
     const matches = [result("a", "b", 1, 1)];
-    expect(projectPlayoffField(teams(["a", "b"]), matches).tiebreakers.groups).toHaveLength(1);
+    expect(projectPlayoffField(teams(["a", "b"]), matches, { formatConfig: null }).tiebreakers.groups).toHaveLength(1);
   });
 
   it("never treats incomplete rounds as a resolved seed", () => {
     const matches = [result("a", "b", 1, 1)];
-    const group = projectPlayoffField(teams(["a", "b"]), matches).tiebreakers.groups[0];
+    const group = projectPlayoffField(teams(["a", "b"]), matches, { formatConfig: null }).tiebreakers.groups[0];
     const extra = round(group).map((m) => ({ ...m, status: "LIVE", homeScore: 1 }));
-    expect(projectPlayoffField(teams(["a", "b"]), [...matches, ...extra]).tiebreakers)
+    expect(projectPlayoffField(teams(["a", "b"]), [...matches, ...extra], { formatConfig: null }).tiebreakers)
       .toMatchObject({ resolved: false, pending: true, needsMatches: false });
   });
 
@@ -82,7 +82,7 @@ describe("playoff tiebreaker weeks", () => {
     const matches = [result("a", "b", 1, 1), result("a", "c", 1, 1), result("b", "c", 1, 1)];
     const group = legacyThreeGroup(ids, matches);
     const first = round(group, [[2, 0], [0, 2], [2, 0]]);
-    const tied = projectPlayoffField(teams(ids), [...matches, ...first]);
+    const tied = projectPlayoffField(teams(ids), [...matches, ...first], { formatConfig: null });
     expect(tied.tiebreakers).toMatchObject({ resolved: false, needsMatches: true, error: null });
     const next = tied.tiebreakers.groups.find((g) => g.status === "needed")!;
     expect(next.round).toBe(2);
@@ -95,13 +95,13 @@ describe("playoff tiebreaker weeks", () => {
   it("replays only the remaining subgroup while preserving the settled seeds", () => {
     const ids = ["a", "b", "c", "d", "e"];
     const regular = drawnRegularSeason(ids);
-    const group = projectPlayoffField(teams(ids), regular).tiebreakers.groups[0];
+    const group = projectPlayoffField(teams(ids), regular, { formatConfig: null }).tiebreakers.groups[0];
     // A is unbeaten and E is winless. B beats C, C beats D, and D beats B,
     // leaving only seeds 2–4 tied after the five-team round robin.
     const first = round(group, group.pairings.map((pair) =>
       pair.home === "b" && pair.away === "d" ? [0, 2] : [2, 0],
     ));
-    const partial = projectPlayoffField(teams(ids), [...regular, ...first]);
+    const partial = projectPlayoffField(teams(ids), [...regular, ...first], { formatConfig: null });
     const needed = partial.tiebreakers.groups.filter((g) => g.status === "needed");
     expect(needed).toHaveLength(1);
     expect(needed[0]).toMatchObject({ teamIds: ["b", "c", "d"], round: 2 });
@@ -123,13 +123,13 @@ describe("playoff tiebreaker weeks", () => {
   it("finishes the playoff order when the remaining subgroup is entirely below the cut", () => {
     const ids = ["a", "b", "c", "d", "e", "f", "g"];
     const regular = drawnRegularSeason(ids);
-    const group = projectPlayoffField(teams(ids), regular).tiebreakers.groups[0];
+    const group = projectPlayoffField(teams(ids), regular, { formatConfig: null }).tiebreakers.groups[0];
     // A–D finish with six, five, four and three wins. E, F and G each lose
     // to all four qualifiers and split their own cycle with identical scores.
     const first = round(group, group.pairings.map((pair) =>
       pair.home === "e" && pair.away === "g" ? [0, 2] : [2, 0],
     ));
-    const field = projectPlayoffField(teams(ids), [...regular, ...first]);
+    const field = projectPlayoffField(teams(ids), [...regular, ...first], { formatConfig: null });
     expect(field.bracketSize).toBe(4);
     expect(field.seededTeamIds).toEqual(["a", "b", "c", "d"]);
     expect(field.tiebreakers.groups).toHaveLength(1);
@@ -145,14 +145,14 @@ describe("playoff tiebreaker weeks", () => {
     const ids = ["a", "b", "c"];
     const regular = [result("a", "b", 1, 1), result("a", "c", 1, 1), result("b", "c", 1, 1)];
     const g = legacyThreeGroup(ids, regular);
-    const field = projectPlayoffField(teams(ids), [...regular, ...round(g, [[2, 0], [1, 2], [2, 0]])]);
+    const field = projectPlayoffField(teams(ids), [...regular, ...round(g, [[2, 0], [1, 2], [2, 0]])], { formatConfig: null });
     expect(field.eligibleTeamIds).toEqual(["a", "b", "c"]);
     expect(field.tiebreakers.resolved).toBe(true);
   });
 
   it("fails closed on duplicate, missing, stale or invalid fixtures", () => {
     const { ids, matches } = cutoffTie();
-    const group = projectPlayoffField(teams(ids), matches).tiebreakers.groups[0];
+    const group = projectPlayoffField(teams(ids), matches, { formatConfig: null }).tiebreakers.groups[0];
     const extra = round(group);
     for (const bad of [
       [...extra, ...extra],
@@ -160,21 +160,21 @@ describe("playoff tiebreaker weeks", () => {
       extra.map((m) => ({ ...m, bracketSlot: null })),
       extra.map((m) => ({ ...m, homeScore: 1, awayScore: 1, winnerTeamId: null, forfeit: true })),
     ]) {
-      expect(projectPlayoffField(teams(ids), [...matches, ...bad]).tiebreakers.error).toBeTruthy();
+      expect(projectPlayoffField(teams(ids), [...matches, ...bad], { formatConfig: null }).tiebreakers.error).toBeTruthy();
     }
     const changed = matches.map((m, i) => i === 0 ? { ...m, forfeit: true } : m);
-    expect(projectPlayoffField(teams(ids), [...changed, ...extra]).tiebreakers.error).toMatch(/earlier/);
+    expect(projectPlayoffField(teams(ids), [...changed, ...extra], { formatConfig: null }).tiebreakers.error).toMatch(/earlier/);
   });
 
   it("keeps the same identity regardless of query return order", () => {
     const { ids, matches } = cutoffTie();
-    expect(projectPlayoffField(teams(ids), matches).tiebreakers.groups)
-      .toEqual(projectPlayoffField(teams(ids.reverse()), matches.reverse()).tiebreakers.groups);
+    expect(projectPlayoffField(teams(ids), matches, { formatConfig: null }).tiebreakers.groups)
+      .toEqual(projectPlayoffField(teams(ids.reverse()), matches.reverse(), { formatConfig: null }).tiebreakers.groups);
   });
 
   it("excludes withdrawn opponents from tiebreaker scheduling", () => {
     const { ids, matches } = cutoffTie();
-    const field = projectPlayoffField(teams(ids).map((t) => ({ ...t, withdrawn: t.id === "e" })), matches);
+    const field = projectPlayoffField(teams(ids).map((t) => ({ ...t, withdrawn: t.id === "e" })), matches, { formatConfig: null });
     expect(field.tiebreakers.groups).toEqual([]);
     expect(field.tiebreakers.resolved).toBe(true);
   });
@@ -202,7 +202,7 @@ describe("playoff tiebreaker weeks", () => {
   it("rejects an incorrect BO1 winner, duplicate stage, or invented future opponent", () => {
     const ids = ["a", "b", "c"];
     const regular = drawnRegularSeason(ids);
-    const group = projectPlayoffField(teams(ids), regular).tiebreakers.groups[0];
+    const group = projectPlayoffField(teams(ids), regular, { formatConfig: null }).tiebreakers.groups[0];
     const first: MatchLike = { ...result("a", "b", 1, 0), phase: "TIEBREAKER", bestOf: 1, bracketSlot: tiebreakerSlot(group, 0) };
     for (const extra of [
       [first, first],
@@ -210,7 +210,7 @@ describe("playoff tiebreaker weeks", () => {
       [{ ...first, homeScore: 2 }],
       [first, { ...first, bracketSlot: first.bracketSlot!.replace(/:1:0$/, ":2:0"), homeTeamId: "b", awayTeamId: "c" }],
     ]) {
-      expect(projectPlayoffField(teams(ids), [...regular, ...extra]).tiebreakers.error).toBeTruthy();
+      expect(projectPlayoffField(teams(ids), [...regular, ...extra], { formatConfig: null }).tiebreakers.error).toBeTruthy();
     }
   });
 });

@@ -878,14 +878,16 @@ enums, so every status column is a string whose allowed values live in
   Reads still fetch at most two rows and `singleActiveSeason` fails closed for
   pre-migration or manually corrupted data rather than silently choosing one;
   carries `draftBudget`, `budgetMmrWeight`, `maxMmr` (soft), series lengths,
-  `firstMatchNight`, `draftAt`, `dotaLeagueId`, `championTeamId`, and the
-  one-way `fantasyLockedAt` competitive-information marker.
+  `firstMatchNight`, `draftAt`, `dotaLeagueId`, `championTeamId`, the
+  `formatConfig` an admin chose (null: the Recommended format; read through
+  `parseFormatConfig`), and the one-way `fantasyLockedAt`
+  competitive-information marker.
 - `Registration` — `@@unique([seasonId, userId])`; type PLAYER/STANDIN,
   status ACTIVE/WITHDRAWN/REMOVED, MMR + questionnaire.
 - `Team` / `TeamMember` — rosters; `TeamMember @@unique([seasonId, userId])`
   stops double-drafting; `price > 0` is the exact auction-vs-free-agent
   discriminator `undoLastSale` relies on. `Team.groupKey` ("A"/"B") is the
-  team's group in a season of ten or more teams, null for one table.
+  team's group in a season that plays groups, null for one table.
 - `Draft` — one row per season: the whole auction state (status, rotation,
   live lot, both clocks). Every transition is a guarded `updateMany` claim on
   this row.

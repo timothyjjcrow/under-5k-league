@@ -30,7 +30,7 @@ export async function StakesBanner({
     awayTeamId: string;
     homeTeam: { name: string; logoUrl: string | null };
     awayTeam: { name: string; logoUrl: string | null };
-    season: { status: string };
+    season: { status: string; formatConfig: string | null };
   };
   // Passed down from MatchPreview, which already loaded the season's matches.
   seasonMatches: (StakesMatchRow & {
@@ -49,7 +49,7 @@ export async function StakesBanner({
     where: { seasonId: match.seasonId },
     select: { id: true, name: true, withdrawn: true, groupKey: true },
   });
-  const playoffField = projectPlayoffField(teams, seasonMatches);
+  const playoffField = projectPlayoffField(teams, seasonMatches, match.season);
   const report = seasonScenarioReport(
     playoffField.eligibleStandings,
     seasonMatches,

@@ -240,7 +240,7 @@ export default async function SeasonArchivePage({
 
   const teamName = new Map(season.teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(season.teams.map((t) => [t.id, t.logoUrl]));
-  const archiveField = projectPlayoffField(season.teams, season.matches);
+  const archiveField = projectPlayoffField(season.teams, season.matches, season);
   const standings = archiveField.standings;
   // One table (and grid) per group in a group-stage season.
   const tableSections = standingsSections(archiveField);

@@ -241,7 +241,7 @@ export default async function TeamPage({
   }
   const teamHeroes = summarizePlayerGames(teamLines).topHeroes;
 
-  const playoffField = projectPlayoffField(allTeams, allMatches);
+  const playoffField = projectPlayoffField(allTeams, allMatches, team.season);
   const playoffRounds = playoffTotalRounds(allMatches);
   const standings = playoffField.standings;
   // Its place in its own table and that table's size: its group's in a group
