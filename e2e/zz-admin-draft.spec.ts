@@ -1,5 +1,10 @@
 import { test, expect } from "@playwright/test";
-import { expectOneRoomPollAtATime, recordRoomPolls } from "../e2e-mid/helpers";
+import {
+  expectNoHorizontalOverflow,
+  expectOneRoomPollAtATime,
+  recordRoomPolls,
+  trackPageErrors,
+} from "../e2e-mid/helpers";
 
 // Runs last (zz-*) because it transitions the seeded season into DRAFT, which
 // would otherwise break the smoke tests that assume the SIGNUPS phase.
@@ -10,12 +15,15 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
 }) => {
   test.setTimeout(120_000);
   page.on("dialog", (d) => d.accept()); // accept the confirm() prompts
+  // Every page this spec opens must finish with zero uncaught client errors.
+  const assertAdminErrors = trackPageErrors(page);
 
   // Two KNOWN captains-to-be register while signups are open — so the live
   // auction below can be driven from their own browser sessions.
   const capOne = await browser.newContext();
   await recordRoomPolls(capOne, "/api/draft/tick");
   const capOnePage = await capOne.newPage();
+  const assertCapOneErrors = trackPageErrors(capOnePage);
   await capOnePage.goto(
     "/api/auth/dev?name=Cap+One&steamId=76561190000003001&redirect=/me",
   );
@@ -28,6 +36,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   const capTwo = await browser.newContext();
   await recordRoomPolls(capTwo, "/api/draft/tick");
   const capTwoPage = await capTwo.newPage();
+  const assertCapTwoErrors = trackPageErrors(capTwoPage);
   await capTwoPage.goto(
     "/api/auth/dev?name=Cap+Two&steamId=76561190000003002&redirect=/me",
   );
@@ -96,6 +105,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
 
   const playerContext = await browser.newContext();
   const playerPage = await playerContext.newPage();
+  const assertWatcherErrors = trackPageErrors(playerPage);
   await playerPage.goto(
     "/api/auth/dev?name=Draft+Watcher&steamId=76561190000000077&redirect=/draft",
   );
@@ -176,6 +186,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
       .getByRole("banner")
       .getByRole("link", { name: /^League status: .+ — Draft live$/ }),
   ).toHaveAttribute("href", "/draft");
+  assertWatcherErrors();
   await playerContext.close();
 
   await expect(page).toHaveURL(/\/draft/);
@@ -226,14 +237,73 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     capOnePage.getByTitle("Back to the auction clock"),
   ).toBeVisible();
   await capOnePage.evaluate(() => window.scrollTo(0, 0));
-  await capOnePage
-    .locator("#player-pool")
-    .getByRole("button", { name: /Topson/ })
-    .click();
-  await capOnePage
-    .getByRole("button", { name: "Nominate", exact: true })
-    .click();
+  // The scouting map comes with the page render, so this tab, parked before
+  // Start, gets it from the room's refresh at Start. Once it lands the pool
+  // says what a tap does for a captain on the clock.
+  const capOnePool = capOnePage.locator("#player-pool");
+  await expect(
+    capOnePool.getByText(
+      "Tap a player to line them up and see their scouting.",
+    ),
+  ).toBeVisible({ timeout: 15_000 });
+  const topsonRow = capOnePool.getByRole("button", { name: /Topson/ });
+  await topsonRow.click();
+  // Lining Topson up opens his scouting under his row (seeded by
+  // e2e/seed-draft-scouting.ts), and the row is still the one pick button.
+  const topsonPoolCard = capOnePool.getByRole("group", {
+    name: "Scouting: Topson",
+  });
+  await expect(topsonPoolCard).toBeVisible({ timeout: 15_000 });
+  await expect(topsonPoolCard).toContainText("Recent pubs");
+  await expect(topsonPoolCard).toContainText(/Their last \d+ public games/);
+  await expect(topsonRow).toHaveCount(1);
+  await expect(topsonRow).toHaveAttribute("aria-pressed", "true");
+  await expect(topsonRow).toHaveAttribute(
+    "aria-controls",
+    (await topsonPoolCard.getAttribute("id"))!,
+  );
+  const nominate = capOnePage.getByRole("button", {
+    name: "Nominate",
+    exact: true,
+  });
+  await expect(nominate).toHaveCount(1);
+  await nominate.click();
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
+  // On the block, Topson's scouting moves from the pool to the lot card:
+  // the pool's card closes, and the lot's shows his pub record (from the
+  // page's map) and his about text (from the tick).
+  await expect(topsonPoolCard).toHaveCount(0);
+  const topsonLotCard = capOnePage.getByRole("group", {
+    name: "Scouting: Topson",
+  });
+  await expect(topsonLotCard).toHaveCount(1);
+  await expect(topsonLotCard).toBeVisible();
+  await expect(topsonLotCard).toContainText(/Pubs \d+% in last \d+/);
+  await expect(topsonLotCard).toContainText("About this player:");
+
+  // With a lot live the admin can't line anyone up, so a pool row opens that
+  // player's scouting instead: a disclosure, one tap open, the next shut.
+  const adminPool = page.locator("#player-pool");
+  await expect(
+    adminPool.getByText("Tap a player to see their scouting."),
+  ).toBeVisible({ timeout: 15_000 });
+  const dendiRow = adminPool.getByRole("button", { name: /Dendi/ });
+  await expect(dendiRow).toHaveCount(1);
+  await expect(dendiRow).toHaveAttribute("aria-expanded", "false");
+  await expect(dendiRow).not.toHaveAttribute("aria-pressed", /.*/);
+  const dendiCard = adminPool.getByRole("group", { name: "Scouting: Dendi" });
+  await expect(dendiCard).toHaveCount(0);
+  await dendiRow.click();
+  await expect(dendiRow).toHaveAttribute("aria-expanded", "true");
+  await expect(dendiCard).toBeVisible();
+  await expect(dendiCard).toContainText("Recent pubs");
+  await expect(dendiRow).toHaveAttribute(
+    "aria-controls",
+    (await dendiCard.getAttribute("id"))!,
+  );
+  await dendiRow.click();
+  await expect(dendiRow).toHaveAttribute("aria-expanded", "false");
+  await expect(dendiCard).toHaveCount(0);
 
   // Cap Two sees the lot on a phone-sized room. The bid controls fit without
   // horizontal overflow, and an exact amount is available alongside quick
@@ -275,6 +345,24 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capOnePage.getByText("You hold the high bid.")).toBeVisible();
   await expect(capOnePage.getByText("Bid trail:")).toBeVisible();
 
+  // Cap Two, next to nominate, lines Dendi up on the phone while Topson's lot
+  // runs: his card opens under his row, and the room still fits 375px.
+  const capTwoPool = capTwoPage.locator("#player-pool");
+  await capTwoPool.getByRole("button", { name: /Dendi/ }).click();
+  const capTwoDendiCard = capTwoPool.getByRole("group", {
+    name: "Scouting: Dendi",
+  });
+  await expect(capTwoDendiCard).toBeVisible({ timeout: 15_000 });
+  await expect(capTwoDendiCard).toContainText(/Their last \d+ public games/);
+  // Topson is still on the block, his lot card on this page too.
+  await expect(
+    capTwoPage.getByRole("group", { name: "Scouting: Topson" }),
+  ).toBeVisible();
+  await expectNoHorizontalOverflow(
+    capTwoPage,
+    "Draft room at 375px with a lot live and a pool card open",
+  );
+
   // Since each captain parked on /draft, through the start, the nomination
   // and three bids (each re-runs the room's poll effect): one tick in flight
   // at a time. Of two at once the server may read the later one first, and
@@ -282,6 +370,8 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expectOneRoomPollAtATime(capOnePage, "Cap One");
   await expectOneRoomPollAtATime(capTwoPage, "Cap Two");
 
+  assertCapOneErrors();
+  assertCapTwoErrors();
   await capOne.close();
   await capTwo.close();
 
@@ -314,4 +404,5 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
   ).toHaveCount(0);
+  assertAdminErrors();
 });

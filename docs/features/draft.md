@@ -384,7 +384,8 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
   provenance, and the last 8 sales while the auction runs (`readDraftSales`
   with `take`, never the accepted-bids log; the finished room's recap reads
   them all). It used to read every player's free text and every sold lot's
-  bid log on every poll.
+  bid log on every poll. Player scouting stays out of it ("Scouting comes
+  from the page render, never the poll", below).
   `room-source-guards.test.ts` fails if `DRAFT_ROOM.POLL_*` rates reappear in
   `draft-room.tsx`. A 429 is back-pressure, not a failure (see
   `docs/features/admin-and-operations.md`).
@@ -479,6 +480,65 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
   (its changing length moved the buttons). Quick-bid buttons show the
   absolute amount; after an outbid, +$1 becomes "Re-bid". The lot shows its
   last 8 `lotBids`, a "next: team" preview and a paused chip.
+- **Scouting comes from the page render, never the poll.** Tim asked on
+  2026-10-24 for "a lot of information" about a player to show when they
+  are nominated, for each player up for draft or on the block, so captains
+  can see who they are drafting ([DECISIONS](../DECISIONS.md)). `/draft` builds one map for the season's ACTIVE
+  PLAYER signups minus captains (`loadDraftScoutInfo`,
+  `draft-scout-service.ts`): last league season, inhouse record, the pub
+  snapshot, favorite heroes and the about text clipped to 300 characters,
+  the facts `/players` shows any visitor, so one copy serves every viewer.
+  It holds no contact or account id. A 60s per-season memo, so the Start
+  refresh of a full room builds it once per process; loaded only while the
+  auction is IN_PROGRESS or PAUSED (`draftScoutWanted`), so a tab parked in
+  the waiting room gets it from the `router.refresh()` at Start. Drafted
+  players stay in: Undo puts a sold player back without a status move. A
+  failed read logs a fixed code and returns null, and the room then shows
+  what it showed before. The full map is about 106 KB for 60 players
+  (`draft-scout.test.ts` caps it). The tick carries only one new field,
+  `nominatedPlayer.showContact` (`canViewLeagueContact`), so the lot card
+  can say "no Discord" without a blank handle reading as missing.
+  - What a card shows is `draftCardView`'s call (`src/lib/draft-scout.ts`):
+    the record line (`lastSeasonToken`, `inhouseToken`, `pubToken`, "last
+    played" once quiet), the profile's pub tiles (`scoutingTiles`, through
+    the shared `ScoutTileGrid`), "Recent pubs" beside "Favorite heroes"
+    (never merged), the about text, "Nothing on file yet…" for an entry with
+    no record, and every finding in full under "More scouting", the only way
+    to read a tile's finding on a phone. MMR, medal and roles come from the
+    live tick row, the nominee's favorites and about text from the tick
+    too; the map's copy is as old as the tab's render plus 60s.
+  - **On the block** the card (`DraftPlayerCard`, presentational) sits under
+    the bid controls, outside the action zone, then the Discord, Profile and
+    Dotabuff links, then the bid trail last, since it grows through a lot.
+    Keyed by the nominee, so a new lot opens with "More" shut.
+  - **In the pool** one card opens under its row at a time. A captain lining
+    up a pick sees the lined-up player's (`poolPanelOpenId`); everyone else
+    taps a row (`aria-expanded`, a second tap closes it). Their card closes
+    when that player goes on the block, and every opened card closes when
+    the viewer starts or stops lining up picks, or the one opened before an
+    admin's or captain's turn would pop back open after it
+    (`inspectedAfterChange`). A watcher's open row is separate state from
+    `selected`, so it never feeds NominateBar. Rows stay inert until the map
+    has their entry. A tapped row is scrolled back into view when a card
+    above it closes; its 8rem scroll margin (clearing the sticky header and
+    clock bar) applies only where the page scrolls, never inside the desktop
+    pool's own scroll box, where it moved a visible row. NominateBar's
+    lined-up chip shows the medal and MMR.
+  - The tiles are the profile's (`ScoutTileGrid compact`): an odd last tile
+    spans the row only while they sit two across, below 26.5rem for the
+    compact tiles. The caption names the window whenever the card shows
+    anything read from it, recent heroes included.
+  - `draft-player-card.test.ts` pins where both cards render, that the card
+    has no state, request, bell, contact or link, that `/draft` loads the
+    map behind `draftScoutWanted`, and that `draft-service.ts` never reads
+    `pubStats`. `draft-scout.itest.ts` covers the loader.
+    `e2e/zz-admin-draft.spec.ts` opens the cards through the real room: the
+    lined-up pick's card arriving with the Start refresh, the lot card after
+    Nominate, a non-picker's toggle, and no horizontal overflow at 375px;
+    `zz2-draft-mobile.spec.ts` opens one on a phone. Both assert zero client
+    errors. Their pub snapshots come from `e2e/seed-draft-scouting.ts`,
+    which `e2e/global-setup.ts` runs after the seed (a change under
+    `prisma/` would force a database release).
 - **The Available list shares `filterAndSortPlayers` with `/players`**
   (`player-pool.ts`: search, role chips, MMR/rank/name sort). It must never
   learn about standins, which the room never lists; `/players` narrows by

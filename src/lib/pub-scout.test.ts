@@ -15,6 +15,8 @@ import {
   roleClaimDiffers,
   scoutingFacts,
   scoutingRowParts,
+  pubScoutCaption,
+  scoutingSentences,
   scoutingTiles,
   scoutingTitle,
   summarizePubMatches,
@@ -404,6 +406,28 @@ describe("the pool row", () => {
     const title = scoutingTitle(scout(), ctx());
     expect(title.split("\n")[0]).toBe("Their last 100 public games");
     expect(title).toContain("Role: Support in 100 of 100 games");
+  });
+
+  it("the sentences are the hover's lines, one per fact", () => {
+    const c = ctx({ roles: "1", signupMmr: 3000, league: "eu" });
+    const s = scout({ ranked: 40, unranked: 10, turbo: 50, abandons: 2 });
+    const sentences = scoutingSentences(s, c);
+    expect(sentences).toEqual(
+      scoutingFacts(s, c).map(
+        (f) => `${f.label}: ${f.lead}${f.detail ? ` (${f.detail})` : ""}`,
+      ),
+    );
+    expect(scoutingTitle(s, c).split("\n")).toEqual([
+      "Their last 100 public games",
+      ...sentences,
+    ]);
+  });
+
+  it("the caption names the window, and the snapshot age when known", () => {
+    expect(pubScoutCaption(100, "3d ago")).toBe(
+      "Their last 100 public games · checked 3d ago",
+    );
+    expect(pubScoutCaption(37, null)).toBe("Their last 37 public games");
   });
 });
 

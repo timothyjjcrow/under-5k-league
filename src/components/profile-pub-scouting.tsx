@@ -9,6 +9,7 @@ import {
 import { heroById } from "@/lib/heroes";
 import {
   pubHeroRows,
+  pubScoutCaption,
   scoutingTiles,
   type PubRoleAverages,
   type PubScout,
@@ -68,114 +69,22 @@ export function ProfilePubScouting({
   checkedLabel: string | null;
 }) {
   const tiles = scoutingTiles(scout, context);
-  const heroes = pubHeroRows(scout).slice(0, STRIP_HEROES);
-  const roleLines = [
-    { label: "As a core", averages: scout.coreAverages },
-    { label: "As a support", averages: scout.supportAverages },
-  ].filter(
-    (r): r is { label: string; averages: PubRoleAverages } =>
-      r.averages != null && r.averages.games >= ROLE_LINE_MIN_GAMES,
-  );
   return (
     <Card id="player-scouting" className="min-w-0 scroll-mt-40">
       <CardHeader
         title="Pub scouting"
-        subtitle={`Their last ${scout.games} public games${
-          checkedLabel ? ` · checked ${checkedLabel}` : ""
-        }`}
+        subtitle={pubScoutCaption(scout.games, checkedLabel)}
       />
       <CardBody className="space-y-3">
-        {tiles.length > 0 ? (
-          // auto-fit, never grid-cols-1: two across in the rail, one row on
-          // a wide page, however many tiles have enough games.
-          <ul className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(9.5rem,100%),1fr))]">
-            {tiles.map((tile) => (
-              <ScoutTileView key={tile.key} tile={tile} />
-            ))}
-          </ul>
-        ) : null}
-
-        {heroes.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-            <span className="text-xs text-muted">
-              Recent heroes{" "}
-              <span className="whitespace-nowrap">
-                ({scout.heroCount} played)
-              </span>
-            </span>
-            <ul className="flex flex-wrap gap-x-3 gap-y-2">
-              {heroes.map((h) => {
-                const hero = heroById(h.heroId);
-                const name = hero?.name ?? `Hero ${h.heroId}`;
-                const winPct = Math.round((h.wins / h.games) * 100);
-                const summary = `${name}: ${h.games} games, ${h.wins}–${h.games - h.wins}, ${h.kda} KDA`;
-                return (
-                  <li
-                    key={h.heroId}
-                    className="flex items-center gap-1.5"
-                    title={summary}
-                  >
-                    {hero ? (
-                      <HeroIcon hero={hero} size={24} title={summary} />
-                    ) : null}
-                    <span className="sr-only">{summary}</span>
-                    <span
-                      aria-hidden
-                      className="text-xs leading-tight tabular-nums text-muted"
-                    >
-                      <span className="font-semibold text-fg">{h.games}g</span>{" "}
-                      <span
-                        className={cn(
-                          h.games >= 3 && winPct >= 60 && "text-success",
-                          h.games >= 3 && winPct < 40 && "text-danger-soft",
-                        )}
-                      >
-                        {winPct}%
-                      </span>
-                    </span>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ) : null}
-
+        <ScoutTileGrid tiles={tiles} />
+        <PubRecentHeroes scout={scout} />
         <details className="group text-xs text-muted">
           <summary className="cursor-pointer select-none py-1 hover:text-fg">
             More: averages by role, and how this is read
           </summary>
           <div className="mt-2 space-y-2">
-            {roleLines.length > 0 ? (
-              <ul className="space-y-1">
-                {roleLines.map(({ label, averages }) => (
-                  <li key={label}>
-                    <span className="font-medium text-fg">{label}</span> (
-                    {averages.games} games):{" "}
-                    <span className="whitespace-nowrap tabular-nums">
-                      {averages.lastHitsPerMin} last hits a minute
-                    </span>
-                    {" · "}
-                    <span className="whitespace-nowrap tabular-nums">
-                      {averages.gpm} GPM
-                    </span>
-                    {" · "}
-                    <span className="whitespace-nowrap">
-                      <KDA
-                        kills={averages.kills}
-                        deaths={averages.deaths}
-                        assists={averages.assists}
-                      />
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <p className="leading-relaxed">
-              Core at 3.5+ last hits a minute, support under 2.5, in ranked and
-              unranked games of 10+ minutes; positions come from the games
-              OpenDota analysed. &ldquo;Games at&rdquo; is the average medal of
-              everyone in their games. Hover a tile for the full finding.
-            </p>
+            <PubRoleAverageLines scout={scout} />
+            <PubScoutingMethod />
           </div>
         </details>
       </CardBody>
@@ -183,14 +92,158 @@ export function ProfilePubScouting({
   );
 }
 
-function ScoutTileView({ tile }: { tile: ScoutTile }) {
+/**
+ * The report's tiles, one finding each, tinted when worth a second look.
+ * Auto-fit, never grid-cols-1: two across in the rail, one row on a wide
+ * page, however many tiles have enough games. `compact` packs narrower
+ * tiles for the draft room. Wherever the tiles sit two across (below 28rem,
+ * or 26.5rem for compact ones, where a third column fits) an odd last tile
+ * takes the whole row, so give the grid an `@container` ancestor.
+ */
+export function ScoutTileGrid({
+  tiles,
+  compact = false,
+}: {
+  tiles: ScoutTile[];
+  compact?: boolean;
+}) {
+  if (tiles.length === 0) return null;
+  return (
+    <ul
+      className={
+        compact
+          ? "grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(8.5rem,100%),1fr))]"
+          : "grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(9.5rem,100%),1fr))]"
+      }
+    >
+      {tiles.map((tile) => (
+        <ScoutTileView key={tile.key} tile={tile} compact={compact} />
+      ))}
+    </ul>
+  );
+}
+
+/** Their recent heroes in one strip: games and win rate under each icon,
+ *  the KDA in the hover and for screen readers. */
+export function PubRecentHeroes({
+  scout,
+  label = "Recent heroes",
+  limit = STRIP_HEROES,
+}: {
+  scout: PubScout;
+  label?: string;
+  limit?: number;
+}) {
+  const heroes = pubHeroRows(scout).slice(0, limit);
+  if (heroes.length === 0) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      <span className="text-xs text-muted">
+        {label}{" "}
+        <span className="whitespace-nowrap">({scout.heroCount} played)</span>
+      </span>
+      <ul className="flex flex-wrap gap-x-3 gap-y-2">
+        {heroes.map((h) => {
+          const hero = heroById(h.heroId);
+          const name = hero?.name ?? `Hero ${h.heroId}`;
+          const winPct = Math.round((h.wins / h.games) * 100);
+          const summary = `${name}: ${h.games} games, ${h.wins}–${h.games - h.wins}, ${h.kda} KDA`;
+          return (
+            <li
+              key={h.heroId}
+              className="flex items-center gap-1.5"
+              title={summary}
+            >
+              {hero ? <HeroIcon hero={hero} size={24} title={summary} /> : null}
+              <span className="sr-only">{summary}</span>
+              <span
+                aria-hidden
+                className="text-xs leading-tight tabular-nums text-muted"
+              >
+                <span className="font-semibold text-fg">{h.games}g</span>{" "}
+                <span
+                  className={cn(
+                    h.games >= 3 && winPct >= 60 && "text-success",
+                    h.games >= 3 && winPct < 40 && "text-danger-soft",
+                  )}
+                >
+                  {winPct}%
+                </span>
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+/** Their averages as a core and as a support, once a role has the games. */
+export function PubRoleAverageLines({ scout }: { scout: PubScout }) {
+  const roleLines = [
+    { label: "As a core", averages: scout.coreAverages },
+    { label: "As a support", averages: scout.supportAverages },
+  ].filter(
+    (r): r is { label: string; averages: PubRoleAverages } =>
+      r.averages != null && r.averages.games >= ROLE_LINE_MIN_GAMES,
+  );
+  if (roleLines.length === 0) return null;
+  return (
+    <ul className="space-y-1">
+      {roleLines.map(({ label, averages }) => (
+        <li key={label}>
+          <span className="font-medium text-fg">{label}</span> (
+          {averages.games} games):{" "}
+          <span className="whitespace-nowrap tabular-nums">
+            {averages.lastHitsPerMin} last hits a minute
+          </span>
+          {" · "}
+          <span className="whitespace-nowrap tabular-nums">
+            {averages.gpm} GPM
+          </span>
+          {" · "}
+          <span className="whitespace-nowrap">
+            <KDA
+              kills={averages.kills}
+              deaths={averages.deaths}
+              assists={averages.assists}
+            />
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+/** How the report is read, in one paragraph. */
+export function PubScoutingMethod() {
+  return (
+    <p className="leading-relaxed">
+      Core at 3.5+ last hits a minute, support under 2.5, in ranked and
+      unranked games of 10+ minutes; positions come from the games OpenDota
+      analysed. &ldquo;Games at&rdquo; is the average medal of everyone in
+      their games. Hover a tile for the full finding.
+    </p>
+  );
+}
+
+function ScoutTileView({
+  tile,
+  compact = false,
+}: {
+  tile: ScoutTile;
+  compact?: boolean;
+}) {
   const tone = TONE[tile.tone];
   return (
     <li
       className={cn(
         // In a narrow column (the rail, a phone) the tiles sit two across,
         // so an odd last tile takes the whole row instead of leaving a hole.
-        "min-w-0 rounded-lg border px-3 py-2 @max-md:odd:last:col-span-full",
+        // Compact tiles fit three across from 26.5rem (3 x 8.5rem + gaps).
+        compact
+          ? "min-w-0 rounded-lg border px-3 py-2 @max-[26.5rem]:odd:last:col-span-full"
+          : "min-w-0 rounded-lg border px-3 py-2 @max-md:odd:last:col-span-full",
         tone.tile,
       )}
       title={tile.title}

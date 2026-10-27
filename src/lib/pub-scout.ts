@@ -1004,14 +1004,32 @@ export function scoutingRowParts(
   return parts;
 }
 
+/** Every fact as a sentence: "Role: Core in 79 of 92 games (…)". The row's
+ *  hover and the draft room's "More scouting" list, where a phone with no
+ *  hover reads a tile's full finding. */
+export function scoutingSentences(scout: PubScout, ctx: ScoutContext): string[] {
+  return scoutingFacts(scout, ctx).map(
+    (f) => `${f.label}: ${f.lead}${f.detail ? ` (${f.detail})` : ""}`,
+  );
+}
+
 /** The row's hover: every fact as a sentence. */
 export function scoutingTitle(scout: PubScout, ctx: ScoutContext): string {
   return [
     `Their last ${scout.games} public games`,
-    ...scoutingFacts(scout, ctx).map(
-      (f) => `${f.label}: ${f.lead}${f.detail ? ` (${f.detail})` : ""}`,
-    ),
+    ...scoutingSentences(scout, ctx),
   ].join("\n");
+}
+
+/** What the tiles rest on, and when it was read: "Their last 100 public
+ *  games · checked 3d ago" (the profile card's subtitle). */
+export function pubScoutCaption(
+  games: number,
+  checkedLabel: string | null,
+): string {
+  return `Their last ${games} public games${
+    checkedLabel ? ` · checked ${checkedLabel}` : ""
+  }`;
 }
 
 // --- The report's tiles --------------------------------------------------------

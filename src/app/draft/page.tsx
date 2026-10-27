@@ -16,6 +16,8 @@ import {
   loadStartDraftPreflight,
 } from "@/lib/draft-room-admin";
 import { DraftRoom } from "@/components/draft-room";
+import { draftScoutWanted } from "@/lib/draft-scout";
+import { loadDraftScoutInfo } from "@/lib/draft-scout-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
   StartDraftControl,
@@ -85,14 +87,22 @@ export default async function DraftPage() {
   // the auction is finished, the room offers them the next step instead.
   const user = await getSessionUser();
   const isAdmin = user?.role === "ADMIN";
-  const [preflight, regularSeasonStep, renderedDraftStatus] = await Promise.all([
-    isAdmin ? loadStartDraftPreflight(season) : null,
-    isAdmin ? loadRegularSeasonStep(season) : null,
-    // What the header chip in this render was built from (request-cached:
-    // the layout's own read in the Draft phase). The room refreshes the
-    // render when its poll shows another phase.
-    getSeasonDraftStatus(season.id),
-  ]);
+  const [preflight, regularSeasonStep, renderedDraftStatus, scout] =
+    await Promise.all([
+      isAdmin ? loadStartDraftPreflight(season) : null,
+      isAdmin ? loadRegularSeasonStep(season) : null,
+      // What the header chip in this render was built from (request-cached:
+      // the layout's own read in the Draft phase). The room refreshes the
+      // render when its poll shows another phase.
+      getSeasonDraftStatus(season.id),
+      // Every pool player's scouting, for the lot card and the pool's cards,
+      // only while the auction runs: the room's refresh at Start brings it to
+      // a tab parked in the waiting room. A per-season memo, so a room full
+      // of tabs refreshing at once costs one build (draft-scout-service.ts).
+      getSeasonDraftStatus(season.id).then((status) =>
+        draftScoutWanted(status) ? loadDraftScoutInfo(season) : null,
+      ),
+    ]);
   const adminStart = preflight
     ? {
         blocker: preflight.blocker,
@@ -190,6 +200,7 @@ export default async function DraftPage() {
           seasonStatus: season.status,
           draftStatus: renderedDraftStatus ?? DRAFT_STATUS.NOT_STARTED,
         }}
+        scout={scout}
       />
     </div>
   );

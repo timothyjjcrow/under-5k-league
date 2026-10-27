@@ -3,7 +3,8 @@ import { E2E_DB_URL } from "../playwright.config";
 import { expireFixtureCache } from "./fixture-cache";
 
 // Reset the DEDICATED e2e database (prisma/e2e.db) to a known seeded state
-// before the run: create/sync the schema, then seed. dev.db is never touched
+// before the run: create/sync the schema, seed, then stage the draft room's
+// pub scouting (seed-draft-scouting.ts). dev.db is never touched
 // — the explicit DATABASE_URL wins over .env for both Prisma and Next.
 export default async function globalSetup() {
   const env = { ...process.env, DATABASE_URL: E2E_DB_URL };
@@ -21,5 +22,8 @@ export default async function globalSetup() {
     env,
   });
   execSync("npm run db:seed", { stdio: "inherit", env });
+  // Pub scouting for two signups the draft specs open cards on (the seed
+  // has none, and prisma/ changes force a database release).
+  execSync("npx tsx e2e/seed-draft-scouting.ts", { stdio: "inherit", env });
   await expireFixtureCache("http://localhost:3210", "signup");
 }

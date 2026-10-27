@@ -13,7 +13,6 @@ import Link from "@/components/app-link";
 import {
   Avatar,
   Badge,
-  HeroList,
   PlayerLink,
   RankBadge,
   RoleBadges,
@@ -26,6 +25,7 @@ import { aboutText } from "@/lib/about-you";
 import { pushToast } from "@/components/toaster";
 import { Countdown } from "@/components/countdown";
 import { DiscordTag } from "@/components/discord-tag";
+import { DraftPlayerCard } from "@/components/draft-player-card";
 import {
   armAudioUnlock,
   audioReady,
@@ -113,7 +113,18 @@ import {
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
-import { filterAndSortPlayers, type PoolSort } from "@/lib/player-pool";
+import {
+  filterAndSortPlayers,
+  NO_DISCORD_TITLE,
+  type PoolSort,
+} from "@/lib/player-pool";
+import {
+  inspectedAfterChange,
+  poolPanelOpenId,
+  poolTapHint,
+  toggleInspected,
+  type DraftScoutInfo,
+} from "@/lib/draft-scout";
 import type { DraftState } from "@/lib/draft-service";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { DraftRecapCard } from "@/components/draft-recap-card";
@@ -313,6 +324,7 @@ export function DraftRoom({
   adminStart,
   adminFinish,
   renderedPhase,
+  scout,
 }: {
   pollMs?: number;
   seasonId: string;
@@ -339,6 +351,13 @@ export function DraftRoom({
    * that render once when its poll shows either moved (draftRoomNeedsRefresh).
    */
   renderedPhase?: DraftRoomPhase;
+  /**
+   * Every pool player's scouting (draft-scout-service.ts), built by the
+   * page render while the auction runs, never the poll. Undefined or null
+   * (the waiting room, a tab rendered before Start until its refresh lands,
+   * a failed read) shows the lot card without it and inert pool rows.
+   */
+  scout?: DraftScoutInfo | null;
 }) {
   const [state, setState] = useState<DraftState | null>(null);
   const { disconnected, ok: pollOk, fail: pollFail } = usePollHealth();
@@ -2193,6 +2212,56 @@ export function DraftRoom({
               lotStale && "opacity-50",
             )}
           >
+            {/* Keyed by the player, so a new lot starts with "More" shut.
+                MMR, medal, roles, favorites and the about text come from the
+                tick; the league and pub record from the page's scouting map
+                (absent until the Start refresh lands, or if it failed). */}
+            <DraftPlayerCard
+              key={state.nominatedPlayer.userId}
+              variant="lot"
+              name={state.nominatedPlayer.name}
+              player={state.nominatedPlayer}
+              scout={scout?.[state.nominatedPlayer.userId]}
+              live={{
+                favoriteHeroes: state.nominatedPlayer.favoriteHeroes,
+                about: nominatedAbout,
+              }}
+              nowMs={state.now}
+            />
+            <div className="flex flex-wrap items-center gap-2 text-muted">
+              <DiscordTag
+                name={state.nominatedPlayer.discordName}
+                verified={state.nominatedPlayer.discordVerified}
+              />
+              {/* Only to a viewer allowed the contact: a hidden handle is
+                  never presented as a missing one. */}
+              {state.nominatedPlayer.showContact &&
+              !state.nominatedPlayer.discordName ? (
+                <span title={NO_DISCORD_TITLE}>no Discord</span>
+              ) : null}
+              {/* Scouting links — open in a new tab so a captain can't
+                  navigate away mid-auction. */}
+              <Link
+                href={`/players/${state.nominatedPlayer.userId}`}
+                target="_blank"
+                rel="noreferrer"
+                className={textLink()}
+              >
+                Profile ↗
+              </Link>
+              {state.nominatedPlayer.accountId ? (
+                <a
+                  href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={textLink()}
+                >
+                  Dotabuff ↗
+                </a>
+              ) : null}
+            </div>
+            {/* Last in the slot: the trail grows through a lot, and here it
+                moves nothing a captain is reading. */}
             {state.lotBids.length > 1 ? (
               // The lot's audit trail (newest first) — kills "who bid
               // what?" disputes without leaving the card.
@@ -2217,48 +2286,6 @@ export function DraftRoom({
                     </span>
                   </span>
                 ))}
-              </div>
-            ) : null}
-            <div className="flex flex-wrap items-center gap-2 text-muted">
-              <DiscordTag
-                name={state.nominatedPlayer.discordName}
-                verified={state.nominatedPlayer.discordVerified}
-              />
-              {/* Scouting links — open in a new tab so a captain can't
-                  navigate away mid-auction. */}
-              <Link
-                href={`/players/${state.nominatedPlayer.userId}`}
-                target="_blank"
-                className={textLink()}
-              >
-                Profile ↗
-              </Link>
-              {state.nominatedPlayer.accountId ? (
-                <a
-                  href={`https://www.dotabuff.com/players/${state.nominatedPlayer.accountId}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className={textLink()}
-                >
-                  Dotabuff ↗
-                </a>
-              ) : null}
-            </div>
-            {state.nominatedPlayer.favoriteHeroes ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="text-muted">Favorite heroes:</span>
-                <HeroList
-                  value={state.nominatedPlayer.favoriteHeroes}
-                  size={30}
-                />
-              </div>
-            ) : null}
-            {/* Clamped: this is free text up to 2000 chars. The full
-                text is a click away on the player's profile. */}
-            {nominatedAbout ? (
-              <div className="line-clamp-3 [overflow-wrap:anywhere]">
-                <span className="text-muted">About this player:</span>{" "}
-                {nominatedAbout}
               </div>
             ) : null}
           </div>
@@ -2293,6 +2320,7 @@ export function DraftRoom({
           >
             <AvailableList
               state={state}
+              scout={scout ?? null}
               role={poolRole}
               onRoleChange={setPoolRole}
               canPick={canLineUp}
@@ -2445,8 +2473,12 @@ function DraftAdminToolbar({
 
 // The auction's shopping list. Draft night runs on a clock, so captains get
 // search, position filters, and sorting instead of one long MMR-sorted list.
+// Tapping a row opens that player's scouting under it, one card at a time:
+// for a captain lining up a pick it is the lined-up player's card, for
+// everyone else the row they opened (a second tap closes it).
 function AvailableList({
   state,
+  scout,
   role,
   onRoleChange: setRole,
   canPick,
@@ -2454,6 +2486,8 @@ function AvailableList({
   onPick,
 }: {
   state: DraftState;
+  /** The page's scouting map, or null when it isn't loaded. */
+  scout: DraftScoutInfo | null;
   /** The position filter, owned by the room (see `poolRole`). */
   role: string | null;
   onRoleChange: (role: string | null) => void;
@@ -2468,6 +2502,27 @@ function AvailableList({
   // The lot's player stays in "Available" until they sell, so say which row it
   // is — otherwise the top of the list reads like nobody is up yet.
   const onBlockId = state.nominatedPlayer?.userId ?? null;
+  // A row someone opened that isn't a lined-up pick: separate from
+  // `selected`, so a watcher's tap never reaches NominateBar.
+  const [inspected, setInspected] = useState<string | null>(null);
+  // When the opened player goes on the block the lot card shows them, so
+  // their card here closes, and a viewer whose turn to line up picks starts
+  // or ends starts with none open: adjusted during render, not in an effect.
+  const [inspectedFor, setInspectedFor] = useState({ onBlockId, canPick });
+  if (inspectedFor.onBlockId !== onBlockId || inspectedFor.canPick !== canPick) {
+    setInspectedFor({ onBlockId, canPick });
+    setInspected(
+      inspectedAfterChange(inspected, inspectedFor, { onBlockId, canPick }),
+    );
+  }
+  const openId = scout
+    ? poolPanelOpenId({ canPick, selected, inspected })
+    : null;
+  // A card closing above the tapped row moves it up the page; bring it back
+  // (iOS Safari has no scroll anchoring). Nothing moves if it is in view.
+  const keepRowInView = (row: Element | null) => {
+    requestAnimationFrame(() => row?.scrollIntoView({ block: "nearest" }));
+  };
 
   return (
     <div className="rounded-[var(--radius)] border border-line bg-surface/80">
@@ -2533,73 +2588,123 @@ function AvailableList({
               <option value="name">Sort: Name</option>
             </select>
           </div>
+          {scout ? (
+            <p className="text-xs text-muted">{poolTapHint(canPick)}</p>
+          ) : null}
         </div>
       ) : null}
       {/* Its own scroll box only beside the auction on desktop. On a phone the
           list flows with the page: a scroller inside a scrolling page made a
           swipe move one or the other, unpredictably. */}
-      <div className="space-y-1 p-3 lg:max-h-[30rem] lg:overflow-y-auto">
-        {shown.map((p) => {
-          const onBlock = p.userId === onBlockId;
-          const rowContent = (
-            <>
-              <span className="flex min-w-0 items-center gap-2">
-                <Avatar name={p.name} src={p.avatar} size={20} />
-                <span className="truncate">{p.name}</span>
-                {onBlock ? (
-                  <span className="shrink-0">
-                    <Badge tone="accent">on the block</Badge>
+      <div className="p-3 lg:max-h-[30rem] lg:overflow-y-auto">
+        {shown.length > 0 ? (
+          <ul aria-label="Available players" className="space-y-1">
+            {shown.map((p) => {
+              const onBlock = p.userId === onBlockId;
+              const scouted = !!scout && p.userId in scout;
+              // Every map entry renders a card (at least "nothing on file").
+              const open = scouted && openId === p.userId;
+              const panelId = `draft-scout-${p.userId}`;
+              // A watcher's row opens a card only when there is one to open:
+              // a control renders where it does something.
+              const canInspect = !canPick && scouted;
+              const rowContent = (
+                <>
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Avatar name={p.name} src={p.avatar} size={20} />
+                    <span className="truncate">{p.name}</span>
+                    {onBlock ? (
+                      <span className="shrink-0">
+                        <Badge tone="accent">on the block</Badge>
+                      </span>
+                    ) : null}
                   </span>
-                ) : null}
-              </span>
-              <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
-                <RoleBadges roles={p.roles} />
-                <RankBadge rankTier={p.rankTier} />
-                {p.mmr > 0 ? <span>{p.mmr}</span> : null}
-              </span>
-            </>
-          );
-          return (
-            // The row body is the nominate button; the profile link is a
-            // sibling anchor (never nested inside the button).
-            <div
-              key={p.userId}
-              className={cn(
-                "flex items-center rounded-md",
-                selected === p.userId
-                  ? "bg-accent/15 ring-1 ring-accent/40"
-                  : onBlock
-                    ? "bg-accent/5"
-                    : "",
-              )}
-            >
-              {canPick ? (
-                <button
-                  type="button"
-                  onClick={() => onPick(p.userId)}
-                  aria-pressed={selected === p.userId}
-                  className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-2"
-                >
-                  {rowContent}
-                </button>
-              ) : (
-                <div className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm">
-                  {rowContent}
-                </div>
-              )}
-              <Link
-                href={`/players/${p.userId}`}
-                target="_blank"
-                rel="noreferrer"
-                aria-label={`${p.name} profile`}
-                title="Open profile in a new tab"
-                className="shrink-0 px-2 py-1.5 text-muted hover:text-info"
-              >
-                ↗
-              </Link>
-            </div>
-          );
-        })}
+                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted">
+                    <RoleBadges roles={p.roles} />
+                    <RankBadge rankTier={p.rankTier} />
+                    {p.mmr > 0 ? <span>{p.mmr}</span> : null}
+                  </span>
+                </>
+              );
+              const rowButton =
+                "flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
+              return (
+                // The margin clears the sticky header and clock bar where the
+                // page scrolls; inside the desktop pool's own scroll box
+                // nothing covers a row, and a margin there would move a
+                // visible row near the top of the box when it is tapped.
+                <li key={p.userId} className="min-w-0 scroll-mt-32 lg:scroll-mt-0">
+                  {/* The row body is the nominate button; the profile link is
+                      a sibling anchor (never nested inside the button). */}
+                  <div
+                    className={cn(
+                      "flex items-center rounded-md",
+                      selected === p.userId
+                        ? "bg-accent/15 ring-1 ring-accent/40"
+                        : open
+                          ? "bg-surface-2/50"
+                          : onBlock
+                            ? "bg-accent/5"
+                            : "",
+                    )}
+                  >
+                    {canPick ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          onPick(p.userId);
+                          keepRowInView(e.currentTarget.closest("li"));
+                        }}
+                        aria-pressed={selected === p.userId}
+                        aria-controls={open ? panelId : undefined}
+                        className={rowButton}
+                      >
+                        {rowContent}
+                      </button>
+                    ) : canInspect ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          setInspected(toggleInspected(inspected, p.userId));
+                          keepRowInView(e.currentTarget.closest("li"));
+                        }}
+                        aria-expanded={open}
+                        aria-controls={open ? panelId : undefined}
+                        className={rowButton}
+                      >
+                        {rowContent}
+                      </button>
+                    ) : (
+                      <div className="flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-sm">
+                        {rowContent}
+                      </div>
+                    )}
+                    <Link
+                      href={`/players/${p.userId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      aria-label={`${p.name} profile`}
+                      title="Open profile in a new tab"
+                      className="shrink-0 px-2 py-1.5 text-muted hover:text-info"
+                    >
+                      ↗
+                    </Link>
+                  </div>
+                  {open ? (
+                    <DraftPlayerCard
+                      variant="pool"
+                      id={panelId}
+                      name={p.name}
+                      player={p}
+                      scout={scout?.[p.userId]}
+                      nowMs={state.now}
+                    />
+                  ) : null}
+                </li>
+              );
+            })}
+          </ul>
+        ) : null}
         {state.available.length === 0 ? (
           <p className="p-2 text-sm text-muted">All players drafted.</p>
         ) : shown.length === 0 ? (
@@ -2690,9 +2795,24 @@ function NominateBar({
         )}
       </Badge>
       {player ? (
-        <span className="flex items-center gap-2 text-sm">
-          <Avatar name={player.name} src={player.avatar} size={24} />
-          {player.name}
+        // Medal and MMR beside the name, so the captain confirms who they
+        // are about to put up; their scouting is open under the pool row.
+        <span className="flex min-w-0 items-center gap-2 text-sm">
+          <Avatar
+            name={player.name}
+            src={player.avatar}
+            size={24}
+            className="shrink-0"
+          />
+          <span className="min-w-0 truncate" title={player.name}>
+            {player.name}
+          </span>
+          <RankBadge rankTier={player.rankTier} className="shrink-0" />
+          {player.mmr > 0 ? (
+            <span className="shrink-0 tabular-nums text-muted">
+              {player.mmr}
+            </span>
+          ) : null}
         </span>
       ) : (
         <a

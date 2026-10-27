@@ -235,6 +235,8 @@ describe("draft snapshot — contact visibility", () => {
     expect(outsiderState?.nominatedPlayer).toMatchObject({
       discordName: "",
       discordVerified: false,
+      // The blank handle must not read as "no Discord" to the outsider.
+      showContact: false,
     });
 
     const participantState = await getDraftState(
@@ -244,7 +246,38 @@ describe("draft snapshot — contact visibility", () => {
     expect(participantState?.nominatedPlayer).toMatchObject({
       discordName: "nominee_handle",
       discordVerified: true,
+      showContact: true,
     });
+  });
+
+  it("tells a participant that a nominee has no Discord, and an outsider nothing", async () => {
+    const season = await makeSeason({ teamSize: 3 });
+    const captain = await makeCaptain(season.id, "Captain", 100, 0);
+    await makeCaptain(season.id, "Other Captain", 100, 1);
+    const nominee = await makePlayer(season.id, "Unreachable", 4200);
+    const participant = await makePlayer(season.id, "Participant", 3500);
+    const outsider = await makeUser("Signed-in Outsider");
+    await startDraftState(season.id);
+    expect(
+      (await nominatePlayer(season.id, sessionFor(captain.user), nominee.id, 1))
+        .ok,
+    ).toBe(true);
+
+    const participantState = await getDraftState(
+      season.id,
+      sessionFor(participant),
+    );
+    expect(participantState?.nominatedPlayer).toMatchObject({
+      discordName: "",
+      showContact: true,
+    });
+    const outsiderState = await getDraftState(season.id, sessionFor(outsider));
+    expect(outsiderState?.nominatedPlayer).toMatchObject({
+      discordName: "",
+      showContact: false,
+    });
+    const signedOut = await getDraftState(season.id, null);
+    expect(signedOut?.nominatedPlayer?.showContact).toBe(false);
   });
 });
 

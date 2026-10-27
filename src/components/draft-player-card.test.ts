@@ -1,0 +1,175 @@
+import { describe, expect, it } from "vitest";
+import {
+  sourceFile,
+  sourceFiles,
+  stripLineComments,
+} from "../../test/support/source-files";
+import { NO_DISCORD_TITLE, PUB_QUIET_TITLE } from "@/lib/player-pool";
+
+// SOURCE GUARDS for the draft room's scouting cards (draft-player-card.tsx,
+// src/lib/draft-scout.ts). What they protect is invisible to a unit test:
+// where the cards render relative to the bid controls, that the card stays
+// presentational, and that the scouting reaches the room from the page
+// render and never from the poll every tab in the room repeats.
+
+const room = () =>
+  stripLineComments(sourceFile("src/components/draft-room.tsx").text);
+const card = () =>
+  stripLineComments(sourceFile("src/components/draft-player-card.tsx").text);
+
+/** Every index of `needle` in `text`. */
+function indexesOf(text: string, needle: string): number[] {
+  const out: number[] = [];
+  for (let i = text.indexOf(needle); i !== -1; i = text.indexOf(needle, i + 1)) {
+    out.push(i);
+  }
+  return out;
+}
+
+describe("draft-room.tsx renders the cards where they move nothing", () => {
+  it("one card on the block, below the bid controls, and one in the pool", () => {
+    const src = room();
+    const cards = indexesOf(src, "<DraftPlayerCard");
+    expect(cards).toHaveLength(2);
+    const live = src.indexOf("const lotStale");
+    const zone = src.indexOf("ref={bannerRef}", live);
+    const zoneEnd = src.indexOf("paused the auction", zone);
+    const primer = src.indexOf("<AuctionPrimer", zoneEnd);
+    expect(live).toBeGreaterThan(-1);
+    expect(zone).toBeGreaterThan(live);
+    expect(zoneEnd).toBeGreaterThan(zone);
+    expect(primer).toBeGreaterThan(zoneEnd);
+    // The lot card sits after the action zone (whose height must not change
+    // between polls) and before the primer; the bid trail comes after it.
+    const [lotCard, poolCard] = cards;
+    expect(lotCard).toBeGreaterThan(zoneEnd);
+    expect(lotCard).toBeLessThan(primer);
+    expect(src.indexOf("Bid trail:", lotCard)).toBeGreaterThan(lotCard);
+    expect(src.indexOf("Bid trail:", lotCard)).toBeLessThan(primer);
+    // The pool card belongs to the Available list.
+    const list = src.indexOf("function AvailableList(");
+    const listEnd = src.indexOf("\nfunction ", list + 1);
+    expect(poolCard).toBeGreaterThan(list);
+    expect(poolCard).toBeLessThan(listEnd);
+  });
+
+  it("the pool keeps picks and opened rows apart, through the tested helpers", () => {
+    const src = room();
+    const list = src.slice(
+      src.indexOf("function AvailableList("),
+      src.indexOf("\nfunction RecentSales("),
+    );
+    expect(list).toContain("aria-pressed={selected === p.userId}");
+    expect(list).toContain("aria-expanded={open}");
+    for (const helper of [
+      "poolPanelOpenId(",
+      "toggleInspected(",
+      "inspectedAfterChange(",
+      "poolTapHint(",
+    ]) {
+      expect(list).toContain(helper);
+    }
+    // A watcher's tap opens a card and never lines up a pick.
+    const watcherRow = list.slice(
+      list.indexOf("canInspect ? ("),
+      list.indexOf(") : (", list.indexOf("canInspect ? (")),
+    );
+    expect(watcherRow).toContain("setInspected(toggleInspected(");
+    expect(watcherRow).not.toContain("onPick(");
+  });
+
+  it("the lot card gets the nominee's live favorites and about text", () => {
+    const src = room();
+    const lotCard = src.slice(
+      src.indexOf("<DraftPlayerCard"),
+      src.indexOf("/>", src.indexOf("<DraftPlayerCard")),
+    );
+    expect(lotCard).toContain('variant="lot"');
+    expect(lotCard).toContain("favoriteHeroes: state.nominatedPlayer.favoriteHeroes");
+    expect(lotCard).toContain("about: nominatedAbout");
+    expect(lotCard).toContain("nowMs={state.now}");
+  });
+
+  it("'no Discord' shows only to a viewer allowed the contact", () => {
+    const src = room();
+    expect(src).toMatch(
+      /state\.nominatedPlayer\.showContact &&\s*!state\.nominatedPlayer\.discordName \?/,
+    );
+    expect(src).toContain("title={NO_DISCORD_TITLE}");
+  });
+});
+
+describe("draft-player-card.tsx is presentational", () => {
+  it("draws what draftCardView decides, with the profile's tiles", () => {
+    const src = card();
+    expect(src).toContain("draftCardView(");
+    expect(src).toContain("<ScoutTileGrid");
+    expect(src).toContain("<PubRecentHeroes");
+  });
+
+  it("holds no state, request, bell, contact or link", () => {
+    const src = card();
+    for (const banned of [
+      "fetch(",
+      "playChime",
+      "issueSequence",
+      "useEffect",
+      "useState",
+      "DiscordTag",
+      "<a ",
+      "<Link",
+      'id="',
+      "totalGames",
+      "computed_mmr",
+    ]) {
+      expect(src, banned).not.toContain(banned);
+    }
+  });
+});
+
+describe("the scouting reaches the room from the page, never the poll", () => {
+  it("/draft loads the map only while the auction runs, and passes it in", () => {
+    const src = stripLineComments(sourceFile("src/app/draft/page.tsx").text);
+    expect(indexesOf(src, "loadDraftScoutInfo(")).toHaveLength(1);
+    expect(src).toMatch(
+      /draftScoutWanted\(status\) \? loadDraftScoutInfo\(season\) : null/,
+    );
+    expect(src).toContain("scout={scout}");
+  });
+
+  it("the draft engine never reads the pub snapshots", () => {
+    // Every tick reply goes to every tab in the room: the snapshots are
+    // read once per page render (draft-scout-service.ts) instead.
+    expect(sourceFile("src/lib/draft-service.ts").text).not.toContain(
+      "pubStats",
+    );
+  });
+});
+
+describe("the shared pieces stay shared", () => {
+  it("the profile card is built from the extracted pieces", () => {
+    const src = stripLineComments(
+      sourceFile("src/components/profile-pub-scouting.tsx").text,
+    );
+    const profile = src.slice(
+      src.indexOf("export function ProfilePubScouting("),
+      src.indexOf("export function ScoutTileGrid("),
+    );
+    expect(profile).toContain("<ScoutTileGrid tiles={tiles} />");
+    expect(profile).toContain("<PubRecentHeroes scout={scout} />");
+    expect(profile).toContain("<PubRoleAverageLines scout={scout} />");
+    expect(profile).toContain("pubScoutCaption(");
+  });
+
+  it("the pool's hover texts are written once, in player-pool.ts", () => {
+    const ui = sourceFiles(
+      ["src/components/**/*.{ts,tsx}", "src/app/**/*.{ts,tsx}"],
+      100,
+    );
+    for (const literal of [PUB_QUIET_TITLE, NO_DISCORD_TITLE]) {
+      expect(
+        ui.filter((f) => f.text.includes(literal)).map((f) => f.path),
+      ).toEqual([]);
+    }
+  });
+});
