@@ -3,6 +3,7 @@ import { playoffFirstRound, type Pairing } from "./schedule";
 import {
   groupShares,
   playoffBracketSize,
+  seasonGroupKeys,
   seedGroups,
   type SeasonFormatKind,
 } from "./season-format";
@@ -68,15 +69,19 @@ export type PlayoffFieldProjection = {
 };
 
 /**
- * The season's groups, or null when it plays one table: every team must
- * carry a group and there must be two or more, else the season renders (and
- * seeds) as one table. Schedule generation writes every team's group in one
- * transaction, so a half-grouped season is a leftover the admin regenerates.
+ * Why the projected bracket can't be built, or null when every place has its
+ * seed and every pair both teams. Three groups into eight places seed only
+ * six (`groupShares`), and `playoffFirstRound` drops the pairs whose seed is
+ * missing, the top seeds' first, so Start playoffs refuses instead.
  */
-function groupKeysOf(teams: readonly FieldTeam[]): string[] | null {
-  if (teams.length === 0 || teams.some((team) => !team.groupKey)) return null;
-  const keys = [...new Set(teams.map((team) => team.groupKey!))].sort();
-  return keys.length >= 2 ? keys : null;
+export function bracketShapeProblem(
+  field: Pick<PlayoffFieldProjection, "bracketSize" | "seededTeamIds" | "pairings">,
+): string | null {
+  const seeds = field.seededTeamIds.length;
+  if (seeds === field.bracketSize && field.pairings.length * 2 === field.bracketSize) {
+    return null;
+  }
+  return `The bracket would seed ${seeds} team${seeds === 1 ? "" : "s"} for ${field.bracketSize} places.`;
 }
 
 /** Ties among eligible rows that touch a seeded place: they must be played off. */
@@ -134,7 +139,7 @@ export function projectPlayoffField(
   const withdrawnIds = new Set(
     teams.filter((team) => team.withdrawn).map((team) => team.id),
   );
-  const groupKeys = groupKeysOf(teams);
+  const groupKeys = seasonGroupKeys(teams);
   if (groupKeys) return projectGroups(teams, groupKeys, matches, withdrawnIds, format);
 
   let standings = computeStandings(

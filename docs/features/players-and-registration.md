@@ -126,7 +126,8 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   whatever is typed; an ACTIVE registrant is exempt (WITHDRAWN or REMOVED
   returning is a new admission). A later-synced medal is warn-only: re-judging
   it would lock an admitted player out of their own form. The typed MMR is
-  checked every submit. Late medals show in the "Refresh player data now"
+  checked every submit while the player may still type it; a stored number the
+  save keeps instead (`mmrKept`: the post-draft lock, or no field sent) is not. Late medals show in the "Refresh player data now"
   toast and the "MMR ≠ medal" flag; nothing auto-removes anyone.
 - **A stored registration MMR is league-approved.** Never re-clamp an unchanged
   resubmit, so an admin correction survives a role edit. `setRegistrationMmr`
@@ -142,8 +143,22 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
 - **Never rewrite a typed number silently.** `/me` shows the medal window
   (`mmrLeadLine`), a danger line when the medal rules the player out, and a
   display-only preview (`mmrPreviewLine`); the toast names any change. A
-  running auction freezes a PLAYER's MMR (`draft.md`). Tests: `rank.test.ts`,
-  `registration.test.ts`, `registration.itest.ts`, `inhouse.itest.ts`.
+  running auction freezes a PLAYER's MMR (`draft.md`).
+- **Signup MMR is fixed once the auction is done** (`mmrSelfEditLocked`,
+  `registration.ts`; Tim's call, 2026-10-25, closing a standin MMR rule
+  loophole: `rosters-and-standins.md`). From DRAFT with the auction COMPLETE
+  on, `saveRegistration` keeps an existing signup's stored MMR (any type), the
+  toast says so (`mmrLockedAfterDraftNote`), and /me renders the box disabled
+  with `MMR_SELF_EDIT_LOCKED_HINT` (`MmrField` `locked`). A missing field on an
+  existing signup always keeps the stored number, in every phase
+  (`keepsStoredMmr`), so a stale tab can't wipe it. A kept number isn't judged
+  against the ceiling (`registrationGate`'s `mmrKept`: the player didn't type
+  it). During a running auction /me and the toast say
+  `mmrFrozenDuringDraftLine` ("you stay listed at 4,400 MMR. After the draft
+  only a league admin can change it."). A new signup (a late standin) still sets its own;
+  admins change it with `setPlayerRank` or `setRegistrationMmr`. Tests:
+  `rank.test.ts`, `registration.test.ts`, `registration.itest.ts`,
+  `registration-standin-mmr.itest.ts`, `inhouse.itest.ts`.
 
 ## Returning players
 

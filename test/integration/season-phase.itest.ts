@@ -219,6 +219,67 @@ describe("setSeasonPhase — an unfinished auction can't be stranded", () => {
     );
   });
 
+  it("names a group season's format from every team, withdrawn ones included", async () => {
+    // Ten teams in two groups of five; one in group B has withdrawn. The
+    // season still plays two groups, and the post lists only the teams in.
+    const season = await makeSeason({ teamSize: 3, status: SEASON_STATUS.DRAFT });
+    const captains = [];
+    for (let i = 0; i < 10; i++) {
+      captains.push(await makeCaptain(season.id, `Captain ${i}`, 100, i));
+    }
+    const teams = captains.map((captain) => captain.team);
+    for (const [index, team] of teams.entries()) {
+      await prisma.team.update({
+        where: { id: team.id },
+        data: { groupKey: index < 5 ? "A" : "B", withdrawn: index === 9 },
+      });
+    }
+    await startDraftState(season.id);
+    await prisma.draft.update({
+      where: { seasonId: season.id },
+      data: { status: DRAFT_STATUS.COMPLETE, nominatedUserId: null, bidEndsAt: null },
+    });
+    const kickoff = new Date("2026-10-07T18:00:00.000Z");
+    const pairs = [[0, 1], [2, 3], [5, 6], [7, 8]];
+    await prisma.match.createMany({
+      data: pairs.map(([home, away], index) => ({
+        seasonId: season.id,
+        week: 1,
+        phase: MATCH_PHASE.REGULAR,
+        homeTeamId: teams[home].id,
+        awayTeamId: teams[away].id,
+        bestOf: 2,
+        scheduledAt: new Date(kickoff.getTime() + index * 60_000),
+      })),
+    });
+
+    const res = await setSeasonPhase({}, phaseForm(SEASON_STATUS.REGULAR_SEASON, season.id));
+
+    expect(res?.error).toBeUndefined();
+    expect(sendDiscordMessage).toHaveBeenCalledWith(
+      regularSeasonStartedMessage(
+        season.name,
+        {
+          week: 1,
+          fixtures: pairs.map(([home, away], index) => ({
+            home: teams[home].name,
+            away: teams[away].name,
+            whenMs: kickoff.getTime() + index * 60_000,
+          })),
+          byes: [teams[4].name],
+          format: "Two groups of 5: the top 4 of each group make the playoffs.",
+          groups: [
+            { key: "A", teams: teams.slice(0, 5).map((team) => team.name) },
+            { key: "B", teams: teams.slice(5, 9).map((team) => team.name) },
+          ],
+          tiebreakerMs: null,
+          playoffsMs: null,
+        },
+        true,
+      ),
+    );
+  });
+
   // Starting with no fixtures used to post "season is live" to Discord with
   // nothing to play, and leave /schedule and every player's home page empty.
   it("waits for the schedule before starting the Regular season", async () => {

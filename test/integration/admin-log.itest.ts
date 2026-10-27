@@ -40,6 +40,7 @@ import {
   makeTeam,
   makeUser,
   resetDb,
+  scheduleClaim,
 } from "./factories";
 
 const fd = (o: Record<string, string>) => {
@@ -121,7 +122,7 @@ describe("destructive actions leave a trail", () => {
       fd({
         firstNight: "2026-10-07T20:00",
         firstNightTs: String(Date.now() + 7 * 864e5),
-        expectedActiveSeasonId: season.id,
+        ...(await scheduleClaim(season.id)),
       }),
     );
 
@@ -274,6 +275,11 @@ describe("log lines name the fixture, never an internal id", () => {
     const covered = await makeUser("Covered Carl");
     await prisma.teamMember.create({
       data: { seasonId: season.id, teamId: home.id, userId: covered.id, price: 1 },
+    });
+    // A signup level with the standin's: within the standin MMR rule, so the
+    // line is the plain booking (an over-the-rule one says so; standins.itest).
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: covered.id, mmr: 3000 },
     });
     const sub = await makeUser("Standin Sam");
     await prisma.registration.create({

@@ -311,6 +311,25 @@ describe("playoffs bracket + champion (integration)", () => {
     await makeTeam(season.id, "Solo", 0);
     await expect(createPlayoffBracket(season.id)).rejects.toThrow(/at least 2/);
   });
+
+  it("refuses a bracket short of seeds instead of dropping the top pairings", async () => {
+    // Three groups of four into eight places seed only six, and round one
+    // would lose 1v8 and 2v7: the group winners would never get a fixture.
+    const season = await makeSeason({ teamSize: 3, minTeams: 12 });
+    const ids = await makeSeededTeams(season.id, 12);
+    for (const [index, key] of ["A", "B", "C"].entries()) {
+      await prisma.team.updateMany({
+        where: { id: { in: ids.filter((_, i) => i % 3 === index) } },
+        data: { groupKey: key },
+      });
+    }
+    await expect(createPlayoffBracket(season.id)).rejects.toThrow(
+      "The bracket would seed 6 teams for 8 places. Nothing was changed.",
+    );
+    expect(await playoffMatches(season.id)).toHaveLength(0);
+    const after = await prisma.season.findUniqueOrThrow({ where: { id: season.id } });
+    expect(after.status).toBe("REGULAR_SEASON");
+  });
 });
 
 describe("playoffs — canonical eligibility and replay-safe commands", () => {

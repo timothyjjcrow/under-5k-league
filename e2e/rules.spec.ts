@@ -17,9 +17,13 @@ const SECTIONS = [
   "Rosters and standins",
   "Match night and rescheduling",
   "Hosting the lobby",
+  "Being on time",
+  "Pauses and remakes",
   "Signups and eligibility",
   "The auction draft",
   "Results and game imports",
+  "Accounts and fair play",
+  "Conduct and commitment",
 ];
 
 test("Rules puts the league's rules on one page, from the season's settings", async ({

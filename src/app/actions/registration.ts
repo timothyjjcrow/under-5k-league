@@ -20,12 +20,22 @@ import {
   seenScheduleIsCurrent,
 } from "@/lib/draft-readiness";
 import {
+  keepsStoredMmr,
   medalProvesIneligible,
+  mmrFrozenDuringDraftLine,
+  mmrLockedAfterDraftNote,
+  mmrSelfEditLocked,
   registrationGate,
   registrationSeasonClosedError,
   withdrawGateError,
 } from "@/lib/registration";
 import { pendingCoverWhere } from "@/lib/standin";
+import {
+  cancelPendingStandinRequests,
+  standinRequestCancellations,
+  StandinRequestsChangedError,
+  type CancelledStandinRequest,
+} from "@/lib/standin-service";
 import { normalizeDiscordName } from "@/lib/discord-name";
 import { unlinkDiscordAccount } from "@/lib/discord-link-service";
 import {
@@ -280,6 +290,31 @@ export async function saveRegistration(
   // Lets the duplicate-submit integration test hold two requests after both
   // observed "no signup" and prove the unique-key loser is truly idempotent.
   await raceHook("registration.saveRegistration.afterExistingRead");
+  // After the draft an existing signup keeps its stored MMR, PLAYER and
+  // STANDIN alike (mmrSelfEditLocked says why); a new signup still sets its
+  // own. Both facts the lock reads are the snapshot the transaction below
+  // re-asserts (season status and version, draft status and version), so a
+  // phase change in between refuses the save instead of slipping past the
+  // lock. /me disables the box here, and a disabled box submits nothing: no
+  // field is "unchanged", never an attempt to clear it, in EVERY phase
+  // (keepsStoredMmr), so a tab left open across a lock that has since
+  // lifted keeps the number too. A missing field gets no note. Decided
+  // before the gate, which then leaves the typed-MMR ceiling to numbers the
+  // player entered (mmrKept): an admin's number over it stands.
+  let lockedMmrNote = "";
+  const mmrLocked =
+    !!existing && mmrSelfEditLocked(season.status, draftSnapshot?.status);
+  const mmrKept = keepsStoredMmr({
+    hasExisting: !!existing,
+    locked: mmrLocked,
+    mmrSubmitted: formData.has("mmr"),
+  });
+  if (existing && mmrKept) {
+    if (mmrLocked && formData.has("mmr") && mmr !== existing.mmr) {
+      lockedMmrNote = mmrLockedAfterDraftNote(existing.mmr);
+    }
+    mmr = existing.mmr;
+  }
   // Captain volunteering is a signup-phase decision for full players. A
   // disabled checkbox does not submit, so after signups preserve the stored
   // answer rather than silently clearing it; standins never enter the captain
@@ -325,6 +360,7 @@ export async function saveRegistration(
     // a medal it merely flagged must not brick their form). existingStatus is
     // what tells the gate which of the two this submit is.
     existingStatus: existing?.status ?? null,
+    mmrKept,
   };
   // Refuse what no medal could change (an MMR over the ceiling, player
   // signups closed) before the provider call: a refused submit stores
@@ -418,7 +454,6 @@ export async function saveRegistration(
   //    mid-auction rewrite had no counter. FREEZE the number instead of
   //    refusing the submit (role/hero/note edits are still useful to the
   //    captains bidding), and say so in the toast — never a silent rewrite.
-  let lockedMmrNote = "";
   if (existing) {
     const wantsTypeFlip = type !== existing.type;
     // WITHDRAWN only, NOT `!== ACTIVE`: a REMOVED player must fall through to
@@ -455,7 +490,7 @@ export async function saveRegistration(
           };
         }
         mmr = existing.mmr;
-        lockedMmrNote = ` · MMR is locked while the draft runs — kept ${existing.mmr}`;
+        lockedMmrNote = ` · ${mmrFrozenDuringDraftLine(existing.mmr)}`;
       }
     }
   }
@@ -901,8 +936,9 @@ export async function leaveLeague(
   // WITHDRAWN standin holding live cover — the exact state the new guard exists
   // to prevent. Re-counting INSIDE the transaction puts the assignments in this
   // transaction's read set so Postgres can spot the cycle (P2034).
+  let cancelledRequests: CancelledStandinRequest[] = [];
   try {
-    await prisma.$transaction(
+    cancelledRequests = await prisma.$transaction(
       async (tx) => {
         const [live, currentDraft, currentSeason] = await Promise.all([
           tx.standinAssignment.count({
@@ -958,10 +994,26 @@ export async function leaveLeague(
           },
         });
         if (withdrawn.count === 0) throw new Error("NOT_ACTIVE");
+        // Bookings refuse the withdrawal above; requests to have them stand in
+        // don't (a request is not cover). Left PENDING, each would hold its
+        // seat on a match they can no longer play, and no agree could pass
+        // (judgeCover wants an ACTIVE signup), so close them with the
+        // withdrawal: same predicate as the cover count, this season's
+        // unplayed matches. Past the first write, a lost claim throws.
+        return cancelPendingStandinRequests(
+          tx,
+          pendingCoverWhere(user.id, season.id),
+          user.id,
+        );
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
   } catch (e) {
+    if (e instanceof StandinRequestsChangedError)
+      return {
+        error:
+          "A captain just answered a request for you to stand in — reload and try again.",
+      };
     if ((e as Error).message === "COVER_APPEARED")
       return {
         error:
@@ -1001,8 +1053,39 @@ export async function leaveLeague(
   }
   // Rule P (draft-room-version.ts): the draft room's pool drops them.
   await publishDraftRoomChange();
+  // After the commit, best-effort: each asking captain hears their request is
+  // off and has to line up someone else.
+  await sendStandinLeftPosts(cancelledRequests);
   refresh();
-  return { message: "Withdrawn from this season" };
+  return {
+    message:
+      "Withdrawn from this season" +
+      (cancelledRequests.length > 0
+        ? ` · ${cancelledRequestsNote(cancelledRequests.length)}`
+        : ""),
+  };
+}
+
+/** "2 standin requests for you were cancelled", for the toast. */
+function cancelledRequestsNote(count: number): string {
+  return count === 1
+    ? "1 standin request for you was cancelled"
+    : `${count} standin requests for you were cancelled`;
+}
+
+/** Tell each asking captain, after the commit; a failed post changes nothing. */
+async function sendStandinLeftPosts(
+  cancelled: CancelledStandinRequest[],
+): Promise<void> {
+  if (cancelled.length === 0) return;
+  try {
+    const posts = await standinRequestCancellations(cancelled, "STANDIN_LEFT");
+    for (const post of posts) {
+      await sendDiscordMessage(post.announcement, post.mentions);
+    }
+  } catch {
+    // Best-effort: the requests are closed and their seats free either way.
+  }
 }
 
 /** Use the current user's Steam-verified Dota account and fetch their medal. */

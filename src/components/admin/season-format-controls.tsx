@@ -9,7 +9,9 @@ import { SeasonPlanList } from "@/components/season-plan";
 import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
-  seasonFormat,
+  formatName,
+  plannedSeasonFormat,
+  resolveSeasonFormat,
   seasonPlan,
 } from "@/lib/season-format";
 
@@ -23,6 +25,7 @@ export function SeasonFormatControls({
   teams,
   firstMatchNight,
   lastRegularWeek,
+  scheduleRevision,
   regenerateOpen,
   regenerateConsequences,
 }: {
@@ -32,13 +35,19 @@ export function SeasonFormatControls({
   firstMatchNight: Date | null;
   /** The schedule's last regular week, 0 before one is generated. */
   lastRegularWeek: number;
+  /** The fixtures shown (`regularScheduleRevision`), for the swap's claim. */
+  scheduleRevision: string;
   /** Whether the schedule can be regenerated now (no result yet). */
   regenerateOpen: boolean;
   /** What a regenerate destroys, for the swap's confirm. */
   regenerateConsequences: string[];
 }) {
-  const format = seasonFormat(teams.length);
+  const format = resolveSeasonFormat(teams, lastRegularWeek > 0);
   if (!format) return null;
+  // A table of ten or more generated before groups: a regenerate builds
+  // the groups the team count now sets, so say so before anyone clicks.
+  const planned = plannedSeasonFormat(teams.length);
+  const rebuildsAs = planned && planned.kind !== format.kind ? planned : null;
   const plan = seasonPlan(format, firstMatchNight, lastRegularWeek || format.regularWeeks);
   const groups =
     format.kind === "GROUPS"
@@ -59,9 +68,18 @@ export function SeasonFormatControls({
         Season format · {teams.length} teams
       </h3>
       <p className="mt-0.5 text-xs text-muted">
-        {describeSeasonFormat(format)} The site sets this from the team count;
+        {describeSeasonFormat(format)}{" "}
+        {rebuildsAs
+          ? "This schedule was generated as one table before groups existed;"
+          : "The site sets this from the team count;"}{" "}
         one week after the regular season is kept for tiebreakers.
       </p>
+      {rebuildsAs && regenerateOpen ? (
+        <p className="mt-1 text-xs text-accent">
+          Regenerating the schedule builds {formatName(rebuildsAs).toLowerCase()}{" "}
+          instead, drawn by roster MMR: {describeSeasonFormat(rebuildsAs)}
+        </p>
+      ) : null}
       <SeasonPlanList plan={plan} className="mt-2" />
       {format.kind === "GROUPS" ? (
         drawn ? (
@@ -91,7 +109,7 @@ export function SeasonFormatControls({
       {drawn && regenerateOpen ? (
         <ActionForm
           action={swapGroupTeams}
-          hidden={{ expectedActiveSeasonId: season.id }}
+          hidden={{ expectedActiveSeasonId: season.id, expectedSchedule: scheduleRevision }}
           className="mt-3 flex flex-wrap items-end gap-2"
         >
           <label className="flex min-w-0 flex-col gap-1 text-xs text-muted">

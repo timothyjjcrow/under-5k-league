@@ -12,8 +12,8 @@ import { matchNightForWeek } from "@/lib/schedule";
 import {
   SEASON_GROUP_KEYS,
   drawGroups,
+  plannedSeasonFormat,
   regularSeasonFixtures,
-  seasonFormat,
 } from "@/lib/season-format";
 import {
   createPlayoffBracket,
@@ -78,7 +78,7 @@ async function main() {
   const regularMode = process.env.FIXTURE_MODE === "regular";
   // The format the site would pick: from ten teams, two groups drawn by
   // strength (team 0 strongest) and a round robin in each.
-  const format = seasonFormat(teams.length);
+  const format = plannedSeasonFormat(teams.length);
   if (format?.kind === "GROUPS") {
     const groups = drawGroups(
       teams.map((team, i) => ({ id: team.id, averageMmr: 10_000 - i })),

@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
 import { nextRoundPairings, upcomingMatchNight } from "./schedule";
-import { projectPlayoffField } from "./playoff-field";
+import { bracketShapeProblem, projectPlayoffField } from "./playoff-field";
 import { firstPlayoffWeek } from "./season-format";
 import {
   playoffSetupRevision,
@@ -15,6 +15,7 @@ import {
   MATCH_STATUS,
   SCRIM_STATUS,
   SEASON_STATUS,
+  STANDIN_REQUEST_STATUS,
 } from "./constants";
 import { championMessage, getWebhookUrl, sendDiscordMessage } from "./discord";
 import { raceHook } from "./race-hook";
@@ -164,6 +165,8 @@ export type PlayoffBracketClaim = {
 type PostseasonRemoval = {
   standDowns: StandDown[];
   removedGameCount: number;
+  /** PENDING standin requests on the removed fixtures, gone by cascade. */
+  standinRequestsCancelled: number;
 };
 
 /**
@@ -183,7 +186,7 @@ async function removePostseason(
     (match) => match.phase === MATCH_PHASE.PLAYOFF || match.phase === MATCH_PHASE.FINAL,
   );
   const archiveKey = playoffGamesArchiveKey(seasonId);
-  const [doomedFixtures, priorRaw, doomedCover] = await Promise.all([
+  const [doomedFixtures, priorRaw, doomedCover, doomedRequests] = await Promise.all([
     tx.match.findMany({
       where: { seasonId, phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] } },
       orderBy: [{ week: "asc" }, { id: "asc" }],
@@ -212,6 +215,19 @@ async function removePostseason(
             homeTeam: { select: { name: true } },
             awayTeam: { select: { name: true } },
           },
+        },
+      },
+    }),
+    // Waiting standin requests cascade with their fixture. Only counted, for
+    // the admin's toast and log: a request is not cover, so nobody stands
+    // down, and the rebuilt or withdrawn bracket leaves its captain nothing
+    // to answer.
+    tx.standinRequest.count({
+      where: {
+        status: STANDIN_REQUEST_STATUS.PENDING,
+        match: {
+          seasonId,
+          phase: { in: [MATCH_PHASE.PLAYOFF, MATCH_PHASE.FINAL] },
         },
       },
     }),
@@ -318,6 +334,7 @@ async function removePostseason(
 
   return {
     removedGameCount: doomedGames.length,
+    standinRequestsCancelled: doomedRequests,
     standDowns: doomedCover.map((assignment) => ({
       standinName: assignment.standin.name,
       discordId: assignment.standin.discordId,
@@ -336,6 +353,8 @@ export async function createPlayoffBracket(
 ): Promise<{
   standDowns: StandDown[];
   removedGameCount: number;
+  /** PENDING standin requests a reset removed with the old bracket. */
+  standinRequestsCancelled: number;
   /** One admin-facing sentence per practice scrim the first round overrode. */
   scrimNotes: string[];
 }> {
@@ -468,6 +487,11 @@ export async function createPlayoffBracket(
           );
         }
 
+        const shapeProblem = bracketShapeProblem(playoffField);
+        if (shapeProblem) {
+          throw new UserFacingError(`${shapeProblem} Nothing was changed.`);
+        }
+
         const pairings = playoffField.pairings;
         const lastWeekOf = (phase: string) =>
           matches
@@ -560,6 +584,7 @@ export async function createPlayoffBracket(
   return {
     standDowns: built.standDowns,
     removedGameCount: built.removedGameCount,
+    standinRequestsCancelled: built.standinRequestsCancelled,
     scrimNotes,
   };
 }

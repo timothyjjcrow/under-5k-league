@@ -77,6 +77,12 @@ const BASELINE = "test/mutation-baseline.json";
  * is also what an untested gap looks like from here.
  */
 const EQUIVALENT = new Set([
+  // cancelPendingStandinRequests claims exactly the ids it has just read with
+  // status PENDING, in its caller's SERIALIZABLE transaction (every caller is
+  // one). A rival answer either lands before that read, so its row is not in
+  // the ids, or forces P2034; dropping the status predicate cannot change
+  // which rows are written, and the count check stays as defense in depth.
+  "src/lib/standin-service.ts::cancelPendingStandinRequests::status#1",
   // createSeason's broad archive runs after the transaction has read the full
   // active set. Dropping `isActive: true` merely writes false over rows already
   // archived; its one newly created row does not exist until the next statement.

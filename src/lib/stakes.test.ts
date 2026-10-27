@@ -7,7 +7,16 @@ import {
   stakesCardTitle,
   type StakesMatchRow,
 } from "./stakes";
-import { computeStandings } from "./standings";
+import { projectPlayoffField } from "./playoff-field";
+import { computeStandings, type MatchLike } from "./standings";
+
+/** The one-table field a page passes, from the same rows. */
+function fieldOf(teamIds: string[], matches: MatchLike[]) {
+  return projectPlayoffField(
+    teamIds.map((id) => ({ id, withdrawn: false, groupKey: null })),
+    matches,
+  );
+}
 
 function row(partial: Partial<StakesMatchRow> & { id: string }): StakesMatchRow {
   return {
@@ -74,10 +83,10 @@ describe("seasonScenarioReport", () => {
     winnerTeamId: winner,
   });
 
-  it("returns null when the bracket takes everyone (no race) or no teams", () => {
-    const standings = computeStandings(["A", "B", "C", "D"], []);
-    expect(seasonScenarioReport(standings, [], 4)).toBeNull();
-    expect(seasonScenarioReport([], [], 0)).toBeNull();
+  it("returns null with no teams or no bracket", () => {
+    expect(seasonScenarioReport([], [], 0, fieldOf([], []))).toBeNull();
+    const alone = computeStandings(["A"], []);
+    expect(seasonScenarioReport(alone, [], 1, fieldOf(["A"], []))).toBeNull();
   });
 
   it("uses the playoff-seeding cut for a field the bracket can't fit", () => {
@@ -87,7 +96,7 @@ describe("seasonScenarioReport", () => {
       played("m2", "C", "D", "C"),
     ];
     const standings = computeStandings(teamIds, done);
-    const report = seasonScenarioReport(standings, done, teamIds.length);
+    const report = seasonScenarioReport(standings, done, teamIds.length, fieldOf(teamIds, done));
     expect(report).not.toBeNull();
     expect(report!.cut).toBe(4);
     expect(report!.teams.size).toBe(5);
@@ -107,7 +116,7 @@ describe("seasonScenarioReport", () => {
       played(`m${i}`, w, l, w, i + 1),
     );
     const standings = computeStandings(teamIds, done);
-    const report = seasonScenarioReport(standings, done, teamIds.length);
+    const report = seasonScenarioReport(standings, done, teamIds.length, fieldOf(teamIds, done));
     const clinch = clinchFromReport(report)!;
     const order = standings.map((s) => s.teamId);
     for (const teamId of order.slice(0, 4)) {
@@ -142,8 +151,8 @@ describe("seasonScenarioReport memo", () => {
       open("m3", "A", "C", 2),
     ];
     const standings = computeStandings(ids, matches);
-    const a = seasonScenarioReport(standings, matches, ids.length);
-    const b = seasonScenarioReport(standings, matches, ids.length);
+    const a = seasonScenarioReport(standings, matches, ids.length, fieldOf(ids, matches));
+    const b = seasonScenarioReport(standings, matches, ids.length, fieldOf(ids, matches));
     expect(a).not.toBeNull();
     expect(b).toBe(a);
   });
@@ -161,6 +170,7 @@ describe("seasonScenarioReport memo", () => {
       computeStandings(ids, before),
       before,
       ids.length,
+      fieldOf(ids, before),
     );
     const after = before.map((m) =>
       m.id === "m1"
@@ -177,6 +187,7 @@ describe("seasonScenarioReport memo", () => {
       computeStandings(ids, after),
       after,
       ids.length,
+      fieldOf(ids, after),
     );
     expect(r2).not.toBe(r1);
     // …and it genuinely recomputed: the played match is nobody's next one now.
@@ -194,13 +205,13 @@ describe("seasonScenarioReport memo", () => {
       open("other", "D", "E", 1),
     ];
     const standings = computeStandings(ids, base);
-    const inWeekOrder = seasonScenarioReport(standings, base, ids.length);
+    const inWeekOrder = seasonScenarioReport(standings, base, ids.length, fieldOf(ids, base));
     const retimed = [
       { ...base[0], scheduledAt: new Date("2026-08-20") },
       { ...base[1], scheduledAt: new Date("2026-08-10") },
       { ...base[2], scheduledAt: new Date("2026-08-11") },
     ];
-    const byKickoff = seasonScenarioReport(standings, retimed, ids.length);
+    const byKickoff = seasonScenarioReport(standings, retimed, ids.length, fieldOf(ids, retimed));
     expect(byKickoff).not.toBe(inWeekOrder);
     expect(byKickoff!.teams.get("A")!.nextMatchId).toBe("late");
     expect(inWeekOrder!.teams.get("A")!.nextMatchId).toBe("early");
@@ -209,7 +220,7 @@ describe("seasonScenarioReport memo", () => {
   it("a cached report cannot be mutated by one viewer's page", () => {
     const matches = [open("f1", "A", "B", 1), open("f2", "C", "D", 1)];
     const standings = computeStandings(ids, matches);
-    const r = seasonScenarioReport(standings, matches, ids.length)!;
+    const r = seasonScenarioReport(standings, matches, ids.length, fieldOf(ids, matches))!;
     expect(() => {
       (r.teams.get("A") as unknown as { status: unknown }).status = "CLINCHED";
     }).toThrow();
@@ -218,21 +229,24 @@ describe("seasonScenarioReport memo", () => {
   // LAST in the file on purpose: it deliberately churns the memo past its cap.
   it("the memo is bounded", () => {
     const matches = [open("b1", "A", "B", 1), open("b2", "C", "D", 1)];
+    const field = fieldOf(ids, matches);
     const first = seasonScenarioReport(
       computeStandings(ids, matches),
       matches,
       ids.length,
+      field,
     );
     for (let i = 0; i < 9; i++) {
       const churn = computeStandings(ids, matches).map((s, idx) =>
         idx === 0 ? { ...s, points: s.points + i + 1 } : s,
       );
-      seasonScenarioReport(churn, matches, ids.length);
+      seasonScenarioReport(churn, matches, ids.length, field);
     }
     const again = seasonScenarioReport(
       computeStandings(ids, matches),
       matches,
       ids.length,
+      field,
     );
     expect(again).not.toBe(first); // evicted, recomputed
   });

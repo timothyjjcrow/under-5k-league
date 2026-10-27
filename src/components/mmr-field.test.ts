@@ -31,6 +31,43 @@ describe("MmrField", () => {
       }),
     );
     expect(html).toContain('value="4400"');
-    expect(html).toContain("you stay listed at 4400 MMR until it ends");
+    expect(html).toContain(
+      "The draft is running, so you stay listed at 4,400 MMR. After the draft only a league admin can change it.",
+    );
+    expect(html).not.toContain("until it ends");
+    expect(html).not.toMatch(/<input[^>]*\sdisabled=""/);
+  });
+
+  it("renders the saved number disabled after the draft, with who can change it", () => {
+    const html = renderToStaticMarkup(
+      createElement(MmrField, {
+        defaultValue: "4200",
+        rankTier: 53,
+        storedMmr: 4200,
+        frozen: false,
+        locked: true,
+      }),
+    );
+    expect(html).toMatch(/<input[^>]*\sdisabled=""[^>]*name="mmr"/);
+    expect(html).toContain('value="4200"');
+    expect(html).toContain(
+      "Locked after the draft — ask a league admin to change it.",
+    );
+    // The typing preview is replaced, not shown beside the hint.
+    expect(html).not.toContain("listed at");
+    expect(html).toContain('aria-describedby="mmr-preview"');
+  });
+
+  it("stays editable without the lock, as every existing caller renders it", () => {
+    const html = renderToStaticMarkup(
+      createElement(MmrField, {
+        defaultValue: "3000",
+        rankTier: null,
+        storedMmr: 3000,
+        frozen: false,
+      }),
+    );
+    expect(html).not.toMatch(/<input[^>]*\sdisabled=""/);
+    expect(html).not.toContain("Locked after the draft");
   });
 });

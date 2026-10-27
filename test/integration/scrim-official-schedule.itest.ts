@@ -36,6 +36,7 @@ import {
   makeSeason,
   makeTeam,
   recordMatch,
+  scheduleClaim,
 } from "./factories";
 
 const empty: ActionResult = {};
@@ -122,7 +123,7 @@ describe("official fixture creation respects confirmed scrims", () => {
     const result = await generateSchedule(
       empty,
       fd({
-        expectedActiveSeasonId: season.id,
+        ...(await scheduleClaim(season.id)),
         firstNight: firstNight.toISOString(),
         firstNightTs: String(firstNight.getTime()),
       }),

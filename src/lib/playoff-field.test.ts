@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  bracketShapeProblem,
   projectPlayoffField,
   publicDeadHeatTeamIds,
   tablePlaceOf,
@@ -374,5 +375,38 @@ describe("one-table bracket size", () => {
     expect(projection.seededTeamIds).toEqual(["t1", "t2", "t3", "t4"]);
     expect(projection.seedLabelByTeam.get("t2")).toBe("2");
     expect(tablePlaceOf(projection, "t6")).toEqual({ place: 6, groupKey: null });
+  });
+});
+
+describe("bracketShapeProblem", () => {
+  function roundRobin(ids: string[]): MatchLike[] {
+    const matches: MatchLike[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      for (let j = i + 1; j < ids.length; j++) matches.push(result(ids[i], ids[j], 2, 0));
+    }
+    return matches;
+  }
+
+  it("passes a bracket with every seed and every pair", () => {
+    const ids = ["a1", "b1", "a2", "b2", "a3", "b3", "a4", "b4", "a5", "b5"];
+    const projection = projectPlayoffField(
+      ids.map((id) => ({ id, groupKey: id[0].toUpperCase() })),
+      roundRobin(ids),
+    );
+    expect(projection.bracketSize).toBe(8);
+    expect(bracketShapeProblem(projection)).toBeNull();
+  });
+
+  it("names a bracket that three groups leave short of seeds", () => {
+    // groupShares gives each of three groups 2 of 8 places: 6 seeds, and the
+    // standard order then loses 1v8 and 2v7.
+    const ids = ["a", "b", "c"].flatMap((key) => [1, 2, 3, 4].map((n) => `${key}${n}`));
+    const projection = projectPlayoffField(
+      ids.map((id) => ({ id, groupKey: id[0].toUpperCase() })),
+      roundRobin(ids),
+    );
+    expect(projection.seededTeamIds).toHaveLength(6);
+    expect(projection.pairings).toHaveLength(2);
+    expect(bracketShapeProblem(projection)).toBe("The bracket would seed 6 teams for 8 places.");
   });
 });
