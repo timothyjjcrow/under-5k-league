@@ -27,6 +27,7 @@ import {
   RULES_CLOSING,
   WRITTEN_RULES,
   leagueRules,
+  regularScheduleMade,
   rulesSeasonFormat,
   type LeagueRules,
   type LeagueRulesInput,
@@ -349,6 +350,69 @@ describe("leagueRules", () => {
     ).toContain("This season plays two groups");
   });
 
+  it("says the admins choose the format, and marks it a plan until the schedule exists", () => {
+    const planned = section(build({ teamCount: 12 }), "format");
+    expect(planned).toContain(
+      "The admins choose each season's format before its schedule is made. Unless they choose otherwise, the number of teams sets it:",
+    );
+    expect(planned).not.toContain("nobody designs");
+    expect(planned).toContain(
+      "3 playoff weeks. It's the plan until the schedule is made, so the admins can still change it.",
+    );
+    const settled = section(build({ teamCount: 12, formatFinal: true }), "format");
+    expect(settled).toContain("3 playoff weeks.");
+    expect(settled).not.toContain("the plan until the schedule is made");
+    expect(regularScheduleMade([{ phase: "PLAYOFF" }])).toBe(false);
+    expect(regularScheduleMade([{ phase: "REGULAR" }])).toBe(true);
+  });
+
+  it("prints no plan for a saved layout today's captains can't fill", () => {
+    // A top 8 saved during signups with 6 captains: the builder says it
+    // can't be generated yet, so /rules makes no claim about this season.
+    const stored = { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' };
+    const six = Array.from({ length: 6 }, () => ({ groupKey: null }));
+    expect(rulesSeasonFormat(stored, six, [])).toBeNull();
+    const rules = build({ teamCount: 6, format: rulesSeasonFormat(stored, six, []) });
+    expect(section(rules, "format")).not.toContain("This season has");
+    expect(section(rules, "playoffs")).not.toContain("This season");
+    // With eight captains it fits, and is the plan.
+    const eight = Array.from({ length: 8 }, () => ({ groupKey: null }));
+    expect(rulesSeasonFormat(stored, eight, [])?.playoffSpots).toBe(8);
+  });
+
+  it("prints the rounds a bracket shrunk by withdrawals will play", () => {
+    const topEight = rulesSeasonFormat(
+      { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' },
+      Array.from({ length: 9 }, () => ({ groupKey: null })),
+      [{ phase: "REGULAR" }],
+    );
+    // Two of nine withdrawn: seven teams still in seed a bracket of 4.
+    const format = section(build({ teamCount: 7, format: topEight, formatFinal: true }), "format");
+    expect(format).toContain("the top 4 play the semifinals and the grand final");
+    expect(format).toContain("That's 12 weeks in all: 9 regular weeks, the tiebreaker week and 2 playoff weeks.");
+    // The general rule names quarterfinals for 10+ teams; this season's
+    // own sentence doesn't.
+    expect(format.slice(format.indexOf("This season has"))).not.toContain("quarterfinals");
+  });
+
+  it("states an admin's chosen cut instead of crediting the team count", () => {
+    const topEight = rulesSeasonFormat(
+      { formatConfig: '{"v":1,"groups":1,"meet":1,"playoffs":8}' },
+      Array.from({ length: 9 }, () => ({ groupKey: null })),
+      [{ phase: "REGULAR" }],
+    );
+    const playoffs = section(build({ teamCount: 9, format: topEight }), "playoffs");
+    expect(playoffs).toContain("This season's top 8 make the playoffs.");
+    expect(playoffs).not.toContain("so the top 8");
+    expect(playoffs).toContain(
+      "The playoffs are a single-elimination bracket. Unless the admins choose otherwise, they take the top 2",
+    );
+    // A withdrawal shrinking the chosen bracket is the team count's doing.
+    expect(section(build({ teamCount: 7, format: topEight }), "playoffs")).toContain(
+      "This season has 7 teams in it, so the top 4 make the playoffs.",
+    );
+  });
+
   it("describes a stored format whose group winners play the final", () => {
     const winners = rulesSeasonFormat(
       { formatConfig: '{"v":1,"groups":2,"meet":1,"playoffs":2}' },
@@ -357,7 +421,8 @@ describe("leagueRules", () => {
     );
     const rules = build({ teamCount: 13, format: winners });
     const playoffs = section(rules, "playoffs");
-    expect(playoffs).toContain("This season plays two groups, so the group winners make the playoffs.");
+    // An admin chose that cut: stated, not explained by the team count.
+    expect(playoffs).toContain("This season plays two groups, and the group winners make the playoffs.");
     expect(playoffs).toContain("The two group winners play the grand final, and Group A's winner hosts.");
     expect(playoffs).not.toContain("The top two play the grand final");
     expect(section(rules, "format")).toContain(
@@ -841,6 +906,8 @@ describe("the /rules page", () => {
     expect(text).toContain(
       "format: active && teams ? rulesSeasonFormat(active, teams, fixtures) : null",
     );
+    // The format reads as settled only once its schedule exists.
+    expect(text).toContain("formatFinal: regularScheduleMade(fixtures)");
     const teamQuery = text.slice(text.indexOf("prisma.team.findMany("));
     expect(teamQuery.slice(0, teamQuery.indexOf("})"))).not.toContain("withdrawn: false");
   });

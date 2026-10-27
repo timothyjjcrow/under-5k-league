@@ -24,7 +24,14 @@ vi.mock("@/lib/discord", async (importOriginal) => ({
 }));
 
 import { prisma } from "@/lib/prisma";
-import { generateSchedule, swapGroupTeams } from "@/app/actions/admin-schedule-results";
+import {
+  generateSchedule,
+  recordResult,
+  swapGroupTeams,
+} from "@/app/actions/admin-schedule-results";
+import { saveSeasonFormat } from "@/app/actions/admin-season";
+import { recentAdminActions } from "@/lib/admin-log";
+import { SETTING_KEYS } from "@/lib/settings";
 import { createPlayoffBracket } from "@/lib/playoff-service";
 import { advanceTiebreakerWeek, createTiebreakerWeek } from "@/lib/tiebreaker-service";
 import { FORMAT_UNREADABLE_MESSAGE, serializeFormatConfig } from "@/lib/season-format";
@@ -32,7 +39,7 @@ import { projectPlayoffField } from "@/lib/playoff-field";
 import { matchNightForWeek } from "@/lib/schedule";
 import { DRAFT_STATUS, MATCH_PHASE, SEASON_STATUS } from "@/lib/constants";
 import type { ActionResult } from "@/lib/action-result";
-import { setRaceHook } from "@/lib/race-hook";
+import { onceAt, setRaceHook } from "@/lib/race-hook";
 import { seedLegacyTiebreaker } from "../fixtures/legacy-tiebreaker";
 import {
   generateRegularSchedule,
@@ -154,7 +161,7 @@ describe("generateSchedule draws two groups from ten teams", () => {
       empty,
       fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)) }),
     );
-    expect(res?.message).toMatch(/One table · 36 matches over 9 week\(s\)/);
+    expect(res?.message).toMatch(/One table · the top 4 make the playoffs · 36 matches over 9 week\(s\)/);
     expect((await groupsOf(season.id)).none).toHaveLength(9);
   });
 });
@@ -359,13 +366,13 @@ describe("a group season's playoffs", () => {
   });
 });
 
-describe("a season that stores its format", () => {
-  async function storeFormat(seasonId: string, formatConfig: string | null) {
-    await prisma.season.update({ where: { id: seasonId }, data: { formatConfig } });
-  }
-  const generate = async (seasonId: string) =>
-    generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(seasonId)) }));
+async function storeFormat(seasonId: string, formatConfig: string | null) {
+  await prisma.season.update({ where: { id: seasonId }, data: { formatConfig } });
+}
+const generate = async (seasonId: string) =>
+  generateSchedule(empty, fd({ ...firstNightFields(), ...(await scheduleClaim(seasonId)) }));
 
+describe("a season that stores its format", () => {
   it("generates the stored format, not the one the team count recommends", async () => {
     // Eight teams would play one table; the stored format splits them.
     const { season } = await draftedSeason(8);
@@ -458,5 +465,318 @@ describe("a season that stores its format", () => {
     await storeFormat(season.id, null);
     await advanceTiebreakerWeek(season.id);
     expect(await tiebreakers()).toBe(2);
+  });
+});
+
+describe("the season builder", () => {
+  const claimOf = async (seasonId: string) => {
+    const season = await prisma.season.findUniqueOrThrow({ where: { id: seasonId } });
+    return {
+      expectedActiveSeasonId: season.id,
+      expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+    };
+  };
+  const custom = (groups: number, meet: number, playoffs: number) => ({
+    formatChoice: "CUSTOM",
+    groups: String(groups),
+    meet: String(meet),
+    playoffs: String(playoffs),
+  });
+  const save = async (seasonId: string, fields: Record<string, string>) =>
+    saveSeasonFormat(empty, fd({ ...(await claimOf(seasonId)), ...fields }));
+  const stored = async (seasonId: string) =>
+    (await prisma.season.findUniqueOrThrow({ where: { id: seasonId } })).formatConfig;
+  const fixtureIds = async (seasonId: string) =>
+    (await prisma.match.findMany({ where: { seasonId }, orderBy: { id: "asc" } })).map((m) => m.id);
+  const generateWith = async (
+    seasonId: string,
+    fields: Record<string, string>,
+    expectedFormat = "RECOMMENDED",
+  ) =>
+    generateSchedule(
+      empty,
+      fd({ ...firstNightFields(), ...(await scheduleClaim(seasonId)), expectedFormat, ...fields }),
+    );
+
+  it("saves a layout during signups, even one today's captains can't fill, and resets it", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    for (let i = 0; i < 5; i++) await makeTeam(season.id, `Captain ${i}`, i);
+    const saved = await save(season.id, custom(2, 1, 4));
+    expect(saved?.error).toBeUndefined();
+    expect(saved?.message).toMatch(/^Season format saved · Two groups, top 2 of each/);
+    // Captains can still change, so it saves, and the toast says what fails.
+    expect(saved?.message).toMatch(
+      /with 5 captains today it can't be generated: Two groups need at least 6 teams, 3 in each; there are 5\./,
+    );
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    const [logged] = await recentAdminActions(1);
+    expect(logged).toMatchObject({ action: "saveSeasonFormat", seasonId: season.id });
+    expect(logged.summary).toMatch(/→ Two groups, top 2 of each/);
+
+    const reset = await save(season.id, { formatChoice: "RECOMMENDED" });
+    expect(reset?.message).toMatch(/^Season format saved · Recommended/);
+    expect(await stored(season.id)).toBeNull();
+  });
+
+  it("refuses a layout the final team count can't build, once the auction has run", async () => {
+    const { season } = await draftedSeason(5);
+    const res = await save(season.id, custom(2, 1, 4));
+    expect(res?.error).toBe(
+      "This layout doesn't fit the season's 5 teams: Two groups need at least 6 teams, 3 in each; there are 5. Nothing was changed.",
+    );
+    expect(await stored(season.id)).toBeNull();
+  });
+
+  it("refuses a malformed choice instead of clamping it", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    for (const fields of [custom(3, 1, 4), custom(2, 3, 4), custom(2, 1, 6), { formatChoice: "BOTH" }]) {
+      const res = await save(season.id, fields);
+      expect(res?.error, JSON.stringify(fields)).toMatch(/^Pick Recommended, or a layout/);
+    }
+    expect(await stored(season.id)).toBeNull();
+  });
+
+  it("refuses a stale form: another save landed after the page rendered", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.SIGNUPS });
+    for (let i = 0; i < 8; i++) await makeTeam(season.id, `Captain ${i}`, i);
+    const rendered = await claimOf(season.id);
+    expect((await save(season.id, custom(2, 1, 4)))?.error).toBeUndefined();
+    const stale = await saveSeasonFormat(empty, fd({ ...rendered, ...custom(1, 1, 8) }));
+    expect(stale?.error).toMatch(/while this page was open — reload/);
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+  });
+
+  it("changes only the playoff places of a built season, keeping every fixture and check-in", async () => {
+    const { season } = await draftedSeason(10);
+    expect((await generate(season.id))?.error).toBeUndefined();
+    const before = await fixtureIds(season.id);
+    const player = await makePlayer(season.id, "Checked in", 3000);
+    await prisma.matchAvailability.create({
+      data: { matchId: before[0], userId: player.id, status: "IN" },
+    });
+    const groups = await groupsOf(season.id);
+    const stampOf = async () =>
+      (await prisma.setting.findUnique({ where: { key: SETTING_KEYS.RESULT_CHANGED_AT } }))?.value ??
+      null;
+    await prisma.setting.deleteMany({ where: { key: SETTING_KEYS.RESULT_CHANGED_AT } });
+
+    // Two groups, top 4 of each, saved as a custom layout: Recommended's own
+    // cut, so nothing a player sees moves and the stamp stays put.
+    const same = await save(season.id, custom(2, 1, 8));
+    expect(same?.message).toMatch(/the fixtures and the playoff places stay as they are/);
+    expect(same?.message).not.toMatch(/only the playoff places changed/);
+    expect(await stampOf()).toBeNull();
+
+    const res = await save(season.id, custom(2, 1, 4));
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/the fixtures stay as they are; only the playoff places changed/);
+    // Public snapshots are keyed on the result stamp: the cut moved.
+    expect(await stampOf()).not.toBeNull();
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    expect(await fixtureIds(season.id)).toEqual(before);
+    expect(await groupsOf(season.id)).toEqual(groups);
+    expect(await prisma.matchAvailability.count({ where: { matchId: before[0] } })).toBe(1);
+    // The field now sends the top 2 of each group.
+    const field = projectPlayoffField(
+      await prisma.team.findMany({ where: { seasonId: season.id } }),
+      await prisma.match.findMany({ where: { seasonId: season.id } }),
+      { formatConfig: await stored(season.id) },
+    );
+    expect(field.bracketSize).toBe(4);
+  });
+
+  it("sends a change to the groups or rounds of a built season through Regenerate", async () => {
+    const { season } = await draftedSeason(10);
+    await generate(season.id);
+    const before = await fixtureIds(season.id);
+    for (const fields of [custom(1, 1, 4), custom(2, 2, 8)]) {
+      const res = await save(season.id, fields);
+      expect(res?.error, JSON.stringify(fields)).toBe(
+        "That changes the groups or how often teams meet, so the fixtures must be rebuilt. Use Regenerate schedule, which saves the layout with its new fixtures. Nothing was changed.",
+      );
+    }
+    expect(await stored(season.id)).toBeNull();
+    expect(await fixtureIds(season.id)).toEqual(before);
+  });
+
+  it("locks the format while a regular result stands, and a reopen unlocks it", async () => {
+    const { season } = await draftedSeason(6);
+    await generate(season.id);
+    await prisma.season.update({
+      where: { id: season.id },
+      data: { status: SEASON_STATUS.REGULAR_SEASON },
+    });
+    const [first] = await prisma.match.findMany({ where: { seasonId: season.id }, orderBy: { id: "asc" } });
+    await recordMatch(first.id, 2, 0);
+    const locked = await save(season.id, custom(1, 1, 2));
+    expect(locked?.error).toBe(
+      "Results are in, so this season's format is locked: it decides the playoff places those results count towards. Nothing was changed.",
+    );
+    expect(await stored(season.id)).toBeNull();
+
+    await prisma.match.update({
+      where: { id: first.id },
+      data: { status: "SCHEDULED", homeScore: 0, awayScore: 0, winnerTeamId: null },
+    });
+    expect((await save(season.id, custom(1, 1, 2)))?.error).toBeUndefined();
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 1, meet: 1, playoffs: 2 }));
+  });
+
+  it("locks the format in the playoffs", async () => {
+    const { season } = await draftedSeason(4);
+    await prisma.season.update({ where: { id: season.id }, data: { status: SEASON_STATUS.PLAYOFFS } });
+    const res = await save(season.id, custom(1, 1, 2));
+    expect(res?.error).toBe("The playoffs have started, so this season's format is locked. Nothing was changed.");
+  });
+
+  it("generates the layout the card posted and saves it with the fixtures", async () => {
+    const { season } = await draftedSeason(8);
+    const res = await generateWith(season.id, custom(2, 1, 4));
+    expect(res?.error).toBeUndefined();
+    expect(res?.message).toMatch(/Two groups of 4, drawn by roster MMR/);
+    // The cut isn't the team count's any more, so the toast and log name it.
+    expect(res?.message).toMatch(/ · the top 2 of each group make the playoffs · /);
+    const [logged] = await recentAdminActions(1);
+    expect(logged.summary).toMatch(/two groups of 4 · the top 2 of each group make the playoffs/);
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    const groups = await groupsOf(season.id);
+    expect([groups.A.length, groups.B.length, groups.none.length]).toEqual([4, 4, 0]);
+  });
+
+  it("regenerates a built season as the new layout: groups, fixtures and format together", async () => {
+    const { season } = await draftedSeason(10);
+    await generate(season.id);
+    const before = await fixtureIds(season.id);
+    const res = await generateWith(season.id, custom(1, 1, 4));
+    expect(res?.error).toBeUndefined();
+    const after = await fixtureIds(season.id);
+    expect(after).toHaveLength(45);
+    expect(after.some((id) => before.includes(id))).toBe(false);
+    expect((await groupsOf(season.id)).none).toHaveLength(10);
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 1, meet: 1, playoffs: 4 }));
+  });
+
+  it("generates Recommended over a stored custom layout and clears it", async () => {
+    const { season } = await draftedSeason(8);
+    const customJson = serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 })!;
+    await storeFormat(season.id, customJson);
+    const res = await generateWith(season.id, { formatChoice: "RECOMMENDED" }, customJson);
+    expect(res?.error).toBeUndefined();
+    // One table of 8, as the card previewed, not the stored two groups.
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(28);
+    expect((await groupsOf(season.id)).none).toHaveLength(8);
+    expect(await stored(season.id)).toBeNull();
+  });
+
+  it("replaces a format it can't read only with a layout the admin posted", async () => {
+    const unreadable = '{"v":2,"groups":3}';
+    const { season } = await draftedSeason(8);
+    await storeFormat(season.id, unreadable);
+    // The card's Generate posts its layout: that replaces the value.
+    const res = await generateWith(season.id, custom(2, 1, 4), unreadable);
+    expect(res?.error).toBeUndefined();
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    const built = await fixtureIds(season.id);
+    expect(built).toHaveLength(12);
+
+    // Built, then unreadable again (a rollback past a newer release that
+    // rebuilt it): a save can't tell whether the fixtures fit, so it refuses
+    // and sends the admin to Regenerate, which may still replace it.
+    await storeFormat(season.id, unreadable);
+    const saved = await save(season.id, custom(2, 1, 2));
+    expect(saved?.error).toBe(
+      "These fixtures were built from a format saved by a newer version of the site, so this version can't tell whether a new layout keeps them. Use Regenerate schedule, which saves the layout with its new fixtures. Nothing was changed.",
+    );
+    expect(await stored(season.id)).toBe(unreadable);
+    expect(await fixtureIds(season.id)).toEqual(built);
+    // A form with no layout (a swap, an old tab) still refuses.
+    const plain = await generate(season.id);
+    expect(plain?.error).toBe(FORMAT_UNREADABLE_MESSAGE);
+    const regenerated = await generateWith(season.id, { formatChoice: "RECOMMENDED" }, unreadable);
+    expect(regenerated?.error).toBeUndefined();
+    expect(await stored(season.id)).toBeNull();
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(28);
+  });
+
+  it("refuses a posted layout when the format changed after the page rendered", async () => {
+    const { season } = await draftedSeason(8);
+    // Another admin saved two groups; this page still showed Recommended.
+    await storeFormat(season.id, serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+    const res = await generateWith(season.id, custom(1, 1, 8), "RECOMMENDED");
+    expect(res?.error).toBe(
+      "The season format changed while this page was open. Nothing was changed; reload to see it.",
+    );
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 2, meet: 1, playoffs: 4 }));
+  });
+
+  it("refuses a posted layout the teams can't fill, and a form that doesn't say what it showed", async () => {
+    const { season } = await draftedSeason(5);
+    const unfit = await generateWith(season.id, custom(2, 1, 4));
+    expect(unfit?.error).toBe(
+      "This layout doesn't fit the season's teams: Two groups need at least 6 teams, 3 in each; there are 5. Nothing was changed.",
+    );
+    const unclaimed = await generateSchedule(
+      empty,
+      fd({ ...firstNightFields(), ...(await scheduleClaim(season.id)), ...custom(1, 1, 4) }),
+    );
+    expect(unclaimed?.error).toBe("This schedule form is stale — reload before generating the schedule.");
+    expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(0);
+    expect(await stored(season.id)).toBeNull();
+  });
+
+  // The two write-skew pairs. SQLite serializes writers, so only Postgres
+  // can interleave them; each rival commits between the reads and the write.
+  describe.skipIf(!ON_POSTGRES)("against a rival in the same moment", () => {
+    it("a save loses to the season's first result and is refused as locked", async () => {
+      const { season } = await draftedSeason(10);
+      await generate(season.id);
+      await prisma.season.update({
+        where: { id: season.id },
+        data: { status: SEASON_STATUS.REGULAR_SEASON },
+      });
+      const [first] = await prisma.match.findMany({
+        where: { seasonId: season.id },
+        orderBy: { id: "asc" },
+      });
+      let fired = false;
+      setRaceHook(
+        onceAt("admin.updateRenderedSeason.beforeWrite", async () => {
+          fired = true;
+          const recorded = await recordResult(
+            empty,
+            fd({ matchId: first.id, homeScore: "2", awayScore: "0" }),
+          );
+          expect(recorded?.error).toBeUndefined();
+        }),
+      );
+      // Read with no result in: a playoff-places change is allowed then.
+      const res = await save(season.id, custom(2, 1, 4));
+      expect(fired).toBe(true);
+      expect(res?.error).toMatch(/^Results are in, so this season's format is locked/);
+      expect(await stored(season.id)).toBeNull();
+      expect(
+        (await prisma.match.findUniqueOrThrow({ where: { id: first.id } })).status,
+      ).toBe("COMPLETED");
+    });
+
+    it("a rebuild loses to a format save and builds nothing from the old format", async () => {
+      const { season } = await draftedSeason(8);
+      let fired = false;
+      let saved: ActionResult | undefined;
+      setRaceHook(
+        onceAt("admin.generateSchedule.afterRead", async () => {
+          fired = true;
+          saved = await save(season.id, custom(1, 1, 2));
+        }),
+      );
+      // Built from Recommended (one table, top 4) as the page showed it.
+      const res = await generateWith(season.id, { formatChoice: "RECOMMENDED" });
+      expect(fired).toBe(true);
+      expect(saved?.error).toBeUndefined();
+      expect(res?.error).toMatch(/nothing was changed/i);
+      expect(await prisma.match.count({ where: { seasonId: season.id } })).toBe(0);
+      expect(await stored(season.id)).toBe(serializeFormatConfig({ groups: 1, meet: 1, playoffs: 2 }));
+    });
   });
 });

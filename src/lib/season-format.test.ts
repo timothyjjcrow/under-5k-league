@@ -24,6 +24,7 @@ import {
   seasonPlan,
   seedGroups,
   teamCountSeasonNote,
+  withBracket,
 } from "./season-format";
 import { playoffFirstRound } from "./schedule";
 
@@ -227,6 +228,33 @@ describe("playoffBracketSize", () => {
   });
 });
 
+describe("withBracket", () => {
+  it("prints the rounds a bracket shrunk by withdrawals will play", () => {
+    // A table of 9 sending 8, two teams withdrawn: Start playoffs seeds 4.
+    const topEight = buildSeasonFormat({ groups: 1, meet: 1, playoffs: 8 }, 9)!;
+    const shown = withBracket(topEight, 4);
+    expect(shown).toMatchObject({ playoffSpots: 4, playoffRounds: 2, totalWeeks: 12, teamCount: 9 });
+    expect(describeSeasonFormat(shown)).toContain("the top 4 play the semifinals and the grand final");
+    const first = new Date("2026-11-07T22:00:00Z");
+    expect(
+      seasonPlan(shown, first, undefined, null)
+        .filter((step) => step.kind === "PLAYOFF")
+        .map((step) => [step.label, step.fromWeek]),
+    ).toEqual([
+      ["Semifinals", 11],
+      ["Grand final", 12],
+    ]);
+    // Groups share the shrunk bracket.
+    expect(withBracket(buildSeasonFormat({ groups: 2, meet: 1, playoffs: 8 }, 8)!, 4).qualifiersPerGroup).toBe(2);
+  });
+
+  it("leaves a full or empty bracket as the format printed it", () => {
+    const topEight = buildSeasonFormat({ groups: 1, meet: 1, playoffs: 8 }, 9)!;
+    expect(withBracket(topEight, 8)).toBe(topEight);
+    expect(withBracket(topEight, 0)).toBe(topEight);
+  });
+});
+
 describe("seasonPlan", () => {
   it("lists the group stage, the tiebreaker week and each playoff round", () => {
     const first = new Date("2026-11-07T22:00:00Z");
@@ -300,6 +328,16 @@ describe("teamCountSeasonNote", () => {
 
   it("says a single week in the singular", () => {
     expect(seasonLengthPhrase(seasonFormat(2)!)).toContain("1 playoff week");
+  });
+
+  it("leaves out a neighbouring count the saved layout can't be built for", () => {
+    // Two groups, top 2 of each: 6 teams fit, 5 don't (3 in each group).
+    const stored = { formatConfig: '{"v":1,"groups":2,"meet":1,"playoffs":4}' };
+    const note = teamCountSeasonNote(stored, 6, (count) => count >= 6);
+    expect(note).not.toContain("5 teams");
+    expect(note).toContain("7 teams:");
+    // Without the check every neighbour is quoted, as before.
+    expect(teamCountSeasonNote(stored, 6)).toContain("5 teams:");
   });
 });
 

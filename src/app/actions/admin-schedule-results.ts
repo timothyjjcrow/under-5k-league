@@ -30,6 +30,7 @@ import {
   hasLaterBracketRound,
 } from "@/lib/schedule";
 import { regularScheduleRevision } from "@/lib/schedule-revision";
+import { formatProblems, formatToken, parseFormatChoice } from "@/lib/season-builder";
 import { playedSeriesFinalError, seriesScoreError } from "@/lib/standings";
 import {
   isPlayoffPhase,
@@ -67,8 +68,10 @@ import {
   formatName,
   parseFormatConfig,
   plannedSeasonFormat,
+  playoffEntrantsPhrase,
   regularSeasonFixtures,
   rosterAverageMmr,
+  serializeFormatConfig,
   seasonPlan,
   type SeasonFormat,
 } from "@/lib/season-format";
@@ -200,13 +203,32 @@ export async function generateSchedule(
     };
   }
 
-  // The format is the team count's (season-format.ts): nobody picks one
-  // table or groups, or a double round robin, here. A regenerate keeps the
-  // groups it finds (a swap survives a new first night) unless the admin
-  // asks for a fresh draw.
+  // The season builder's card posts the layout it previewed and the format
+  // it was rendered with; generate saves that layout with the fixtures it
+  // builds. A form without one builds the season's stored format. A
+  // regenerate keeps the groups it finds (a swap survives a new first night)
+  // unless the admin asks for a fresh draw or the layout changes them.
+  let format: { expected: string; next: string | null } | null = null;
+  if (str(formData, "formatChoice")) {
+    const choice = parseFormatChoice({
+      formatChoice: str(formData, "formatChoice"),
+      groups: str(formData, "groups"),
+      meet: str(formData, "meet"),
+      playoffs: str(formData, "playoffs"),
+    });
+    const expected = str(formData, "expectedFormat");
+    if (!choice || !expected) {
+      return { error: "This schedule form is stale — reload before generating the schedule." };
+    }
+    format = {
+      expected,
+      next: serializeFormatConfig(choice.kind === "CUSTOM" ? choice.knobs : null),
+    };
+  }
   return replaceRegularSchedule({
     expectedActiveSeasonId,
     expectedSchedule,
+    format,
     firstNight,
     groups: bool(formData, "redrawGroups") ? { kind: "DRAW" } : { kind: "AUTO" },
   });
@@ -237,6 +259,7 @@ export async function swapGroupTeams(
   return replaceRegularSchedule({
     expectedActiveSeasonId,
     expectedSchedule,
+    format: null,
     firstNight: null,
     groups: { kind: "SWAP", teamA, teamB },
   });
@@ -249,6 +272,12 @@ class ScheduleChangedError extends Error {}
 
 /** The season's stored format is one this version of the site can't read. */
 class FormatUnreadableError extends Error {}
+
+/** Another admin saved the season's format since the form rendered. */
+class FormatChangedError extends Error {}
+
+/** The layout can't be built for the season's teams; the message says why. */
+class FormatDoesNotFitError extends Error {}
 
 class FirstNightPassedError extends Error {
   constructor(readonly firstNight: Date | null) {
@@ -268,11 +297,14 @@ type GroupPlan =
  * draw by roster MMR (`AUTO` with none that fit, or `DRAW`), or the current
  * groups with two teams swapped (`SWAP`). `firstNight` null keeps the
  * season's own week-1 night (a swap). `expectedSchedule` is the
- * `regularScheduleRevision` of the fixtures the form showed.
+ * `regularScheduleRevision` of the fixtures the form showed. `format`, from
+ * the season builder's card, is the layout to save with the fixtures and the
+ * stored format it was rendered with; null builds the stored format.
  */
 async function replaceRegularSchedule(input: {
   expectedActiveSeasonId: string;
   expectedSchedule: string;
+  format: { expected: string; next: string | null } | null;
   firstNight: Date | null;
   groups: GroupPlan;
 }): Promise<ActionResult> {
@@ -387,12 +419,26 @@ async function replaceRegularSchedule(input: {
         if (withdrawn.length > 0) {
           throw new WithdrawnTeamsError(withdrawn.map((team) => team.name));
         }
-        // The season's stored format, or the Recommended one. A value this
-        // version can't read is never built as Recommended.
-        if (parseFormatConfig(currentSeason.formatConfig).kind === "UNREADABLE") {
-          throw new FormatUnreadableError();
+        // The layout the card posted (claimed against the format it was
+        // rendered with: another admin's save in between refuses), or the
+        // season's stored format, or the Recommended one. A stored value
+        // this version can't read is never built as Recommended: a form
+        // without a layout (a swap, a form from before the builder) refuses
+        // it, and a layout the builder posted replaces it.
+        if (
+          input.format &&
+          formatToken(currentSeason.formatConfig) !== input.format.expected
+        ) {
+          throw new FormatChangedError();
         }
-        const format = plannedSeasonFormat(currentSeason, teams.length);
+        const nextFormatConfig = input.format ? input.format.next : currentSeason.formatConfig;
+        const stored = parseFormatConfig(nextFormatConfig);
+        if (stored.kind === "UNREADABLE") throw new FormatUnreadableError();
+        if (stored.kind === "CUSTOM") {
+          const [unfit] = formatProblems(stored.knobs, teams.length).errors;
+          if (unfit) throw new FormatDoesNotFitError(unfit);
+        }
+        const format = plannedSeasonFormat({ formatConfig: nextFormatConfig }, teams.length);
         if (!format) throw new ScheduleNeedsTeamsError();
         const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
         if (!firstNight || firstNight.getTime() < Date.now()) {
@@ -484,6 +530,10 @@ async function replaceRegularSchedule(input: {
         // unchanged there.) A waiting standin request posts nothing: the
         // fixture it asked about is gone, and its captain asks again on the
         // new one if they still need cover.
+        // Test seam: every check above has read, nothing is written yet. A
+        // rival (a format save) committing here must cost this rebuild its
+        // Season write, never let it build fixtures for a stale format.
+        await raceHook("admin.generateSchedule.afterRead");
         const ids = regularIds;
         let cleared = {
           rsvps: 0,
@@ -575,9 +625,11 @@ async function replaceRegularSchedule(input: {
             data: { groupKey: key },
           });
         }
+        // The anchor and the format the fixtures were built from, in the
+        // same statement: while fixtures exist the stored format is theirs.
         const anchored = await tx.season.updateMany({
           where: { id: expectedActiveSeasonId, isActive: true },
-          data: { firstMatchNight: firstNight },
+          data: { firstMatchNight: firstNight, formatConfig: nextFormatConfig },
         });
         if (anchored.count !== 1) throw new ActiveSeasonChangedError();
         // The week reminders quoted kickoffs for fixtures that no longer exist.
@@ -630,6 +682,17 @@ async function replaceRegularSchedule(input: {
     }
     if (e instanceof FormatUnreadableError) {
       return { error: FORMAT_UNREADABLE_MESSAGE };
+    }
+    if (e instanceof FormatChangedError) {
+      return {
+        error:
+          "The season format changed while this page was open. Nothing was changed; reload to see it.",
+      };
+    }
+    if (e instanceof FormatDoesNotFitError) {
+      return {
+        error: `This layout doesn't fit the season's teams: ${e.message} Nothing was changed.`,
+      };
     }
     if (e instanceof WithdrawnTeamsError) {
       return {
@@ -697,7 +760,7 @@ async function replaceRegularSchedule(input: {
       (groupPlan.kind === "SWAP"
         ? `Swapped ${scheduleTeamNames.get(groupPlan.teamA) ?? "a team"} and ${scheduleTeamNames.get(groupPlan.teamB) ?? "a team"} between the groups and regenerated ${outcome.rows} regular-season fixture(s)`
         : `Generated ${outcome.rows} regular-season fixture(s)`) +
-      ` (${formatName(outcome.format).toLowerCase()}${groupsLine ? ` · ${groupsLine}` : ""})` +
+      ` (${formatName(outcome.format).toLowerCase()} · ${playoffEntrantsPhrase(outcome.format)} make the playoffs${groupsLine ? ` · ${groupsLine}` : ""})` +
       (outcome.cleared.rsvps ||
       outcome.cleared.picks ||
       outcome.cleared.covers ||
@@ -736,7 +799,7 @@ async function replaceRegularSchedule(input: {
   return {
     message: `${groupPlan.kind === "SWAP" ? "Groups swapped and schedule regenerated" : "Schedule generated"} · ${formatName(outcome.format)}${groupsFrom}${
       groupsLine ? ` (${groupsLine})` : ""
-    } · ${outcome.rows} matches over ${outcome.weeks} week(s) · week 1: ${formatLeagueTime(outcome.firstNight)}, then weekly${
+    } · ${playoffEntrantsPhrase(outcome.format)} make the playoffs · ${outcome.rows} matches over ${outcome.weeks} week(s) · week 1: ${formatLeagueTime(outcome.firstNight)}, then weekly${
       tiebreakerNight && playoffNight
         ? ` · tiebreaker week ${formatLeagueTime(tiebreakerNight)} (only if a tie needs it), playoffs from ${formatLeagueTime(playoffNight)}`
         : ""

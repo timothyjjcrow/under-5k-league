@@ -85,6 +85,13 @@ auto-import), `assignStandinGuarded` (double-covered seat), and `deleteSeason`
   `$transaction` for this reason; its rival is an admin removal, which a blind
   write would turn from REMOVED into a WITHDRAWN the player can re-register from.
 
+- **Where SSI itself is the guard, sabotage the isolation.** A write-skew pair
+  has no predicate to delete: a format save that counts results, against
+  `recordResult` (`admin.updateRenderedSeason.beforeWrite`), and a rebuild that
+  read the format, against a format save (`admin.generateSchedule.afterRead`).
+  Their seam tests go red with the transaction downgraded to ReadCommitted,
+  which is how to check them.
+
 ## Per-instance caches: the inhouse room snapshot
 
 Each server instance serves the inhouse room from one copy of its rows,

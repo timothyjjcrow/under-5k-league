@@ -1,6 +1,7 @@
-// The schedule card's format box (/admin): the season the team count makes
+// The schedule card's format box (/admin): the season as stored or built
 // (one table or two groups, season-format.ts), its calendar, and in a group
 // season each group, with a swap while the schedule can still be rebuilt.
+// The season builder beside it is where the layout is chosen.
 
 import { swapGroupTeams } from "@/app/actions/admin-schedule-results";
 import { ActionForm } from "@/components/action-form";
@@ -9,13 +10,16 @@ import { SeasonPlanList } from "@/components/season-plan";
 import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
+  formatBracketSize,
   formatName,
+  parseFormatConfig,
   plannedSeasonFormat,
   resolveSeasonFormat,
   seasonPlan,
+  withBracket,
 } from "@/lib/season-format";
 
-type FormatTeam = { id: string; name: string; groupKey: string | null };
+type FormatTeam = { id: string; name: string; groupKey: string | null; withdrawn?: boolean };
 
 const FIELD =
   "h-8 min-w-0 max-w-full rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg";
@@ -48,7 +52,13 @@ export function SeasonFormatControls({
   // the groups the team count now sets, so say so before anyone clicks.
   const planned = plannedSeasonFormat(season, teams.length);
   const rebuildsAs = planned && planned.kind !== format.kind ? planned : null;
-  const plan = seasonPlan(format, firstMatchNight, lastRegularWeek || format.regularWeeks);
+  // Withdrawals can shrink the bracket below the format's: show the rounds
+  // Start playoffs will build (the format itself stays as built).
+  const shown = withBracket(
+    format,
+    formatBracketSize(format, teams.filter((team) => !team.withdrawn).length),
+  );
+  const plan = seasonPlan(shown, firstMatchNight, lastRegularWeek || format.regularWeeks);
   const groups =
     format.kind === "GROUPS"
       ? SEASON_GROUP_KEYS.map((key) => ({
@@ -68,10 +78,12 @@ export function SeasonFormatControls({
         Season format · {teams.length} teams
       </h3>
       <p className="mt-0.5 text-xs text-muted">
-        {describeSeasonFormat(format)}{" "}
+        {describeSeasonFormat(shown)}{" "}
         {rebuildsAs
           ? "This schedule was generated as one table before groups existed;"
-          : "The site sets this from the team count;"}{" "}
+          : parseFormatConfig(season.formatConfig).kind === "CUSTOM"
+            ? "An admin chose this layout in the season builder;"
+            : "Recommended for this many teams;"}{" "}
         one week after the regular season is kept for tiebreakers.
       </p>
       {rebuildsAs && regenerateOpen ? (
