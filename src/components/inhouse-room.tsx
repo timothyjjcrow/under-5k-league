@@ -694,6 +694,7 @@ export function InhouseRoom({
       lobbyId: state.lobby?.id ?? null,
       pendingIds: state.pendingResults.map((p) => p.id),
       inQueue: state.me.inQueue,
+      duelAcceptId: state.duel.me?.canAccept ? state.duel.me.duelId : null,
     };
     const prev = prevAlertRef.current;
 

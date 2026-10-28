@@ -1827,14 +1827,29 @@ describe("1v1 bot jobs (kind duel)", () => {
       return u;
     }
 
-    it("asks the bot for the pair's lobby right after the join that pairs them", async () => {
-      const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
+    // Both players accept first (2026-10-28): the join that pairs them asks
+    // nothing, and the accept that completes the pair asks for the lobby.
+    async function pairAndAccept(waiter: Awaited<ReturnType<typeof makeUser>>, joiner: Awaited<ReturnType<typeof makeUser>>) {
+      const { acceptDuel, joinDuelQueue } = await import("@/lib/inhouse-duel-service");
+      expect(await joinDuelQueue(asSession(joiner))).toEqual({ ok: true });
+      const duel = await prisma.inhouseDuel.findFirstOrThrow();
+      expect(duel.status).toBe("ACCEPTING");
+      return {
+        duel,
+        accept: (u: Awaited<ReturnType<typeof makeUser>>) => acceptDuel(asSession(u), duel.id),
+      };
+    }
+
+    it("asks the bot for the pair's lobby only once both players accepted", async () => {
       const waiter = await queued("Waiter");
       const joiner = await makeUser("Joiner");
       const calls = fakeBot(() => ({ state: "creating" }));
-      expect(await joinDuelQueue(asSession(joiner))).toEqual({ ok: true });
-      const duel = await prisma.inhouseDuel.findFirstOrThrow();
-      expect(duel.status).toBe("READY");
+      const { duel, accept } = await pairAndAccept(waiter, joiner);
+      expect(calls).toEqual([]);
+      expect(await accept(waiter)).toEqual({ ok: true });
+      expect(calls).toEqual([]);
+      expect(await accept(joiner)).toEqual({ ok: true });
+      expect(await statusOf(duel.id)).toBe("READY");
       expect(calls).toHaveLength(1);
       expect(calls[0]).toMatchObject({
         action: "create",
@@ -1848,7 +1863,8 @@ describe("1v1 bot jobs (kind duel)", () => {
     it("asks nothing for a join that only waits, or while the bot is saved for a 5v5", async () => {
       const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
       const calls = fakeBot(() => ({ state: "creating" }));
-      expect(await joinDuelQueue(asSession(await makeUser("Alone")))).toEqual({ ok: true });
+      const alone = await makeUser("Alone");
+      expect(await joinDuelQueue(asSession(alone))).toEqual({ ok: true });
       expect(calls).toEqual([]);
       const captain = await makeUser("Five Captain");
       await prisma.inhouseLobby.create({
@@ -1857,17 +1873,22 @@ describe("1v1 bot jobs (kind duel)", () => {
           players: { create: { userId: captain.id, team: 1, isCaptain: true } },
         },
       });
-      expect(await joinDuelQueue(asSession(await makeUser("Second")))).toEqual({ ok: true });
-      expect(await statusOf((await prisma.inhouseDuel.findFirstOrThrow()).id)).toBe("READY");
+      const second = await makeUser("Second");
+      const { duel, accept } = await pairAndAccept(alone, second);
+      await accept(alone);
+      await accept(second);
+      expect(await statusOf(duel.id)).toBe("READY");
       expect(calls).toEqual([]);
     });
 
     it("takes a busy bot quietly: the pair stays READY", async () => {
-      const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
-      await queued("Waiter");
+      const waiter = await queued("Waiter");
+      const joiner = await makeUser("Joiner");
       const calls = fakeBot(() => ({ code: "BUSY" }), "inhouse:somewhere:1");
-      expect(await joinDuelQueue(asSession(await makeUser("Joiner")))).toEqual({ ok: true });
-      expect(await statusOf((await prisma.inhouseDuel.findFirstOrThrow()).id)).toBe("READY");
+      const { duel, accept } = await pairAndAccept(waiter, joiner);
+      await accept(waiter);
+      await accept(joiner);
+      expect(await statusOf(duel.id)).toBe("READY");
       expect(calls.map((c) => c.action)).toEqual(["create", "health"]);
     });
 

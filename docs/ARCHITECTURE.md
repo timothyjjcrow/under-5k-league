@@ -623,9 +623,10 @@ same page, room and route on their own tables (`InhouseDuelQueueEntry`,
 `inhouse-duel-service.ts`, the room's rows in `inhouse-duel-room.ts` (an
 additive `duel` block in the room's reply), the bot side in
 `inhouse-duel-bot.ts`, and `duel*` actions on `POST /api/inhouse`. Join pairs
-at once (READY), the bot's reads move a duel to PLAYING and AWAITING_RESULT,
+at once (ACCEPTING), both players' accepts make it READY and ask the bot for
+the lobby, the bot's reads move a duel to PLAYING and AWAITING_RESULT,
 and OpenDota's match closes it COMPLETED (or a clock, a call-off or an admin
-CANCELLED). Their clocks, the bot's reads and the result scan are
+CANCELLED). Their clocks (the accept's too), the bot's reads and the result scan are
 worker-only (`syncInhouseDuels` after the 5v5 half of `syncInhouse`); the
 1v1 Elo is derived from completed duels, like the 5v5 ladder.
 

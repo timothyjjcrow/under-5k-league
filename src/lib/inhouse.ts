@@ -422,7 +422,12 @@ export function autoJoinAlreadyInToast(me: {
  * flip keeps `inLobby` true, and so does a poll that skips the vote entirely.
  */
 export type InhouseAlert =
-  "lobby-formed" | "vote-opened" | "my-turn" | "teams-ready" | "game-ended";
+  | "lobby-formed"
+  | "vote-opened"
+  | "my-turn"
+  | "teams-ready"
+  | "game-ended"
+  | "duel-found";
 
 /**
  * What the room knows about the viewer, per poll. The room keeps ONE ref
@@ -444,6 +449,12 @@ export type InhouseAlertSnapshot = {
   pendingIds?: readonly string[];
   /** `me.inQueue`. */
   inQueue?: boolean;
+  /**
+   * The viewer's 1v1 waiting for their accept (`duel.me.canAccept ?
+   * duel.me.duelId : null`). Only the two paired players ever have one: the
+   * duel block is per viewer.
+   */
+  duelAcceptId?: string | null;
 };
 
 /**
@@ -503,6 +514,12 @@ export function inhouseAlerts(
   // gets resultLandedToast instead.
   if (next.resultId && prev.resultId !== next.resultId && next.status === null) {
     alerts.push("game-ended");
+  }
+  // A 1v1 paired under the viewer, waiting for their accept. Keyed on the
+  // duel id, so a second pairing inside one hidden-tab gap still rings, and
+  // an accept (which clears it) never does.
+  if (next.duelAcceptId && next.duelAcceptId !== prev.duelAcceptId) {
+    alerts.push("duel-found");
   }
   return alerts;
 }

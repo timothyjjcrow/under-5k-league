@@ -36,7 +36,8 @@ const count = new Intl.NumberFormat("en-US");
  * The 1v1 mid card (docs/features/inhouse-duels.md): its own section under
  * every 5v5 card in the room, never above or inside the 5v5 queue card.
  * Join 1v1 pairs the viewer with the oldest present waiter, or queues them;
- * a pair's lobby is the bot's (bot only). The viewer's own 1v1, their last
+ * both players accept (only these two see the prompt, the bell and the
+ * desktop alert), then the pair's lobby is the bot's (bot only). The viewer's own 1v1, their last
  * result for 10 minutes, the waiters, the other live 1v1s one line each,
  * and an admin's rows. Every action goes through the room's act(), and the
  * card's rules are the pure helpers in inhouse-duel.ts.
@@ -120,6 +121,8 @@ export function DuelSection({
             <DuelGameCard
               game={myGame}
               viewerId={viewerId}
+              canAccept={me.canAccept}
+              canDecline={me.canDecline}
               canCallOff={me.canCallOff}
               canOver={me.canOver}
               canRecord={me.canRecord}

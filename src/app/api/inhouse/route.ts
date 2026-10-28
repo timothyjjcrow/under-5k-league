@@ -25,8 +25,10 @@ import {
   startGame,
 } from "@/lib/inhouse-service";
 import {
+  acceptDuel,
   callOffDuel,
   cancelDuel,
+  declineDuel,
   finishDuel,
   joinDuelQueue,
   leaveDuelQueue,
@@ -78,6 +80,8 @@ const MUTATION_ACTIONS = new Set([
   // The 1v1 mid queue and duels (inhouse-duel-service.ts).
   "duelJoin",
   "duelLeave",
+  "duelAccept",
+  "duelDecline",
   "duelOver",
   "duelCallOff",
   "duelRecord",
@@ -287,12 +291,19 @@ export async function POST(req: NextRequest) {
         res = await removeFromQueue(user, String(body.userId ?? ""));
         break;
       case "duelJoin":
-        // A pair formed here asks the bot for its lobby after the response
-        // (joinDuelQueue's runAfterResponse).
+        // A pair formed here is ACCEPTING: both players accept first.
         res = await joinDuelQueue(user);
         break;
       case "duelLeave":
         res = await leaveDuelQueue(user);
+        break;
+      case "duelAccept":
+        // The second accept asks the bot for the lobby after the response
+        // (acceptDuel's runAfterResponse).
+        res = await acceptDuel(user, duelId);
+        break;
+      case "duelDecline":
+        res = await declineDuel(user, duelId);
         break;
       case "duelOver":
         // "1v1 over": the fallback for a bot game whose end the bot missed.

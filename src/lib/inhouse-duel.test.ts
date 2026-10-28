@@ -13,7 +13,15 @@ import {
   DUEL_SIGN_IN_RETURN,
   DUEL_WAITING_NOTE,
   assignDuelSides,
+  duelAcceptEndsAtMs,
+  duelAcceptExpired,
+  duelAcceptOpenAfter,
   duelAdminToolsVisible,
+  duelBothAccepted,
+  duelIsLive,
+  duelIsOpen,
+  duelRequeueAfterAccept,
+  duelTakesResult,
   duelCancelLine,
   duelEndReason,
   duelBotEndedWithoutGame,
@@ -440,6 +448,8 @@ describe("buildDuelState", () => {
     radiantHeroId: null,
     direHeroId: null,
     endReason: null,
+    radiantAcceptedAt: null,
+    direAcceptedAt: null,
     radiantUser: user(radiant),
     direUser: user(dire),
     ...over,
@@ -609,6 +619,73 @@ describe("buildDuelState", () => {
     });
     expect(me([off("c", 1000, duelEndReason.neverPlayed()), older]).lastCancelled?.duelId).toBe("c");
   });
+
+  it("gives only the two paired players the accept, and only until it runs out", () => {
+    const rows = {
+      queue: [queueRow("w", 5)],
+      duels: [
+        duelRow("d", INHOUSE_DUEL_STATUS.ACCEPTING, "a", "b", {
+          createdAt: sec(10),
+          radiantAcceptedAt: sec(5),
+        }),
+      ],
+    };
+    const a = buildDuelState({ id: "a", role: "PLAYER" }, rows, noExtras, NOW);
+    const b = buildDuelState({ id: "b", role: "PLAYER" }, rows, noExtras, NOW);
+    const other = buildDuelState({ id: "w", role: "PLAYER" }, rows, noExtras, NOW);
+    // a accepted: no accept left, Decline still there.
+    expect([a.me?.duelId, a.me?.canAccept, a.me?.canDecline]).toEqual(["d", false, true]);
+    expect([b.me?.duelId, b.me?.canAccept, b.me?.canDecline]).toEqual(["d", true, true]);
+    // Anyone else: no accept, no decline, and their own queue row is unchanged.
+    expect([other.me?.duelId, other.me?.canAccept, other.me?.canDecline]).toEqual([null, false, false]);
+    expect(other.me?.inQueue).toBe(true);
+    expect(b.games[0]).toMatchObject({
+      status: INHOUSE_DUEL_STATUS.ACCEPTING,
+      acceptEndsAt: sec(10).getTime() + INHOUSE_DUEL.ACCEPT_SECONDS * 1000,
+      radiantAccepted: true,
+      direAccepted: false,
+      setupEndsAt: null,
+      giveUpAt: null,
+    });
+    // Nothing to record, call off or mark over before the lobby exists.
+    expect([b.me?.canRecord, b.me?.canCallOff, b.me?.canOver]).toEqual([false, false, false]);
+    // A paired player can't join the 1v1 queue again meanwhile.
+    expect(b.me?.joinRefusal).toBe(DUEL_REFUSAL.IN_DUEL);
+    // Out of time: no accept, though the duel shows until the worker closes it.
+    const late = buildDuelState(
+      { id: "b", role: "PLAYER" },
+      rows,
+      noExtras,
+      sec(10).getTime() + INHOUSE_DUEL.ACCEPT_SECONDS * 1000,
+    );
+    expect([late.me?.canAccept, late.me?.canDecline]).toEqual([false, true]);
+  });
+
+  it("tells a player put back in the queue so, beside the reason", () => {
+    const cancelled = (endReason: string) =>
+      duelRow("d", INHOUSE_DUEL_STATUS.CANCELLED, "a", "b", {
+        completedAt: sec(5),
+        endReason,
+      });
+    const requeued = buildDuelState(
+      { id: "b", role: "PLAYER" },
+      { queue: [queueRow("b", 60)], duels: [cancelled(duelEndReason.declined("A"))] },
+      noExtras,
+      NOW,
+    );
+    expect(requeued.me?.lastCancelled?.line).toBe(
+      "The 1v1 was declined, so it was called off. You're back at the front of the 1v1 queue.",
+    );
+    const dropped = buildDuelState(
+      { id: "a", role: "PLAYER" },
+      { queue: [], duels: [cancelled(duelEndReason.notAccepted(["A"]))] },
+      noExtras,
+      NOW,
+    );
+    expect(dropped.me?.lastCancelled?.line).toBe(
+      "The 1v1 wasn't accepted in time, so it was called off.",
+    );
+  });
 });
 
 describe("the lobby bot", () => {
@@ -687,9 +764,9 @@ describe("the 1v1 block's clocks (the long-poll's wake)", () => {
     const clocks = duelRoomClocks({
       queue: [{ lastSeenAt, expiresAt }],
       duels: [
-        { status: INHOUSE_DUEL_STATUS.COMPLETED, completedAt },
-        { status: INHOUSE_DUEL_STATUS.PLAYING, completedAt: null },
-        { status: INHOUSE_DUEL_STATUS.CANCELLED, completedAt: sec(40) },
+        { status: INHOUSE_DUEL_STATUS.COMPLETED, createdAt: sec(60), completedAt },
+        { status: INHOUSE_DUEL_STATUS.PLAYING, createdAt: sec(60), completedAt: null },
+        { status: INHOUSE_DUEL_STATUS.CANCELLED, createdAt: sec(60), completedAt: sec(40) },
       ],
     });
     const resultEnds = completedAt.getTime() + INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1;
@@ -763,6 +840,8 @@ describe("the 1v1 card's rules", () => {
     queuedAt: null,
     queueExpiresAt: null,
     duelId: null,
+    canAccept: false,
+    canDecline: false,
     joinRefusal: null,
     canJoin: true,
     canLeave: false,
@@ -861,7 +940,8 @@ describe("the 1v1 card's rules", () => {
     const user = { id: "a", name: "A", avatar: null, rankTier: null };
     const game = {
       id: "g", status: "READY", radiant: user, dire: { ...user, id: "b" }, createdAt: NOW,
-      startedAt: null, finishedAt: null, setupEndsAt: NOW, giveUpAt: null, mine: false, canCancel: true,
+      startedAt: null, finishedAt: null, acceptEndsAt: null, radiantAccepted: true, direAccepted: true,
+      setupEndsAt: NOW, giveUpAt: null, mine: false, canCancel: true,
     };
     expect(duelAdminToolsVisible({ ...empty, games: [game] })).toBe(true);
     expect(duelAdminToolsVisible({ ...empty, games: [{ ...game, canCancel: false }] })).toBe(false);
@@ -872,6 +952,75 @@ describe("the 1v1 card's rules", () => {
     expect(duelResultLanded(["a"], ["a"])).toBe(false);
     expect(duelResultLanded(["a"], [])).toBe(false);
     expect(duelResultLanded(["a"], ["b", "a"])).toBe(true);
+  });
+});
+
+describe("the accept step", () => {
+  const accepting = (
+    over: Partial<{ radiantAcceptedAt: Date | null; direAcceptedAt: Date | null; createdAt: Date }> = {},
+  ) => ({
+    status: INHOUSE_DUEL_STATUS.ACCEPTING as string,
+    createdAt: sec(10),
+    radiantUserId: "a",
+    direUserId: "b",
+    radiantAcceptedAt: null as Date | null,
+    direAcceptedAt: null as Date | null,
+    ...over,
+  });
+
+  it("is open and holds its players, but has no lobby and takes no result", () => {
+    expect(duelIsOpen(INHOUSE_DUEL_STATUS.ACCEPTING)).toBe(true);
+    expect(duelIsLive(INHOUSE_DUEL_STATUS.ACCEPTING)).toBe(true);
+    expect(duelTakesResult(INHOUSE_DUEL_STATUS.ACCEPTING)).toBe(false);
+    expect(duelStageLabel(INHOUSE_DUEL_STATUS.ACCEPTING)).toBe("Accepting");
+    expect(duelIsOpen(INHOUSE_DUEL_STATUS.CANCELLED)).toBe(false);
+  });
+
+  it("runs ACCEPT_SECONDS from the pairing, split exactly between an accept and the expiry", () => {
+    const d = accepting();
+    const ends = duelAcceptEndsAtMs(d);
+    expect(ends).toBe(sec(10).getTime() + INHOUSE_DUEL.ACCEPT_SECONDS * 1000);
+    expect(duelAcceptExpired(d, ends - 1)).toBe(false);
+    expect(duelAcceptExpired(d, ends)).toBe(true);
+    // An accept claims createdAt > openAfter; the expiry createdAt <= openAfter.
+    expect(d.createdAt.getTime() > duelAcceptOpenAfter(ends - 1).getTime()).toBe(true);
+    expect(d.createdAt.getTime() > duelAcceptOpenAfter(ends).getTime()).toBe(false);
+    // Only ACCEPTING expires.
+    expect(duelAcceptExpired({ ...d, status: INHOUSE_DUEL_STATUS.READY }, ends + 1)).toBe(false);
+    expect(duelNextClockMs({ ...d, startedAt: null, checkedAt: null })).toBe(ends);
+  });
+
+  it("is both accepted only with both stamps", () => {
+    expect(duelBothAccepted(accepting())).toBe(false);
+    expect(duelBothAccepted(accepting({ radiantAcceptedAt: sec(5) }))).toBe(false);
+    expect(duelBothAccepted(accepting({ radiantAcceptedAt: sec(5), direAcceptedAt: sec(4) }))).toBe(true);
+  });
+
+  it("puts back the other player on a decline, and only those who accepted on a timeout", () => {
+    // b declined before a answered: a goes back, seen at the pairing.
+    expect(duelRequeueAfterAccept(accepting(), "b")).toEqual([{ userId: "a", seenAt: sec(10) }]);
+    // a declined after b accepted: b goes back, seen at their accept.
+    expect(duelRequeueAfterAccept(accepting({ direAcceptedAt: sec(3) }), "a")).toEqual([
+      { userId: "b", seenAt: sec(3) },
+    ]);
+    // Time ran out: whoever accepted goes back; nobody who didn't.
+    expect(duelRequeueAfterAccept(accepting({ radiantAcceptedAt: sec(6) }), null)).toEqual([
+      { userId: "a", seenAt: sec(6) },
+    ]);
+    expect(duelRequeueAfterAccept(accepting(), null)).toEqual([]);
+  });
+
+  it("wakes the worker every pass while a duel is accepting", () => {
+    expect(
+      duelWorkerWakeAtMs({ queue: [], duels: [{ ...accepting(), startedAt: null, checkedAt: null }] }, NOW),
+    ).toBe(NOW);
+  });
+
+  it("wakes the held long-poll when the accept runs out (canAccept turns false)", () => {
+    const d = accepting();
+    expect(
+      duelRoomClocks({ queue: [], duels: [{ status: d.status, createdAt: d.createdAt, completedAt: null }] }),
+    ).toEqual([duelAcceptEndsAtMs(d)]);
   });
 });
 
@@ -896,7 +1045,7 @@ describe("the 1v1 card's source", () => {
     }
     // Every 1v1 action the route takes is wired somewhere on the card.
     const all = section + card + admin;
-    for (const action of ["duelJoin", "duelLeave", "duelOver", "duelCallOff", "duelRecord", "duelCancel", "duelRemove", "duelVoid"]) {
+    for (const action of ["duelJoin", "duelLeave", "duelAccept", "duelDecline", "duelOver", "duelCallOff", "duelRecord", "duelCancel", "duelRemove", "duelVoid"]) {
       expect(all, action).toContain(`action: "${action}"`);
     }
   });
@@ -943,6 +1092,10 @@ describe("the 1v1 card's source", () => {
       expect(all, name).not.toContain(name);
     }
     expect(all).not.toMatch(/>\s*MMR\s*</);
+    // The 5v5 ready check's "Decline" button: the 1v1's says which it is.
+    expect(all).not.toMatch(/>\s*Decline\s*</);
+    expect(card).toContain("Decline 1v1");
+    expect(card).toContain("Accept 1v1");
   });
 
   it("the room renders it below every 5v5 card", () => {

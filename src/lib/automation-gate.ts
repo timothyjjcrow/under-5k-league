@@ -4,7 +4,7 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
-  INHOUSE_DUEL_RESULT_STATUSES,
+  INHOUSE_DUEL_OPEN_STATUSES,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -830,16 +830,16 @@ export function computeAutomationGateSnapshot(
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
   // The 1v1 duels' worker steps (runDuelWorkerSteps): every pass while a
-  // duel is live (the bot's reads, the READY duel's lobby create retry) or
-  // two present waiters could pair, else the queue expiries and each open
-  // duel's scan, setup call-off and give-up clocks.
+  // duel is live (an accept clock, the bot's reads, the READY duel's lobby
+  // create retry) or two present waiters could pair, else the queue expiries
+  // and each open duel's scan, setup call-off and give-up clocks.
   for (const [index, entry] of inputs.duelQueue.entries()) {
     dateMs(entry.lastSeenAt, `duelQueue[${index}].lastSeenAt`);
     dateMs(entry.expiresAt, `duelQueue[${index}].expiresAt`);
   }
   for (const [index, duel] of inputs.openDuels.entries()) {
     invariant(
-      INHOUSE_DUEL_RESULT_STATUSES.includes(duel.status as never),
+      INHOUSE_DUEL_OPEN_STATUSES.includes(duel.status as never),
       "duel status is unknown",
     );
     dateMs(duel.createdAt, `openDuels[${index}].createdAt`);
@@ -1419,7 +1419,7 @@ export async function loadAutomationGateSnapshot(
       select: { lastSeenAt: true, expiresAt: true },
     }),
     prisma.inhouseDuel.findMany({
-      where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+      where: { status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
       take: 200,
       select: {

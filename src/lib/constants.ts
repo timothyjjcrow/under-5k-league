@@ -601,7 +601,10 @@ export const INHOUSE = {
 // over" kept as the fallback for a bot game whose end the bot missed.
 
 export const INHOUSE_DUEL_STATUS = {
-  // Paired; waiting for the bot to host and launch the lobby.
+  // Paired; each player has ACCEPT_SECONDS to accept before the bot is asked
+  // for a lobby. Both accepting makes it READY.
+  ACCEPTING: "ACCEPTING",
+  // Both accepted; waiting for the bot to host and launch the lobby.
   READY: "READY",
   // The bot saw the game launch.
   PLAYING: "PLAYING",
@@ -616,6 +619,15 @@ export type InhouseDuelStatus =
 // A duel holds its two players until its game is over: they can't join the
 // 1v1 queue again meanwhile.
 export const INHOUSE_DUEL_LIVE_STATUSES: InhouseDuelStatus[] = [
+  INHOUSE_DUEL_STATUS.ACCEPTING,
+  INHOUSE_DUEL_STATUS.READY,
+  INHOUSE_DUEL_STATUS.PLAYING,
+];
+
+// Where the lobby bot may hold the duel's lobby or game: the worker reads the
+// bot for these, and only these move on the bot's reads. An ACCEPTING duel
+// has no lobby yet.
+export const INHOUSE_DUEL_BOT_STATUSES: InhouseDuelStatus[] = [
   INHOUSE_DUEL_STATUS.READY,
   INHOUSE_DUEL_STATUS.PLAYING,
 ];
@@ -627,6 +639,13 @@ export const INHOUSE_DUEL_RESULT_STATUSES: InhouseDuelStatus[] = [
   INHOUSE_DUEL_STATUS.AWAITING_RESULT,
 ];
 
+// Not closed yet: the room shows it, an admin can cancel it, and the worker
+// has a clock for it.
+export const INHOUSE_DUEL_OPEN_STATUSES: InhouseDuelStatus[] = [
+  INHOUSE_DUEL_STATUS.ACCEPTING,
+  ...INHOUSE_DUEL_RESULT_STATUSES,
+];
+
 export const INHOUSE_DUEL = {
   // A waiter counts as present (and can be paired) when their room heartbeat
   // is at most this old.
@@ -635,6 +654,10 @@ export const INHOUSE_DUEL = {
   HEARTBEAT_SECONDS: 30,
   // A queue row expires this long after the (latest) join.
   QUEUE_MINUTES: 30,
+  // A new pair has this long to accept (ACCEPTING) before the bot is asked
+  // for a lobby. Whoever didn't accept leaves the queue; whoever did goes
+  // back to its front.
+  ACCEPT_SECONDS: 60,
   // A READY duel with no started game this long after it was paired is
   // called off ("never-played"), whether the bot was busy or nobody came.
   SETUP_MINUTES: 30,

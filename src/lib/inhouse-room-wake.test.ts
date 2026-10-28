@@ -294,6 +294,7 @@ describe("a throttled board edit's retry", () => {
         duels: [
           {
             status: INHOUSE_DUEL_STATUS.COMPLETED,
+            createdAt: new Date(NOW - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS),
             completedAt: new Date(NOW - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 30 * SEC),
           },
         ],

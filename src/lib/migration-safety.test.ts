@@ -179,6 +179,7 @@ describe("migration SQL safety gate", () => {
       "20261025120000_standin_request",
       "20261028120000_inhouse_duel",
       "20261028130000_draft_clocks",
+      "20261029120000_inhouse_duel_accept",
     ]);
   });
 

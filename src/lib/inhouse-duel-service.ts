@@ -13,12 +13,18 @@ import { prisma } from "./prisma";
 import {
   INHOUSE_ACTIVE_STATUSES,
   INHOUSE_DUEL,
+  INHOUSE_DUEL_BOT_STATUSES,
   INHOUSE_DUEL_LIVE_STATUSES,
+  INHOUSE_DUEL_OPEN_STATUSES,
   INHOUSE_DUEL_RESULT_STATUSES,
   INHOUSE_DUEL_STATUS,
 } from "./constants";
 import {
   assignDuelSides,
+  duelAcceptExpired,
+  duelAcceptOpenAfter,
+  duelBothAccepted,
+  duelRequeueAfterAccept,
   DUEL_NO_BOT_NOTE,
   duelIsLive,
   duelTakesResult,
@@ -156,8 +162,10 @@ async function readPresentWaiters(tx: Tx, nowMs: number): Promise<DuelWaiter[]> 
 /**
  * The pair claim, inside the pairing transaction: delete exactly the queue
  * rows judged (the waiter's, and the joiner's own when they had one), then
- * create the duel. Any other count throws DuelPairRaceError: the delete may
- * already have removed one row, and a return would commit that.
+ * create the duel, ACCEPTING: both players get ACCEPT_SECONDS to accept
+ * before the bot is asked for a lobby. Any other count throws
+ * DuelPairRaceError: the delete may already have removed one row, and a
+ * return would commit that.
  */
 async function claimPair(
   tx: Tx,
@@ -172,6 +180,7 @@ async function claimPair(
   const sides = assignDuelSides(firstUserId, secondUserId);
   const duel = await tx.inhouseDuel.create({
     data: {
+      status: INHOUSE_DUEL_STATUS.ACCEPTING,
       radiantUserId: sides.radiantUserId,
       direUserId: sides.direUserId,
     },
@@ -204,8 +213,8 @@ type JoinOutcome =
 
 /**
  * "Join 1v1" (refused while no lobby bot can host 1v1s here): pair with the
- * oldest PRESENT waiter who isn't in a live 5v5 lobby or a live duel, or
- * wait. A repeat join refreshes the row's expiry
+ * oldest PRESENT waiter who isn't in a live 5v5 lobby or a live duel (the
+ * pair then has ACCEPT_SECONDS to accept: acceptDuel), or wait. A repeat join refreshes the row's expiry
  * (and its place, once it had expired) and tries the pairing again.
  *
  * Serializable, retried with a jittered wait: the transaction reads the 1v1
@@ -308,15 +317,10 @@ export async function joinDuelQueue(viewer: SessionUser): Promise<DuelActionResu
     outcome = { kind: "queued" };
   }
   if (outcome.kind === "refused") return { ok: false, error: outcome.error };
-  // Rule P: the queue row or the new duel is committed.
+  // Rule P: the queue row or the new duel is committed. A new pair waits for
+  // both accepts (acceptDuel asks the bot for its lobby); the worker's
+  // accept clock needs a wake, which the route's gate expiry gives it.
   await publishInhouseRoomChange();
-  if (outcome.kind === "paired") {
-    // A pair formed: ask the bot for its lobby at once, after the response
-    // (the joiner's controls never wait on the bot). A busy bot, or one
-    // saved for a 5v5, is left to the worker's retry.
-    const duelId = outcome.duelId;
-    await runAfterResponse(() => createDuelBotLobby(duelId));
-  }
   return { ok: true };
 }
 
@@ -337,7 +341,7 @@ export async function leaveDuelQueue(viewer: SessionUser): Promise<DuelActionRes
   if (paired) {
     return {
       ok: false,
-      error: "You've been paired for a 1v1 already. Call it off from the 1v1 card.",
+      error: "You've been paired for a 1v1 already. Decline or call it off from the 1v1 card.",
     };
   }
   return { ok: true };
@@ -388,6 +392,269 @@ export async function touchDuelQueueHeartbeat(viewerId: string): Promise<number>
     data: { lastSeenAt: new Date() },
   });
   return touched.count;
+}
+
+type AcceptingDuel = {
+  id: string;
+  createdAt: Date;
+  radiantUserId: string;
+  direUserId: string;
+  radiantAcceptedAt: Date | null;
+  direAcceptedAt: Date | null;
+};
+
+const acceptingDuelSelect = {
+  id: true,
+  createdAt: true,
+  radiantUserId: true,
+  direUserId: true,
+  radiantAcceptedAt: true,
+  direAcceptedAt: true,
+} as const;
+
+/**
+ * Put players back at the front of the 1v1 queue after their pair ended
+ * unaccepted: `joinedAt` is the ended duel's pairing, ahead of anyone who
+ * joined since, and `lastSeenAt` when they were last known to be there
+ * (duelRequeueAfterAccept). Inside the claim's transaction and past its
+ * write, so a failure throws and rolls the claim back with it.
+ */
+async function requeueAtFront(
+  tx: Tx,
+  duel: AcceptingDuel,
+  declinedBy: string | null,
+  nowMs: number,
+): Promise<void> {
+  const expiresAt = duelQueueExpiresAt(nowMs);
+  for (const p of duelRequeueAfterAccept(duel, declinedBy)) {
+    await tx.inhouseDuelQueueEntry.upsert({
+      where: { userId: p.userId },
+      create: {
+        userId: p.userId,
+        joinedAt: duel.createdAt,
+        lastSeenAt: p.seenAt,
+        expiresAt,
+      },
+      update: { joinedAt: duel.createdAt, lastSeenAt: p.seenAt, expiresAt },
+    });
+  }
+}
+
+/**
+ * Both players accepted: ACCEPTING becomes READY, and only then is the bot
+ * asked for the lobby (after the response, never inside a transaction). The
+ * claim is ACCEPTING with both stamps, so whichever accept lands second
+ * makes it (an accept and its rival's can't both miss: each writes its own
+ * stamp before trying), and the worker's settle step catches a promote that
+ * never ran. Returns whether this call made it READY.
+ */
+async function promoteAcceptedDuel(duelId: string): Promise<boolean> {
+  await raceHook("inhouseDuel.promoteAcceptedDuel.beforeClaim");
+  const promoted = await prisma.inhouseDuel.updateMany({
+    where: {
+      id: duelId,
+      status: INHOUSE_DUEL_STATUS.ACCEPTING,
+      radiantAcceptedAt: { not: null },
+      direAcceptedAt: { not: null },
+    },
+    data: { status: INHOUSE_DUEL_STATUS.READY },
+  });
+  if (promoted.count === 0) return false;
+  // Rule P, then the gate: a READY duel has the worker's bot reads and the
+  // lobby create retry.
+  await publishInhouseRoomChange();
+  invalidateAutomationGateBestEffort();
+  await runAfterResponse(() => createDuelBotLobby(duelId));
+  return true;
+}
+
+const NO_DUEL_TO_ACCEPT = "There's no 1v1 waiting for your answer";
+
+/**
+ * "Accept 1v1": stamp the viewer's side of their ACCEPTING duel, in time
+ * (paired after duelAcceptOpenAfter), then try to make it READY. Only the
+ * two players; an admin can't accept for anyone. A second press, or a duel
+ * already through, is fine.
+ */
+export async function acceptDuel(
+  viewer: SessionUser,
+  duelId: string,
+): Promise<DuelActionResult> {
+  if (!duelId) return { ok: false, error: NO_DUEL_TO_ACCEPT };
+  const duel = await prisma.inhouseDuel.findFirst({
+    where: { id: duelId, status: INHOUSE_DUEL_STATUS.ACCEPTING },
+    select: acceptingDuelSelect,
+  });
+  if (!duel || (duel.radiantUserId !== viewer.id && duel.direUserId !== viewer.id)) {
+    return acceptRefusal(viewer, duelId);
+  }
+  const nowMs = Date.now();
+  const acceptedAt = new Date(nowMs);
+  const openAfter = duelAcceptOpenAfter(nowMs);
+  // Seam: a decline, the expiry or an admin cancel landing after the read.
+  // The sides never change while ACCEPTING (only a result rewrites them),
+  // so the read's side is the claim's.
+  await raceHook("inhouseDuel.acceptDuel.beforeClaim");
+  const claim =
+    duel.radiantUserId === viewer.id
+      ? await prisma.inhouseDuel.updateMany({
+          where: {
+            id: duel.id,
+            status: INHOUSE_DUEL_STATUS.ACCEPTING,
+            radiantAcceptedAt: null,
+            createdAt: { gt: openAfter },
+          },
+          data: { radiantAcceptedAt: acceptedAt },
+        })
+      : await prisma.inhouseDuel.updateMany({
+          where: {
+            id: duel.id,
+            status: INHOUSE_DUEL_STATUS.ACCEPTING,
+            direAcceptedAt: null,
+            createdAt: { gt: openAfter },
+          },
+          data: { direAcceptedAt: acceptedAt },
+        });
+  if (claim.count === 0) return acceptRefusal(viewer, duelId);
+  // Rule P: the stamp is committed (the opponent's card shows it).
+  await publishInhouseRoomChange();
+  await promoteAcceptedDuel(duel.id);
+  return { ok: true };
+}
+
+/** Why an accept changed nothing: already accepted or through (fine), or the words. */
+async function acceptRefusal(viewer: SessionUser, duelId: string): Promise<DuelActionResult> {
+  const current = await prisma.inhouseDuel.findUnique({
+    where: { id: duelId },
+    select: { ...acceptingDuelSelect, status: true },
+  });
+  if (!current || (current.radiantUserId !== viewer.id && current.direUserId !== viewer.id)) {
+    return { ok: false, error: NO_DUEL_TO_ACCEPT };
+  }
+  if (current.status === INHOUSE_DUEL_STATUS.ACCEPTING) {
+    const mine =
+      current.radiantUserId === viewer.id
+        ? current.radiantAcceptedAt
+        : current.direAcceptedAt;
+    if (mine !== null) return { ok: true };
+    if (duelAcceptExpired(current, Date.now())) {
+      return { ok: false, error: "Too late: the time to accept this 1v1 ran out." };
+    }
+    return { ok: false, error: "The 1v1 changed — please try again." };
+  }
+  if (current.status === INHOUSE_DUEL_STATUS.CANCELLED) {
+    return { ok: false, error: "That 1v1 was called off before it started." };
+  }
+  // READY or past it: both accepted.
+  return { ok: true };
+}
+
+/**
+ * "Decline": either player ends their ACCEPTING duel; the other goes back to
+ * the front of the 1v1 queue (requeueAtFront), the decliner leaves it. The
+ * claim is ACCEPTING, so it loses to the promote (both accepted first), the
+ * expiry and an admin cancel.
+ */
+export async function declineDuel(
+  viewer: SessionUser,
+  duelId: string,
+): Promise<DuelActionResult> {
+  if (!duelId) return { ok: false, error: NO_DUEL_TO_ACCEPT };
+  const duel = await prisma.inhouseDuel.findFirst({
+    where: { id: duelId, status: INHOUSE_DUEL_STATUS.ACCEPTING },
+    select: acceptingDuelSelect,
+  });
+  if (!duel || (duel.radiantUserId !== viewer.id && duel.direUserId !== viewer.id)) {
+    return { ok: false, error: NO_DUEL_TO_ACCEPT };
+  }
+  // Seam: both accepting, the expiry or an admin cancel landing after the read.
+  await raceHook("inhouseDuel.declineDuel.beforeClaim");
+  const endReason = duelEndReason.declined(viewer.name);
+  const nowMs = Date.now();
+  const completedAt = new Date(nowMs);
+  const declined = await prisma.$transaction(async (tx) => {
+    const claim = await tx.inhouseDuel.updateMany({
+      where: { id: duel.id, status: INHOUSE_DUEL_STATUS.ACCEPTING },
+      data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
+    });
+    // The last legal return: nothing is written yet.
+    if (claim.count === 0) return false;
+    // The stamps are frozen now (an accept claims ACCEPTING): read them fresh.
+    const closed = await tx.inhouseDuel.findUniqueOrThrow({
+      where: { id: duel.id },
+      select: acceptingDuelSelect,
+    });
+    await requeueAtFront(tx, closed, viewer.id, nowMs);
+    return true;
+  });
+  if (!declined) {
+    return { ok: false, error: "That 1v1 already started or ended, so it can't be declined" };
+  }
+  await publishInhouseRoomChange();
+  return { ok: true };
+}
+
+/**
+ * The worker's accept clock, every pass: an ACCEPTING duel both players
+ * accepted becomes READY (a promote that never ran after the second
+ * accept), and one whose time ran out unaccepted is CANCELLED, whoever
+ * accepted going back to the front of the 1v1 queue and whoever didn't
+ * leaving it. Each is a claim on the state judged. Returns how many it
+ * readied and how many it closed.
+ */
+export async function settleDuelAccepts(
+  nowMs = Date.now(),
+): Promise<{ readied: number; expired: number }> {
+  const accepting = await prisma.inhouseDuel.findMany({
+    where: { status: INHOUSE_DUEL_STATUS.ACCEPTING },
+    select: {
+      ...acceptingDuelSelect,
+      status: true,
+      radiantUser: { select: { name: true } },
+      direUser: { select: { name: true } },
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+  });
+  let readied = 0;
+  let expired = 0;
+  for (const d of accepting) {
+    if (duelBothAccepted(d)) {
+      if (await promoteAcceptedDuel(d.id)) readied += 1;
+      continue;
+    }
+    if (!duelAcceptExpired(d, nowMs)) continue;
+    const missing = [
+      d.radiantAcceptedAt === null ? d.radiantUser.name : null,
+      d.direAcceptedAt === null ? d.direUser.name : null,
+    ].filter((n): n is string => n !== null);
+    const endReason = duelEndReason.notAccepted(missing);
+    const completedAt = new Date(nowMs);
+    // Seam: a last accept or a decline landing after the read.
+    await raceHook("inhouseDuel.settleDuelAccepts.beforeExpireClaim");
+    const closed = await prisma.$transaction(async (tx) => {
+      const claim = await tx.inhouseDuel.updateMany({
+        where: {
+          id: d.id,
+          status: INHOUSE_DUEL_STATUS.ACCEPTING,
+          OR: [{ radiantAcceptedAt: null }, { direAcceptedAt: null }],
+        },
+        data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
+      });
+      // The last legal return: nothing is written yet.
+      if (claim.count === 0) return false;
+      const frozen = await tx.inhouseDuel.findUniqueOrThrow({
+        where: { id: d.id },
+        select: acceptingDuelSelect,
+      });
+      await requeueAtFront(tx, frozen, null, nowMs);
+      return true;
+    });
+    if (closed) {
+      expired += 1;
+      await publishInhouseRoomChange();
+    }
+  }
+  return { readied, expired };
 }
 
 type DuelForAction = {
@@ -488,9 +755,9 @@ export async function callOffDuel(
 }
 
 /**
- * Admin: cancel any duel a result can still land on (READY, PLAYING or
+ * Admin: cancel any open duel (ACCEPTING, READY, PLAYING or
  * AWAITING_RESULT). Loses to a result that lands first. Logged after the
- * claim, so a losing rival logs nothing.
+ * claim, so a losing rival logs nothing. Nobody is requeued.
  */
 export async function cancelDuel(
   viewer: SessionUser,
@@ -498,7 +765,7 @@ export async function cancelDuel(
 ): Promise<DuelActionResult> {
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   const duel = await prisma.inhouseDuel.findFirst({
-    where: { id: duelId, status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+    where: { id: duelId, status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
     select: {
       id: true,
       radiantUser: { select: { name: true } },
@@ -512,7 +779,7 @@ export async function cancelDuel(
   const endReason = duelEndReason.adminCancel(viewer.name);
   const completedAt = new Date();
   const cancelled = await prisma.inhouseDuel.updateMany({
-    where: { id: duel.id, status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+    where: { id: duel.id, status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
     data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
   });
   if (cancelled.count === 0) {
@@ -634,7 +901,7 @@ export async function endDuelFromBot(duelId: string): Promise<boolean> {
   await raceHook("inhouseDuel.endDuelFromBot.beforeClaim");
   const finishedAt = new Date();
   const ended = await prisma.inhouseDuel.updateMany({
-    where: { id: duelId, status: { in: INHOUSE_DUEL_LIVE_STATUSES } },
+    where: { id: duelId, status: { in: INHOUSE_DUEL_BOT_STATUSES } },
     data: { status: INHOUSE_DUEL_STATUS.AWAITING_RESULT, finishedAt },
   });
   if (ended.count === 0) return false;
@@ -1169,7 +1436,7 @@ export async function duelWorkPending(): Promise<boolean> {
   const [queued, open] = await Promise.all([
     prisma.inhouseDuelQueueEntry.findFirst({ select: { id: true } }),
     prisma.inhouseDuel.findFirst({
-      where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+      where: { status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
       select: { id: true },
     }),
   ]);
@@ -1181,7 +1448,9 @@ const logDuelStepFailure = (step: string) =>
 
 /**
  * Every 1v1 step the one-minute worker runs (syncInhouse calls it in its own
- * try/catch, stage C): expire queue rows, pair waiters left side by side,
+ * try/catch, stage C): expire queue rows, settle the accept clocks (before
+ * the pairing, so a player put back at the front can pair again in the same
+ * pass), pair waiters left side by side,
  * read the bot for live duels (and act on it), ask the bot once for the
  * oldest READY duel's lobby it doesn't have yet, scan OpenDota, then the
  * give-up clocks (after
@@ -1199,6 +1468,11 @@ export async function runDuelWorkerSteps(
     logDuelStepFailure("expire-queue");
   }
   try {
+    await settleDuelAccepts();
+  } catch {
+    logDuelStepFailure("settle-accepts");
+  }
+  try {
     await pairDuelQueue();
   } catch {
     logDuelStepFailure("pair-queue");
@@ -1209,7 +1483,7 @@ export async function runDuelWorkerSteps(
   const read: { id: string; status: string; bot: DotaLobbyStatus | null }[] = [];
   try {
     const live = await prisma.inhouseDuel.findMany({
-      where: { status: { in: INHOUSE_DUEL_LIVE_STATUSES } },
+      where: { status: { in: INHOUSE_DUEL_BOT_STATUSES } },
       select: { ...DUEL_BOT_SPEC_SELECT, botMatchId: true, startedAt: true },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });

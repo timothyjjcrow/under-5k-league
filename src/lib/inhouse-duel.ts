@@ -7,6 +7,7 @@ import {
   DUEL_GAME_MODE,
   INHOUSE_DUEL,
   INHOUSE_DUEL_LIVE_STATUSES,
+  INHOUSE_DUEL_OPEN_STATUSES,
   INHOUSE_DUEL_RESULT_STATUSES,
   INHOUSE_DUEL_STATUS,
   INHOUSE_STATUS,
@@ -22,7 +23,7 @@ import {
 const isOneOf = (list: readonly string[], status: string) =>
   list.includes(status);
 
-/** A duel still holds its players (READY or PLAYING). */
+/** A duel still holds its players (ACCEPTING, READY or PLAYING). */
 export function duelIsLive(status: string): boolean {
   return isOneOf(INHOUSE_DUEL_LIVE_STATUSES, status);
 }
@@ -30,6 +31,70 @@ export function duelIsLive(status: string): boolean {
 /** A result can still land on it, and the scan may look for one. */
 export function duelTakesResult(status: string): boolean {
   return isOneOf(INHOUSE_DUEL_RESULT_STATUSES, status);
+}
+
+/** Not closed yet: the room shows it and the worker has a clock for it. */
+export function duelIsOpen(status: string): boolean {
+  return isOneOf(INHOUSE_DUEL_OPEN_STATUSES, status);
+}
+
+// ---------- The accept step ----------
+
+/** When an ACCEPTING duel's time to accept runs out: its pairing + ACCEPT_SECONDS. */
+export function duelAcceptEndsAtMs(d: { createdAt: Date }): number {
+  return d.createdAt.getTime() + INHOUSE_DUEL.ACCEPT_SECONDS * 1000;
+}
+
+/**
+ * The pairing time an accept claim must be after (`createdAt > this`) to be
+ * in time at `nowMs`: exactly the duels duelAcceptExpired calls not expired,
+ * so no accept lands once the worker may close the duel.
+ */
+export function duelAcceptOpenAfter(nowMs: number): Date {
+  return new Date(nowMs - INHOUSE_DUEL.ACCEPT_SECONDS * 1000);
+}
+
+/** ACCEPTING and out of time to accept. */
+export function duelAcceptExpired(
+  d: { status: string; createdAt: Date },
+  nowMs: number,
+): boolean {
+  return d.status === INHOUSE_DUEL_STATUS.ACCEPTING && duelAcceptEndsAtMs(d) <= nowMs;
+}
+
+export function duelBothAccepted(d: {
+  radiantAcceptedAt: Date | null;
+  direAcceptedAt: Date | null;
+}): boolean {
+  return d.radiantAcceptedAt !== null && d.direAcceptedAt !== null;
+}
+
+/**
+ * Who goes back to the front of the 1v1 queue when an ACCEPTING duel ends
+ * unaccepted: on a decline, the other player; on running out of time,
+ * whoever accepted. `seenAt` is when they were last known to be there (their
+ * accept, else the pairing), so a player who never answered isn't counted
+ * present longer than they were.
+ */
+export function duelRequeueAfterAccept(
+  d: {
+    createdAt: Date;
+    radiantUserId: string;
+    direUserId: string;
+    radiantAcceptedAt: Date | null;
+    direAcceptedAt: Date | null;
+  },
+  declinedBy: string | null,
+): { userId: string; seenAt: Date }[] {
+  const sides = [
+    { userId: d.radiantUserId, acceptedAt: d.radiantAcceptedAt },
+    { userId: d.direUserId, acceptedAt: d.direAcceptedAt },
+  ];
+  return sides
+    .filter((p) =>
+      declinedBy === null ? p.acceptedAt !== null : p.userId !== declinedBy,
+    )
+    .map((p) => ({ userId: p.userId, seenAt: p.acceptedAt ?? d.createdAt }));
 }
 
 // ---------- The lobby bot ----------
@@ -337,6 +402,7 @@ export function duelBotMatchWaitOver(
  * (stage C) is the earliest of these over every open duel.
  */
 export function duelNextClockMs(d: DuelClockInput): number | null {
+  if (d.status === INHOUSE_DUEL_STATUS.ACCEPTING) return duelAcceptEndsAtMs(d);
   if (!duelTakesResult(d.status)) return null;
   const clocks = [duelScanDueAtMs(d) ?? Infinity];
   if (d.status === INHOUSE_DUEL_STATUS.READY && d.startedAt === null) {
@@ -362,6 +428,9 @@ export function duelScanOrder<T extends { id: string; createdAt: Date; checkedAt
 // ---------- End reasons ----------
 
 export const duelEndReason = {
+  declined: (name: string) => `Declined by ${name}`,
+  notAccepted: (names: string[]) =>
+    `Not accepted in time by ${names.join(" and ")}`,
   calledOff: (name: string) => `Called off by ${name} before the game started`,
   neverPlayed: () =>
     `Never played: no game started within ${INHOUSE_DUEL.SETUP_MINUTES} minutes`,
@@ -608,6 +677,9 @@ export type DuelRoomDuelRow = {
   direHeroId: number | null;
   /** Why a CANCELLED duel ended (duelEndReason); null otherwise. */
   endReason: string | null;
+  /** ACCEPTING: when each side accepted. */
+  radiantAcceptedAt: Date | null;
+  direAcceptedAt: Date | null;
   radiantUser: DuelUserView;
   direUser: DuelUserView;
 };
@@ -631,6 +703,11 @@ export type DuelGameView = {
   createdAt: number;
   startedAt: number | null;
   finishedAt: number | null;
+  /** ACCEPTING: when the time to accept runs out. */
+  acceptEndsAt: number | null;
+  /** ACCEPTING: which sides have accepted. */
+  radiantAccepted: boolean;
+  direAccepted: boolean;
   /** READY with no started game: when it is called off. */
   setupEndsAt: number | null;
   /** PLAYING or AWAITING_RESULT: when it is given up on. */
@@ -659,8 +736,12 @@ export type DuelMeView = {
   inQueue: boolean;
   queuedAt: number | null;
   queueExpiresAt: number | null;
-  /** The viewer's open duel (a result can still land on it), if any. */
+  /** The viewer's open duel (accepting, or a result can still land on it), if any. */
   duelId: string | null;
+  /** "Accept 1v1": their duel is ACCEPTING, they haven't, and there's time. */
+  canAccept: boolean;
+  /** "Decline": their duel is ACCEPTING. */
+  canDecline: boolean;
   joinRefusal: string | null;
   canJoin: boolean;
   canLeave: boolean;
@@ -735,8 +816,9 @@ export function buildDuelState(
     !!viewer && (d.radiantUser.id === viewer.id || d.direUser.id === viewer.id);
 
   const games: DuelGameView[] = byNewest
-    .filter((d) => duelTakesResult(d.status))
+    .filter((d) => duelIsOpen(d.status))
     .map((d) => {
+      const accepting = d.status === INHOUSE_DUEL_STATUS.ACCEPTING;
       const unstarted =
         d.status === INHOUSE_DUEL_STATUS.READY && d.startedAt === null;
       return {
@@ -747,8 +829,11 @@ export function buildDuelState(
         createdAt: d.createdAt.getTime(),
         startedAt: d.startedAt?.getTime() ?? null,
         finishedAt: d.finishedAt?.getTime() ?? null,
+        acceptEndsAt: accepting ? duelAcceptEndsAtMs(d) : null,
+        radiantAccepted: d.radiantAcceptedAt !== null,
+        direAccepted: d.direAcceptedAt !== null,
         setupEndsAt: unstarted ? duelSetupEndsAtMs(d) : null,
-        giveUpAt: unstarted ? null : duelGiveUpAtMs(d),
+        giveUpAt: unstarted || accepting ? null : duelGiveUpAtMs(d),
         mine: isMine(d),
         canCancel: isAdmin,
       };
@@ -787,7 +872,12 @@ export function buildDuelState(
   let me: DuelMeView | null = null;
   if (viewer) {
     const own = queue.find((q) => q.userId === viewer.id) ?? null;
-    const myDuel = byNewest.find((d) => isMine(d) && duelTakesResult(d.status));
+    const myDuel = byNewest.find((d) => isMine(d) && duelIsOpen(d.status));
+    const myAcceptedAt =
+      myDuel && viewer.id === myDuel.radiantUser.id
+        ? myDuel.radiantAcceptedAt
+        : (myDuel?.direAcceptedAt ?? null);
+    const accepting = myDuel?.status === INHOUSE_DUEL_STATUS.ACCEPTING;
     const inLiveDuel = byNewest.some((d) => isMine(d) && duelIsLive(d.status));
     const joinRefusal = duelJoinRefusal({
       mmrRefusal: extras.mmrRefusal,
@@ -818,13 +908,16 @@ export function buildDuelState(
       cancelledAt !== null &&
       !(last && last.completedAt > cancelledAt) &&
       !(myDuel && myDuel.createdAt.getTime() > cancelled.createdAt.getTime())
-        ? { duelId: cancelled.id, line: duelCancelLine(cancelled.endReason) }
+        ? { duelId: cancelled.id, line: duelCancelLine(cancelled.endReason, own !== null) }
         : null;
     me = {
       inQueue: own !== null,
       queuedAt: own?.joinedAt.getTime() ?? null,
       queueExpiresAt: own?.expiresAt.getTime() ?? null,
       duelId: myDuel?.id ?? null,
+      canAccept:
+        accepting && myAcceptedAt === null && !duelAcceptExpired(myDuel, nowMs),
+      canDecline: accepting,
       joinRefusal,
       canJoin: own === null && joinRefusal === null,
       canLeave: own !== null,
@@ -832,7 +925,7 @@ export function buildDuelState(
       canCallOff:
         myDuel?.status === INHOUSE_DUEL_STATUS.READY &&
         myDuel.startedAt === null,
-      canRecord: !!myDuel,
+      canRecord: !!myDuel && duelTakesResult(myDuel.status),
       lastResult: last
         ? {
             duelId: last.id,
@@ -895,7 +988,7 @@ export function duelHeartbeatAction(
  */
 export function duelRoomClocks(rows: {
   queue: readonly { lastSeenAt: Date; expiresAt: Date }[];
-  duels: readonly { status: string; completedAt: Date | null }[];
+  duels: readonly { status: string; createdAt: Date; completedAt: Date | null }[];
 }): number[] {
   const clocks: number[] = [];
   for (const q of rows.queue) {
@@ -905,6 +998,8 @@ export function duelRoomClocks(rows: {
     clocks.push(q.lastSeenAt.getTime() + INHOUSE_DUEL.PRESENT_SECONDS * 1000 + 1);
   }
   for (const d of rows.duels) {
+    // canAccept turns false once the time to accept runs out (duelAcceptExpired).
+    if (d.status === INHOUSE_DUEL_STATUS.ACCEPTING) clocks.push(duelAcceptEndsAtMs(d));
     if (
       (d.status === INHOUSE_DUEL_STATUS.COMPLETED ||
         d.status === INHOUSE_DUEL_STATUS.CANCELLED) &&
@@ -1036,12 +1131,20 @@ export function duelResultLine(r: { won: boolean; opponentName: string }): strin
 
 /**
  * A 1v1 that ended without a result, in plain words for its players, from its
- * endReason (duelEndReason): called off (by a player or an admin), never
- * started in time, the bot's game ended with no result, no result on
- * OpenDota, or an admin voided its result.
+ * endReason (duelEndReason): declined or not accepted in time (`requeued`:
+ * the viewer went back to the front of the 1v1 queue), called off (by a
+ * player or an admin), never started in time, the bot's game ended with no
+ * result, no result on OpenDota, or an admin voided its result.
  */
-export function duelCancelLine(endReason: string | null): string {
+export function duelCancelLine(endReason: string | null, requeued = false): string {
   const r = endReason ?? "";
+  const back = requeued ? " You're back at the front of the 1v1 queue." : "";
+  if (r.startsWith(duelEndReason.declined("").trim())) {
+    return `The 1v1 was declined, so it was called off.${back}`;
+  }
+  if (r.startsWith(duelEndReason.notAccepted([]).trim())) {
+    return `The 1v1 wasn't accepted in time, so it was called off.${back}`;
+  }
   if (r.startsWith(duelEndReason.voided("", null).trim())) {
     return "An admin voided your 1v1 result.";
   }
@@ -1060,6 +1163,8 @@ export function duelCancelLine(endReason: string | null): string {
 /** A duel's stage, in a word or three, for its one-line listing. */
 export function duelStageLabel(status: string): string {
   switch (status) {
+    case INHOUSE_DUEL_STATUS.ACCEPTING:
+      return "Accepting";
     case INHOUSE_DUEL_STATUS.READY:
       return "Setting up";
     case INHOUSE_DUEL_STATUS.PLAYING:
