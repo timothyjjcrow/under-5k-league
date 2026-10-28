@@ -9,6 +9,7 @@ import {
   INHOUSE_DUEL_LIVE_STATUSES,
   INHOUSE_DUEL_RESULT_STATUSES,
   INHOUSE_DUEL_STATUS,
+  INHOUSE_STATUS,
 } from "./constants";
 import type { OpenDotaMatch, OpenDotaRecentMatch } from "./dota";
 import {
@@ -29,6 +30,56 @@ export function duelIsLive(status: string): boolean {
 /** A result can still land on it, and the scan may look for one. */
 export function duelTakesResult(status: string): boolean {
   return isOneOf(INHOUSE_DUEL_RESULT_STATUSES, status);
+}
+
+// ---------- The lobby bot ----------
+
+/**
+ * The 5v5 statuses that save the one bot: a game forming (ready check,
+ * captain vote, draft) or set up and not yet started (READY with no
+ * startedAt). A 1v1's lobby made then could hold the bot through the 5v5's
+ * whole setup. The service's query reads these, then duelBotSavedFor5v5.
+ */
+export const DUEL_BOT_SAVING_5V5_STATUSES: readonly string[] = [
+  INHOUSE_STATUS.READY_CHECK,
+  INHOUSE_STATUS.CAPTAIN_VOTE,
+  INHOUSE_STATUS.DRAFTING,
+  INHOUSE_STATUS.READY,
+];
+
+/** What a duel create refuses while the bot is saved for a 5v5. */
+export const DUEL_BOT_SAVED_FOR_5V5 = "The bot is saved for the 5v5 being set up";
+
+/**
+ * Is the bot saved for a 5v5 of this league (each league has its own
+ * database, so these are its games only)? True while any 5v5 game is in
+ * READY_CHECK, CAPTAIN_VOTE or DRAFTING, or READY with no started game. A
+ * 1v1's create waits then: the join's create and the worker's retry skip
+ * it, and the panel's Create is refused with DUEL_BOT_SAVED_FOR_5V5.
+ */
+export function duelBotSavedFor5v5(
+  lobbies: readonly { status: string; startedAt: Date | null }[],
+): boolean {
+  return lobbies.some(
+    (l) =>
+      DUEL_BOT_SAVING_5V5_STATUSES.includes(l.status) &&
+      (l.status !== INHOUSE_STATUS.READY || l.startedAt === null),
+  );
+}
+
+/**
+ * Which bot reads end a duel with no result to wait for: a job `released`
+ * (a failed launch, a game Dota ended as not scored, a lobby released or
+ * idled out before any game) that Dota never showed over. Null for anything
+ * else: no answer, a lobby still being set up, a running game (`started`,
+ * also one the bot has `left`), a blocked or offline bot. Returns the reason
+ * the duel's endReason carries.
+ */
+export function duelBotEndedWithoutGame(
+  status: { state: string; over?: true } | null,
+): string | null {
+  if (!status || status.over || status.state !== "released") return null;
+  return "the lobby was released before a game was played";
 }
 
 // ---------- The queue ----------

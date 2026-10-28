@@ -6,8 +6,11 @@ import {
 } from "./constants";
 import type { OpenDotaMatch, OpenDotaRecentMatch } from "./dota";
 import {
+  DUEL_BOT_SAVED_FOR_5V5,
   DUEL_REFUSAL,
   assignDuelSides,
+  duelBotEndedWithoutGame,
+  duelBotSavedFor5v5,
   buildDuelState,
   duelJoinRefusal,
   duelLadder,
@@ -474,5 +477,36 @@ describe("buildDuelState", () => {
     expect(admin.canRemoveFromQueue).toBe(true);
     expect(admin.results[0].canVoid).toBe(true);
     expect(admin.games.map((g) => [g.id, g.canCancel, g.mine])).toEqual([["live", true, false]]);
+  });
+});
+
+describe("the lobby bot", () => {
+  const at = new Date("2026-10-27T12:00:00Z");
+  it("is saved for a 5v5 forming, drafting, or set up and not started", () => {
+    expect(DUEL_BOT_SAVED_FOR_5V5).toBe("The bot is saved for the 5v5 being set up");
+    for (const status of ["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY"])
+      expect(duelBotSavedFor5v5([{ status, startedAt: null }])).toBe(true);
+    // Started: the 5v5 has (or had) its lobby; the bot can host a 1v1 next.
+    expect(duelBotSavedFor5v5([{ status: "READY", startedAt: at }])).toBe(false);
+    for (const status of ["IN_PROGRESS", "AWAITING_RESULT", "COMPLETED", "CANCELLED"])
+      expect(duelBotSavedFor5v5([{ status, startedAt: null }])).toBe(false);
+    expect(duelBotSavedFor5v5([])).toBe(false);
+    expect(
+      duelBotSavedFor5v5([
+        { status: "IN_PROGRESS", startedAt: at },
+        { status: "DRAFTING", startedAt: null },
+      ]),
+    ).toBe(true);
+  });
+
+  it("ends a duel only on a job released with no game", () => {
+    expect(duelBotEndedWithoutGame({ state: "released" })).toMatch(/released/);
+    expect(duelBotEndedWithoutGame({ state: "released", over: true })).toBeNull();
+    for (const state of ["idle", "creating", "ready", "starting", "started", "blocked"])
+      expect(duelBotEndedWithoutGame({ state })).toBeNull();
+    // A running game the bot has left is running, never a failed launch.
+    const left = { state: "started", left: true as const, matchId: "8123456789" };
+    expect(duelBotEndedWithoutGame(left)).toBeNull();
+    expect(duelBotEndedWithoutGame(null)).toBeNull();
   });
 });

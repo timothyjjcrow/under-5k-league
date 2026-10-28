@@ -1,4 +1,8 @@
-export type LobbyKind = "season" | "inhouse";
+/**
+ * The three kinds of bot job: a season match, a 5v5 inhouse game and a 1v1
+ * mid duel (docs/features/inhouse-duels.md).
+ */
+export type LobbyKind = "season" | "inhouse" | "duel";
 export type LobbyAction = "create" | "start" | "release" | "invite";
 
 export type DotaLobbySpec = {
@@ -83,19 +87,34 @@ export type DotaLobbyStatus = {
    * Never for a failed launch; absent otherwise (and from an older bot).
    */
   over?: true;
+  /**
+   * The bot left this launched game while it still runs (its early leave,
+   * docs/DOTA-LOBBY-BOT.md): the game is running and the bot is free for the
+   * next one. Only with state `started`; the job keeps its match id, and
+   * still reads `over` once Dota shows the game's end. Never a failed launch
+   * or the game's end by itself. Absent otherwise (and from a bot that never
+   * leaves early, the default).
+   */
+  left?: true;
 };
 
 /**
- * The bot reply's two lifecycle flags, read strictly: only the boolean `true`
+ * The bot reply's lifecycle flags, read strictly: only the boolean `true`
  * counts. Anything else (absent, "true", 1, false) is unknown, so absent.
+ * `left` counts only on a `started` job, the one state the bot sends it with.
  */
 export function parseLobbyLifecycle(body: {
+  state?: unknown;
   releasing?: unknown;
   over?: unknown;
-}): Pick<DotaLobbyStatus, "releasing" | "over"> {
+  left?: unknown;
+}): Pick<DotaLobbyStatus, "releasing" | "over" | "left"> {
   return {
     ...(body.releasing === true ? { releasing: true as const } : {}),
     ...(body.over === true ? { over: true as const } : {}),
+    ...(body.left === true && body.state === "started"
+      ? { left: true as const }
+      : {}),
   };
 }
 
@@ -186,12 +205,21 @@ const LOBBY_STATE_LABELS = {
  * Dota showed over, then the state's own label.
  */
 export function lobbyStatusLabel(
-  status: Pick<DotaLobbyStatus, "state" | "releasing" | "over">,
+  status: Pick<DotaLobbyStatus, "state" | "releasing" | "over" | "left">,
 ): string {
   if (status.releasing) return "Leaving the Dota lobby…";
   if (status.over) return "Game over in Dota";
+  if (status.left && status.state === "started")
+    return "Game running — the bot has left it";
   return LOBBY_STATE_LABELS[status.state];
 }
+
+/**
+ * The line under a running game the bot has left (`left`): the bot is free
+ * for the next game, and the game's end still comes from Dota.
+ */
+export const LOBBY_LEFT_NOTE =
+  "The bot left this running game so it can host the next one. The game is still marked over here once Dota shows its end.";
 
 /** The line under a game Dota showed over. */
 export const LOBBY_OVER_NOTE =
@@ -204,19 +232,22 @@ export const LOBBY_RELEASING_NOTE =
 /**
  * "Release bot…": a captain or admin, while the bot holds a lobby (ready,
  * blocked or started), not while a release is already pending (a second
- * press would change nothing), and not once Dota showed the game over: the
+ * press would change nothing), not for a running game the bot has already
+ * left (`left`), and not once Dota showed the game over: the
  * bot leaves at the postgame by itself, and a release after that answers
  * that the lobby can't.
  */
 export function releaseOpen(
   view: Pick<DotaLobbyView, "canRelease"> & {
-    status: Pick<DotaLobbyStatus, "state" | "releasing" | "over">;
+    status: Pick<DotaLobbyStatus, "state" | "releasing" | "over" | "left">;
   },
 ): boolean {
   return (
     view.canRelease &&
     !view.status.releasing &&
     !view.status.over &&
+    // A game the bot has left holds nothing to release.
+    !view.status.left &&
     (view.status.state === "ready" ||
       view.status.state === "blocked" ||
       view.status.state === "started")
@@ -256,6 +287,10 @@ export function lobbyBusyElsewhere(
 
 /** The status line while the bot is another game's (see lobbyBusyElsewhere). */
 export function lobbyBusyLabel(busy: BotBusyElsewhere): string {
+  if (busy.duel)
+    return busy.closed
+      ? "The bot is still leaving a finished 1v1"
+      : "The bot is hosting a 1v1";
   const game = busy.game ? `game ${busy.game}` : "another game";
   return busy.closed
     ? `The bot is still leaving finished ${game}`
@@ -263,15 +298,29 @@ export function lobbyBusyLabel(busy: BotBusyElsewhere): string {
 }
 
 /**
+ * A 1v1's line while the bot is another game's: there is no hand-hosted
+ * 1v1, and the site asks the bot for this lobby by itself once it is free
+ * (the join's create, then the worker's retry each pass).
+ */
+export const DUEL_BOT_WAITING_NOTE =
+  "Waiting for the lobby bot — it makes your lobby as soon as it's free.";
+
+/**
  * The line under it. A game still being played keeps the one bot until it
  * ends in Dota, so this game is hosted by hand (the card's steps, unfolded);
- * a closed one is freed by this game's Create.
+ * a closed one is freed by this game's Create. A 1v1 is never hosted by
+ * hand: it waits for the bot.
  */
-export function lobbyBusyNote(busy: BotBusyElsewhere, canControl: boolean): string {
+export function lobbyBusyNote(
+  busy: BotBusyElsewhere,
+  canControl: boolean,
+  kind: LobbyKind = "inhouse",
+): string {
   if (busy.closed)
     return canControl
       ? "Press “Create Dota lobby”: it frees the bot from that game first."
       : "A captain's “Create Dota lobby” frees the bot from that game first.";
+  if (kind === "duel") return DUEL_BOT_WAITING_NOTE;
   return "The bot hosts one game at a time and is free again when that game ends in Dota. Host this game by hand with the steps on this card.";
 }
 
@@ -389,6 +438,8 @@ export type BotBusyElsewhere = {
   game: string | null;
   /** The site closed that game: Create frees the bot from it (BUSY's self-heal). */
   closed: boolean;
+  /** That job is one of this league's 1v1s: the panel names "a 1v1". */
+  duel?: true;
 };
 
 /** The bot reports at most this many players: two sides of ten. */
@@ -593,9 +644,10 @@ function seatCount(n: number): string {
  * "All ten seated" state. `start` is true only for a viewer who sees "Start
  * game with bot" (`canStart`: `startOpen`, on a panel that may start), whose
  * button it highlights; everyone else is told a captain starts it, so nobody
- * else gets a Start prompt.
+ * else gets a Start prompt. A 1v1's (kind "duel") says "Both seated" or
+ * names whom it waits for (`duelSeatSummary`).
  *
- * Null for a season lobby (scope: in-house only), for a game that is no
+ * Null for a season lobby (scope: in-house games and 1v1s), for a game that is no
  * longer playable (nobody will start it: admin recovery's panel of a closed
  * game), while the lobby isn't ready or a release is pending (the bot refuses
  * Start then), and without a seat list (no bot that invites, or a reply that
@@ -605,12 +657,15 @@ export function lobbySeatSummary(input: {
   kind: LobbyKind;
   playable: boolean;
   status: Pick<DotaLobbyStatus, "state" | "releasing"> | undefined;
-  players: readonly Pick<DotaLobbyPlayerView, "side" | "seat">[] | null | undefined;
+  players:
+    | readonly (Pick<DotaLobbyPlayerView, "side" | "seat"> & { name?: string })[]
+    | null
+    | undefined;
   canStart: boolean;
 }): { allSeated: boolean; start: boolean; text: string } | null {
   const { kind, playable, status, players, canStart } = input;
   if (
-    kind !== "inhouse" ||
+    kind === "season" ||
     !playable ||
     status?.state !== "ready" ||
     status.releasing ||
@@ -619,6 +674,7 @@ export function lobbySeatSummary(input: {
     return null;
   const total = players.length;
   const seated = players.filter((p) => p.seat === p.side).length;
+  if (kind === "duel") return duelSeatSummary(players, canStart);
   if (seated === total)
     return {
       allSeated: true,
@@ -633,6 +689,31 @@ export function lobbySeatSummary(input: {
     text: canStart
       ? `${seated} of ${total} on their side. Start works once all ${seatCount(total)} are.`
       : `${seated} of ${total} on their side.`,
+  };
+}
+
+/**
+ * A 1v1's seat summary: "Both seated" (Start highlighted for whoever has
+ * it: either player or an admin), or whom the lobby still waits for, by name.
+ */
+function duelSeatSummary(
+  players: readonly (Pick<DotaLobbyPlayerView, "side" | "seat"> & { name?: string })[],
+  canStart: boolean,
+): { allSeated: boolean; start: boolean; text: string } {
+  const waiting = players.filter((p) => p.seat !== p.side);
+  if (waiting.length === 0)
+    return {
+      allSeated: true,
+      start: canStart,
+      text: canStart
+        ? "Both seated — press “Start game with bot”."
+        : "Both seated — waiting for a player to start the game.",
+    };
+  const names = waiting.map((p) => p.name || "a player").join(" and ");
+  return {
+    allSeated: false,
+    start: false,
+    text: `Waiting for ${names} to sit on their side.`,
   };
 }
 

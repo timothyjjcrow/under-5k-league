@@ -19,6 +19,9 @@ import {
 } from "./constants";
 import {
   assignDuelSides,
+  duelIsLive,
+  duelTakesResult,
+  duelBotEndedWithoutGame,
   duelEndReason,
   duelJoinRefusal,
   duelLadder,
@@ -40,7 +43,14 @@ import {
   type DuelRoomRows,
   type DuelWaiter,
 } from "./inhouse-duel";
-import { duelBotGameStatus, releaseDuelBotAfterClose } from "./inhouse-duel-bot";
+import {
+  createDuelBotLobby,
+  DUEL_BOT_SPEC_SELECT,
+  duelBotGameStatus,
+  releaseDuelBotAfterClose,
+  retryDuelBotCreate,
+} from "./inhouse-duel-bot";
+import { runAfterResponse } from "./after-response";
 import type { DotaLobbyStatus } from "./dota-lobby";
 import { botReportedMatchId } from "./dota-lobby-service";
 import {
@@ -294,6 +304,13 @@ export async function joinDuelQueue(viewer: SessionUser): Promise<DuelActionResu
   if (outcome.kind === "refused") return { ok: false, error: outcome.error };
   // Rule P: the queue row or the new duel is committed.
   await publishInhouseRoomChange();
+  if (outcome.kind === "paired") {
+    // A pair formed: ask the bot for its lobby at once, after the response
+    // (the joiner's controls never wait on the bot). A busy bot, or one
+    // saved for a 5v5, is left to the worker's retry.
+    const duelId = outcome.duelId;
+    await runAfterResponse(() => createDuelBotLobby(duelId));
+  }
   return { ok: true };
 }
 
@@ -620,7 +637,7 @@ export async function endDuelFromBot(duelId: string): Promise<boolean> {
  * The lobby bot's game for this duel ended with no result to wait for (a
  * failed launch, a game Dota didn't score, a lobby released with no match):
  * the duel is CANCELLED with `why` in its reason, and the bot is let go.
- * Stage B decides which bot reads mean this. Returns whether it closed it.
+ * Which bot reads mean this: duelBotEndedWithoutGame. Returns whether it closed it.
  */
 export async function cancelDuelFromBot(duelId: string, why: string): Promise<boolean> {
   const endReason = duelEndReason.botCancelled(why);
@@ -1020,26 +1037,37 @@ export async function pairDuelQueue(maxPairs = 10): Promise<number> {
 }
 
 /**
- * Act on what the lobby bot reports for one duel: a launch moves READY to
- * PLAYING (with the bot's match id), Dota's postgame moves it to
- * AWAITING_RESULT. Stage B adds the bot's no-result endings (a failed
- * launch, a game not scored) here, through cancelDuelFromBot.
+ * Act on what the lobby bot reports for one duel (the worker's read and the
+ * bot panel's, /api/dota-lobby): Dota's end of a played game (`over`) moves
+ * a live duel to AWAITING_RESULT; a launch (`started`, also a running game
+ * the bot has `left`) moves READY to PLAYING with the bot's match id; a job
+ * `released` with no game (a failed launch, a game Dota didn't score, a
+ * lobby released or idled out first) cancels it (duelBotEndedWithoutGame).
+ * Each is a guarded claim that publishes the room and wakes the automation
+ * gate before it returns. `botMatchId`, when the caller read it, skips a
+ * write that would change nothing (a PLAYING duel whose id is stored).
  */
 export async function applyDuelBotStatus(
-  duel: { id: string; status: string },
+  duel: { id: string; status: string; botMatchId?: string | null },
   status: DotaLobbyStatus | null,
 ): Promise<void> {
   if (!status) return;
   if (status.over) {
-    await endDuelFromBot(duel.id);
+    if (duelIsLive(duel.status)) await endDuelFromBot(duel.id);
     return;
   }
   if (status.state === "started") {
     const matchId = botReportedMatchId(status);
-    if (duel.status === INHOUSE_DUEL_STATUS.READY || matchId) {
+    if (
+      duel.status === INHOUSE_DUEL_STATUS.READY ||
+      (matchId && duel.botMatchId == null)
+    ) {
       await markDuelStartedFromBot(duel.id, matchId);
     }
+    return;
   }
+  const why = duelBotEndedWithoutGame(status);
+  if (why && duelTakesResult(duel.status)) await cancelDuelFromBot(duel.id, why);
 }
 
 /** Cheap probe for the worker's idle early return: any 1v1 work at all? */
@@ -1060,7 +1088,9 @@ const logDuelStepFailure = (step: string) =>
 /**
  * Every 1v1 step the one-minute worker runs (syncInhouse calls it in its own
  * try/catch, stage C): expire queue rows, pair waiters left side by side,
- * read the bot for live duels, scan OpenDota, then the give-up clocks (after
+ * read the bot for live duels (and act on it), ask the bot once for the
+ * oldest READY duel's lobby it doesn't have yet, scan OpenDota, then the
+ * give-up clocks (after
  * the scan, so a result that is there lands first). Each step catches its
  * own failure, so one never stops the next, nor the 5v5 work.
  */
@@ -1079,15 +1109,14 @@ export async function runDuelWorkerSteps(
   } catch {
     logDuelStepFailure("pair-queue");
   }
+  // The bot's read of each live duel, oldest first; then one create retry
+  // for the oldest READY duel the bot has no lobby for (the join's own
+  // create found it busy, saved for a 5v5, or unreachable).
+  const read: { id: string; status: string; bot: DotaLobbyStatus | null }[] = [];
   try {
     const live = await prisma.inhouseDuel.findMany({
       where: { status: { in: INHOUSE_DUEL_LIVE_STATUSES } },
-      select: {
-        id: true,
-        status: true,
-        radiantUser: { select: { steamId: true } },
-        direUser: { select: { steamId: true } },
-      },
+      select: { ...DUEL_BOT_SPEC_SELECT, botMatchId: true },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     for (const duel of live) {
@@ -1095,10 +1124,19 @@ export async function runDuelWorkerSteps(
         deadlineReached = true;
         break;
       }
-      await applyDuelBotStatus(duel, await duelBotGameStatus(duel, options));
+      const bot = await duelBotGameStatus(duel, options);
+      read.push({ id: duel.id, status: duel.status, bot });
+      await applyDuelBotStatus(duel, bot);
     }
   } catch {
     logDuelStepFailure("bot-status");
+  }
+  if (!deadlineReached && canStartOpenDotaFetch(options)) {
+    try {
+      await retryDuelBotCreate(read, { signal: options.signal });
+    } catch {
+      logDuelStepFailure("bot-create");
+    }
   }
   if (!deadlineReached) {
     try {

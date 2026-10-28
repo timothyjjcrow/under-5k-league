@@ -1348,3 +1348,479 @@ describe("the panel says when the bot is hosting another game", () => {
     expect(calls.filter((c) => c.action === "health")).toHaveLength(1);
   });
 });
+
+describe("1v1 bot jobs (kind duel)", () => {
+  type BotCall = {
+    action: string;
+    spec?: {
+      key: string;
+      gameMode: number;
+      radiant: string[];
+      dire: string[];
+      name: string;
+      password: string;
+      leagueId: number;
+    };
+  };
+
+  /**
+   * A fake bot: `reply(call)` answers each job request (a body, or a
+   * `{ code }` error answered 409); health names `activeKey`.
+   */
+  function fakeBot(
+    reply: (call: BotCall) => Record<string, unknown> = () => ({ state: "idle" }),
+    activeKey: string | null = null,
+  ) {
+    const calls: BotCall[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init: RequestInit) => {
+        const body = JSON.parse(String(init.body)) as BotCall;
+        calls.push(body);
+        if (body.action === "health")
+          return Response.json({ online: true, steamId: null, activeKey });
+        const answer = reply(body);
+        return Response.json(answer, { status: "code" in answer ? 409 : 200 });
+      }),
+    );
+    return calls;
+  }
+
+  async function pair(status = "READY") {
+    const a = await makeUser("Mid Radiant");
+    const b = await makeUser("Mid Dire");
+    const duel = await prisma.inhouseDuel.create({
+      data: {
+        radiantUserId: a.id,
+        direUserId: b.id,
+        status,
+        ...(status === "PLAYING" ? { startedAt: new Date() } : {}),
+      },
+    });
+    return { a, b, duel };
+  }
+  const duelKey = (id: string) => `${keyPrefix}duel:${id}:1`;
+  async function post(id: string, action = "status") {
+    const response = await POST(request({ kind: "duel", id, action }));
+    return { status: response.status, body: await response.json() };
+  }
+  const statusOf = async (id: string) =>
+    (await prisma.inhouseDuel.findUniqueOrThrow({ where: { id } })).status;
+
+  beforeEach(() => resetLobbyBotStatusCacheForTests());
+
+  it("builds the duel's spec: its own key, 1v1 Solo Mid, one player a side, the in-house ticket", async () => {
+    const { INHOUSE } = await import("@/lib/constants");
+    const { a, b, duel } = await pair();
+    const lobby = await resolveDotaLobby(asSession(a), "duel", duel.id);
+    expect(lobby).toMatchObject({
+      canControl: true,
+      playable: true,
+      spec: {
+        key: duelKey(duel.id),
+        name: `${LEAGUE_CONFIG.name} 1v1 ${duel.id.slice(-6)}`,
+        password: INHOUSE.LOBBY_PASSWORD,
+        leagueId: 54321,
+        gameMode: 21,
+        serverRegion: LEAGUE_CONFIG.gameServerRegionId,
+        radiant: [a.steamId],
+        dire: [b.steamId],
+        radiantName: "Mid Radiant",
+        direName: "Mid Dire",
+        radiantNames: ["Mid Radiant"],
+        direNames: ["Mid Dire"],
+      },
+    });
+    expect(lobby.roster.map((p) => [p.side, p.self])).toEqual([
+      ["radiant", true],
+      ["dire", false],
+    ]);
+    // The other player runs the lobby too; an admin may; nobody else.
+    expect((await resolveDotaLobby(asSession(b), "duel", duel.id)).canControl).toBe(true);
+    const admin = await makeUser("Admin", "ADMIN");
+    expect((await resolveDotaLobby(asSession(admin), "duel", duel.id)).canControl).toBe(true);
+    const outsider = await makeUser("Outsider");
+    await expect(resolveDotaLobby(asSession(outsider), "duel", duel.id)).rejects.toThrow(
+      "Only this 1v1's players and admins",
+    );
+    // Once its game launched, a duel can't create or start a lobby again.
+    await prisma.inhouseDuel.update({ where: { id: duel.id }, data: { status: "PLAYING" } });
+    expect((await resolveDotaLobby(asSession(a), "duel", duel.id)).playable).toBe(false);
+  });
+
+  it("sends the duel key to the bot and words a roster refusal for two players", async () => {
+    const { a, duel } = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    const calls = fakeBot((call) =>
+      call.action === "start" ? { code: "ROSTER" } : { state: "ready" },
+    );
+    const created = await post(duel.id, "create");
+    expect(created.status).toBe(200);
+    expect(calls[0]).toMatchObject({
+      action: "create",
+      spec: { key: duelKey(duel.id), gameMode: 21 },
+    });
+    expect(calls[0].spec?.radiant).toHaveLength(1);
+    expect(calls[0].spec?.dire).toHaveLength(1);
+    const started = await post(duel.id, "start");
+    expect(started.status).toBe(400);
+    expect(started.body.error).toMatch(/^Both players must sit on their own sides/);
+  });
+
+  it.each(["READY_CHECK", "CAPTAIN_VOTE", "DRAFTING", "READY"])(
+    "refuses a 1v1 create while a 5v5 is %s and not started, before calling the bot",
+    async (status) => {
+      const { a, duel } = await pair();
+      const captain = await makeUser("Five Captain");
+      await prisma.inhouseLobby.create({
+        data: { status, players: { create: { userId: captain.id, team: 1, isCaptain: true } } },
+      });
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+      const calls = fakeBot();
+      const refused = await post(duel.id, "create");
+      expect(refused).toEqual({
+        status: 400,
+        body: { error: "The bot is saved for the 5v5 being set up" },
+      });
+      expect(calls).toEqual([]);
+      // Reads and the other buttons are never held back.
+      expect((await post(duel.id)).status).toBe(200);
+    },
+  );
+
+  it("creates a 1v1's lobby once the 5v5 is under way", async () => {
+    const { a, duel } = await pair();
+    const captain = await makeUser("Five Captain");
+    await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        startedAt: new Date(),
+        players: { create: { userId: captain.id, team: 1, isCaptain: true } },
+      },
+    });
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    const calls = fakeBot(() => ({ state: "creating" }));
+    expect((await post(duel.id, "create")).status).toBe(200);
+    expect(calls.map((c) => c.action)).toEqual(["create"]);
+  });
+
+  it("moves the duel with what the bot reads: started, then over, publishing before the response", async () => {
+    const { a, duel } = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    const gate = vi.mocked(invalidateAutomationGateBestEffort);
+    gate.mockClear();
+    fakeBot(() => ({ state: "started", matchId: "8123456789" }));
+    const started = await post(duel.id);
+    expect(started.body).toMatchObject({ playable: false, canControl: false });
+    expect(
+      await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } }),
+    ).toMatchObject({ status: "PLAYING", botMatchId: "8123456789", startedAt: expect.any(Date) });
+    expect(gate).toHaveBeenCalledOnce();
+    const version = await readInhouseRoomVersion();
+    expect(version).not.toBeNull();
+
+    // The same read again changes nothing and publishes nothing.
+    resetLobbyBotStatusCacheForTests();
+    await post(duel.id);
+    expect(await readInhouseRoomVersion()).toBe(version);
+
+    resetLobbyBotStatusCacheForTests();
+    const calls = fakeBot(() => ({ state: "started", matchId: "8123456789", over: true }));
+    await post(duel.id);
+    await settleInhouseBotReleases();
+    expect(await statusOf(duel.id)).toBe("AWAITING_RESULT");
+    expect(await readInhouseRoomVersion()).not.toBe(version);
+    // The close lets the bot go (fire and forget, after the commit).
+    expect(calls.map((c) => [c.action, c.spec?.key])).toContainEqual([
+      "release",
+      duelKey(duel.id),
+    ]);
+  });
+
+  it("cancels a duel whose job the bot released with no game", async () => {
+    const { a, duel } = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    fakeBot(() => ({ state: "released" }));
+    const read = await post(duel.id);
+    expect(read.body).toMatchObject({ playable: false });
+    expect(
+      await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } }),
+    ).toMatchObject({
+      status: "CANCELLED",
+      endReason: expect.stringContaining("lobby bot"),
+    });
+  });
+
+  it("leaves an idle, blocked or ready job's duel READY", async () => {
+    const { a, duel } = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    for (const state of ["idle", "creating", "ready", "starting", "blocked"]) {
+      resetLobbyBotStatusCacheForTests();
+      fakeBot(() => ({ state }));
+      expect((await post(duel.id)).status).toBe(200);
+      expect(await statusOf(duel.id)).toBe("READY");
+    }
+  });
+
+  describe("a running game the bot has left (AMENDMENT 2)", () => {
+    it("keeps a duel PLAYING while the bot is gone, and ends it on the later over", async () => {
+      const { a, duel } = await pair();
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+      fakeBot(() => ({ state: "started", matchId: "8123456790", left: true }));
+      const read = await post(duel.id);
+      expect(read.body.status).toEqual({
+        state: "started",
+        matchId: "8123456790",
+        left: true,
+      });
+      expect(
+        await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } }),
+      ).toMatchObject({ status: "PLAYING", botMatchId: "8123456790" });
+      resetLobbyBotStatusCacheForTests();
+      await post(duel.id);
+      expect(await statusOf(duel.id)).toBe("PLAYING");
+      resetLobbyBotStatusCacheForTests();
+      fakeBot(() => ({ state: "started", matchId: "8123456790", left: true, over: true }));
+      await post(duel.id);
+      expect(await statusOf(duel.id)).toBe("AWAITING_RESULT");
+    });
+
+    it("keeps a 5v5 IN_PROGRESS while the bot is gone, and marks it over on the later over", async () => {
+      const user = await makeUser("Captain");
+      const lobby = await prisma.inhouseLobby.create({
+        data: {
+          status: "READY",
+          players: { create: { userId: user.id, team: 1, isCaptain: true } },
+        },
+      });
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+      fakeBot(() => ({ state: "started", matchId: "8123456791", left: true }));
+      const read = await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+      expect((await read.json()).status).toEqual({
+        state: "started",
+        matchId: "8123456791",
+        left: true,
+      });
+      expect((await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status).toBe(
+        "IN_PROGRESS",
+      );
+      resetLobbyBotStatusCacheForTests();
+      await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+      expect((await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status).toBe(
+        "IN_PROGRESS",
+      );
+      resetLobbyBotStatusCacheForTests();
+      fakeBot(() => ({ state: "started", matchId: "8123456791", left: true, over: true }));
+      await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+      expect((await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status).toBe(
+        "AWAITING_RESULT",
+      );
+    });
+
+    it("answers a 5v5 status without left exactly as before", async () => {
+      const user = await makeUser("Captain");
+      const lobby = await prisma.inhouseLobby.create({
+        data: {
+          status: "READY",
+          players: { create: { userId: user.id, team: 1, isCaptain: true } },
+        },
+      });
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+      fakeBot(() => ({ state: "started", lobbyId: "123456789012345678", matchId: "8123456792" }));
+      const body = await (
+        await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }))
+      ).json();
+      expect(body).toEqual({
+        enabled: true,
+        canControl: true,
+        canRelease: true,
+        playable: true,
+        name: expect.any(String),
+        password: expect.any(String),
+        leagueId: 54321,
+        radiantName: expect.any(String),
+        direName: expect.any(String),
+        inviteScope: "missing",
+        status: {
+          state: "started",
+          lobbyId: "123456789012345678",
+          matchId: "8123456792",
+        },
+      });
+      expect((await prisma.inhouseLobby.findUniqueOrThrow({ where: { id: lobby.id } })).status).toBe(
+        "IN_PROGRESS",
+      );
+    });
+
+    it("never reports a left job as the bot being busy: its claim is free", async () => {
+      const { a, duel } = await pair();
+      vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+      // The bot left another game early: health names no active key.
+      fakeBot(() => ({ state: "idle" }), null);
+      expect((await post(duel.id)).body.busyElsewhere).toBeUndefined();
+    });
+  });
+
+  it("names a 1v1 holding the bot, and frees the bot from a closed one on Create", async () => {
+    const { lobbyBusyLabel } = await import("@/lib/dota-lobby");
+    const user = await makeUser("Captain");
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        players: { create: { userId: user.id, team: 1, isCaptain: true } },
+      },
+    });
+    const holder = await pair("PLAYING");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+    fakeBot(() => ({ state: "idle" }), duelKey(holder.duel.id));
+    const read = await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }));
+    const busy = (await read.json()).busyElsewhere;
+    expect(busy).toEqual({ game: "a 1v1", closed: false, duel: true });
+    expect(lobbyBusyLabel(busy)).toBe("The bot is hosting a 1v1");
+
+    // That duel closes; this game's Create answers BUSY and frees the bot.
+    await prisma.inhouseDuel.update({
+      where: { id: holder.duel.id },
+      data: { status: "CANCELLED" },
+    });
+    resetLobbyBotStatusCacheForTests();
+    const calls = fakeBot(
+      (call) => (call.action === "create" ? { code: "BUSY" } : { state: "ready" }),
+      duelKey(holder.duel.id),
+    );
+    const created = await POST(request({ kind: "inhouse", id: lobby.id, action: "create" }));
+    expect(await created.json()).toEqual({
+      error: "Freeing the bot from a finished 1v1. Press “Create Dota lobby” again in a few seconds.",
+      freeing: true,
+    });
+    expect(calls.map((c) => [c.action, c.spec?.key])).toEqual([
+      ["create", `${keyPrefix}inhouse:${lobby.id}:1`],
+      ["health", undefined],
+      ["release", duelKey(holder.duel.id)],
+    ]);
+  });
+
+  it("leaves a live 1v1's hold alone, and tells a 1v1's Create to wait for the bot", async () => {
+    const { a, duel } = await pair();
+    const holder = await pair("PLAYING");
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    const calls = fakeBot(
+      (call) => (call.action === "create" ? { code: "BUSY" } : { state: "idle" }),
+      duelKey(holder.duel.id),
+    );
+    const created = await post(duel.id, "create");
+    expect(created).toEqual({
+      status: 400,
+      body: { error: "The bot is hosting another game. It makes your 1v1 lobby as soon as it's free." },
+    });
+    expect(calls.map((c) => c.action)).toEqual(["create", "health"]);
+  });
+
+  describe("auto-create", () => {
+    async function queued(name: string) {
+      const u = await makeUser(name);
+      const now = Date.now();
+      await prisma.inhouseDuelQueueEntry.create({
+        data: {
+          userId: u.id,
+          joinedAt: new Date(now - 60_000),
+          lastSeenAt: new Date(now),
+          expiresAt: new Date(now + 600_000),
+        },
+      });
+      return u;
+    }
+
+    it("asks the bot for the pair's lobby right after the join that pairs them", async () => {
+      const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
+      const waiter = await queued("Waiter");
+      const joiner = await makeUser("Joiner");
+      const calls = fakeBot(() => ({ state: "creating" }));
+      expect(await joinDuelQueue(asSession(joiner))).toEqual({ ok: true });
+      const duel = await prisma.inhouseDuel.findFirstOrThrow();
+      expect(duel.status).toBe("READY");
+      expect(calls).toHaveLength(1);
+      expect(calls[0]).toMatchObject({
+        action: "create",
+        spec: { key: duelKey(duel.id), gameMode: 21 },
+      });
+      expect([...calls[0].spec!.radiant, ...calls[0].spec!.dire].sort()).toEqual(
+        [waiter.steamId, joiner.steamId].sort(),
+      );
+    });
+
+    it("asks nothing for a join that only waits, or while the bot is saved for a 5v5", async () => {
+      const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
+      const calls = fakeBot(() => ({ state: "creating" }));
+      expect(await joinDuelQueue(asSession(await makeUser("Alone")))).toEqual({ ok: true });
+      expect(calls).toEqual([]);
+      const captain = await makeUser("Five Captain");
+      await prisma.inhouseLobby.create({
+        data: {
+          status: "DRAFTING",
+          players: { create: { userId: captain.id, team: 1, isCaptain: true } },
+        },
+      });
+      expect(await joinDuelQueue(asSession(await makeUser("Second")))).toEqual({ ok: true });
+      expect(await statusOf((await prisma.inhouseDuel.findFirstOrThrow()).id)).toBe("READY");
+      expect(calls).toEqual([]);
+    });
+
+    it("takes a busy bot quietly: the pair stays READY", async () => {
+      const { joinDuelQueue } = await import("@/lib/inhouse-duel-service");
+      await queued("Waiter");
+      const calls = fakeBot(() => ({ code: "BUSY" }), "inhouse:somewhere:1");
+      expect(await joinDuelQueue(asSession(await makeUser("Joiner")))).toEqual({ ok: true });
+      expect(await statusOf((await prisma.inhouseDuel.findFirstOrThrow()).id)).toBe("READY");
+      expect(calls.map((c) => c.action)).toEqual(["create", "health"]);
+    });
+
+    it("retries the oldest READY duel with no bot lobby, once per worker pass", async () => {
+      const { runDuelWorkerSteps } = await import("@/lib/inhouse-duel-service");
+      const older = await pair();
+      await prisma.inhouseDuel.update({
+        where: { id: older.duel.id },
+        data: { createdAt: new Date(Date.now() - 60_000) },
+      });
+      const newer = await pair();
+      const calls = fakeBot(() => ({ state: "idle" }));
+      await runDuelWorkerSteps();
+      const creates = calls.filter((c) => c.action === "create");
+      expect(creates.map((c) => c.spec?.key)).toEqual([duelKey(older.duel.id)]);
+      // A duel with its lobby up is never asked again; the next one is.
+      const again = fakeBot((call) =>
+        call.spec?.key === duelKey(older.duel.id) ? { state: "ready" } : { state: "idle" },
+      );
+      await runDuelWorkerSteps();
+      expect(again.filter((c) => c.action === "create").map((c) => c.spec?.key)).toEqual([
+        duelKey(newer.duel.id),
+      ]);
+    });
+
+    it("never retries while the bot is saved for a 5v5, and moves duels by the worker's read", async () => {
+      const { runDuelWorkerSteps } = await import("@/lib/inhouse-duel-service");
+      const waiting = await pair();
+      const captain = await makeUser("Five Captain");
+      await prisma.inhouseLobby.create({
+        data: {
+          status: "CAPTAIN_VOTE",
+          players: { create: { userId: captain.id, team: 1, isCaptain: true } },
+        },
+      });
+      const calls = fakeBot(() => ({ state: "idle" }));
+      await runDuelWorkerSteps();
+      expect(calls.map((c) => c.action)).toEqual(["status"]);
+      expect(await statusOf(waiting.duel.id)).toBe("READY");
+
+      const launched = await pair();
+      fakeBot((call) =>
+        call.spec?.key === duelKey(launched.duel.id)
+          ? { state: "started", matchId: "8123456793", left: true }
+          : { state: "released" },
+      );
+      await runDuelWorkerSteps();
+      expect(await statusOf(launched.duel.id)).toBe("PLAYING");
+      expect(await statusOf(waiting.duel.id)).toBe("CANCELLED");
+    });
+  });
+});

@@ -6,6 +6,7 @@ import {
   INHOUSE_SEAT_RULE_NOTE,
   inviteResultToast,
   inviteUnknownToast,
+  LOBBY_LEFT_NOTE,
   LOBBY_OVER_NOTE,
   LOBBY_RELEASING_NOTE,
   lobbyBusyElsewhere,
@@ -28,7 +29,7 @@ import {
   type LobbyKind,
   type LobbySeat,
 } from "@/lib/dota-lobby";
-import { LEAGUE_GAME_MODE } from "@/lib/constants";
+import { DUEL_GAME_MODE, LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { requestSignal } from "@/lib/request-signal";
 import { cn } from "@/lib/utils";
@@ -314,6 +315,9 @@ export function DotaLobbyControls({
   // does. An admin on the players' panel can, and gets the hosts' copy.
   const joiner = audience === "player" && !view?.canRelease;
   const releasing = view?.status?.releasing === true;
+  // A running game the bot has left early: the bot is free for the next one.
+  const left = view?.status?.left === true;
+  const duel = kind === "duel";
   // In-house only: how many sit on their own side, then "All ten seated",
   // which highlights Start for the viewers who have it and tells everyone
   // else a captain starts the game.
@@ -336,7 +340,9 @@ export function DotaLobbyControls({
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Steam lobby bot</h3>
-        <span className="text-xs text-muted">{LEAGUE_GAME_MODE.name} · {LEAGUE_CONFIG.gameServerRegion}</span>
+        <span className="text-xs text-muted">
+          {duel ? DUEL_GAME_MODE.name : LEAGUE_GAME_MODE.name} · {LEAGUE_CONFIG.gameServerRegion}
+        </span>
       </div>
       {view?.enabled === false ? (
         <p className="text-sm text-muted">
@@ -362,7 +368,7 @@ export function DotaLobbyControls({
         <>
           {busy ? (
             <p className="text-xs text-muted">
-              {lobbyBusyNote(busy, view.canControl)}
+              {lobbyBusyNote(busy, view.canControl, kind)}
             </p>
           ) : null}
           {/* No bot lobby will exist for a game the bot can't host now, so
@@ -390,7 +396,7 @@ export function DotaLobbyControls({
           )}
           {/* Anyone who can't press Create (a player, not a captain) waits
               for a captain's lobby; the hosts get the Create button. */}
-          {!view.canControl && !busy && ["idle", "released"].includes(state) ? (
+          {!duel && !view.canControl && !busy && ["idle", "released"].includes(state) ? (
             <p className="text-xs text-muted">
               Once a captain creates it, join with this name and password.
             </p>
@@ -399,6 +405,8 @@ export function DotaLobbyControls({
             <p className="text-xs text-muted">{LOBBY_RELEASING_NOTE}</p>
           ) : over ? (
             <p className="text-xs text-muted">{LOBBY_OVER_NOTE}</p>
+          ) : left ? (
+            <p className="text-xs text-muted">{LOBBY_LEFT_NOTE}</p>
           ) : null}
           {players ? (
             <>
@@ -415,9 +423,9 @@ export function DotaLobbyControls({
                   still missing can join with this name and password.
                 </p>
               )}
-              {/* In-house only: the bot keeps its sides right while the
-                  lobby fills (it moves nobody in a season lobby). */}
-              {kind === "inhouse" && state === "ready" && !releasing ? (
+              {/* In-house games and 1v1s: the bot keeps its sides right
+                  while the lobby fills (it moves nobody in a season lobby). */}
+              {kind !== "season" && state === "ready" && !releasing ? (
                 <p className="text-xs text-muted">{INHOUSE_SEAT_RULE_NOTE}</p>
               ) : null}
               <p className="text-xs text-muted">
@@ -487,6 +495,12 @@ export function DotaLobbyControls({
             <p className="text-xs text-muted">
               After this result is imported, this page offers the next game in
               the series.
+            </p>
+          ) : null}
+          {state === "started" && duel && !recoveryOnly && !over ? (
+            <p className="text-xs text-muted">
+              The result records itself from OpenDota after the game, and the
+              1v1 is marked over here as soon as Dota shows its end.
             </p>
           ) : null}
           {state === "started" && kind === "inhouse" && !recoveryOnly && !over ? (
@@ -579,9 +593,9 @@ export function DotaLobbyControls({
           {confirmRelease && releaseOpen(view) ? (
             <div className="space-y-2 rounded-lg border border-line p-3">
               <p className="text-sm">
-                The bot will leave this Dota lobby: at once on the lobby
-                screen, or when a running game ends. The lobby may remain
-                open for its players; check it before creating another.
+                {duel
+                  ? "The bot will leave this Dota lobby: at once on the lobby screen, or when a running game ends. A 1v1 whose game never started is called off once the bot has left."
+                  : "The bot will leave this Dota lobby: at once on the lobby screen, or when a running game ends. The lobby may remain open for its players; check it before creating another."}
               </p>
               <button
                 type="button"
