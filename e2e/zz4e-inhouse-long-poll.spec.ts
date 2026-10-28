@@ -35,13 +35,19 @@ type StateRequest = {
   queue: { userId: string; name: string }[] | null;
 };
 
-/** Dev-login a fresh user and return an authed API context. */
+/**
+ * Dev-login a fresh user and return an authed API context. The redirect is
+ * not followed: the cookie comes on the 307, and rendering /inhouse for an
+ * API context only keeps the dev server busy (CI, 2026-10-28: 1.45 s, while
+ * the tabs' polls waited behind it).
+ */
 async function apiPlayer(name: string, steamId: string): Promise<APIRequestContext> {
   const ctx = await pwRequest.newContext({ baseURL: BASE });
   const res = await ctx.get(
     `/api/auth/dev?name=${encodeURIComponent(name)}&steamId=${steamId}&redirect=/inhouse`,
+    { maxRedirects: 0 },
   );
-  expect(res.ok()).toBe(true);
+  expect(res.status()).toBe(307);
   return ctx;
 }
 
@@ -140,35 +146,41 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 test("a change reaches every open tab, signed in or out, within about a second", async ({ browser }) => {
   test.setTimeout(90_000);
+  // The joiner signs in first: a sign-in moves the room version, and one
+  // landing after the tabs' requests turns them into stale ones the server
+  // answers at once, which a busy server can keep in flight past HELD_MS.
+  const joiner = await apiPlayer("LP Joiner", "76561190000007002");
   const spectator = await roomTab(browser, null);
   const watcher = await roomTab(browser, { name: "LP Watcher", steamId: "76561190000007001" });
-  const joiner = await apiPlayer("LP Joiner", "76561190000007002");
-  for (const tab of [spectator, watcher]) await untilHeld(tab);
+  try {
+    for (const tab of [spectator, watcher]) await untilHeld(tab);
 
-  const joined = await act(joiner, { action: "join", mmr: 3100 });
-  const joinedAt = Date.now();
-  const joinerId = String((joined.me as { userId: string }).userId);
-  for (const tab of [spectator, watcher]) {
-    await expect
-      .poll(
-        () => tab.log.find((r) => r.end !== null && r.end >= joinedAt && r.queue?.some((q) => q.userId === joinerId)),
-        { timeout: 5_000, intervals: [50] },
-      )
-      .toBeTruthy();
-    const seen = tab.log.find((r) => r.end !== null && r.end >= joinedAt && r.queue?.some((q) => q.userId === joinerId))!;
-    // The held request answered: it was sent before the join, with `since`.
-    expect(seen.since).not.toBeNull();
-    expect(seen.start).toBeLessThan(joinedAt);
-    // Coalesce (100 ms), jitter (up to 150 ms), the poll, the dev server.
-    expect(seen.end! - joinedAt).toBeLessThan(1_500);
-    await expect(tab.page.getByText("LP Joiner").first()).toBeVisible();
+    const joined = await act(joiner, { action: "join", mmr: 3100 });
+    const joinedAt = Date.now();
+    const joinerId = String((joined.me as { userId: string }).userId);
+    for (const tab of [spectator, watcher]) {
+      await expect
+        .poll(
+          () => tab.log.find((r) => r.end !== null && r.end >= joinedAt && r.queue?.some((q) => q.userId === joinerId)),
+          { timeout: 5_000, intervals: [50] },
+        )
+        .toBeTruthy();
+      const seen = tab.log.find((r) => r.end !== null && r.end >= joinedAt && r.queue?.some((q) => q.userId === joinerId))!;
+      // The held request answered: it was sent before the join, with `since`.
+      expect(seen.since).not.toBeNull();
+      expect(seen.start).toBeLessThan(joinedAt);
+      // Coalesce (100 ms), jitter (up to 150 ms), the poll, the dev server.
+      expect(seen.end! - joinedAt).toBeLessThan(1_500);
+      await expect(tab.page.getByText("LP Joiner").first()).toBeVisible();
+    }
+    spectator.errors();
+    watcher.errors();
+  } finally {
+    // Even after a failure: a joiner left queued fills the next spec's lobby.
+    await act(joiner, { action: "leave" });
+    await joiner.dispose();
+    for (const tab of [spectator, watcher]) await tab.context.close();
   }
-
-  await act(joiner, { action: "leave" });
-  spectator.errors();
-  watcher.errors();
-  await joiner.dispose();
-  for (const tab of [spectator, watcher]) await tab.context.close();
 });
 
 test("an idle room costs about one request per hold, per tab", async ({ browser }) => {
