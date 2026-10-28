@@ -255,8 +255,11 @@ describe("the bot hosting another game", () => {
   });
 
   it("sends a game still being played to the by-hand steps, and a closed one to Create", () => {
-    expect(lobbyBusyNote(live, true)).toMatch(/Host this game by hand/);
-    expect(lobbyBusyNote(live, false)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(live, true)).toMatch(/host this game by hand/);
+    expect(lobbyBusyNote(live, false)).toMatch(/host this game by hand/);
+    // The bot comes back by itself: once it leaves that game (early leave, a
+    // few minutes after it starts) or at its end.
+    expect(lobbyBusyNote(live, true)).toMatch(/“Create Dota lobby” comes back here/);
     expect(lobbyBusyNote(closed, true)).toMatch(/^Press “Create Dota lobby”/);
     expect(lobbyBusyNote(closed, false)).toMatch(/A captain's “Create Dota lobby”/);
   });
@@ -909,7 +912,7 @@ describe("a 1v1's panel (kind duel)", () => {
     );
     // Today's 5v5 wording is unchanged, with or without the kind.
     expect(lobbyBusyNote(busy, true)).toBe(lobbyBusyNote(busy, true, "inhouse"));
-    expect(lobbyBusyNote(busy, true)).toMatch(/Host this game by hand/);
+    expect(lobbyBusyNote(busy, true)).toMatch(/host this game by hand/);
     // A closed game's hold is freed by Create, for a 1v1 too.
     expect(lobbyBusyNote({ ...busy, closed: true }, true, "duel")).toMatch(
       /Create Dota lobby/,
