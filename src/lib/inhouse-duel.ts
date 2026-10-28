@@ -482,7 +482,13 @@ export function duelLadder(duels: FinishedDuelRow[]): RankedInhouse {
 
 // ---------- The room's duel block ----------
 
-type DuelUserView = { id: string; name: string; avatar: string | null };
+type DuelUserView = {
+  id: string;
+  name: string;
+  avatar: string | null;
+  /** The player's medal (the card shows it beside the opponent). */
+  rankTier: number | null;
+};
 
 export type DuelRoomQueueRow = {
   userId: string;
@@ -719,4 +725,165 @@ export function buildDuelState(
     me,
     canRemoveFromQueue: isAdmin,
   };
+}
+
+// ---------- The room poll and the worker's wake ----------
+
+export type DuelHeartbeatAction = "skip" | "write" | "writeAndRefresh";
+
+/**
+ * What the polling viewer's 1v1 queue heartbeat needs (the 5v5's
+ * roomHeartbeatAction, for the 1v1 queue). `row` is their 1v1 queue row
+ * (null when not queued); `seenAtMs` a later heartbeat this server already
+ * wrote for them, if it knows one.
+ *
+ * - skip: not queued, or seen within HEARTBEAT_SECONDS. That mirrors
+ *   touchDuelQueueHeartbeat's strict `lastSeenAt < now - 30s` WHERE, so the
+ *   skipped statement would have matched no row.
+ * - write: queued, present and due a heartbeat. Presence doesn't change.
+ * - writeAndRefresh: the rows show them away. After the write they are
+ *   present (and can be paired), so the poll publishes and re-reads.
+ */
+export function duelHeartbeatAction(
+  row: { lastSeenAt: Date } | null,
+  seenAtMs: number | null,
+  nowMs: number,
+): DuelHeartbeatAction {
+  if (!row) return "skip";
+  const seen = Math.max(row.lastSeenAt.getTime(), seenAtMs ?? -Infinity);
+  if (seen >= nowMs - INHOUSE_DUEL.HEARTBEAT_SECONDS * 1000) return "skip";
+  return duelWaiterPresent(row, nowMs) ? "write" : "writeAndRefresh";
+}
+
+/**
+ * The moments the room's duel block reads differently with no write
+ * (buildDuelState's own boundaries): a queue row dropping out at its expiry,
+ * a waiter turning away, a result leaving the 10-minute window. The held
+ * long-poll wakes for them (inhouseRoomWakeAt). The duels' own clocks (the
+ * setup call-off, the give-up) change the reply only through the worker's
+ * writes, which publish.
+ */
+export function duelRoomClocks(rows: {
+  queue: readonly { lastSeenAt: Date; expiresAt: Date }[];
+  duels: readonly { status: string; completedAt: Date | null }[];
+}): number[] {
+  const clocks: number[] = [];
+  for (const q of rows.queue) {
+    // duelWaiterExpired: expiresAt <= now.
+    clocks.push(q.expiresAt.getTime());
+    // duelWaiterPresent: lastSeenAt >= now - PRESENT_SECONDS, so away 1ms past.
+    clocks.push(q.lastSeenAt.getTime() + INHOUSE_DUEL.PRESENT_SECONDS * 1000 + 1);
+  }
+  for (const d of rows.duels) {
+    if (d.status === INHOUSE_DUEL_STATUS.COMPLETED && d.completedAt) {
+      clocks.push(d.completedAt.getTime() + INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1);
+    }
+  }
+  return clocks;
+}
+
+/**
+ * When the one-minute worker next has 1v1 work (runDuelWorkerSteps), for
+ * the automation gate; null when there is none. Now while a duel is live
+ * (READY or PLAYING: the worker reads the bot every pass, retries a READY
+ * duel's lobby create, and the scan and the give-up follow), or while two
+ * present waiters sit in the queue (the worker's pairing sweep); otherwise
+ * the earliest queue expiry and each open duel's next clock
+ * (duelNextClockMs: its scan, its setup call-off, its give-up).
+ */
+export function duelWorkerWakeAtMs(
+  input: {
+    queue: readonly { lastSeenAt: Date; expiresAt: Date }[];
+    duels: readonly DuelClockInput[];
+  },
+  nowMs: number,
+): number | null {
+  let next = Infinity;
+  let present = 0;
+  for (const q of input.queue) {
+    // expireDuelQueue deletes rows with expiresAt <= now.
+    next = Math.min(next, q.expiresAt.getTime());
+    if (duelWaiterPresent(q, nowMs) && !duelWaiterExpired(q, nowMs)) present += 1;
+  }
+  if (present >= 2) next = Math.min(next, nowMs);
+  for (const d of input.duels) {
+    if (duelIsLive(d.status)) next = Math.min(next, nowMs);
+    const clock = duelNextClockMs(d);
+    if (clock !== null) next = Math.min(next, clock);
+  }
+  return next === Infinity ? null : next;
+}
+
+// ---------- The 1v1 card (src/components/inhouse/duel-*.tsx) ----------
+
+/** The 1v1 card's intro: what a 1v1 is, shown to everyone. */
+export const DUEL_CARD_INTRO =
+  "Play a quick 1v1 Solo Mid. First to two kills or a tower. Wins count on the 1v1 leaderboard.";
+
+/**
+ * What the card's join row offers the viewer: sign in, Join 1v1, Leave 1v1,
+ * a refusal in Join's place, or nothing (their own 1v1 is on the card).
+ * `pageRefusal` is the page's MMR-cap refusal (the 5v5 queue's own rule,
+ * which joinDuelQueue applies too), judged first so its words win, as in
+ * duelJoinRefusal.
+ */
+export type DuelJoinRow =
+  | { kind: "sign-in" }
+  | { kind: "join" }
+  | { kind: "leave" }
+  | { kind: "refused"; reason: string }
+  | { kind: "none" };
+
+export function duelJoinRow(
+  me: DuelMeView | null,
+  pageRefusal: string | null,
+): DuelJoinRow {
+  if (!me) return { kind: "sign-in" };
+  if (me.inQueue) return { kind: "leave" };
+  if (me.joinRefusal === DUEL_REFUSAL.IN_DUEL) return { kind: "none" };
+  if (pageRefusal) return { kind: "refused", reason: pageRefusal };
+  if (me.joinRefusal) return { kind: "refused", reason: me.joinRefusal };
+  return me.canJoin ? { kind: "join" } : { kind: "none" };
+}
+
+/** "You beat X" / "X won": the viewer's last 1v1, for 10 minutes. */
+export function duelResultLine(r: { won: boolean; opponentName: string }): string {
+  return r.won ? `You beat ${r.opponentName}` : `${r.opponentName} won`;
+}
+
+/** A duel's stage, in a word or three, for its one-line listing. */
+export function duelStageLabel(status: string): string {
+  switch (status) {
+    case INHOUSE_DUEL_STATUS.READY:
+      return "Setting up";
+    case INHOUSE_DUEL_STATUS.PLAYING:
+      return "Playing";
+    case INHOUSE_DUEL_STATUS.AWAITING_RESULT:
+      return "Waiting for OpenDota";
+    default:
+      return "Over";
+  }
+}
+
+/**
+ * Whether the viewer has a 1v1 stake the room must keep polling for while
+ * its tab is hidden: a queue row (whose presence a pairing needs) or a duel
+ * a result can still land on.
+ */
+export function duelStake(me: DuelMeView | null): boolean {
+  return !!me && (me.inQueue || me.duelId !== null);
+}
+
+/**
+ * Whether a room reply brought a 1v1 result the last one didn't show: the
+ * room then refreshes the server-rendered 1v1 leaderboard below it. Null
+ * `prev` (the first reply) is never news.
+ */
+export function duelResultLanded(
+  prev: readonly string[] | null,
+  cur: readonly string[],
+): boolean {
+  if (prev === null) return false;
+  const seen = new Set(prev);
+  return cur.some((id) => !seen.has(id));
 }

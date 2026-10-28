@@ -68,6 +68,7 @@ import {
 } from "./reminder-service";
 import { maybeNudgeMissingResults } from "./result-nudge-service";
 import { announceInhouseNightStart } from "./inhouse-night-service";
+import { duelWorkPending, runDuelWorkerSteps } from "./inhouse-duel-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recordLeagueFeedWait } from "./league-feed-wait-service";
@@ -474,6 +475,75 @@ async function syncDueMatches(
   return { imported: leagueImported, watch: true };
 }
 
+type InhouseSyncOutcome = {
+  recorded: boolean;
+  watch: boolean;
+  deadlineReached?: boolean;
+  notificationFailed?: boolean;
+};
+
+/**
+ * The worker's inhouse pass: the 5v5 games (syncInhouseLobbies), then the
+ * 1v1 mid duels (syncInhouseDuels). The duels run after the 5v5 work and
+ * whatever it did, its early returns and a throw included, and a duel
+ * failure never reaches the 5v5 result (syncInhouseDuels catches its own).
+ */
+async function syncInhouse(
+  options: RunResultSyncOptions,
+): Promise<InhouseSyncOutcome> {
+  let games: InhouseSyncOutcome | null = null;
+  let gamesError: unknown = null;
+  try {
+    games = await syncInhouseLobbies(options);
+  } catch (error) {
+    gamesError = error;
+  }
+  const duels = await syncInhouseDuels(options);
+  if (games === null) throw gamesError;
+  return {
+    ...games,
+    recorded: games.recorded || duels.recorded,
+    watch: games.watch || duels.watch,
+    ...(games.deadlineReached || duels.deadlineReached
+      ? { deadlineReached: true }
+      : {}),
+  };
+}
+
+/**
+ * The 1v1 mid steps (runDuelWorkerSteps: queue expiry, the pairing sweep,
+ * the bot's reads and its create retry, the OpenDota scan, the give-up
+ * clocks). Worker-only: no room poll runs them
+ * (inhouse-resolver-parity.test.ts). One cheap probe first, so a pass with
+ * no 1v1 work costs two indexed reads; never throws.
+ */
+async function syncInhouseDuels(options: RunResultSyncOptions): Promise<{
+  recorded: boolean;
+  watch: boolean;
+  deadlineReached?: boolean;
+}> {
+  if (!canStartWork(options)) {
+    return { recorded: false, watch: false, deadlineReached: true };
+  }
+  try {
+    if (!(await duelWorkPending())) return { recorded: false, watch: false };
+    const steps = await runDuelWorkerSteps({
+      deadlineMs: options.deadlineMs,
+      signal: options.signal,
+    });
+    return {
+      recorded: steps.recorded,
+      // Open 1v1 work keeps parked pages on the fast cadence, as a live
+      // 5v5 does.
+      watch: true,
+      ...(steps.deadlineReached ? { deadlineReached: true } : {}),
+    };
+  } catch (error) {
+    logStepFailure("inhouse-duels", error);
+    return { recorded: false, watch: false };
+  }
+}
+
 /**
  * Run the inhouse lazy resolvers from outside the room. While a game is being
  * played, all ten players are in the Dota client — often with /inhouse closed —
@@ -481,12 +551,9 @@ async function syncDueMatches(
  * The scheduled worker now forms/advances/closes the lobby even when the room
  * is empty. Gated behind one cheap read so idle runs cost almost nothing.
  */
-async function syncInhouse(options: RunResultSyncOptions): Promise<{
-  recorded: boolean;
-  watch: boolean;
-  deadlineReached?: boolean;
-  notificationFailed?: boolean;
-}> {
+async function syncInhouseLobbies(
+  options: RunResultSyncOptions,
+): Promise<InhouseSyncOutcome> {
   if (!canStartWork(options)) {
     return { recorded: false, watch: false, deadlineReached: true };
   }

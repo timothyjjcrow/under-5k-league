@@ -37,6 +37,7 @@ import { singleSearchParam } from "@/lib/search-params";
 import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
+import { DuelLadderCard } from "./duel-ladder-card";
 import {
   InhouseNightCard,
   loadCurrentInhouseNight,
@@ -314,6 +315,7 @@ export default async function InhousePage({
                   items={[
                     { id: PLAY_LATER_ANCHOR, label: "Play later" },
                     { id: "inhouse-ladder", label: "Ladder" },
+                    { id: DUEL_LADDER_ANCHOR, label: "1v1" },
                     { id: "recent-inhouse", label: "Results" },
                     { id: "opendota-setup", label: "Setup help" },
                   ]}
@@ -364,6 +366,7 @@ export default async function InhousePage({
               followHash={false}
               items={[
                 { id: "inhouse-ladder", label: "Ladder" },
+                { id: DUEL_LADDER_ANCHOR, label: "1v1" },
                 { id: "recent-inhouse", label: "Results" },
                 { id: "opendota-setup", label: "Setup help" },
               ]}
@@ -397,6 +400,7 @@ export default async function InhousePage({
                 )}
               </Suspense>
             </section>
+            <DuelLadder meId={user?.id ?? null} />
             <section
               id="recent-inhouse"
               className="scroll-mt-28"
@@ -420,6 +424,9 @@ export default async function InhousePage({
             </p>
           </section>
         )}
+        {/* The 1v1 board stands on its own: 1v1s can be played before any
+            5v5 has been. After the 5v5 ladder either way. */}
+        {hasGames ? null : <DuelLadder meId={user?.id ?? null} />}
 
         {/* Open ONLY for the cohort it is about: a player OpenDota reports as
             having public match data switched off. Folding it shut for everyone
@@ -436,6 +443,27 @@ export default async function InhousePage({
         </section>
       </div>
     </>
+  );
+}
+
+/** The 1v1 mid leaderboard's section, the section nav's "1v1". */
+const DUEL_LADDER_ANCHOR = "inhouse-1v1";
+
+/**
+ * The 1v1 mid leaderboard (duel-ladder-card.tsx) in its own section, after
+ * the 5v5 ladder, streamed behind its own skeleton.
+ */
+function DuelLadder({ meId }: { meId: string | null }) {
+  return (
+    <section
+      id={DUEL_LADDER_ANCHOR}
+      className="scroll-mt-28"
+      aria-label="1v1 mid leaderboard"
+    >
+      <Suspense fallback={<CardSkeleton rows={4} />}>
+        <DuelLadderCard meId={meId} />
+      </Suspense>
+    </section>
   );
 }
 

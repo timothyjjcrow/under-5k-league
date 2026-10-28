@@ -175,7 +175,7 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
  */
 export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
-export const INHOUSE_SCAN_ACTIONS = ["detect", "record"] as const;
+export const INHOUSE_SCAN_ACTIONS = ["detect", "record", "duelRecord"] as const;
 
 /**
  * Consecutive failed polls before a room declares itself disconnected (see

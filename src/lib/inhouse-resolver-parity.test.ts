@@ -7,8 +7,9 @@ import { REASON_RESOLVER } from "./inhouse-room-due";
 // in TWO places on purpose:
 //
 //   - getInhouseState (inhouse-service.ts) — the room's own poll path
-//   - syncInhouse (result-sync-service.ts) — the authenticated one-minute
-//     automation worker, which reaches a lobby NOBODY is polling
+//   - syncInhouseLobbies (result-sync-service.ts, the 5v5 half of the
+//     worker's syncInhouse) — the authenticated one-minute automation
+//     worker, which reaches a lobby NOBODY is polling
 //
 // A resolver added to one chain but not the other fails SILENTLY: tsc is
 // happy, the resolver's own unit tests pass, and the forgotten chain just
@@ -42,9 +43,11 @@ const CHAINS = [
     end: "const rows = await loadInhouseRoomRows(",
   },
   {
-    label: "syncInhouse (result-sync-service.ts)",
+    label: "syncInhouseLobbies (result-sync-service.ts)",
     file: "result-sync-service.ts",
-    start: "async function syncInhouse",
+    // The 5v5 half of the worker's syncInhouse (the 1v1 half is worker-only,
+    // below).
+    start: "async function syncInhouseLobbies(",
     end: "const [stillActive, present]",
   },
 ] as const;
@@ -149,5 +152,77 @@ describe("inhouse resolver-chain parity", () => {
     expect(woken).toEqual(
       EXPECTED.filter((name) => name !== "maybeAutoDetectResult"),
     );
+  });
+});
+
+// WORKER-ONLY STEPS. The 1v1 mid duels (inhouse-duel-service.ts) have no
+// room-poll chain at all: their queue expiry, pairing sweep, bot reads,
+// OpenDota scan and give-up clocks run only from the worker's syncInhouse,
+// through runDuelWorkerSteps (docs/features/inhouse-duels.md). That is an
+// explicit list, not a loosening of the 5v5 parity above: each name must be
+// called from the worker and must never appear in the room's chain or the
+// room poll's modules, where it would run on a viewer's request.
+const WORKER_ONLY = [
+  "runDuelWorkerSteps",
+  "maybeAutoDetectDuelResults",
+  "giveUpOnDuels",
+  "expireDuelQueue",
+  "pairDuelQueue",
+] as const;
+
+describe("worker-only inhouse steps (the 1v1 duels)", () => {
+  const worker = stripComments(readSource("result-sync-service.ts"));
+  const fnBody = (src: string, name: string) => {
+    const start = src.indexOf(`async function ${name}(`);
+    if (start === -1) return "";
+    const rest = src.slice(start + 1);
+    const next = rest.search(/\n(export |async function |function )/);
+    return next === -1 ? rest : rest.slice(0, next);
+  };
+
+  it("the worker's syncInhouse runs the 5v5 half, then the 1v1 steps behind their probe", () => {
+    const sync = fnBody(worker, "syncInhouse");
+    expect(sync.length).toBeGreaterThan(0);
+    const games = sync.indexOf("await syncInhouseLobbies(options)");
+    const duels = sync.indexOf("await syncInhouseDuels(options)");
+    expect(games).toBeGreaterThan(-1);
+    expect(duels).toBeGreaterThan(games);
+    const steps = fnBody(worker, "syncInhouseDuels");
+    const probe = steps.indexOf("await duelWorkPending()");
+    expect(probe).toBeGreaterThan(-1);
+    expect(steps.indexOf("await runDuelWorkerSteps(")).toBeGreaterThan(probe);
+    // Its own catch: a 1v1 failure never fails the 5v5 pass.
+    expect(steps).toMatch(/\} catch \(error\) \{\s*logStepFailure\("inhouse-duels", error\);/);
+  });
+
+  it("runDuelWorkerSteps runs every worker-only step", () => {
+    const duel = stripComments(readSource("inhouse-duel-service.ts"));
+    const steps = fnBody(duel, "runDuelWorkerSteps");
+    expect(steps.length).toBeGreaterThan(0);
+    for (const name of WORKER_ONLY.filter((n) => n !== "runDuelWorkerSteps")) {
+      expect(steps, name).toContain(`await ${name}(`);
+    }
+  });
+
+  it("no worker-only step runs in the room's chain or a room poll module", () => {
+    const roomChain = chainSlice(CHAINS[0]);
+    const pollModules = [
+      "inhouse-room-state.ts",
+      "inhouse-room-due.ts",
+      "inhouse-room-wake.ts",
+      "inhouse-room-cache.ts",
+    ].map((file) => ({ file, text: stripComments(readSource(file)) }));
+    const route = stripComments(
+      readFileSync(join(__dirname, "../app/api/inhouse/route.ts"), "utf8"),
+    );
+    for (const name of WORKER_ONLY) {
+      expect(roomChain, `getInhouseState runs ${name}`).not.toContain(name);
+      for (const m of pollModules) {
+        expect(m.text, `${m.file} runs ${name}`).not.toContain(name);
+      }
+      expect(route, `the room's route runs ${name}`).not.toContain(name);
+    }
+    // And the 5v5 chain's set is untouched by them (the parity above).
+    expect(resolverSet(roomChain)).toEqual(EXPECTED);
   });
 });

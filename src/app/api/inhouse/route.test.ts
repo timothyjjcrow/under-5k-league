@@ -22,6 +22,14 @@ const mocks = vi.hoisted(() => ({
   cancelLobby: vi.fn(),
   voidLastResult: vi.fn(),
   removeFromQueue: vi.fn(),
+  joinDuelQueue: vi.fn(),
+  leaveDuelQueue: vi.fn(),
+  finishDuel: vi.fn(),
+  callOffDuel: vi.fn(),
+  recordDuelMatch: vi.fn(),
+  cancelDuel: vi.fn(),
+  removeFromDuelQueue: vi.fn(),
+  voidDuelResult: vi.fn(),
   pollInhouseState: vi.fn(),
   holdInhouseRoomPoll: vi.fn(),
   readInhouseRoomVersion: vi.fn(),
@@ -55,6 +63,16 @@ vi.mock("@/lib/inhouse-service", () => ({
   cancelLobby: mocks.cancelLobby,
   voidLastResult: mocks.voidLastResult,
   removeFromQueue: mocks.removeFromQueue,
+}));
+vi.mock("@/lib/inhouse-duel-service", () => ({
+  joinDuelQueue: mocks.joinDuelQueue,
+  leaveDuelQueue: mocks.leaveDuelQueue,
+  finishDuel: mocks.finishDuel,
+  callOffDuel: mocks.callOffDuel,
+  recordDuelMatch: mocks.recordDuelMatch,
+  cancelDuel: mocks.cancelDuel,
+  removeFromDuelQueue: mocks.removeFromDuelQueue,
+  voidDuelResult: mocks.voidDuelResult,
 }));
 vi.mock("@/lib/inhouse-room-state", () => ({
   pollInhouseState: mocks.pollInhouseState,
@@ -93,6 +111,14 @@ const actionMocks = [
   mocks.cancelLobby,
   mocks.voidLastResult,
   mocks.removeFromQueue,
+  mocks.joinDuelQueue,
+  mocks.leaveDuelQueue,
+  mocks.finishDuel,
+  mocks.callOffDuel,
+  mocks.recordDuelMatch,
+  mocks.cancelDuel,
+  mocks.removeFromDuelQueue,
+  mocks.voidDuelResult,
 ];
 
 function request(body: unknown) {
@@ -267,7 +293,7 @@ describe("POST /api/inhouse request boundary", () => {
       syncBoard: false,
     });
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v14", {
       expire: 0,
     });
   });
@@ -279,7 +305,7 @@ describe("POST /api/inhouse request boundary", () => {
 
     expect(response.status).toBe(400);
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v14", {
       expire: 0,
     });
   });
@@ -290,7 +316,7 @@ describe("POST /api/inhouse request boundary", () => {
     await expect(POST(request({ action: "leave" }))).rejects.toThrow(
       "read failed",
     );
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v14", {
       expire: 0,
     });
   });
@@ -307,7 +333,7 @@ describe("POST /api/inhouse request boundary", () => {
     // Maintenance is the poll's call, never the route's own.
     expect(mocks.getInhouseState).not.toHaveBeenCalled();
     expect(mocks.revalidateTag).toHaveBeenCalledOnce();
-    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v13", {
+    expect(mocks.revalidateTag).toHaveBeenCalledWith("automation-gate:v14", {
       expire: 0,
     });
   });
@@ -681,6 +707,46 @@ describe("POST /api/inhouse request boundary", () => {
     expect(mocks.setInhouseRoles).toHaveBeenCalledWith(user, ["2", "3"]);
     expect(mocks.joinQueue).toHaveBeenNthCalledWith(1, user, 3000, ["5"]);
     expect(mocks.joinQueue).toHaveBeenNthCalledWith(2, user, 3000, undefined);
+  });
+
+  it("hands each 1v1 action its own service, naming the duel the room showed", async () => {
+    await POST(request({ action: "duelJoin" }));
+    await POST(request({ action: "duelLeave" }));
+    await POST(request({ action: "duelOver", duelId: "duel-1" }));
+    await POST(request({ action: "duelCallOff", duelId: "duel-1" }));
+    await POST(request({ action: "duelRecord", duelId: "duel-1", matchId: "8100000001" }));
+    await POST(request({ action: "duelCancel", duelId: "duel-2" }));
+    await POST(request({ action: "duelRemove", userId: "player-9" }));
+    await POST(request({ action: "duelVoid", duelId: "duel-3" }));
+    // Only a string names a duel.
+    await POST(request({ action: "duelCallOff", duelId: { id: "duel-1" } }));
+
+    expect(mocks.joinDuelQueue).toHaveBeenCalledWith(user);
+    expect(mocks.leaveDuelQueue).toHaveBeenCalledWith(user);
+    expect(mocks.finishDuel).toHaveBeenCalledWith(user, "duel-1");
+    expect(mocks.callOffDuel).toHaveBeenNthCalledWith(1, user, "duel-1");
+    expect(mocks.callOffDuel).toHaveBeenNthCalledWith(2, user, "");
+    expect(mocks.recordDuelMatch).toHaveBeenCalledWith(user, "8100000001", "duel-1");
+    expect(mocks.cancelDuel).toHaveBeenCalledWith(user, "duel-2");
+    expect(mocks.removeFromDuelQueue).toHaveBeenCalledWith(user, "player-9");
+    expect(mocks.voidDuelResult).toHaveBeenCalledWith(user, "duel-3");
+    // None of them reaches a 5v5 service.
+    expect(mocks.joinQueue).not.toHaveBeenCalled();
+    expect(mocks.leaveQueue).not.toHaveBeenCalled();
+    expect(mocks.removeFromQueue).not.toHaveBeenCalled();
+    expect(mocks.cancelLobby).not.toHaveBeenCalled();
+  });
+
+  it("answers a 1v1 refusal with its words, after publishing, and expires the gate", async () => {
+    mocks.callOffDuel.mockResolvedValue({ ok: false, error: "That 1v1 already started" });
+
+    const response = await POST(request({ action: "duelCallOff", duelId: "duel-1" }));
+
+    expect(response.status).toBe(400);
+    expect((await response.json()).error).toBe("That 1v1 already started");
+    expect(mocks.publishInhouseRoomChange).toHaveBeenCalled();
+    expect(mocks.revalidateTag).toHaveBeenCalled();
+    expect(mocks.getInhouseState).not.toHaveBeenCalled();
   });
 
   it("refuses the retired bet action as unknown", async () => {

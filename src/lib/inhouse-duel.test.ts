@@ -12,6 +12,15 @@ import {
   duelBotEndedWithoutGame,
   duelBotSavedFor5v5,
   buildDuelState,
+  duelHeartbeatAction,
+  duelJoinRow,
+  duelResultLanded,
+  duelResultLine,
+  duelRoomClocks,
+  duelStageLabel,
+  duelStake,
+  duelWorkerWakeAtMs,
+  type DuelMeView,
   duelJoinRefusal,
   duelLadder,
   duelMatchFloorSeconds,
@@ -32,6 +41,7 @@ import {
   type FinishedDuelRow,
 } from "./inhouse-duel";
 import { INHOUSE_ELO, summarizeInhouse } from "./inhouse-stats";
+import { sourceFile } from "../../test/support/source-files";
 
 const NOW = Date.UTC(2026, 9, 27, 20, 0, 0);
 const sec = (s: number) => new Date(NOW - s * 1000);
@@ -298,7 +308,7 @@ describe("sharedDuelMatchIds", () => {
   });
 });
 
-const user = (id: string) => ({ id, name: `name-${id}`, avatar: null });
+const user = (id: string) => ({ id, name: `name-${id}`, avatar: null, rankTier: null });
 
 describe("the 1v1 ladder", () => {
   const finished = (
@@ -508,5 +518,219 @@ describe("the lobby bot", () => {
     const left = { state: "started", left: true as const, matchId: "8123456789" };
     expect(duelBotEndedWithoutGame(left)).toBeNull();
     expect(duelBotEndedWithoutGame(null)).toBeNull();
+  });
+});
+
+describe("the room poll's 1v1 heartbeat", () => {
+  const BEAT = INHOUSE_DUEL.HEARTBEAT_SECONDS;
+  it("skips a viewer with no 1v1 queue row, or one seen inside the throttle", () => {
+    expect(duelHeartbeatAction(null, null, NOW)).toBe("skip");
+    expect(duelHeartbeatAction({ lastSeenAt: sec(BEAT) }, null, NOW)).toBe("skip");
+    // A heartbeat this server wrote since the rows were read counts too.
+    expect(duelHeartbeatAction({ lastSeenAt: sec(BEAT + 5) }, NOW - 1000, NOW)).toBe("skip");
+  });
+
+  it("writes past the throttle (touchDuelQueueHeartbeat's strict lt), and refreshes an away waiter", () => {
+    expect(duelHeartbeatAction({ lastSeenAt: sec(BEAT + 1) }, null, NOW)).toBe("write");
+    expect(
+      duelHeartbeatAction({ lastSeenAt: sec(INHOUSE_DUEL.PRESENT_SECONDS) }, null, NOW),
+    ).toBe("write");
+    expect(
+      duelHeartbeatAction({ lastSeenAt: sec(INHOUSE_DUEL.PRESENT_SECONDS + 1) }, null, NOW),
+    ).toBe("writeAndRefresh");
+  });
+});
+
+describe("the 1v1 block's clocks (the long-poll's wake)", () => {
+  it("names each moment buildDuelState reads differently with no write", () => {
+    const expiresAt = new Date(NOW + 10 * 60_000);
+    const lastSeenAt = sec(10);
+    const completedAt = sec(30);
+    const clocks = duelRoomClocks({
+      queue: [{ lastSeenAt, expiresAt }],
+      duels: [
+        { status: INHOUSE_DUEL_STATUS.COMPLETED, completedAt },
+        { status: INHOUSE_DUEL_STATUS.PLAYING, completedAt: null },
+      ],
+    });
+    const resultEnds = completedAt.getTime() + INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1;
+    const awayAt = lastSeenAt.getTime() + INHOUSE_DUEL.PRESENT_SECONDS * 1000 + 1;
+    expect(clocks.sort()).toEqual([expiresAt.getTime(), awayAt, resultEnds].sort());
+
+    // Each is a real boundary of the reply.
+    const viewer = { id: "v", role: "USER" };
+    const rows = {
+      queue: [{ userId: "q", joinedAt: sec(60), lastSeenAt, expiresAt, user: { name: "q", avatar: null } }],
+      duels: [] as DuelRoomDuelRow[],
+    };
+    const noExtras = { in5v5: false, mmrRefusal: null };
+    expect(buildDuelState(viewer, rows, noExtras, awayAt - 1).queue.present).toBe(1);
+    expect(buildDuelState(viewer, rows, noExtras, awayAt).queue.present).toBe(0);
+    expect(buildDuelState(viewer, rows, noExtras, expiresAt.getTime() - 1).queue.players).toHaveLength(1);
+    expect(buildDuelState(viewer, rows, noExtras, expiresAt.getTime()).queue.players).toHaveLength(0);
+  });
+});
+
+describe("the worker's 1v1 wake (the automation gate)", () => {
+  const MIN = 60_000;
+  const open = (status: string, over: Partial<{ startedAt: Date | null; checkedAt: Date | null }> = {}) => ({
+    status,
+    createdAt: new Date(NOW - 20 * MIN),
+    startedAt: null,
+    checkedAt: new Date(NOW - MIN),
+    ...over,
+  });
+  const queued = (seenAgoS: number, expiresInMin: number) => ({
+    lastSeenAt: sec(seenAgoS),
+    expiresAt: new Date(NOW + expiresInMin * MIN),
+  });
+
+  it("has nothing to do with no queue and no open duel", () => {
+    expect(duelWorkerWakeAtMs({ queue: [], duels: [] }, NOW)).toBeNull();
+  });
+
+  it("runs every pass while a duel is live", () => {
+    for (const status of [INHOUSE_DUEL_STATUS.READY, INHOUSE_DUEL_STATUS.PLAYING]) {
+      expect(duelWorkerWakeAtMs({ queue: [], duels: [open(status)] }, NOW)).toBe(NOW);
+    }
+  });
+
+  it("sleeps an awaiting duel to its scan (duelNextClockMs), and a lone waiter to their expiry", () => {
+    const awaiting = open(INHOUSE_DUEL_STATUS.AWAITING_RESULT, { startedAt: sec(1000) });
+    expect(duelWorkerWakeAtMs({ queue: [], duels: [awaiting] }, NOW)).toBe(
+      duelNextClockMs(awaiting),
+    );
+    expect(duelWorkerWakeAtMs({ queue: [queued(5, 12)], duels: [] }, NOW)).toBe(NOW + 12 * MIN);
+  });
+
+  it("wakes at once for two present waiters, not for one present and one away", () => {
+    expect(
+      duelWorkerWakeAtMs({ queue: [queued(5, 12), queued(20, 25)], duels: [] }, NOW),
+    ).toBe(NOW);
+    expect(
+      duelWorkerWakeAtMs(
+        { queue: [queued(5, 12), queued(INHOUSE_DUEL.PRESENT_SECONDS + 1, 25)], duels: [] },
+        NOW,
+      ),
+    ).toBe(NOW + 12 * MIN);
+  });
+});
+
+describe("the 1v1 card's rules", () => {
+  const me = (over: Partial<DuelMeView> = {}): DuelMeView => ({
+    inQueue: false,
+    queuedAt: null,
+    queueExpiresAt: null,
+    duelId: null,
+    joinRefusal: null,
+    canJoin: true,
+    canLeave: false,
+    canOver: false,
+    canCallOff: false,
+    canRecord: false,
+    lastResult: null,
+    ...over,
+  });
+
+  it("offers sign in, Join, Leave, a refusal in Join's place, or nothing beside the viewer's own 1v1", () => {
+    expect(duelJoinRow(null, null)).toEqual({ kind: "sign-in" });
+    expect(duelJoinRow(me(), null)).toEqual({ kind: "join" });
+    expect(duelJoinRow(me({ inQueue: true, canJoin: false, canLeave: true }), null)).toEqual({
+      kind: "leave",
+    });
+    // The page's MMR-cap refusal wins, as duelJoinRefusal judges it first.
+    expect(duelJoinRow(me(), "over the cap")).toEqual({ kind: "refused", reason: "over the cap" });
+    expect(
+      duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), "over the cap"),
+    ).toEqual({ kind: "refused", reason: "over the cap" });
+    expect(duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), null)).toEqual({
+      kind: "refused",
+      reason: DUEL_REFUSAL.IN_5V5,
+    });
+    // In a live 1v1: the card shows it, not a refusal.
+    expect(
+      duelJoinRow(me({ canJoin: false, duelId: "d", joinRefusal: DUEL_REFUSAL.IN_DUEL }), null),
+    ).toEqual({ kind: "none" });
+  });
+
+  it("words the last result, and each stage", () => {
+    expect(duelResultLine({ won: true, opponentName: "Ana" })).toBe("You beat Ana");
+    expect(duelResultLine({ won: false, opponentName: "Ana" })).toBe("Ana won");
+    expect(duelStageLabel(INHOUSE_DUEL_STATUS.READY)).toBe("Setting up");
+    expect(duelStageLabel(INHOUSE_DUEL_STATUS.PLAYING)).toBe("Playing");
+    expect(duelStageLabel(INHOUSE_DUEL_STATUS.AWAITING_RESULT)).toBe("Waiting for OpenDota");
+  });
+
+  it("counts a 1v1 queue row or an open 1v1 as a stake for a hidden tab", () => {
+    expect(duelStake(null)).toBe(false);
+    expect(duelStake(me())).toBe(false);
+    expect(duelStake(me({ inQueue: true }))).toBe(true);
+    expect(duelStake(me({ duelId: "d" }))).toBe(true);
+  });
+
+  it("calls a result news only when a reply adds one", () => {
+    expect(duelResultLanded(null, ["a"])).toBe(false);
+    expect(duelResultLanded(["a"], ["a"])).toBe(false);
+    expect(duelResultLanded(["a"], [])).toBe(false);
+    expect(duelResultLanded(["a"], ["b", "a"])).toBe(true);
+  });
+});
+
+describe("the 1v1 card's source", () => {
+  const code = (path: string) =>
+    sourceFile(path)
+      .text.split("\n")
+      .filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l))
+      .join("\n");
+  const section = code("src/components/inhouse/duel-section.tsx");
+  const card = code("src/components/inhouse/duel-game-card.tsx");
+  const admin = code("src/components/inhouse/duel-admin-tools.tsx");
+
+  it("decides through the pure rules, and acts only through the room's act()", () => {
+    for (const call of ["duelJoinRow(me, joinRefusal)", "duelResultLine(", "duelResultLanded(", "DUEL_CARD_INTRO"]) {
+      expect(section, call).toContain(call);
+    }
+    for (const src of [section, card, admin]) {
+      expect(src).not.toMatch(/\bfetch\(/);
+      expect(src).not.toContain("playChime(");
+    }
+    // Every 1v1 action the route takes is wired somewhere on the card.
+    const all = section + card + admin;
+    for (const action of ["duelJoin", "duelLeave", "duelOver", "duelCallOff", "duelRecord", "duelCancel", "duelRemove", "duelVoid"]) {
+      expect(all, action).toContain(`action: "${action}"`);
+    }
+  });
+
+  it("shows the lobby bot's panel for the viewer's 1v1, or the waiting note: never by-hand steps", () => {
+    expect(card).toMatch(/<DotaLobbyControls\s+key=\{game\.id\}\s+kind="duel"/);
+    expect(card).toContain("DUEL_BOT_WAITING_NOTE");
+  });
+
+  it("names no control like a 5v5 one", () => {
+    const all = section + card + admin;
+    for (const name of [
+      "Join queue",
+      "Leave queue",
+      "ACCEPT MATCH",
+      "Game over — queue again",
+      "Get into the Dota lobby",
+      "Your side",
+      "Record by match ID",
+      "Result on the way",
+      ">Remove<",
+      ">Record<",
+    ]) {
+      expect(all, name).not.toContain(name);
+    }
+    expect(all).not.toMatch(/>\s*MMR\s*</);
+  });
+
+  it("the room renders it below every 5v5 card", () => {
+    const room = code("src/components/inhouse-room.tsx");
+    const last5v5 = room.indexOf("{otherLobbies.map(otherGame)}");
+    const duel = room.indexOf("<DuelSection");
+    expect(last5v5).toBeGreaterThan(-1);
+    expect(duel).toBeGreaterThan(last5v5);
+    expect(room.slice(duel, duel + 300)).toContain("act={act}");
   });
 });

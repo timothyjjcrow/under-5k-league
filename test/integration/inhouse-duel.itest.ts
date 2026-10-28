@@ -22,7 +22,6 @@ import {
   joinDuelQueue,
   leaveDuelQueue,
   loadDuelLadder,
-  loadDuelRoomRows,
   markDuelStartedFromBot,
   maybeAutoDetectDuelResults,
   pairDuelQueue,
@@ -32,6 +31,7 @@ import {
   touchDuelQueueHeartbeat,
   voidDuelResult,
 } from "@/lib/inhouse-duel-service";
+import { loadDuelRoomRows } from "@/lib/inhouse-duel-room";
 import { makeUser, raceAll, sessionFor } from "./factories";
 
 // The 1v1 mid engine on SQLite. OpenDota is stubbed at its two network calls

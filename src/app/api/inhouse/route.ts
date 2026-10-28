@@ -25,6 +25,16 @@ import {
   startGame,
 } from "@/lib/inhouse-service";
 import {
+  callOffDuel,
+  cancelDuel,
+  finishDuel,
+  joinDuelQueue,
+  leaveDuelQueue,
+  recordDuelMatch,
+  removeFromDuelQueue,
+  voidDuelResult,
+} from "@/lib/inhouse-duel-service";
+import {
   holdInhouseRoomPoll,
   pollInhouseState,
 } from "@/lib/inhouse-room-state";
@@ -65,6 +75,15 @@ const MUTATION_ACTIONS = new Set([
   "giveup",
   "void",
   "remove",
+  // The 1v1 mid queue and duels (inhouse-duel-service.ts).
+  "duelJoin",
+  "duelLeave",
+  "duelOver",
+  "duelCallOff",
+  "duelRecord",
+  "duelCancel",
+  "duelRemove",
+  "duelVoid",
 ]);
 
 // One JSON endpoint for the whole inhouse room. `state` is long-polled; the
@@ -202,6 +221,8 @@ export async function POST(req: NextRequest) {
   // click is judged against that game even with two live (see
   // chooseActionLobby in inhouse-service.ts).
   const lobbyId = typeof body.lobbyId === "string" ? body.lobbyId : null;
+  // The 1v1 a duel action is for: the one the room showed.
+  const duelId = typeof body.duelId === "string" ? body.duelId : "";
   // Rule P: whether a write since the last publish may still be unpublished.
   // Starts true: the action itself may commit and then throw.
   let unpublished = true;
@@ -264,6 +285,34 @@ export async function POST(req: NextRequest) {
       case "remove":
         // Admin: take the named player out of the queue.
         res = await removeFromQueue(user, String(body.userId ?? ""));
+        break;
+      case "duelJoin":
+        // A pair formed here asks the bot for its lobby after the response
+        // (joinDuelQueue's runAfterResponse).
+        res = await joinDuelQueue(user);
+        break;
+      case "duelLeave":
+        res = await leaveDuelQueue(user);
+        break;
+      case "duelOver":
+        // "1v1 over": the fallback for a bot game whose end the bot missed.
+        res = await finishDuel(user, duelId);
+        break;
+      case "duelCallOff":
+        res = await callOffDuel(user, duelId);
+        break;
+      case "duelRecord":
+        res = await recordDuelMatch(user, String(body.matchId ?? ""), duelId);
+        break;
+      case "duelCancel":
+        res = await cancelDuel(user, duelId);
+        break;
+      case "duelRemove":
+        // Admin: take the named player out of the 1v1 queue.
+        res = await removeFromDuelQueue(user, String(body.userId ?? ""));
+        break;
+      case "duelVoid":
+        res = await voidDuelResult(user, duelId);
         break;
       default:
         throw new Error("Unsupported inhouse mutation");

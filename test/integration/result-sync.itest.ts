@@ -7,6 +7,8 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_DUEL,
+  INHOUSE_DUEL_STATUS,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -54,6 +56,8 @@ vi.mock("@/lib/dota", async (importOriginal) => {
     fetchOpenDotaMatch: vi.fn(),
     fetchRecentMatchIds: vi.fn(async () => [] as number[]),
     fetchLeagueMatchIds: vi.fn(async () => [] as number[]),
+    // The 1v1 scan's history read: nothing found (never the network).
+    fetchRecentMatches: vi.fn(async () => []),
   };
 });
 import {
@@ -1622,6 +1626,57 @@ describe("result sync — inhouse (integration)", () => {
 // Runs on SQLite too: the seam is between two plain queries, with no open
 // transaction for the rival's connection to block on.
 // ---------------------------------------------------------------------------
+describe("result sync — the 1v1 duels run after the 5v5 work (integration)", () => {
+  const MIN = 60_000;
+  const duel = (status: string, createdAgoMs: number) =>
+    Promise.all([makeUser("Duel A"), makeUser("Duel B")]).then(([a, b]) =>
+      prisma.inhouseDuel.create({
+        data: {
+          status,
+          radiantUserId: a.id,
+          direUserId: b.id,
+          createdAt: new Date(Date.now() - createdAgoMs),
+        },
+      }),
+    );
+
+  it("an idle 5v5 room does not skip them: a 1v1 never started is called off", async () => {
+    // No lobby and nobody in the 5v5 queue: syncInhouseLobbies returns early.
+    const d = await duel(INHOUSE_DUEL_STATUS.READY, (INHOUSE_DUEL.SETUP_MINUTES + 1) * MIN);
+    const out = await runResultSync();
+    expect(out.issues).toEqual([]);
+    const after = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: d.id } });
+    expect(after.status).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    expect(after.endReason).toMatch(/^Never played/);
+  });
+
+  it("expires a 1v1 queue row past its time, and keeps parked pages watching an open 1v1", async () => {
+    const u = await makeUser("Duel Q");
+    await prisma.inhouseDuelQueueEntry.create({
+      data: {
+        userId: u.id,
+        joinedAt: new Date(Date.now() - 40 * MIN),
+        lastSeenAt: new Date(Date.now() - 40 * MIN),
+        expiresAt: new Date(Date.now() - 10 * MIN),
+      },
+    });
+    const live = await duel(INHOUSE_DUEL_STATUS.PLAYING, 2 * MIN);
+    const out = await runResultSync();
+    expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
+    expect(out.watch).toBe(true);
+    // Too young to give up on or to scan: untouched.
+    expect(
+      (await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: live.id } })).status,
+    ).toBe(INHOUSE_DUEL_STATUS.PLAYING);
+  });
+
+  it("a pass with no 1v1 work reads nothing more than its probe and stays idle", async () => {
+    const out = await runResultSync();
+    expect(out.watch).toBe(false);
+    expect(out.inhouse).toBe(false);
+  });
+});
+
 describe("result sync — a claim that needs a staged interleaving", () => {
   afterEach(() => setRaceHook(null));
 

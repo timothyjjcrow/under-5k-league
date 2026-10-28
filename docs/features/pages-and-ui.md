@@ -848,6 +848,13 @@ the league is already draftable and many visitors have joined. Write for both.
   `SceneStats`, ladder, recent results, then the OpenDota guide. The ladder
   is why people return; the history sections are the costliest queries, so
   they stream in below the room.
+- **The 1v1 mid card and leaderboard sit below the 5v5** ([inhouse-duels](inhouse-duels.md#the-card)):
+  the room renders `DuelSection` (`<section aria-label="1v1 mid">`, h2 "1v1
+  mid") after every 5v5 card, never above or inside the queue card, and the
+  page streams the "1v1 mid leaderboard" (`duel-ladder-card.tsx`, section
+  `inhouse-1v1`, "1v1" in the section nav) after the 5v5 ladder, whether or
+  not any 5v5 has been played. Its controls never share a 5v5 control's name
+  (the 5v5 specs find theirs by name).
 - **The whole queue card fits the first screen** (Tim, 2026-10-10: "the
   entire queue on the screen when you go to the in-house page, you
   shouldn't have to scroll down", with the bar where you can opt into a
