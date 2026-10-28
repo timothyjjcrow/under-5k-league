@@ -74,10 +74,10 @@ describe("a 1v1's bot job (kind duel)", () => {
   it.each([
     // [function, the commit the release follows]
     ["finishDuel", "data: { status: INHOUSE_DUEL_STATUS.AWAITING_RESULT, finishedAt }"],
-    ["callOffDuel", "data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason }"],
+    ["callOffDuel", "data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt }"],
     ["cancelDuel", "updateMany("],
     ["endDuelFromBot", "data: { status: INHOUSE_DUEL_STATUS.AWAITING_RESULT, finishedAt }"],
-    ["cancelDuelFromBot", "data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason }"],
+    ["cancelDuelFromBot", "data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt }"],
     ["applyDuelResult", "updateMany("],
     ["giveUpOnDuels", "updateMany("],
   ])("%s releases the bot after its commit, never awaited", (name, commit) => {

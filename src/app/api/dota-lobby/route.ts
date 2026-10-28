@@ -180,7 +180,9 @@ export async function POST(req: NextRequest) {
       // it (one health read, one release) and say what the release did; a
       // refused release leaves the BUSY answer as it is.
       if (action === "create" && error instanceof LobbyBotBusyError) {
-        const freed = await freeBotFromClosedInhouseGame();
+        // A 5v5's Create also frees the bot from a 1v1 whose game hasn't
+        // started (the 5v5 comes first); a 1v1's Create never does.
+        const freed = await freeBotFromClosedInhouseGame(kind);
         // Progress, not a failure: the panel words it as information.
         if (freed)
           return NextResponse.json(
@@ -218,13 +220,17 @@ export async function POST(req: NextRequest) {
     if (kind === "duel" && duel && duelTakesResult(duel.status)) {
       // The 1v1's own bot-driven writes (applyDuelBotStatus): over ->
       // AWAITING_RESULT, started -> PLAYING with the bot's match id, a job
-      // released with no game -> CANCELLED. Each is a guarded claim that
-      // publishes the room and wakes the automation gate before this
-      // response; the worker's read does the same, so a failure only delays.
+      // released after its game started -> CANCELLED. A READY duel whose
+      // game never started stays playable on a `released` read (a dropped
+      // Create, a lobby gone after a reconnect, a Release before the start):
+      // Create makes it a fresh lobby, and so does the worker. Each is a
+      // guarded claim that publishes the room and wakes the automation gate
+      // before this response; the worker's read does the same, so a failure
+      // only delays.
       if (
         status.over ||
         status.state === "started" ||
-        duelBotEndedWithoutGame(status)
+        duelBotEndedWithoutGame(status, duel)
       )
         stillPlayable = false;
       try {

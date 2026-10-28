@@ -13,10 +13,13 @@ import {
 } from "@/components/ui";
 import { LocalTime } from "@/components/local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
-import { INHOUSE_QUEUE_INVITE_PATH } from "@/lib/inhouse-queue-invite";
 import { signInHref } from "@/lib/sign-in";
 import {
   DUEL_CARD_INTRO,
+  DUEL_NO_BOT_NOTE,
+  DUEL_ROOM_ANCHOR,
+  DUEL_SIGN_IN_RETURN,
+  DUEL_WAITING_NOTE,
   duelJoinRow,
   duelResultLanded,
   duelResultLine,
@@ -42,6 +45,7 @@ export function DuelSection({
   duel,
   viewerId,
   joinRefusal,
+  botReady,
   offset,
   pending,
   act,
@@ -50,13 +54,18 @@ export function DuelSection({
   viewerId: string | null;
   /** The page's MMR-cap refusal (the 5v5 queue's rule; joinDuelQueue's too). */
   joinRefusal: string | null;
+  /**
+   * The lobby bot can host this league's 1v1s (inhouseLobbyBotConfigured):
+   * without it Join gives way to DUEL_NO_BOT_NOTE, as joinDuelQueue refuses.
+   */
+  botReady: boolean;
   offset: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => Promise<boolean>;
 }) {
   const router = useRouter();
   const me = duel.me;
-  const row = duelJoinRow(me, joinRefusal);
+  const row = duelJoinRow(me, joinRefusal, botReady);
   const myGame =
     me?.duelId != null ? (duel.games.find((g) => g.id === me.duelId) ?? null) : null;
   const others = duel.games.filter((g) => g.id !== myGame?.id);
@@ -73,7 +82,7 @@ export function DuelSection({
   }, [resultsKey, router]);
 
   return (
-    <section id="inhouse-1v1-room" aria-label="1v1 mid" className="scroll-mt-28">
+    <section id={DUEL_ROOM_ANCHOR} aria-label="1v1 mid" className="scroll-mt-28">
       <Card className="overflow-hidden">
         <CardHeader
           headingLevel={2}
@@ -86,7 +95,14 @@ export function DuelSection({
           }
         />
         <CardBody className="space-y-4">
-          {me?.lastResult ? (
+          {me?.lastCancelled ? (
+            <p
+              role="status"
+              className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm text-muted"
+            >
+              {me.lastCancelled.line}
+            </p>
+          ) : me?.lastResult ? (
             <p
               role="status"
               className={cn(
@@ -116,7 +132,7 @@ export function DuelSection({
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
             {row.kind === "sign-in" ? (
               <a
-                href={signInHref(INHOUSE_QUEUE_INVITE_PATH)}
+                href={signInHref(DUEL_SIGN_IN_RETURN)}
                 className={buttonClasses("secondary", "md")}
               >
                 Sign in to play 1v1
@@ -141,7 +157,7 @@ export function DuelSection({
                   Leave 1v1
                 </button>
                 <p className="min-w-0 text-sm text-muted">
-                  Waiting for an opponent: the next player to join plays you.
+                  {DUEL_WAITING_NOTE}
                   {me?.queueExpiresAt ? (
                     <>
                       {" Your spot holds until "}
@@ -160,6 +176,10 @@ export function DuelSection({
               </>
             ) : row.kind === "refused" ? (
               <p className="min-w-0 text-sm text-muted">{row.reason}</p>
+            ) : row.kind === "no-bot" ? (
+              <p role="status" className="min-w-0 text-sm text-muted">
+                {DUEL_NO_BOT_NOTE}
+              </p>
             ) : null}
             {row.kind === "join" && waiting.length === 0 ? (
               <p className="min-w-0 text-sm text-muted">

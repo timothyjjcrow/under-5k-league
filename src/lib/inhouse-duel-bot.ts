@@ -18,7 +18,11 @@
 
 import { prisma } from "./prisma";
 import { INHOUSE_DUEL_STATUS } from "./constants";
-import { DUEL_BOT_SAVING_5V5_STATUSES, duelBotSavedFor5v5 } from "./inhouse-duel";
+import {
+  DUEL_BOT_SAVING_5V5_STATUSES,
+  duelBotLobbyMissing,
+  duelBotSavedFor5v5,
+} from "./inhouse-duel";
 import {
   boundedBotStatus,
   callLobbyBot,
@@ -157,7 +161,7 @@ export async function createDuelBotLobby(
     } catch (error) {
       if (error instanceof LobbyBotBusyError) {
         // A closed game's hold: free the bot, so the next pass can create.
-        await freeBotFromClosedInhouseGame();
+        await freeBotFromClosedInhouseGame("duel");
         return "busy";
       }
       return "failed";
@@ -177,8 +181,8 @@ export async function createDuelBotLobby(
 
 /**
  * The worker's create retry, once per pass: the oldest READY duel the bot
- * reported no lobby for (`idle`), skipping only duels whose spec can't be
- * built. `candidates` come in the worker's order (oldest first) with the
+ * reported no lobby for (`idle`, or `released` before any game:
+ * duelBotLobbyMissing), skipping only duels whose spec can't be built. `candidates` come in the worker's order (oldest first) with the
  * status it just read for each; a null status (no bot, unreachable) is never
  * a candidate. Returns the outcome of the one create it asked for, or null.
  */
@@ -187,7 +191,7 @@ export async function retryDuelBotCreate(
   options: { signal?: AbortSignal } = {},
 ): Promise<DuelCreateOutcome | null> {
   for (const c of candidates) {
-    if (c.status !== INHOUSE_DUEL_STATUS.READY || c.bot?.state !== "idle") continue;
+    if (c.status !== INHOUSE_DUEL_STATUS.READY || !duelBotLobbyMissing(c.bot)) continue;
     const outcome = await createDuelBotLobby(c.id, options);
     if (outcome !== "unbuildable" && outcome !== "skipped") return outcome;
   }

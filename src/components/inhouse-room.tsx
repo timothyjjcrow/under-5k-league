@@ -113,6 +113,7 @@ export function InhouseRoom({
   joinRefusal = null,
   firstGame = false,
   botStatus = null,
+  duelBotReady = false,
 }: {
   pollMs?: number;
   /**
@@ -136,6 +137,12 @@ export function InhouseRoom({
   firstGame?: boolean;
   /** The lobby bot's status for an admin, shown in the room's admin panel. */
   botStatus?: ReactNode;
+  /**
+   * The lobby bot can host this league's 1v1s (inhouseLobbyBotConfigured: a
+   * connection and the in-house ticket). 1v1s are bot only: without it the
+   * 1v1 card offers no Join.
+   */
+  duelBotReady?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -1419,6 +1426,7 @@ export function InhouseRoom({
         duel={state.duel}
         viewerId={me.userId}
         joinRefusal={joinRefusal}
+        botReady={duelBotReady}
         offset={offset}
         pending={pending}
         act={act}

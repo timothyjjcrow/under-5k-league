@@ -342,6 +342,7 @@ export default async function InhousePage({
               joinRefusal={joinRefusal}
               firstGame={firstGame}
               botStatus={user?.role === "ADMIN" ? <DotaLobbyRecovery /> : null}
+              duelBotReady={inhouseLobbyBotConfigured()}
             />
           </section>
         </div>

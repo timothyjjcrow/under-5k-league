@@ -3,7 +3,7 @@
 import { useId, useState } from "react";
 import { buttonClasses } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
-import type { DuelState } from "@/lib/inhouse-duel";
+import { duelAdminToolsVisible, type DuelState } from "@/lib/inhouse-duel";
 
 const dangerGhost = buttonClasses("ghost", "sm", "text-danger hover:text-danger");
 
@@ -32,9 +32,7 @@ export function DuelAdminTools({
   const picked = queued.find((p) => p.userId === choice) ?? null;
   const games = duel.games.filter((g) => g.canCancel);
   const results = duel.results.filter((r) => r.canVoid);
-  if (!duel.canRemoveFromQueue && games.length === 0 && results.length === 0) {
-    return null;
-  }
+  if (!duelAdminToolsVisible(duel)) return null;
   return (
     <div className="divide-y divide-line rounded-lg border border-line bg-surface/40">
       <p className="px-4 py-2 text-xs font-semibold uppercase tracking-wide text-muted">

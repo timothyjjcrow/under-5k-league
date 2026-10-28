@@ -8,7 +8,12 @@ import {
   INHOUSE_STATUS,
 } from "@/lib/constants";
 import { effectiveDotaAccountId } from "@/lib/dota-account";
-import { DUEL_REFUSAL, duelEndReason, type DuelResult } from "@/lib/inhouse-duel";
+import {
+  DUEL_NO_BOT_NOTE,
+  DUEL_REFUSAL,
+  duelEndReason,
+  type DuelResult,
+} from "@/lib/inhouse-duel";
 import type { OpenDotaMatch, OpenDotaRecentMatch } from "@/lib/dota";
 import {
   applyDuelResult,
@@ -32,7 +37,7 @@ import {
   voidDuelResult,
 } from "@/lib/inhouse-duel-service";
 import { loadDuelRoomRows } from "@/lib/inhouse-duel-room";
-import { makeUser, raceAll, sessionFor } from "./factories";
+import { makeUser, ON_POSTGRES, raceAll, sessionFor } from "./factories";
 
 // The 1v1 mid engine on SQLite. OpenDota is stubbed at its two network calls
 // (a player's recent matches and one match). The lobby bot is stage B's: its
@@ -47,6 +52,17 @@ vi.mock("@/lib/dota", async (importOriginal) => {
   };
 });
 import { fetchOpenDotaMatch, fetchRecentMatches } from "@/lib/dota";
+
+// Whether a lobby bot can host 1v1s here (a connection and the in-house
+// ticket). Mocked on: 1v1s are bot only, so a join is refused without one.
+// The bot's own calls stay unconfigured (no connection), so its reads answer
+// null and its releases are no-ops, unless a test stubs the env and fetch.
+vi.mock("@/lib/dota-lobby-service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/dota-lobby-service")>();
+  return { ...actual, inhouseLobbyBotConfigured: vi.fn(() => true) };
+});
+import { inhouseLobbyBotConfigured } from "@/lib/dota-lobby-service";
+const mockBotReady = vi.mocked(inhouseLobbyBotConfigured);
 
 // logAdminAction resolves its actor from the session; there is no cookie jar.
 vi.mock("@/lib/auth", async (importOriginal) => {
@@ -139,6 +155,7 @@ const statusOf = async (id: string) =>
 beforeEach(() => {
   mockRecent.mockReset().mockResolvedValue([]);
   mockMatch.mockReset().mockResolvedValue(null);
+  mockBotReady.mockReset().mockReturnValue(true);
   resetDuelLadderMemoForTests();
 });
 
@@ -224,6 +241,18 @@ describe("joining and pairing", () => {
     const capped = await joinDuelQueue(sessionFor(strong));
     expect(capped.ok).toBe(false);
     expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
+  });
+
+  it("refuses every join while no lobby bot can host 1v1s here: a pair could never play", async () => {
+    const waiter = await makeUser("W");
+    await queueRow(waiter);
+    mockBotReady.mockReturnValue(false);
+    expect(await joinDuelQueue(sessionFor(await makeUser("J")))).toEqual({
+      ok: false,
+      error: DUEL_NO_BOT_NOTE,
+    });
+    expect(await prisma.inhouseDuel.count()).toBe(0);
+    expect(await prisma.inhouseDuelQueueEntry.count()).toBe(1);
   });
 
   it("lets a player whose duel is over (awaiting its result) queue again", async () => {
@@ -625,6 +654,134 @@ describe("the result scan", () => {
     expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.COMPLETED);
   });
 
+  it("never takes a rematch's match: a later 1v1 of the same players caps the earlier duel's result", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const first = await makeDuel(a, b, INHOUSE_DUEL_STATUS.AWAITING_RESULT, {
+      createdAt: new Date(Date.now() - 40 * 60_000),
+      startedAt: new Date(Date.now() - 38 * 60_000),
+    });
+    // They ran it back: the second 1v1 paired ten minutes ago.
+    const secondAt = Date.now() - 10 * 60_000;
+    const second = await makeDuel(b, a, INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt: new Date(secondAt),
+      startedAt: new Date(secondAt + 60_000),
+      checkedAt: new Date(),
+    });
+    // Only the rematch's match is on OpenDota yet.
+    const rematchS = Math.floor(secondAt / 1000) + 120;
+    mockRecent.mockImplementation(async (account) => [
+      recent(8_100_000_602, rematchS, account === accountOf(a) ? 128 : 0),
+    ]);
+    mockMatch.mockResolvedValue(duelMatch(b, a, { id: 8_100_000_602, startAt: rematchS * 1000 }));
+    await maybeAutoDetectDuelResults();
+    expect(await statusOf(first.id)).toBe(INHOUSE_DUEL_STATUS.AWAITING_RESULT);
+    // The scan never even fetched it for the earlier duel.
+    expect(mockMatch).not.toHaveBeenCalled();
+    // Pasted onto the earlier duel, it is refused and named.
+    const pasted = await recordDuelMatch(sessionFor(a), "8100000602", first.id);
+    expect(pasted.ok).toBe(false);
+    expect(!pasted.ok && pasted.error).toMatch(/later 1v1/);
+    expect(await statusOf(first.id)).toBe(INHOUSE_DUEL_STATUS.AWAITING_RESULT);
+    // The rematch takes it.
+    expect(await recordDuelMatch(sessionFor(a), "8100000602", second.id)).toEqual({ ok: true });
+  });
+
+  it("takes the oldest shared match after pairing, never a newer one", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const createdAt = new Date(Date.now() - 30 * 60_000);
+    const duel = await makeDuel(a, b, INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt,
+      startedAt: createdAt,
+    });
+    const s0 = Math.floor(createdAt.getTime() / 1000);
+    mockRecent.mockImplementation(async (account) => {
+      const slot = account === accountOf(a) ? 0 : 128;
+      return [recent(8_100_000_702, s0 + 900, slot), recent(8_100_000_701, s0 + 60, slot)];
+    });
+    mockMatch.mockImplementation(async (id) =>
+      duelMatch(a, b, { id: Number(id), startAt: (Number(id) === 8_100_000_701 ? s0 + 60 : s0 + 900) * 1000 }),
+    );
+    await maybeAutoDetectDuelResults();
+    expect(mockMatch).toHaveBeenNthCalledWith(1, "8100000701", expect.anything());
+    expect(
+      (await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } })).dotaMatchId,
+    ).toBe("8100000701");
+  });
+
+  it("while OpenDota lacks the bot's match, reads only that match until BOT_MATCH_WAIT_MINUTES", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const young = await makeDuel(a, b, INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt: new Date(Date.now() - 20 * 60_000),
+      startedAt: new Date(Date.now() - 18 * 60_000),
+      botMatchId: "8100000801",
+    });
+    await maybeAutoDetectDuelResults();
+    expect(mockMatch).toHaveBeenCalledWith("8100000801", expect.anything());
+    expect(mockRecent).not.toHaveBeenCalled();
+    expect(await statusOf(young.id)).toBe(INHOUSE_DUEL_STATUS.PLAYING);
+    // Past the wait, the histories are read as well.
+    const wait = INHOUSE_DUEL.BOT_MATCH_WAIT_MINUTES;
+    await prisma.inhouseDuel.update({
+      where: { id: young.id },
+      data: {
+        createdAt: new Date(Date.now() - (wait + 5) * 60_000),
+        startedAt: new Date(Date.now() - wait * 60_000),
+        checkedAt: null,
+      },
+    });
+    await maybeAutoDetectDuelResults();
+    expect(mockRecent).toHaveBeenCalledTimes(2);
+  });
+
+  it("stops the pass when OpenDota is unreachable", async () => {
+    const users = await Promise.all(Array.from({ length: 4 }, (_, i) => makeUser(`U${i}`)));
+    const old = new Date(Date.now() - 30 * 60_000);
+    const first = await makeDuel(users[0], users[1], INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt: old,
+      checkedAt: new Date(Date.now() - 20 * 60_000),
+    });
+    const second = await makeDuel(users[2], users[3], INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt: old,
+      checkedAt: new Date(Date.now() - 10 * 60_000),
+    });
+    mockRecent.mockResolvedValue(null);
+    await maybeAutoDetectDuelResults();
+    expect(mockRecent).toHaveBeenCalledTimes(2);
+    const after = await prisma.inhouseDuel.findMany({
+      where: { id: { in: [first.id, second.id] } },
+      select: { id: true, checkedAt: true },
+    });
+    const stamped = (id: string) =>
+      (after.find((d) => d.id === id)?.checkedAt?.getTime() ?? 0) > Date.now() - 5_000;
+    expect(stamped(first.id)).toBe(true);
+    expect(stamped(second.id)).toBe(false);
+  });
+
+  it("backs off a long game's scan as it ages, and never scans a READY duel", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    // Two hours into its game, scanned five minutes ago: its interval is six.
+    const long = await makeDuel(a, b, INHOUSE_DUEL_STATUS.PLAYING, {
+      createdAt: new Date(Date.now() - 125 * 60_000),
+      startedAt: new Date(Date.now() - 120 * 60_000),
+      checkedAt: new Date(Date.now() - 5 * 60_000),
+    });
+    // A READY duel well past SCAN_AFTER_MINUTES: no game, so no scan.
+    const ready = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
+      createdAt: new Date(Date.now() - 20 * 60_000),
+    });
+    await maybeAutoDetectDuelResults();
+    expect(mockRecent).not.toHaveBeenCalled();
+    const rows = await prisma.inhouseDuel.findMany({
+      where: { id: { in: [long.id, ready.id] } },
+      select: { id: true, checkedAt: true },
+    });
+    expect(rows.find((r) => r.id === ready.id)?.checkedAt).toBeNull();
+  });
+
   it("waits SCAN_AFTER_MINUTES, backs off SCAN_EVERY_SECONDS, never scans a closed duel", async () => {
     const a = await makeUser("A");
     const b = await makeUser("B");
@@ -728,6 +885,8 @@ describe("the result scan", () => {
 
 describe("give-up clocks", () => {
   it("calls off READY at SETUP_MINUTES and gives up a played duel at GIVE_UP_HOURS", async () => {
+    // No bot that hosts 1v1s: the setup clock alone calls it off.
+    mockBotReady.mockReturnValue(false);
     const a = await makeUser("A");
     const b = await makeUser("B");
     const ago = (min: number) => new Date(Date.now() - min * 60_000);
@@ -759,7 +918,74 @@ describe("give-up clocks", () => {
     expect(await statusOf(done.id)).toBe(INHOUSE_DUEL_STATUS.COMPLETED);
   });
 
+  describe("with a lobby bot that hosts 1v1s", () => {
+    beforeEach(() => {
+      vi.stubEnv("DOTA_LOBBY_BOT_URL", "http://127.0.0.1:8090");
+      vi.stubEnv("DOTA_LOBBY_BOT_SECRET", "test-lobby-secret-".repeat(4));
+      vi.stubEnv("DOTA_INHOUSE_LEAGUE_ID", "54321");
+    });
+    afterEach(async () => {
+      const { settleInhouseBotReleases } = await import("@/lib/lobby-bot-releases");
+      await settleInhouseBotReleases();
+      vi.unstubAllEnvs();
+      vi.unstubAllGlobals();
+    });
+
+    it("calls off a never-played duel only on this pass's bot read showing no game starting", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ state: "idle" })));
+      const a = await makeUser("A");
+      const b = await makeUser("B");
+      const stale = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
+        createdAt: new Date(Date.now() - (INHOUSE_DUEL.SETUP_MINUTES + 1) * 60_000),
+      });
+      // Not read this pass (its deadline, an unreachable bot): it waits.
+      expect(await giveUpOnDuels(Date.now())).toBe(0);
+      expect(await giveUpOnDuels(Date.now(), new Map([[stale.id, null]]))).toBe(0);
+      // A launch the site hasn't seen yet: it waits for that read to land.
+      for (const state of ["started", "starting"] as const) {
+        expect(await giveUpOnDuels(Date.now(), new Map([[stale.id, { state }]]))).toBe(0);
+      }
+      expect(await statusOf(stale.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+      // Read this pass with no game starting: called off.
+      expect(await giveUpOnDuels(Date.now(), new Map([[stale.id, { state: "ready" }]]))).toBe(1);
+      expect(await statusOf(stale.id)).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    });
+
+    it("closes an unread never-played duel GIVE_UP_HOURS after pairing regardless", async () => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ state: "idle" })));
+      const a = await makeUser("A");
+      const b = await makeUser("B");
+      const ancient = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
+        createdAt: new Date(Date.now() - (INHOUSE_DUEL.GIVE_UP_HOURS * 60 + 1) * 60_000),
+      });
+      expect(await giveUpOnDuels(Date.now())).toBe(1);
+      expect(await statusOf(ancient.id)).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    });
+
+    it("the worker passes its own reads: a launch read near the deadline is never cancelled", async () => {
+      const { runDuelWorkerSteps } = await import("@/lib/inhouse-duel-service");
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (_url: string, init: RequestInit) => {
+          const body = JSON.parse(String(init.body)) as { action: string };
+          if (body.action === "health")
+            return Response.json({ online: true, steamId: null, activeKey: null });
+          return Response.json({ state: "starting" });
+        }),
+      );
+      const a = await makeUser("A");
+      const b = await makeUser("B");
+      const stale = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
+        createdAt: new Date(Date.now() - (INHOUSE_DUEL.SETUP_MINUTES + 1) * 60_000),
+      });
+      await runDuelWorkerSteps();
+      expect(await statusOf(stale.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+    });
+  });
+
   it("the never-played call-off loses to a launch landing after its read", async () => {
+    // No bot that hosts 1v1s: the setup clock alone calls it off.
+    mockBotReady.mockReturnValue(false);
     const a = await makeUser("A");
     const b = await makeUser("B");
     const duel = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
@@ -811,9 +1037,52 @@ describe("room rows and the ladder", () => {
       completedAt: new Date(Date.now() - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS - 60_000),
     });
     await makeDuel(a, b, INHOUSE_DUEL_STATUS.CANCELLED);
+    await makeDuel(a, b, INHOUSE_DUEL_STATUS.CANCELLED, {
+      completedAt: new Date(Date.now() - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS - 60_000),
+    });
+    // A 1v1 called off just now: its players are told, so the rows carry it.
+    const calledOff = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY);
+    expect(await callOffDuel(sessionFor(a), calledOff.id)).toEqual({ ok: true });
     const rows = await loadDuelRoomRows();
     expect(rows.queue.map((q) => q.userId)).toEqual([a.id]);
-    expect(rows.duels.map((d) => d.id).sort()).toEqual([open.id, recentDone.id].sort());
+    expect(rows.duels.map((d) => d.id).sort()).toEqual(
+      [open.id, recentDone.id, calledOff.id].sort(),
+    );
+    expect(rows.duels.find((d) => d.id === calledOff.id)?.endReason).toBe(
+      duelEndReason.calledOff("A"),
+    );
+  });
+
+  it("stamps when each close happened, so its players are told", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const before = Date.now() - 1000;
+    const closedAt = async (id: string) =>
+      (await prisma.inhouseDuel.findUniqueOrThrow({ where: { id } })).completedAt?.getTime() ?? 0;
+    const called = await makeDuel(a, b);
+    await callOffDuel(sessionFor(a), called.id);
+    const cancelled = await makeDuel(a, b, INHOUSE_DUEL_STATUS.PLAYING);
+    await cancelDuel(admin, cancelled.id);
+    const botEnded = await makeDuel(a, b, INHOUSE_DUEL_STATUS.PLAYING);
+    await cancelDuelFromBot(botEnded.id, "not scored");
+    mockBotReady.mockReturnValue(false);
+    const stale = await makeDuel(a, b, INHOUSE_DUEL_STATUS.READY, {
+      createdAt: new Date(Date.now() - (INHOUSE_DUEL.SETUP_MINUTES + 1) * 60_000),
+    });
+    const lost = await makeDuel(a, b, INHOUSE_DUEL_STATUS.AWAITING_RESULT, {
+      createdAt: new Date(Date.now() - (INHOUSE_DUEL.GIVE_UP_HOURS * 60 + 1) * 60_000),
+    });
+    expect(await giveUpOnDuels()).toBe(2);
+    const done = await makeDuel(a, b, INHOUSE_DUEL_STATUS.COMPLETED, {
+      winnerTeam: 1,
+      dotaMatchId: "8100000999",
+      completedAt: new Date(Date.now() - 3_600_000),
+    });
+    await voidDuelResult(admin, done.id);
+    for (const d of [called, cancelled, botEnded, stale, lost, done]) {
+      expect(await closedAt(d.id), d.id).toBeGreaterThan(before);
+    }
   });
 
   it("rates completed duels and refreshes the memo when a result lands", async () => {
@@ -912,5 +1181,37 @@ describe("raced", () => {
     expect(late).toBe("closed");
     const after = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
     expect([after.status, after.dotaMatchId]).toEqual([INHOUSE_DUEL_STATUS.CANCELLED, null]);
+  });
+});
+
+// The pair claim's count check (claimPair) is a deleteMany guard the mutation
+// ratchet can't see. This stages its one interleaving: the joiner's
+// transaction has judged the waiter pairable, then the waiter's row goes
+// (they left) before the claim. In-transaction seam: Postgres only (on
+// SQLite the rival waits on the open transaction's lock).
+describe.skipIf(!ON_POSTGRES)("the pair claim on Postgres", () => {
+  it("a waiter who leaves between the pairing read and the claim is never paired, and the joiner queues", async () => {
+    const waiter = await makeUser("Waiter");
+    const joiner = await makeUser("Joiner");
+    await queueRow(waiter);
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.joinDuelQueue.beforePairClaim", async () => {
+        fired = true;
+        const left = await prisma.inhouseDuelQueueEntry.deleteMany({
+          where: { userId: waiter.id },
+        });
+        expect(left.count).toBe(1);
+      }),
+    );
+    expect(await joinDuelQueue(sessionFor(joiner))).toEqual({ ok: true });
+    expect(fired).toBe(true);
+    // One outcome, no half state: no duel, the waiter gone, the joiner waiting.
+    expect(await prisma.inhouseDuel.count()).toBe(0);
+    expect(
+      (await prisma.inhouseDuelQueueEntry.findMany({ select: { userId: true } })).map(
+        (q) => q.userId,
+      ),
+    ).toEqual([joiner.id]);
   });
 });

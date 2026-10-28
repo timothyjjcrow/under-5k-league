@@ -19,18 +19,22 @@ import {
 } from "./constants";
 import {
   assignDuelSides,
+  DUEL_NO_BOT_NOTE,
   duelIsLive,
   duelTakesResult,
   duelBotEndedWithoutGame,
   duelEndReason,
+  duelGiveUpAtMs,
   duelJoinRefusal,
   duelLadder,
   duelMatchFloorSeconds,
   duelNeverPlayedDue,
   duelPresentCutoff,
   duelQueueExpiresAt,
+  duelResultCeilingSeconds,
   duelResultGiveUpDue,
-  duelScanCutoff,
+  duelBotMatchWaitOver,
+  duelScanCutoffFor,
   duelScanDue,
   duelScanOrder,
   duelWaiterExpired,
@@ -51,7 +55,7 @@ import {
 } from "./inhouse-duel-bot";
 import { runAfterResponse } from "./after-response";
 import type { DotaLobbyStatus } from "./dota-lobby";
-import { botReportedMatchId } from "./dota-lobby-service";
+import { botReportedMatchId, inhouseLobbyBotConfigured } from "./dota-lobby-service";
 import {
   canStartOpenDotaFetch,
   fetchOpenDotaMatch,
@@ -199,8 +203,9 @@ type JoinOutcome =
   | { kind: "refused"; error: string };
 
 /**
- * "Join 1v1": pair with the oldest PRESENT waiter who isn't in a live 5v5
- * lobby or a live duel, or wait. A repeat join refreshes the row's expiry
+ * "Join 1v1" (refused while no lobby bot can host 1v1s here): pair with the
+ * oldest PRESENT waiter who isn't in a live 5v5 lobby or a live duel, or
+ * wait. A repeat join refreshes the row's expiry
  * (and its place, once it had expired) and tries the pairing again.
  *
  * Serializable, retried with a jittered wait: the transaction reads the 1v1
@@ -210,6 +215,9 @@ type JoinOutcome =
  * (claimPair); a lost claim throws and retries.
  */
 export async function joinDuelQueue(viewer: SessionUser): Promise<DuelActionResult> {
+  // 1v1s are bot only: with no bot that can host here (no connection, or no
+  // in-house ticket), a pair could never play. The card shows the same line.
+  if (!inhouseLobbyBotConfigured()) return { ok: false, error: DUEL_NO_BOT_NOTE };
   const mmrRefusal = await duelMmrRefusal(viewer.id);
   if (mmrRefusal) return { ok: false, error: mmrRefusal };
 
@@ -463,9 +471,10 @@ export async function callOffDuel(
   }
   await raceHook("inhouseDuel.callOffDuel.beforeClaim");
   const endReason = duelEndReason.calledOff(viewer.name);
+  const completedAt = new Date();
   const called = await prisma.inhouseDuel.updateMany({
     where: { id: duel.id, status: INHOUSE_DUEL_STATUS.READY, startedAt: null },
-    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason },
+    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
   });
   if (called.count === 0) {
     return {
@@ -501,9 +510,10 @@ export async function cancelDuel(
   }
   await raceHook("inhouseDuel.cancelDuel.beforeClaim");
   const endReason = duelEndReason.adminCancel(viewer.name);
+  const completedAt = new Date();
   const cancelled = await prisma.inhouseDuel.updateMany({
     where: { id: duel.id, status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
-    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason },
+    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
   });
   if (cancelled.count === 0) {
     return { ok: false, error: "That 1v1 just ended: its result landed or it was cancelled" };
@@ -545,6 +555,8 @@ export async function voidDuelResult(
   const summary = `Voided the 1v1 result ${duel.radiantUser.name} vs ${duel.direUser.name}${
     duel.dotaMatchId ? ` (match ${duel.dotaMatchId})` : ""
   }`;
+  // The void is when it closed now: its players are told (lastCancelled).
+  const completedAt = new Date();
   const voided = await prisma.$transaction(async (tx) => {
     const claim = await tx.inhouseDuel.updateMany({
       // COMPLETED is the state judged: nothing re-completes a duel, so a
@@ -553,6 +565,7 @@ export async function voidDuelResult(
       data: {
         status: INHOUSE_DUEL_STATUS.CANCELLED,
         endReason,
+        completedAt,
         winnerTeam: null,
         dotaMatchId: null,
         durationSecs: null,
@@ -639,9 +652,10 @@ export async function endDuelFromBot(duelId: string): Promise<boolean> {
  */
 export async function cancelDuelFromBot(duelId: string, why: string): Promise<boolean> {
   const endReason = duelEndReason.botCancelled(why);
+  const completedAt = new Date();
   const cancelled = await prisma.inhouseDuel.updateMany({
     where: { id: duelId, status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
-    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason },
+    data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
   });
   if (cancelled.count === 0) return false;
   await publishInhouseRoomChange();
@@ -711,6 +725,7 @@ type DuelWithPlayers = {
   id: string;
   status: string;
   createdAt: Date;
+  startedAt: Date | null;
   botMatchId: string | null;
   radiantUser: {
     id: string;
@@ -726,10 +741,29 @@ const duelWithPlayersSelect = {
   id: true,
   status: true,
   createdAt: true,
+  startedAt: true,
   botMatchId: true,
   radiantUser: userDotaIdentity,
   direUser: userDotaIdentity,
 } as const;
+
+/**
+ * The result ceiling for this duel (duelResultCeilingSeconds): when the
+ * earliest later 1v1 with either of its players was paired, or null.
+ */
+async function duelCeilingSeconds(duel: DuelWithPlayers): Promise<number | null> {
+  const ids = [duel.radiantUser.id, duel.direUser.id];
+  const next = await prisma.inhouseDuel.findFirst({
+    where: {
+      id: { not: duel.id },
+      createdAt: { gt: duel.createdAt },
+      OR: [{ radiantUserId: { in: ids } }, { direUserId: { in: ids } }],
+    },
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    select: { createdAt: true },
+  });
+  return duelResultCeilingSeconds(next ? next.createdAt.getTime() : null);
+}
 
 function duelMatchPlayers(duel: DuelWithPlayers) {
   return [duel.radiantUser, duel.direUser].map((u) => ({
@@ -742,6 +776,8 @@ const MATCH_REFUSAL_COPY: Record<DuelMatchRefusal, string> = {
   "wrong-mode": "That match isn't a 1v1 Solo Mid game — check the ID.",
   "not-two-players": "That match doesn't have exactly two players — check the ID.",
   "before-duel": "That match started before this 1v1 was paired — wrong game?",
+  "after-next-duel":
+    "That match started after a later 1v1 of these players was paired — it belongs to that one.",
   "not-these-players":
     "Couldn't find both of this 1v1's players in that match (check the ID, and that both Dota accounts are linked).",
   "same-side": "Both players were on the same side in that match — wrong game?",
@@ -798,6 +834,7 @@ export async function recordDuelMatch(
   const checked = validateDuelMatch(od, {
     createdAtMs: duel.createdAt.getTime(),
     players: duelMatchPlayers(duel),
+    ceilingSeconds: await duelCeilingSeconds(duel),
   });
   if (!checked.ok) return { ok: false, error: MATCH_REFUSAL_COPY[checked.reason] };
   const outcome = await applyDuelResult(duel.id, checked.result);
@@ -812,27 +849,40 @@ export async function recordDuelMatch(
 /**
  * Find this duel's game on OpenDota: the bot's reported match id first
  * (checked like a pasted id), then a match in BOTH players' recent matches
- * in 1v1 Solo Mid since the pairing (sharedDuelMatchIds), each candidate
- * fetched and checked with validateDuelMatch. `unreachable`: a history read
- * failed, which is not the same as "nothing there".
+ * in 1v1 Solo Mid between the pairing and a later 1v1's pairing
+ * (sharedDuelMatchIds, oldest first), each candidate fetched and checked
+ * with validateDuelMatch. While OpenDota lacks the bot's match, the
+ * histories are skipped until BOT_MATCH_WAIT_MINUTES after the game started
+ * (duelBotMatchWaitOver): they can't hold an unpublished game either.
+ * `unreachable`: a history read failed, which is not the same as "nothing
+ * there", and the caller stops its pass.
  */
 async function lookUpDuelGame(
   duel: DuelWithPlayers,
+  nowMs: number,
   options: OpenDotaFetchOptions,
 ): Promise<{ found: DuelResult | null; deadlineReached: boolean; unreachable: boolean }> {
   const expired = () => !canStartOpenDotaFetch(options) || openDotaBudgetExpired(options);
+  const ceilingSeconds = await duelCeilingSeconds(duel);
   const check = (od: Awaited<ReturnType<typeof fetchOpenDotaMatch>>) => {
     if (!od) return null;
     const checked = validateDuelMatch(od, {
       createdAtMs: duel.createdAt.getTime(),
       players: duelMatchPlayers(duel),
+      ceilingSeconds,
     });
     return checked.ok ? checked.result : null;
   };
   if (duel.botMatchId) {
-    const found = check(await fetchOpenDotaMatch(duel.botMatchId, options));
+    const od = await fetchOpenDotaMatch(duel.botMatchId, options);
+    const found = check(od);
     if (found) return { found, deadlineReached: false, unreachable: false };
     if (expired()) return { found: null, deadlineReached: true, unreachable: false };
+    // Not on OpenDota yet: one lookup per scan, not two histories, until the
+    // wait is over. A match that is there but isn't this duel's falls through.
+    if (!od && !duelBotMatchWaitOver(duel, nowMs)) {
+      return { found: null, deadlineReached: false, unreachable: false };
+    }
   }
   const accounts = duelMatchPlayers(duel).map((p) => p.accountId);
   if (accounts.some((a) => a == null)) {
@@ -852,6 +902,7 @@ async function lookUpDuelGame(
     a,
     b,
     duelMatchFloorSeconds(duel.createdAt.getTime()),
+    ceilingSeconds,
   ).slice(0, 2);
   for (const id of candidates) {
     const found = check(await fetchOpenDotaMatch(String(id), options));
@@ -862,12 +913,15 @@ async function lookUpDuelGame(
 }
 
 /**
- * The worker's result scan: duels a result can land on (READY, PLAYING,
- * AWAITING_RESULT only; never a closed one), from SCAN_AFTER_MINUTES after
- * pairing, each at most once per SCAN_EVERY_SECONDS, at most SCAN_PER_PASS
- * per pass, stalest checkedAt first. Each attempt claims `checkedAt` so two
- * workers never scan one duel; an attempt cut off by the deadline restores
- * exactly the claim it stamped.
+ * The worker's result scan: duels whose game started and a result can land
+ * on (PLAYING, AWAITING_RESULT; never a READY one, which has no game, nor a
+ * closed one), from SCAN_AFTER_MINUTES after pairing, each at most once per
+ * its scan interval (duelScanIntervalSeconds: SCAN_EVERY_SECONDS, growing
+ * with the game's age to SCAN_MAX_SECONDS), at most SCAN_PER_PASS per pass,
+ * stalest checkedAt first. Each attempt claims `checkedAt` so two workers
+ * never scan one duel; an attempt cut off by the deadline restores exactly
+ * the claim it stamped. OpenDota unreachable stops the pass: the next duel's
+ * reads would fail the same way.
  */
 export async function maybeAutoDetectDuelResults(
   options: OpenDotaFetchOptions = {},
@@ -886,7 +940,7 @@ export async function maybeAutoDetectDuelResults(
   for (const d of due) {
     if (!canStartOpenDotaFetch(options)) return { recorded, deadlineReached: true };
     const checkedAt = new Date(nowMs);
-    const cutoff = duelScanCutoff(nowMs);
+    const cutoff = duelScanCutoffFor(d, nowMs);
     // Seam: a cancel, a result or another worker's claim landing after the
     // read that judged this duel due.
     await raceHook("inhouseDuel.autoDetect.beforeClaim");
@@ -911,7 +965,11 @@ export async function maybeAutoDetectDuelResults(
       select: duelWithPlayersSelect,
     });
     if (!duel) continue;
-    const { found, deadlineReached } = await lookUpDuelGame(duel, options);
+    const { found, deadlineReached, unreachable } = await lookUpDuelGame(
+      duel,
+      nowMs,
+      options,
+    );
     if (deadlineReached) {
       await raceHook("inhouseDuel.autoDetect.beforeDeadlineRollback");
       const restored = await prisma.inhouseDuel.updateMany({
@@ -928,33 +986,62 @@ export async function maybeAutoDetectDuelResults(
     if (found && (await applyDuelResult(duel.id, found)) === "recorded") {
       recorded = true;
     }
+    if (unreachable) break;
   }
   return { recorded, deadlineReached: false };
 }
 
 /**
- * The give-up clocks: a READY duel with no started game SETUP_MINUTES after
- * pairing ("never-played", which includes waiting too long for a busy bot),
- * and a PLAYING or AWAITING_RESULT duel with no result GIVE_UP_HOURS after
- * pairing ("result-never-showed"). Each is a claim on the state judged; the
- * bot is let go after each. Returns how many it closed.
+ * Whether the never-played call-off may close this READY duel now, given what
+ * this pass read from the lobby bot (`botReads`, by duel id). A game the bot
+ * launched near the end of the setup window may not have reached the site
+ * yet, so with a bot that can host 1v1s the call-off waits for a read taken
+ * this pass that shows no game starting (anything but `started` or
+ * `starting`); a duel the pass didn't read (its deadline, an unreachable bot)
+ * waits for the next pass. With no such bot there is nothing to wait for.
+ * GIVE_UP_HOURS after pairing it closes regardless, so an unreachable bot
+ * never holds two players forever.
  */
-export async function giveUpOnDuels(nowMs = Date.now()): Promise<number> {
+function neverPlayedMayClose(
+  d: { id: string; createdAt: Date },
+  nowMs: number,
+  botReads: ReadonlyMap<string, DotaLobbyStatus | null> | undefined,
+): boolean {
+  if (!inhouseLobbyBotConfigured()) return true;
+  if (duelGiveUpAtMs(d) <= nowMs) return true;
+  const read = botReads?.get(d.id) ?? null;
+  return read !== null && read.state !== "started" && read.state !== "starting";
+}
+
+/**
+ * The give-up clocks: a READY duel with no started game SETUP_MINUTES after
+ * pairing ("never-played", which includes waiting too long for a busy bot;
+ * only on this pass's bot read, neverPlayedMayClose), and a PLAYING or
+ * AWAITING_RESULT duel with no result GIVE_UP_HOURS after pairing
+ * ("result-never-showed"). Each is a claim on the state judged; the bot is
+ * let go after each. Returns how many it closed.
+ */
+export async function giveUpOnDuels(
+  nowMs = Date.now(),
+  botReads?: ReadonlyMap<string, DotaLobbyStatus | null>,
+): Promise<number> {
   const open = await prisma.inhouseDuel.findMany({
     where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
     select: { id: true, status: true, createdAt: true, startedAt: true, checkedAt: true },
   });
   let closed = 0;
   for (const d of open) {
-    const neverPlayed = duelNeverPlayedDue(d, nowMs);
+    const neverPlayed =
+      duelNeverPlayedDue(d, nowMs) && neverPlayedMayClose(d, nowMs, botReads);
     if (!neverPlayed && !duelResultGiveUpDue(d, nowMs)) continue;
     // Seam: the bot's launch read or a result landing after the read.
     await raceHook("inhouseDuel.giveUpOnDuels.beforeClaim");
     if (neverPlayed) {
       const endReason = duelEndReason.neverPlayed();
+      const completedAt = new Date();
       const gaveUp = await prisma.inhouseDuel.updateMany({
         where: { id: d.id, status: INHOUSE_DUEL_STATUS.READY, startedAt: null },
-        data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason },
+        data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
       });
       if (gaveUp.count > 0) {
         closed += 1;
@@ -963,6 +1050,7 @@ export async function giveUpOnDuels(nowMs = Date.now()): Promise<number> {
       }
     } else {
       const endReason = duelEndReason.resultNeverShowed();
+      const completedAt = new Date();
       const gaveUp = await prisma.inhouseDuel.updateMany({
         where: {
           id: d.id,
@@ -970,7 +1058,7 @@ export async function giveUpOnDuels(nowMs = Date.now()): Promise<number> {
             in: [INHOUSE_DUEL_STATUS.PLAYING, INHOUSE_DUEL_STATUS.AWAITING_RESULT],
           },
         },
-        data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason },
+        data: { status: INHOUSE_DUEL_STATUS.CANCELLED, endReason, completedAt },
       });
       if (gaveUp.count > 0) {
         closed += 1;
@@ -1039,14 +1127,20 @@ export async function pairDuelQueue(maxPairs = 10): Promise<number> {
  * bot panel's, /api/dota-lobby): Dota's end of a played game (`over`) moves
  * a live duel to AWAITING_RESULT; a launch (`started`, also a running game
  * the bot has `left`) moves READY to PLAYING with the bot's match id; a job
- * `released` with no game (a failed launch, a game Dota didn't score, a
- * lobby released or idled out first) cancels it (duelBotEndedWithoutGame).
+ * `released` after its game started (a failed launch, a game Dota didn't
+ * score) cancels it (duelBotEndedWithoutGame). A `released` READY duel whose
+ * game never started stays READY: the worker asks for a fresh lobby.
  * Each is a guarded claim that publishes the room and wakes the automation
  * gate before it returns. `botMatchId`, when the caller read it, skips a
  * write that would change nothing (a PLAYING duel whose id is stored).
  */
 export async function applyDuelBotStatus(
-  duel: { id: string; status: string; botMatchId?: string | null },
+  duel: {
+    id: string;
+    status: string;
+    startedAt: Date | null;
+    botMatchId?: string | null;
+  },
   status: DotaLobbyStatus | null,
 ): Promise<void> {
   if (!status) return;
@@ -1064,7 +1158,9 @@ export async function applyDuelBotStatus(
     }
     return;
   }
-  const why = duelBotEndedWithoutGame(status);
+  // A READY duel whose game never started reads `released` like `idle`:
+  // never cancelled here (duelBotEndedWithoutGame), its lobby made again.
+  const why = duelBotEndedWithoutGame(status, duel);
   if (why && duelTakesResult(duel.status)) await cancelDuelFromBot(duel.id, why);
 }
 
@@ -1114,7 +1210,7 @@ export async function runDuelWorkerSteps(
   try {
     const live = await prisma.inhouseDuel.findMany({
       where: { status: { in: INHOUSE_DUEL_LIVE_STATUSES } },
-      select: { ...DUEL_BOT_SPEC_SELECT, botMatchId: true },
+      select: { ...DUEL_BOT_SPEC_SELECT, botMatchId: true, startedAt: true },
       orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     });
     for (const duel of live) {
@@ -1146,7 +1242,11 @@ export async function runDuelWorkerSteps(
     }
   }
   try {
-    await giveUpOnDuels();
+    // The never-played call-off acts only on duels this pass read.
+    await giveUpOnDuels(
+      Date.now(),
+      new Map(read.map((r) => [r.id, r.bot])),
+    );
   } catch {
     logDuelStepFailure("give-up");
   }

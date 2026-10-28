@@ -632,12 +632,21 @@ export const INHOUSE_DUEL = {
   // A PLAYING or AWAITING_RESULT duel with no result this long after it was
   // paired is given up on ("result-never-showed").
   GIVE_UP_HOURS: 3,
-  // The worker's OpenDota scan: first look this long after pairing, then at
-  // most once per SCAN_EVERY_SECONDS per duel, at most SCAN_PER_PASS duels
-  // per pass, stalest checkedAt first.
+  // The worker's OpenDota scan, only for a duel whose game started (a READY
+  // duel has none: PLAYING comes only from the bot): first look this long
+  // after pairing, then at most once per SCAN_EVERY_SECONDS per duel, an
+  // interval that grows with the game's age (1/20 of it, like the 5v5's
+  // detectIntervalSeconds) up to SCAN_MAX_SECONDS; at most SCAN_PER_PASS
+  // duels per pass, stalest checkedAt first.
   SCAN_AFTER_MINUTES: 5,
   SCAN_EVERY_SECONDS: 180,
+  SCAN_MAX_SECONDS: 1800,
   SCAN_PER_PASS: 3,
+  // While OpenDota lacks the bot's match id, each scan looks that one match up
+  // and skips both players' histories (which can't hold an unpublished game
+  // either), for this long after the game started (the 5v5's
+  // DETECT_BOT_MATCH_WAIT_MINUTES).
+  BOT_MATCH_WAIT_MINUTES: 120,
   // A match may have started this long before the duel was paired (clock
   // skew between Valve and the box) and still be this duel's.
   START_GRACE_SECONDS: 120,

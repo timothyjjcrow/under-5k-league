@@ -18,7 +18,8 @@ const userDisplay = {
 
 /**
  * The 1v1 queue (unexpired rows), every duel a result can still land on, and
- * the duels completed in the last LAST_RESULT_WINDOW_MS. Display fields only.
+ * the duels completed or cancelled in the last LAST_RESULT_WINDOW_MS. Display
+ * fields only.
  * `nowMs` opens the result window; buildDuelState narrows it with its own
  * clock, so pass a time no later than the build's.
  */
@@ -40,7 +41,11 @@ export async function loadDuelRoomRows(nowMs: number = Date.now()): Promise<Duel
         OR: [
           { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
           {
-            status: INHOUSE_DUEL_STATUS.COMPLETED,
+            // Closed in the window: a result, or a cancel its players are
+            // told about (a closed duel's completedAt is when it closed).
+            status: {
+              in: [INHOUSE_DUEL_STATUS.COMPLETED, INHOUSE_DUEL_STATUS.CANCELLED],
+            },
             completedAt: {
               gte: new Date(nowMs - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS),
             },
@@ -59,6 +64,7 @@ export async function loadDuelRoomRows(nowMs: number = Date.now()): Promise<Duel
         durationSecs: true,
         radiantHeroId: true,
         direHeroId: true,
+        endReason: true,
         radiantUser: userDisplay,
         direUser: userDisplay,
       },

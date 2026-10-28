@@ -2608,6 +2608,29 @@ test("a game left early that Dota ends as not scored is released, like today's n
   assert.equal(c.request("create", duel).state, "creating");
 });
 
+test("the old lobby of a game left early and then not scored, replayed with no claim, is never claimed back", (t) => {
+  const { controller: c, calls, logs } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  c.departed("destroy");
+  time.at += DETAILS_AFTER_MS;
+  c.tick();
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 66 } }), true);
+  const before = calls.length;
+  // The Game Coordinator replays the old lobby, still showing the game.
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  assert.equal(c.data.active, null);
+  assert.ok(!logs.some((line) => / claim-back /.test(line)));
+  // No Leave at RUN, and the job still reads released.
+  assert.deepEqual(calls.slice(before), []);
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "released", lobbyId: LOBBY, matchId: undefined });
+  // Its lobby screen or postgame: left like any finished game's.
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 3 }));
+  assert.equal(calls.at(-1), "leave");
+  assert.equal(c.data.jobs[duel.key].leaveReason, "orphan");
+  assert.equal(c.data.active, null);
+});
+
 test("match-details asks stop after three hours, skip while offline, keep one in flight, and never block a Create", (t) => {
   const { controller: c, calls, logs } = setup(t, early(["duel", "season"]));
   const time = clock(c);

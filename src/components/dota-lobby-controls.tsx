@@ -594,7 +594,7 @@ export function DotaLobbyControls({
             <div className="space-y-2 rounded-lg border border-line p-3">
               <p className="text-sm">
                 {duel
-                  ? "The bot will leave this Dota lobby: at once on the lobby screen, or when a running game ends. A 1v1 whose game never started is called off once the bot has left."
+                  ? "The bot will leave this Dota lobby: at once on the lobby screen, or when a running game ends. A 1v1 that hasn't started stays paired, and the bot makes it a fresh lobby on its next check. To end the 1v1 instead, use “Call it off”."
                   : "The bot will leave this Dota lobby: at once on the lobby screen, or when a running game ends. The lobby may remain open for its players; check it before creating another."}
               </p>
               <button

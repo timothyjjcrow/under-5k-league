@@ -12,7 +12,7 @@ import {
 import { DUEL_BOT_WAITING_NOTE } from "@/lib/dota-lobby";
 import { INHOUSE_DUEL_STATUS } from "@/lib/constants";
 import { formatLeagueMatchTime } from "@/lib/match-time";
-import { duelStageLabel, type DuelGameView } from "@/lib/inhouse-duel";
+import { DUEL_BOT_OFF_NOTE, duelStageLabel, type DuelGameView } from "@/lib/inhouse-duel";
 import { cn } from "@/lib/utils";
 import { sideMeta } from "@/components/inhouse/shared";
 
@@ -49,7 +49,8 @@ function DuelCountdown({
  * with their medal, the side each plays, the lobby bot's panel (kind
  * "duel": either player can create, start, re-invite or release, as 5v5
  * captains do) or, while the bot can't answer, the waiting note (1v1s are
- * bot only, never hosted by hand), then the stage's own controls: "Call it
+ * bot only, never hosted by hand; a bot that can't host here at all says
+ * so), then the stage's own controls: "Call it
  * off" while it hasn't started, "1v1 over" for a bot game whose end the bot
  * missed, and recording the result by its match ID.
  */
@@ -136,7 +137,9 @@ export function DuelGameCard({
             <p role="status" className="text-sm text-muted">
               {availability === "checking"
                 ? "Checking the lobby bot…"
-                : DUEL_BOT_WAITING_NOTE}
+                : availability === "off"
+                  ? DUEL_BOT_OFF_NOTE
+                  : DUEL_BOT_WAITING_NOTE}
             </p>
           )}
         </>

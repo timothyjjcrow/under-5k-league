@@ -1132,7 +1132,8 @@ model InhouseDuel {
   startedAt      DateTime?
   // AWAITING_RESULT: "1v1 over", or the bot saw Dota's postgame.
   finishedAt     DateTime?
-  // The result clock: written once by the COMPLETED claim. Never updatedAt.
+  // The closing clock: when it closed, written by the claim that closes it
+  // (COMPLETED, or CANCELLED by a cancel, a give-up or a void). Never updatedAt.
   completedAt    DateTime?
   // Throttles the worker's OpenDota scan (claimed per attempt).
   checkedAt      DateTime?

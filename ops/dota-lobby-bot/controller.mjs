@@ -996,7 +996,10 @@ export class LobbyController {
       // Any other lobby stays untouched.
       const done = finishedJob(this.data.jobs, lobby);
       if (!done) return;
-      if (!(done.launchFailed && showsGame(lobby))) {
+      // A game the bot left early is never claimed back, even one Dota later
+      // called not scored (launchFailed): the bot already went, so its old
+      // lobby is a leftover like any finished game's.
+      if (done.left === true || !(done.launchFailed && showsGame(lobby))) {
         // A played game's end, seen after its claim was freed, still reaches
         // the site as `over`.
         const recorded = done.state === "started" && recordEnd(done, lobby, now);

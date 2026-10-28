@@ -1537,8 +1537,8 @@ describe("1v1 bot jobs (kind duel)", () => {
     ]);
   });
 
-  it("cancels a duel whose job the bot released with no game", async () => {
-    const { a, duel } = await pair();
+  it("cancels a duel whose job the bot released after its game started", async () => {
+    const { a, duel } = await pair("PLAYING");
     vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
     fakeBot(() => ({ state: "released" }));
     const read = await post(duel.id);
@@ -1549,6 +1549,26 @@ describe("1v1 bot jobs (kind duel)", () => {
       status: "CANCELLED",
       endReason: expect.stringContaining("lobby bot"),
     });
+  });
+
+  it("keeps a READY duel playable on a released read: the lobby went before any game", async () => {
+    const { a, duel } = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    fakeBot(() => ({ state: "released" }));
+    const read = await post(duel.id);
+    expect(read.body).toMatchObject({ playable: true, canControl: true });
+    expect(await statusOf(duel.id)).toBe("READY");
+    // The worker reads it the same way, and asks for a fresh lobby.
+    const { runDuelWorkerSteps } = await import("@/lib/inhouse-duel-service");
+    resetLobbyBotStatusCacheForTests();
+    const calls = fakeBot((call) =>
+      call.action === "create" ? { state: "creating" } : { state: "released" },
+    );
+    await runDuelWorkerSteps();
+    expect(await statusOf(duel.id)).toBe("READY");
+    expect(calls.filter((c) => c.action === "create").map((c) => c.spec?.key)).toEqual([
+      duelKey(duel.id),
+    ]);
   });
 
   it("leaves an idle, blocked or ready job's duel READY", async () => {
@@ -1700,6 +1720,82 @@ describe("1v1 bot jobs (kind duel)", () => {
     ]);
   });
 
+  it("a 5v5 comes first: an unstarted 1v1 lobby holding the bot reads as freeing, and the 5v5's Create frees it", async () => {
+    const { lobbyBusyLabel, lobbyBusyNote, createOpen } = await import("@/lib/dota-lobby");
+    const user = await makeUser("Captain");
+    const lobby = await prisma.inhouseLobby.create({
+      data: {
+        status: "READY",
+        players: { create: { userId: user.id, team: 1, isCaptain: true } },
+      },
+    });
+    // The 1v1's lobby was made before the 5v5 formed; its game hasn't started.
+    const holder = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(user));
+    fakeBot(() => ({ state: "idle" }), duelKey(holder.duel.id));
+    const read = await (
+      await POST(request({ kind: "inhouse", id: lobby.id, action: "status" }))
+    ).json();
+    expect(read.busyElsewhere).toEqual({
+      game: "a 1v1",
+      closed: true,
+      duel: true,
+      unstarted: true,
+    });
+    // Never the hand-hosting latch: Create is open, and says it frees the bot.
+    expect(createOpen(read)).toBe(true);
+    expect(lobbyBusyLabel(read.busyElsewhere)).toBe(
+      "The bot is holding a 1v1 lobby that hasn't started",
+    );
+    expect(lobbyBusyNote(read.busyElsewhere, true)).toMatch(/frees the bot/);
+
+    resetLobbyBotStatusCacheForTests();
+    const calls = fakeBot(
+      (call) => (call.action === "create" ? { code: "BUSY" } : { state: "ready" }),
+      duelKey(holder.duel.id),
+    );
+    const created = await POST(request({ kind: "inhouse", id: lobby.id, action: "create" }));
+    expect(await created.json()).toEqual({
+      error:
+        "Freeing the bot from a 1v1 lobby that hadn't started. Press “Create Dota lobby” again in a few seconds.",
+      freeing: true,
+    });
+    expect(calls.map((c) => [c.action, c.spec?.key])).toEqual([
+      ["create", `${keyPrefix}inhouse:${lobby.id}:1`],
+      ["health", undefined],
+      ["release", duelKey(holder.duel.id)],
+    ]);
+    // The 1v1 stays paired; its lobby is made again once the 5v5 is under way.
+    expect(await statusOf(holder.duel.id)).toBe("READY");
+  });
+
+  it("a 1v1's panel and Create never take another unstarted 1v1's bot", async () => {
+    const { a, duel } = await pair();
+    const holder = await pair();
+    vi.mocked(getSessionUser).mockResolvedValue(asSession(a));
+    fakeBot(() => ({ state: "idle" }), duelKey(holder.duel.id));
+    expect((await post(duel.id)).body.busyElsewhere).toEqual({
+      game: "a 1v1",
+      closed: false,
+      duel: true,
+    });
+    resetLobbyBotStatusCacheForTests();
+    const calls = fakeBot(
+      (call) => (call.action === "create" ? { code: "BUSY" } : { state: "idle" }),
+      duelKey(holder.duel.id),
+    );
+    expect((await post(duel.id, "create")).status).toBe(400);
+    expect(calls.map((c) => c.action)).toEqual(["create", "health"]);
+    // Nor does the auto-create.
+    const { createDuelBotLobby } = await import("@/lib/inhouse-duel-bot");
+    const again = fakeBot(
+      (call) => (call.action === "create" ? { code: "BUSY" } : { state: "idle" }),
+      duelKey(holder.duel.id),
+    );
+    expect(await createDuelBotLobby(duel.id)).toBe("busy");
+    expect(again.map((c) => c.action)).toEqual(["create", "health"]);
+  });
+
   it("leaves a live 1v1's hold alone, and tells a 1v1's Create to wait for the bot", async () => {
     const { a, duel } = await pair();
     const holder = await pair("PLAYING");
@@ -1813,14 +1909,19 @@ describe("1v1 bot jobs (kind duel)", () => {
       expect(await statusOf(waiting.duel.id)).toBe("READY");
 
       const launched = await pair();
-      fakeBot((call) =>
+      const failed = await pair("PLAYING");
+      const retried = fakeBot((call) =>
         call.spec?.key === duelKey(launched.duel.id)
           ? { state: "started", matchId: "8123456793", left: true }
           : { state: "released" },
       );
       await runDuelWorkerSteps();
       expect(await statusOf(launched.duel.id)).toBe("PLAYING");
-      expect(await statusOf(waiting.duel.id)).toBe("CANCELLED");
+      // A launched game released (not scored): cancelled. A READY duel's
+      // released lobby: still READY, and no create while the 5v5 sets up.
+      expect(await statusOf(failed.duel.id)).toBe("CANCELLED");
+      expect(await statusOf(waiting.duel.id)).toBe("READY");
+      expect(retried.filter((c) => c.action === "create")).toEqual([]);
     });
   });
 });

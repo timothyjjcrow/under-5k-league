@@ -288,9 +288,11 @@ export function lobbyBusyElsewhere(
 /** The status line while the bot is another game's (see lobbyBusyElsewhere). */
 export function lobbyBusyLabel(busy: BotBusyElsewhere): string {
   if (busy.duel)
-    return busy.closed
-      ? "The bot is still leaving a finished 1v1"
-      : "The bot is hosting a 1v1";
+    return busy.unstarted
+      ? "The bot is holding a 1v1 lobby that hasn't started"
+      : busy.closed
+        ? "The bot is still leaving a finished 1v1"
+        : "The bot is hosting a 1v1";
   const game = busy.game ? `game ${busy.game}` : "another game";
   return busy.closed
     ? `The bot is still leaving finished ${game}`
@@ -440,6 +442,12 @@ export type BotBusyElsewhere = {
   closed: boolean;
   /** That job is one of this league's 1v1s: the panel names "a 1v1". */
   duel?: true;
+  /**
+   * That 1v1's game hasn't started (READY, no startedAt), and this panel is a
+   * 5v5's: the 5v5 comes first, so its Create frees the bot from that lobby
+   * (`closed` is true) and the 1v1 waits for the bot again.
+   */
+  unstarted?: true;
 };
 
 /** The bot reports at most this many players: two sides of ten. */

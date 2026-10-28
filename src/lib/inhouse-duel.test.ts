@@ -7,13 +7,22 @@ import {
 import type { OpenDotaMatch, OpenDotaRecentMatch } from "./dota";
 import {
   DUEL_BOT_SAVED_FOR_5V5,
+  DUEL_NO_BOT_NOTE,
   DUEL_REFUSAL,
+  DUEL_ROOM_ANCHOR,
+  DUEL_SIGN_IN_RETURN,
+  DUEL_WAITING_NOTE,
   assignDuelSides,
+  duelAdminToolsVisible,
+  duelCancelLine,
+  duelEndReason,
   duelBotEndedWithoutGame,
+  duelBotLobbyMissing,
   duelBotSavedFor5v5,
   buildDuelState,
   duelHeartbeatAction,
   duelJoinRow,
+  duelResultCeilingSeconds,
   duelResultLanded,
   duelResultLine,
   duelRoomClocks,
@@ -21,13 +30,18 @@ import {
   duelStake,
   duelWorkerWakeAtMs,
   type DuelMeView,
+  type DuelState,
   duelJoinRefusal,
   duelLadder,
   duelMatchFloorSeconds,
   duelNeverPlayedDue,
   duelNextClockMs,
   duelResultGiveUpDue,
+  duelBotMatchWaitOver,
+  duelScanCutoffFor,
   duelScanDue,
+  duelScanDueAtMs,
+  duelScanIntervalSeconds,
   duelScanOrder,
   duelToFinishedLobby,
   duelWinnerUserId,
@@ -42,6 +56,7 @@ import {
 } from "./inhouse-duel";
 import { INHOUSE_ELO, summarizeInhouse } from "./inhouse-stats";
 import { sourceFile } from "../../test/support/source-files";
+import { INHOUSE_QUEUE_INVITE_PATH } from "./inhouse-queue-invite";
 
 const NOW = Date.UTC(2026, 9, 27, 20, 0, 0);
 const sec = (s: number) => new Date(NOW - s * 1000);
@@ -155,28 +170,68 @@ describe("clocks", () => {
     expect(duelResultGiveUpDue(at(INHOUSE_DUEL_STATUS.READY, floor * 2), NOW)).toBe(false);
   });
 
-  it("scans from SCAN_AFTER_MINUTES, then once per SCAN_EVERY_SECONDS, never a closed duel", () => {
+  const playing = (agoMin: number, startedAgoMin = agoMin) => ({
+    ...base,
+    status: INHOUSE_DUEL_STATUS.PLAYING,
+    createdAt: new Date(NOW - agoMin * 60_000),
+    startedAt: new Date(NOW - startedAgoMin * 60_000),
+  });
+
+  it("scans a started game from SCAN_AFTER_MINUTES, then once per SCAN_EVERY_SECONDS, never a closed duel", () => {
     const after = INHOUSE_DUEL.SCAN_AFTER_MINUTES;
-    expect(duelScanDue(ready(after - 1), NOW)).toBe(false);
-    expect(duelScanDue(ready(after), NOW)).toBe(true);
+    expect(duelScanDue(playing(after - 1), NOW)).toBe(false);
+    expect(duelScanDue(playing(after), NOW)).toBe(true);
     expect(
-      duelScanDue({ ...ready(20), checkedAt: sec(INHOUSE_DUEL.SCAN_EVERY_SECONDS - 1) }, NOW),
+      duelScanDue({ ...playing(20), checkedAt: sec(INHOUSE_DUEL.SCAN_EVERY_SECONDS - 1) }, NOW),
     ).toBe(false);
     expect(
-      duelScanDue({ ...ready(20), checkedAt: sec(INHOUSE_DUEL.SCAN_EVERY_SECONDS) }, NOW),
+      duelScanDue({ ...playing(20), checkedAt: sec(INHOUSE_DUEL.SCAN_EVERY_SECONDS) }, NOW),
     ).toBe(true);
+    const awaiting = { ...playing(20), status: INHOUSE_DUEL_STATUS.AWAITING_RESULT };
+    expect(duelScanDue(awaiting, NOW)).toBe(true);
     for (const status of [INHOUSE_DUEL_STATUS.COMPLETED, INHOUSE_DUEL_STATUS.CANCELLED]) {
-      expect(duelScanDue({ ...ready(60), status }, NOW)).toBe(false);
-      expect(duelNextClockMs({ ...ready(60), status })).toBeNull();
+      expect(duelScanDue({ ...playing(60), status }, NOW)).toBe(false);
+      expect(duelNextClockMs({ ...playing(60), status })).toBeNull();
     }
   });
 
-  it("names the next clock: scan or setup for READY, scan or give-up after", () => {
+  it("never scans a READY duel: its game never started, so no result exists", () => {
+    expect(duelScanDue(ready(60), NOW)).toBe(false);
+    expect(duelScanDueAtMs(ready(60))).toBeNull();
+  });
+
+  it("stretches the scan interval with the game's age, to SCAN_MAX_SECONDS", () => {
+    expect(duelScanIntervalSeconds(0)).toBe(INHOUSE_DUEL.SCAN_EVERY_SECONDS);
+    expect(duelScanIntervalSeconds(60 * 60_000)).toBe(180);
+    expect(duelScanIntervalSeconds(2 * 3_600_000)).toBe(360);
+    expect(duelScanIntervalSeconds(24 * 3_600_000)).toBe(INHOUSE_DUEL.SCAN_MAX_SECONDS);
+    // A game two hours in, scanned five minutes ago: its interval is six.
+    const old = { ...playing(130, 120), checkedAt: sec(300) };
+    expect(duelScanDue(old, NOW)).toBe(false);
+    const checkedAgoMs = 300_000;
+    const interval = duelScanIntervalSeconds(120 * 60_000 - checkedAgoMs) * 1000;
+    expect(duelScanDueAtMs(old)).toBe(NOW - checkedAgoMs + interval);
+    // The claim's cutoff admits exactly the stamp judged due.
+    const due = { ...playing(130, 120), checkedAt: sec(400) };
+    expect(duelScanDue(due, NOW)).toBe(true);
+    expect(duelScanCutoffFor(due, NOW).getTime()).toBeGreaterThanOrEqual(due.checkedAt.getTime());
+    expect(duelScanCutoffFor(due, NOW).getTime()).toBeLessThan(NOW);
+  });
+
+  it("waits BOT_MATCH_WAIT_MINUTES after the game started before reading histories for a bot game", () => {
+    const wait = INHOUSE_DUEL.BOT_MATCH_WAIT_MINUTES;
+    expect(duelBotMatchWaitOver(playing(wait + 10, wait - 1), NOW)).toBe(false);
+    expect(duelBotMatchWaitOver(playing(wait + 10, wait), NOW)).toBe(true);
+  });
+
+  it("names the next clock: setup for READY, scan or give-up after", () => {
     const r = ready(0);
-    expect(duelNextClockMs(r)).toBe(NOW + INHOUSE_DUEL.SCAN_AFTER_MINUTES * 60_000);
-    const checked = { ...ready(29), checkedAt: sec(0) };
+    expect(duelNextClockMs(r)).toBe(NOW + INHOUSE_DUEL.SETUP_MINUTES * 60_000);
+    const p = playing(0);
+    expect(duelNextClockMs(p)).toBe(NOW + INHOUSE_DUEL.SCAN_AFTER_MINUTES * 60_000);
+    const checked = { ...playing(179), checkedAt: sec(0) };
     expect(duelNextClockMs(checked)).toBe(
-      checked.createdAt.getTime() + INHOUSE_DUEL.SETUP_MINUTES * 60_000,
+      checked.createdAt.getTime() + INHOUSE_DUEL.GIVE_UP_HOURS * 3_600_000,
     );
   });
 
@@ -205,7 +260,7 @@ function match(over: Partial<OpenDotaMatch> = {}): OpenDotaMatch {
   };
 }
 
-const duel: { createdAtMs: number; players: DuelMatchPlayer[] } = {
+const duel: { createdAtMs: number; players: DuelMatchPlayer[]; ceilingSeconds?: number | null } = {
   createdAtMs: NOW,
   players: [
     { userId: "A", accountId: 22 },
@@ -252,6 +307,11 @@ describe("validateDuelMatch", () => {
     expect(reason(match({ players: match().players.slice(0, 1) }))).toBe("not-two-players");
     expect(reason(match({ start_time: duelMatchFloorSeconds(NOW) - 1 }))).toBe("before-duel");
     expect(reason(match({ start_time: duelMatchFloorSeconds(NOW) }))).toBe("ok");
+    // A later 1v1 of either player was paired: a match from then on is its.
+    const start = match().start_time;
+    expect(reason(match(), { ...duel, ceilingSeconds: start })).toBe("after-next-duel");
+    expect(reason(match(), { ...duel, ceilingSeconds: start + 1 })).toBe("ok");
+    expect(reason(match(), { ...duel, ceilingSeconds: null })).toBe("ok");
     expect(
       reason(match(), { ...duel, players: [duel.players[0], { userId: "B", accountId: 99 }] }),
     ).toBe("not-these-players");
@@ -287,7 +347,7 @@ describe("sharedDuelMatchIds", () => {
     player_slot: slot,
   });
 
-  it("keeps 1v1 matches both played, on opposite sides, since the floor, newest first", () => {
+  it("keeps 1v1 matches both played, on opposite sides, since the floor, oldest first", () => {
     const a = [
       recent(1, 100, 0),
       recent(2, 300, 0),
@@ -304,7 +364,16 @@ describe("sharedDuelMatchIds", () => {
       recent(5, 250, 1),
       recent(6, 260, 128),
     ];
-    expect(sharedDuelMatchIds(a, b, 80)).toEqual([2, 6, 1]);
+    expect(sharedDuelMatchIds(a, b, 80)).toEqual([1, 6, 2]);
+    // A later 1v1 of either player was paired at 260: its game (and later)
+    // is never this duel's.
+    expect(sharedDuelMatchIds(a, b, 80, 260)).toEqual([1]);
+    expect(sharedDuelMatchIds(a, b, 80, null)).toEqual([1, 6, 2]);
+  });
+
+  it("refuses a match that started at or after a later 1v1's pairing", () => {
+    expect(duelResultCeilingSeconds(null)).toBeNull();
+    expect(duelResultCeilingSeconds(1_000_999)).toBe(1000);
   });
 });
 
@@ -370,6 +439,7 @@ describe("buildDuelState", () => {
     durationSecs: null,
     radiantHeroId: null,
     direHeroId: null,
+    endReason: null,
     radiantUser: user(radiant),
     direUser: user(dire),
     ...over,
@@ -488,6 +558,57 @@ describe("buildDuelState", () => {
     expect(admin.results[0].canVoid).toBe(true);
     expect(admin.games.map((g) => [g.id, g.canCancel, g.mine])).toEqual([["live", true, false]]);
   });
+
+  it("tells the viewer their 1v1 was cancelled, and why, for LAST_RESULT_WINDOW_MS", () => {
+    const off = (id: string, agoMs: number, endReason: string, createdAgoMs = agoMs + 60_000) =>
+      duelRow(id, INHOUSE_DUEL_STATUS.CANCELLED, "a", "b", {
+        createdAt: new Date(NOW - createdAgoMs),
+        completedAt: new Date(NOW - agoMs),
+        endReason,
+      });
+    const me = (duels: DuelRoomDuelRow[], id = "a") =>
+      buildDuelState({ id, role: "USER" }, { queue: [], duels }, noExtras, NOW).me!;
+    expect(me([off("c", 1000, duelEndReason.calledOff("name-b"))]).lastCancelled).toEqual({
+      duelId: "c",
+      line: "Your 1v1 was called off.",
+    });
+    const lines: [string, string][] = [
+      [duelEndReason.adminCancel("Admin"), "Your 1v1 was called off."],
+      [
+        duelEndReason.neverPlayed(),
+        `No game started within ${INHOUSE_DUEL.SETUP_MINUTES} minutes, so the 1v1 was cancelled.`,
+      ],
+      [duelEndReason.botCancelled("not scored"), "The game didn't start, so the 1v1 was cancelled."],
+      [duelEndReason.resultNeverShowed(), "No result showed on OpenDota, so the 1v1 was cancelled."],
+      [duelEndReason.voided("Admin", "81"), "An admin voided your 1v1 result."],
+    ];
+    for (const [reason, line] of lines) {
+      expect(duelCancelLine(reason), reason).toBe(line);
+      expect(me([off("c", 1000, reason)]).lastCancelled?.line, reason).toBe(line);
+    }
+    // Only the players, only inside the window.
+    expect(me([off("c", 1000, duelEndReason.neverPlayed())], "z").lastCancelled).toBeNull();
+    expect(
+      me([off("c", INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1, duelEndReason.neverPlayed())])
+        .lastCancelled,
+    ).toBeNull();
+    // A newer result, or a newer 1v1 of theirs, says more.
+    const won = duelRow("w", INHOUSE_DUEL_STATUS.COMPLETED, "a", "b", {
+      winnerTeam: 1,
+      completedAt: new Date(NOW - 500),
+    });
+    expect(me([off("c", 1000, duelEndReason.neverPlayed()), won]).lastCancelled).toBeNull();
+    const again = duelRow("n", INHOUSE_DUEL_STATUS.READY, "a", "e", {
+      createdAt: new Date(NOW - 500),
+    });
+    expect(me([off("c", 1000, duelEndReason.neverPlayed()), again]).lastCancelled).toBeNull();
+    // An older result than the cancel: the cancel shows.
+    const older = duelRow("o", INHOUSE_DUEL_STATUS.COMPLETED, "a", "b", {
+      winnerTeam: 1,
+      completedAt: new Date(NOW - 5000),
+    });
+    expect(me([off("c", 1000, duelEndReason.neverPlayed()), older]).lastCancelled?.duelId).toBe("c");
+  });
 });
 
 describe("the lobby bot", () => {
@@ -509,15 +630,32 @@ describe("the lobby bot", () => {
     ).toBe(true);
   });
 
-  it("ends a duel only on a job released with no game", () => {
-    expect(duelBotEndedWithoutGame({ state: "released" })).toMatch(/released/);
-    expect(duelBotEndedWithoutGame({ state: "released", over: true })).toBeNull();
+  it("ends a duel only on a job released after its game started", () => {
+    const playing = { status: "PLAYING", startedAt: new Date() };
+    const awaiting = { status: "AWAITING_RESULT", startedAt: null };
+    const unstarted = { status: "READY", startedAt: null };
+    expect(duelBotEndedWithoutGame({ state: "released" }, playing)).toMatch(/not scored/);
+    expect(duelBotEndedWithoutGame({ state: "released" }, awaiting)).toMatch(/not scored/);
+    expect(
+      duelBotEndedWithoutGame({ state: "released" }, { status: "READY", startedAt: new Date() }),
+    ).toMatch(/not scored/);
+    // A READY duel whose game never started: a released read is transient
+    // (a dropped Create, a lobby gone after a reconnect, a player's Release),
+    // so it reads like idle and the worker makes a fresh lobby.
+    expect(duelBotEndedWithoutGame({ state: "released" }, unstarted)).toBeNull();
+    expect(duelBotLobbyMissing({ state: "released" })).toBe(true);
+    expect(duelBotLobbyMissing({ state: "idle" })).toBe(true);
+    expect(duelBotLobbyMissing({ state: "released", over: true })).toBe(false);
+    for (const state of ["creating", "ready", "starting", "started", "blocked"])
+      expect(duelBotLobbyMissing({ state })).toBe(false);
+    expect(duelBotLobbyMissing(null)).toBe(false);
+    expect(duelBotEndedWithoutGame({ state: "released", over: true }, playing)).toBeNull();
     for (const state of ["idle", "creating", "ready", "starting", "started", "blocked"])
-      expect(duelBotEndedWithoutGame({ state })).toBeNull();
+      expect(duelBotEndedWithoutGame({ state }, playing)).toBeNull();
     // A running game the bot has left is running, never a failed launch.
     const left = { state: "started", left: true as const, matchId: "8123456789" };
-    expect(duelBotEndedWithoutGame(left)).toBeNull();
-    expect(duelBotEndedWithoutGame(null)).toBeNull();
+    expect(duelBotEndedWithoutGame(left, playing)).toBeNull();
+    expect(duelBotEndedWithoutGame(null, playing)).toBeNull();
   });
 });
 
@@ -551,11 +689,14 @@ describe("the 1v1 block's clocks (the long-poll's wake)", () => {
       duels: [
         { status: INHOUSE_DUEL_STATUS.COMPLETED, completedAt },
         { status: INHOUSE_DUEL_STATUS.PLAYING, completedAt: null },
+        { status: INHOUSE_DUEL_STATUS.CANCELLED, completedAt: sec(40) },
       ],
     });
     const resultEnds = completedAt.getTime() + INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1;
+    // A cancel's line leaves the card when its window ends too.
+    const cancelEnds = sec(40).getTime() + INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 1;
     const awayAt = lastSeenAt.getTime() + INHOUSE_DUEL.PRESENT_SECONDS * 1000 + 1;
-    expect(clocks.sort()).toEqual([expiresAt.getTime(), awayAt, resultEnds].sort());
+    expect(clocks.sort()).toEqual([expiresAt.getTime(), awayAt, resultEnds, cancelEnds].sort());
 
     // Each is a real boundary of the reply.
     const viewer = { id: "v", role: "USER" };
@@ -629,28 +770,55 @@ describe("the 1v1 card's rules", () => {
     canCallOff: false,
     canRecord: false,
     lastResult: null,
+    lastCancelled: null,
     ...over,
   });
 
   it("offers sign in, Join, Leave, a refusal in Join's place, or nothing beside the viewer's own 1v1", () => {
-    expect(duelJoinRow(null, null)).toEqual({ kind: "sign-in" });
-    expect(duelJoinRow(me(), null)).toEqual({ kind: "join" });
-    expect(duelJoinRow(me({ inQueue: true, canJoin: false, canLeave: true }), null)).toEqual({
+    expect(duelJoinRow(null, null, true)).toEqual({ kind: "sign-in" });
+    expect(duelJoinRow(me(), null, true)).toEqual({ kind: "join" });
+    expect(duelJoinRow(me({ inQueue: true, canJoin: false, canLeave: true }), null, true)).toEqual({
       kind: "leave",
     });
     // The page's MMR-cap refusal wins, as duelJoinRefusal judges it first.
-    expect(duelJoinRow(me(), "over the cap")).toEqual({ kind: "refused", reason: "over the cap" });
+    expect(duelJoinRow(me(), "over the cap", true)).toEqual({ kind: "refused", reason: "over the cap" });
     expect(
-      duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), "over the cap"),
+      duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), "over the cap", true),
     ).toEqual({ kind: "refused", reason: "over the cap" });
-    expect(duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), null)).toEqual({
+    expect(duelJoinRow(me({ canJoin: false, joinRefusal: DUEL_REFUSAL.IN_5V5 }), null, true)).toEqual({
       kind: "refused",
       reason: DUEL_REFUSAL.IN_5V5,
     });
     // In a live 1v1: the card shows it, not a refusal.
     expect(
-      duelJoinRow(me({ canJoin: false, duelId: "d", joinRefusal: DUEL_REFUSAL.IN_DUEL }), null),
+      duelJoinRow(me({ canJoin: false, duelId: "d", joinRefusal: DUEL_REFUSAL.IN_DUEL }), null, true),
     ).toEqual({ kind: "none" });
+  });
+
+  it("offers no Join and no sign in while no lobby bot can host 1v1s here", () => {
+    expect(duelJoinRow(null, null, false)).toEqual({ kind: "no-bot" });
+    expect(duelJoinRow(me(), null, false)).toEqual({ kind: "no-bot" });
+    expect(duelJoinRow(me(), "over the cap", false)).toEqual({ kind: "no-bot" });
+    // A row from before can still be left, and a live 1v1 still shows.
+    expect(duelJoinRow(me({ inQueue: true, canLeave: true }), null, false)).toEqual({
+      kind: "leave",
+    });
+    expect(
+      duelJoinRow(me({ canJoin: false, duelId: "d", joinRefusal: DUEL_REFUSAL.IN_DUEL }), null, false),
+    ).toEqual({ kind: "none" });
+    expect(DUEL_NO_BOT_NOTE).toBe("1v1s start once the lobby bot can host here.");
+  });
+
+  it("returns sign in to the 1v1 card, never the 5v5 queue's invite (which joins the 5v5 queue)", () => {
+    expect(DUEL_SIGN_IN_RETURN).toBe(`/inhouse#${DUEL_ROOM_ANCHOR}`);
+    expect(DUEL_SIGN_IN_RETURN).not.toContain(INHOUSE_QUEUE_INVITE_PATH);
+    expect(DUEL_SIGN_IN_RETURN).not.toMatch(/[?&]join=/);
+  });
+
+  it("tells a waiter pairing needs their page open", () => {
+    expect(DUEL_WAITING_NOTE).toBe(
+      "Waiting for an opponent: the next player to join plays you while this page is open.",
+    );
   });
 
   it("words the last result, and each stage", () => {
@@ -666,6 +834,37 @@ describe("the 1v1 card's rules", () => {
     expect(duelStake(me())).toBe(false);
     expect(duelStake(me({ inQueue: true }))).toBe(true);
     expect(duelStake(me({ duelId: "d" }))).toBe(true);
+  });
+
+  it("shows the admin rows only when there is something to act on", () => {
+    const empty: DuelState = {
+      queue: { present: 0, players: [] },
+      games: [],
+      results: [],
+      me: null,
+      canRemoveFromQueue: true,
+    };
+    expect(duelAdminToolsVisible(empty)).toBe(false);
+    expect(duelAdminToolsVisible({ ...empty, canRemoveFromQueue: false })).toBe(false);
+    const waiterRow = { userId: "u", name: "U", avatar: null, present: true, joinedAt: NOW };
+    expect(
+      duelAdminToolsVisible({ ...empty, queue: { present: 1, players: [waiterRow] } }),
+    ).toBe(true);
+    // A player (not an admin) never sees them.
+    expect(
+      duelAdminToolsVisible({
+        ...empty,
+        canRemoveFromQueue: false,
+        queue: { present: 1, players: [waiterRow] },
+      }),
+    ).toBe(false);
+    const user = { id: "a", name: "A", avatar: null, rankTier: null };
+    const game = {
+      id: "g", status: "READY", radiant: user, dire: { ...user, id: "b" }, createdAt: NOW,
+      startedAt: null, finishedAt: null, setupEndsAt: NOW, giveUpAt: null, mine: false, canCancel: true,
+    };
+    expect(duelAdminToolsVisible({ ...empty, games: [game] })).toBe(true);
+    expect(duelAdminToolsVisible({ ...empty, games: [{ ...game, canCancel: false }] })).toBe(false);
   });
 
   it("calls a result news only when a reply adds one", () => {
@@ -687,9 +886,10 @@ describe("the 1v1 card's source", () => {
   const admin = code("src/components/inhouse/duel-admin-tools.tsx");
 
   it("decides through the pure rules, and acts only through the room's act()", () => {
-    for (const call of ["duelJoinRow(me, joinRefusal)", "duelResultLine(", "duelResultLanded(", "DUEL_CARD_INTRO"]) {
+    for (const call of ["duelJoinRow(me, joinRefusal, botReady)", "duelResultLine(", "duelResultLanded(", "DUEL_CARD_INTRO"]) {
       expect(section, call).toContain(call);
     }
+    expect(admin).toContain("if (!duelAdminToolsVisible(duel)) return null;");
     for (const src of [section, card, admin]) {
       expect(src).not.toMatch(/\bfetch\(/);
       expect(src).not.toContain("playChime(");
@@ -704,6 +904,26 @@ describe("the 1v1 card's source", () => {
   it("shows the lobby bot's panel for the viewer's 1v1, or the waiting note: never by-hand steps", () => {
     expect(card).toMatch(/<DotaLobbyControls\s+key=\{game\.id\}\s+kind="duel"/);
     expect(card).toContain("DUEL_BOT_WAITING_NOTE");
+    // A panel answering that the bot can't host here gets its own line.
+    expect(card).toMatch(/availability === "off"\s*\?\s*DUEL_BOT_OFF_NOTE/);
+  });
+
+  it("signs in back to the 1v1 card, never through the 5v5 queue's invite", () => {
+    expect(section).toContain("signInHref(DUEL_SIGN_IN_RETURN)");
+    expect(section).toContain("id={DUEL_ROOM_ANCHOR}");
+    for (const src of [section, card, admin]) {
+      expect(src).not.toContain("INHOUSE_QUEUE_INVITE_PATH");
+      expect(src).not.toContain("join=1");
+    }
+  });
+
+  it("offers Join only where the lobby bot can host 1v1s: the page passes it, the room hands it on", () => {
+    const page = code("src/app/inhouse/page.tsx");
+    const room = code("src/components/inhouse-room.tsx");
+    expect(page).toContain("duelBotReady={inhouseLobbyBotConfigured()}");
+    expect(room).toContain("botReady={duelBotReady}");
+    expect(section).toContain("DUEL_NO_BOT_NOTE");
+    expect(section).toContain("DUEL_WAITING_NOTE");
   });
 
   it("names no control like a 5v5 one", () => {
