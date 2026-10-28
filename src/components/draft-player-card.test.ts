@@ -115,6 +115,61 @@ describe("draft-room.tsx renders the cards where they move nothing", () => {
   });
 });
 
+describe("draft-room.tsx lays desktop out in two columns from the top", () => {
+  // The lot and then the teams on the left, the feed above the pool on the
+  // right (Tim, 2026-10-27). One grid, placed by class, so a phone keeps the
+  // viewer's DOM order.
+  it("the lot spans the top two rows of the left two thirds", () => {
+    const src = room();
+    expect(
+      indexesOf(src, "lg:grid-cols-3 lg:grid-rows-[auto_auto_auto_1fr]"),
+    ).toHaveLength(1);
+    const grid = src.indexOf("lg:grid-rows-[auto_auto_auto_1fr]");
+    const lot = src.indexOf("{/* On the block */}");
+    expect(lot).toBeGreaterThan(grid);
+    expect(src.slice(lot, src.indexOf("ref={bannerRef}", lot))).toContain(
+      "lg:col-span-2 lg:col-start-1 lg:row-span-2 lg:row-start-1",
+    );
+    // The primer, then the teams, below it on the left.
+    const primer = src.indexOf("<AuctionPrimer", lot);
+    expect(src.slice(src.lastIndexOf("<div", primer), primer)).toContain(
+      "lg:col-span-2 lg:col-start-1 lg:row-start-3",
+    );
+    const rosters = src.slice(
+      src.indexOf('key="rosters"'),
+      src.indexOf("<TeamsGrid", src.indexOf('key="rosters"')),
+    );
+    expect(rosters).toContain("lg:col-span-2 lg:col-start-1 lg:row-start-4");
+  });
+
+  it("the feed sits top right, the pool under it, pinned while the teams scroll", () => {
+    const src = room();
+    const feed = src.slice(
+      src.indexOf('key="feed"'),
+      src.indexOf("<RecentSales", src.indexOf('key="feed"')),
+    );
+    expect(feed).toContain("lg:col-start-3 lg:row-start-1");
+    const pool = src.slice(
+      src.indexOf('key="pool"'),
+      src.indexOf("<AvailableList", src.indexOf('key="pool"')),
+    );
+    // Rows 2-4, so it starts under the feed however tall the lot is, and
+    // clears the 64px header and the 44px clock bar.
+    expect(pool).toContain(
+      "lg:sticky lg:top-[7.5rem] lg:col-start-3 lg:row-span-3 lg:row-start-2",
+    );
+    // Its list is sized to the window, so a 720px laptop shows all of it.
+    expect(src).toContain("lg:max-h-[max(16rem,calc(100dvh_-_19.5rem))]");
+  });
+
+  it("a phone keeps the viewer's order: the pool first for a captain or admin", () => {
+    const src = room();
+    expect(src).toContain(
+      "return watcher ? [feed, rosters, pool] : [pool, feed, rosters];",
+    );
+  });
+});
+
 describe("draft-player-card.tsx is presentational", () => {
   it("draws what draftCardView decides, with the profile's tiles", () => {
     const src = card();

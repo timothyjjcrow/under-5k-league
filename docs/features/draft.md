@@ -461,10 +461,21 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
   runs the toggle reads "Tap to turn on alerts", and that tap turns the bell
   on rather than muting it (`soundToggleNext`, `src/lib/room-sound.ts`,
   shared with the inhouse room).
-- **Phone order follows the viewer:** a captain or admin gets the pool
-  first; everyone else gets Recent sales, then the rosters, then the pool (DOM
-  order, so screen readers match). Desktop is fixed by grid placement. "next:
-  Team" shows at every size.
+- **Desktop is two columns from the top** (Tim, 2026-10-27: the player
+  "taking up too much space", Recent sales and Available "easily
+  accessible"). Left, across two thirds: the lot (the player and the
+  bidding), the primer, then the teams. Right: Recent sales above the
+  pool. One grid of four rows (`lg:grid-rows-[auto_auto_auto_1fr]`): the
+  lot spans rows 1-2 and the feed takes row 1, so the pool (rows 2-4)
+  starts right under the feed however tall the lot is; the primer and the
+  teams take rows 3 and 4. The pool is sticky under the header and the
+  clock bar (`lg:top-[7.5rem]`, 64px + 44px + a gap) while the teams
+  scroll, and its list is the window's height less about 19.5rem, so it
+  fits a 720px laptop.
+- **Phone order follows the viewer:** the lot, the primer, then for a
+  captain or admin the pool first; everyone else gets Recent sales, then
+  the rosters, then the pool (DOM order, so screen readers match; desktop
+  is placed by the grid). "next: Team" shows at every size.
 - **The admin's Auto-nominate panel names an absent captain** ("X isn't in
   the room — nominate for … or auto-nominate"), from the presence the poll
   already carries.

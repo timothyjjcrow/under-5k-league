@@ -298,6 +298,24 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(topsonLotCard).toContainText("About this player:");
   await expect(topsonLotCard).toContainText(/Their last \d+ public games/);
 
+  // Desktop (Playwright's 1280x720) is two columns from the top: the lot and
+  // then the teams on the left, Recent sales above the pool on the right, the
+  // pool beside the lot rather than under it.
+  const lotBox = (await topsonLotCard.boundingBox())!;
+  const salesBox = (await capOnePage
+    .getByRole("heading", { name: "Recent sales" })
+    .boundingBox())!;
+  const poolBox = (await capOnePool.boundingBox())!;
+  const teamsBox = (await capOnePage
+    .getByRole("region", { name: "Team rosters" })
+    .boundingBox())!;
+  expect(salesBox.x).toBeGreaterThan(lotBox.x + lotBox.width);
+  expect(poolBox.x).toBeGreaterThan(lotBox.x + lotBox.width);
+  expect(salesBox.y).toBeLessThan(poolBox.y);
+  expect(poolBox.y).toBeLessThan(lotBox.y + lotBox.height);
+  expect(teamsBox.x).toBeLessThan(poolBox.x);
+  expect(teamsBox.y).toBeGreaterThan(lotBox.y + lotBox.height);
+
   // With a lot live the admin can't line anyone up, so a pool row opens that
   // player's scouting instead: a disclosure, one tap open, the next shut.
   const adminPool = page.locator("#player-pool");
