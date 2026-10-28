@@ -171,6 +171,11 @@ export type OpenDotaMatch = {
   radiant_score?: number;
   dire_score?: number;
   leagueid?: number;
+  // Dota's game mode (21 = 1v1 Solo Mid) and lobby type. Present on every
+  // /matches payload; optional because nothing older than the 1v1 checks
+  // reads them.
+  game_mode?: number;
+  lobby_type?: number;
   players: OpenDotaPlayer[];
 };
 
@@ -240,6 +245,68 @@ export async function fetchRecentMatchIds(
       .filter((x): x is number => typeof x === "number");
     success = true;
     return ids;
+  } catch {
+    return null;
+  } finally {
+    databaseDiagnostics.provider("recent", performance.now() - started, success);
+  }
+}
+
+/**
+ * One entry of a player's /recentMatches, as the 1v1 result scan reads it:
+ * which match, when it started, its mode and lobby type, and the player's
+ * slot (under 128 is Radiant). A field OpenDota left out is null.
+ */
+export type OpenDotaRecentMatch = {
+  match_id: number;
+  start_time: number;
+  game_mode: number | null;
+  lobby_type: number | null;
+  player_slot: number | null;
+};
+
+const finiteOrNull = (v: unknown): number | null =>
+  typeof v === "number" && Number.isFinite(v) ? v : null;
+
+/**
+ * A player's recent matches with the fields the 1v1 scan needs (the
+ * fetchRecentMatchIds endpoint, read wider). Same contract: `null` =
+ * OpenDota unreachable (non-2xx, rate limit, timeout, an unusable body),
+ * never the same as `[]`, an empty or private history. Entries without a
+ * match id or start time are dropped.
+ */
+export async function fetchRecentMatches(
+  accountId: number,
+  limit = 20,
+  options: OpenDotaFetchOptions = {},
+): Promise<OpenDotaRecentMatch[] | null> {
+  const signal = boundedSignal(OPEN_DOTA_RECENT_TIMEOUT_MS, options);
+  if (!signal) return null;
+  const started = performance.now();
+  let success = false;
+  try {
+    const res = await fetch(
+      withKey(`${BASE}/players/${accountId}/recentMatches`),
+      { cache: "no-store", signal },
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    const rows: OpenDotaRecentMatch[] = [];
+    for (const m of data.slice(0, limit) as Record<string, unknown>[]) {
+      const matchId = finiteOrNull(m?.match_id);
+      const startTime = finiteOrNull(m?.start_time);
+      if (matchId === null || startTime === null) continue;
+      rows.push({
+        match_id: matchId,
+        start_time: startTime,
+        game_mode: finiteOrNull(m.game_mode),
+        lobby_type: finiteOrNull(m.lobby_type),
+        player_slot: finiteOrNull(m.player_slot),
+      });
+    }
+    success = true;
+    return rows;
   } catch {
     return null;
   } finally {

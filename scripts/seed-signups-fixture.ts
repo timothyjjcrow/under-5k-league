@@ -47,6 +47,8 @@ async function main() {
   await prisma.inhouseLobbyPlayer.deleteMany({});
   await prisma.inhouseLobby.deleteMany({});
   await prisma.inhouseQueueEntry.deleteMany({});
+  await prisma.inhouseDuel.deleteMany({});
+  await prisma.inhouseDuelQueueEntry.deleteMany({});
   await prisma.bid.deleteMany({});
   await prisma.standinAssignment.deleteMany({});
   await prisma.match.deleteMany({});

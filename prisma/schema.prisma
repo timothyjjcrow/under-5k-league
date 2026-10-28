@@ -90,6 +90,9 @@ model User {
   inhouseNightRsvps      InhouseNightRsvp[]
   inhouseTimeRsvps       InhouseTimeRsvp[]
   inhouseLobbies         InhouseLobbyPlayer[]
+  inhouseDuelQueue       InhouseDuelQueueEntry?
+  radiantDuels           InhouseDuel[]        @relation("InhouseDuelRadiant")
+  direDuels              InhouseDuel[]        @relation("InhouseDuelDire")
   startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
   inhouseBets            InhouseBet[]
   inhouseCredit          InhouseCredit?
@@ -1090,6 +1093,73 @@ model InhouseLobbyPlayer {
 // what lets @@unique([lobbyId, userId]) be the double-spend guard: there is
 // exactly one debit path per (player, lobby), enforced by the database on both
 // SQLite and Postgres, so two tabs cannot both charge.
+// ---------- 1v1 mid inhouse ("duel"; docs/features/inhouse-duels.md) ----------
+//
+// Its own tables, never a mode column on the 5v5 ones: about 150 5v5 readers
+// filter InhouseLobby by status alone. Season-independent like the 5v5.
+
+// One player waiting for a 1v1. Pairing happens at a join (or the worker's
+// sweep): the joiner takes the oldest PRESENT waiter, and both rows go.
+model InhouseDuelQueueEntry {
+  id         String   @id @default(cuid())
+  userId     String   @unique
+  // Queue order: the oldest present waiter is paired first. A repeat join
+  // keeps it (and refreshes expiresAt).
+  joinedAt   DateTime @default(now())
+  // Presence heartbeat from the player's own room polls (throttled). Unseen
+  // for INHOUSE_DUEL.PRESENT_SECONDS: still queued, but never paired.
+  lastSeenAt DateTime @default(now())
+  // INHOUSE_DUEL.QUEUE_MINUTES after the (latest) join; the worker deletes
+  // the row after it, and nothing pairs it meanwhile.
+  expiresAt  DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([joinedAt])
+}
+
+// One 1v1: READY (paired) -> PLAYING -> AWAITING_RESULT -> COMPLETED |
+// CANCELLED (INHOUSE_DUEL_STATUS). Two players, one per side: no player table.
+model InhouseDuel {
+  id             String    @id @default(cuid())
+  status         String    @default("READY")
+  // The sides as paired, at random. A result rewrites them to the sides the
+  // Dota match actually had, so winnerTeam and the heroes always line up.
+  radiantUserId  String
+  direUserId     String
+  createdAt      DateTime  @default(now())
+  // PLAYING: the bot saw the game launch, or a player pressed "We're playing".
+  startedAt      DateTime?
+  // AWAITING_RESULT: "1v1 over", or the bot saw Dota's postgame.
+  finishedAt     DateTime?
+  // The result clock: written once by the COMPLETED claim. Never updatedAt.
+  completedAt    DateTime?
+  // Throttles the worker's OpenDota scan (claimed per attempt).
+  checkedAt      DateTime?
+  // The Dota match id the lobby bot reported for this duel's lobby, checked
+  // first (like a pasted id) before the players' histories are scanned.
+  botMatchId     String?
+  // One Dota match records one duel.
+  dotaMatchId    String?   @unique
+  winnerTeam     Int? // 1 = radiant won, 2 = dire won
+  durationSecs   Int?
+  radiantHeroId  Int?
+  direHeroId     Int?
+  // The played game's own start, from OpenDota.
+  matchStartTime DateTime?
+  // Plain-words reason a duel ended without a result, shown to admins.
+  endReason      String?
+  updatedAt      DateTime  @updatedAt
+
+  radiantUser User @relation("InhouseDuelRadiant", fields: [radiantUserId], references: [id], onDelete: Cascade)
+  direUser    User @relation("InhouseDuelDire", fields: [direUserId], references: [id], onDelete: Cascade)
+
+  @@index([status, createdAt])
+  @@index([status, completedAt])
+  @@index([radiantUserId])
+  @@index([direUserId])
+}
+
 model InhouseBet {
   id          String    @id @default(cuid())
   lobbyId     String

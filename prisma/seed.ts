@@ -81,6 +81,8 @@ async function main() {
   await prisma.inhouseLobbyPlayer.deleteMany();
   await prisma.inhouseLobby.deleteMany();
   await prisma.inhouseQueueEntry.deleteMany();
+  await prisma.inhouseDuel.deleteMany();
+  await prisma.inhouseDuelQueueEntry.deleteMany();
   await prisma.season.deleteMany();
   await prisma.user.deleteMany();
   await prisma.setting.deleteMany();
