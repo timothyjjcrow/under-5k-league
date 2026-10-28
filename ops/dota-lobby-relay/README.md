@@ -95,6 +95,10 @@ The website sends `POST /lobby` with `Content-Type: application/json` and
 { "action": "status", "spec": { "key": "inhouse:example:1" } }
 ```
 
+Keys are `season:<id>:<game>`, `inhouse:<id>:1` and `duel:<id>:1` (a 1v1 mid
+duel, since 2026-10-27), each also with Europe's `eu:` prefix. The same
+pattern checks `active`'s `key` and `health`'s `activeKey`.
+
 `create`, `start`, `release`, and `invite` use the bot's complete existing
 lobby spec; `active` and `health` have no spec. `POST /health` also accepts
 `{"action":"health"}` with the same authentication. There is no public status
@@ -159,19 +163,22 @@ The bot must reject expired commands and send exactly one correlated response:
 Health reflects the bot's Steam/GC state, not merely whether its relay socket is
 connected. `active` returns `{key: string|null}`. Lobby operations (`status`,
 `create`, `start`, `release`, `invite`) return
-`{state, lobbyId?, matchId?, players?, releasing?, over?}`, and `invite` adds
+`{state, lobbyId?, matchId?, players?, releasing?, over?, left?}`, and `invite` adds
 `invited`, the number of invites it sent (an integer from 0 to 20). Errors use
 status 400 or 409 and only `{code}`, where code is one of `AUTH`, `INVALID`,
 `OFFLINE`, `BUSY`, `STATE`, `ROSTER`, or `SETTINGS`. Additional response fields
 are rejected rather than passed through: an unknown key, `invited` on any other
-action, or `releasing`/`over` with any value but `true`, turns the reply into
+action, or `releasing`/`over`/`left` with any value but `true`, turns the reply into
 `409 {"code":"STATE"}`.
 
 `releasing` and `over` are the lifecycle flags. The bot sends them only when
 the spec asked with `withLifecycle: true`, and only as `true`: `releasing`
 while a release is pending on the bot's active claim (a running game's release
 waits for its postgame), and `over` once a played game's end showed in Dota
-with a winner (never "not scored", nor an outcome Dota hasn't named yet). See
+with a winner (never "not scored", nor an outcome Dota hasn't named yet).
+`left` (since 2026-10-27) marks a `started` game the bot left early, while it
+still runs: the bot is free and the game goes on (early leave, off unless the
+bot's `DOTA_BOT_EARLY_LEAVE` lists the game's kind). See
 [DOTA-LOBBY-BOT: Protocol](../../docs/DOTA-LOBBY-BOT.md#protocol).
 
 `players` is the seat report. The bot includes it only when the spec asked
@@ -197,7 +204,9 @@ lobby name and password remain the fallback.
 Deploy this relay before the bot and the site that use `invite`,
 `withPlayers` or `withLifecycle`. An older relay rejects `invite` with
 `400 {"code":"INVALID"}` and turns any reply carrying `players`, `invited`,
-`releasing` or `over` into `409 {"code":"STATE"}`. Roll back in reverse (site,
+`releasing`, `over` or `left` into `409 {"code":"STATE"}`, and a relay older
+than 2026-10-27 does the same to an `active` or `health` reply naming a duel
+key (while the bot holds a duel, every site's bot check would read it broken). Roll back in reverse (site,
 then bot, then relay): never run an older relay while the new bot and the new
 site are both live.
 

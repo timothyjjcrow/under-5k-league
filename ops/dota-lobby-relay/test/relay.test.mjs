@@ -406,3 +406,47 @@ test("control requests accept invite with a spec exactly like the other lobby ac
   assert.equal(validControlRequest({ action: "health" }), true);
   assert.equal(validControlRequest({ action: "active" }), true);
 });
+
+// 1v1 mid duels (2026-10-27): duel keys in both namespaces, and the bot's
+// `left` flag on a game it left early.
+test("health and active accept duel keys in both namespaces, and nothing else new", () => {
+  const health = { online: true, steamId: "76561198000000001", activeKey: null, lobbyId: null, gameMode: 21, serverRegion: 2, leagueId: 12345 };
+  for (const key of ["duel:clx1duel:1", "eu:duel:clx1duel:1"]) {
+    assert.equal(validReply(reply({ key }), "active"), true, key);
+    assert.equal(validReply(reply({ ...health, activeKey: key }), "health"), true, key);
+  }
+  for (const key of ["duels:x:1", "duel:x:0", "eu:duel:x", "us:duel:x:1", "DUEL:x:1", "duel::1"]) {
+    assert.equal(validReply(reply({ key }), "active"), false, key);
+    assert.equal(validReply(reply({ ...health, activeKey: key }), "health"), false, key);
+  }
+});
+
+test("left is an optional true flag on every lobby reply, and on nothing else", () => {
+  for (const action of LOBBY_ACTIONS) {
+    assert.equal(validReply(reply({ state: "started", lobbyId: "12345", matchId: "67890", left: true }), action), true);
+    assert.equal(validReply(reply({ state: "started", lobbyId: "12345", matchId: "67890", over: true, left: true }), action), true);
+    for (const value of [false, "true", 1, null, {}])
+      assert.equal(validReply(reply({ state: "started", left: value }), action), false, `left ${JSON.stringify(value)}`);
+  }
+  const health = { online: true, steamId: "76561198000000001", activeKey: null, lobbyId: null, gameMode: null, serverRegion: null, leagueId: null };
+  assert.equal(validReply(reply({ ...health, left: true }), "health"), false);
+  assert.equal(validReply(reply({ key: null, left: true }), "active"), false);
+  assert.equal(validReply(reply({ code: "BUSY", left: true }, 409), "create"), false);
+});
+
+test("a duel request and a left reply dispatch through the relay unchanged", { timeout: 5_000 }, async (t) => {
+  const { post, connect } = await fixture(t);
+  const bot = await connect();
+  const spec = {
+    key: "eu:duel:clx1duel:1", name: "GGD2L Europe 1v1 x1duel", password: "ggd2l", leagueId: 54321,
+    gameMode: 21, serverRegion: 3, radiant: ["76561198000000001"], dire: ["76561198000000002"],
+    withLifecycle: true, withPlayers: true,
+  };
+  assert.equal(validControlRequest({ action: "status", spec }), true);
+  const pending = post({ action: "status", spec });
+  const command = await bot.nextRequest();
+  assert.deepEqual(command.request, { action: "status", spec });
+  const body = { state: "started", lobbyId: "12345", matchId: "67890", left: true };
+  bot.ws.send(JSON.stringify({ id: command.id, status: 200, body }));
+  await assertResponse(await pending, 200, body);
+});

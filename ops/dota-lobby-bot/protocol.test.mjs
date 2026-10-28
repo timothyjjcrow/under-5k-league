@@ -212,7 +212,7 @@ test("server.mjs moves players only with KickFromTeam and the swap, and never se
   assert.doesNotMatch(server, /\bsend\w*\(\s*(?:7081|7188|7047)\b|k_EMsgGCPracticeLobbyKick\b|k_EMsgGCBalancedShuffleLobby|k_EMsgGCPracticeLobbySetTeamSlot/);
   // Every command goes through send() or the invite's sendPartial.
   const commands = [...server.matchAll(/\bsend\((\d+),/g)].map((m) => Number(m[1])).sort((a, b) => a - b);
-  assert.deepEqual([...new Set(commands)], [7009, 7038, 7040, 7041, 7273, 7320, 8047]);
+  assert.deepEqual([...new Set(commands)], [7009, 7035, 7038, 7040, 7041, 7273, 7320, 8047]);
   // Every lobby snapshot carries which teams Dota sent.
   assert.match(server, /controller\.snapshot\(markWireTeams\(CSODOTALobby\.decode\(obj\.objectData\), obj\.objectData\)\)/);
   // The chat answers reach the controller, and the chat clock never throws.
@@ -220,4 +220,60 @@ test("server.mjs moves players only with KickFromTeam and the swap, and never se
   assert.match(server, /function runChat\(\) \{\s*try \{\s*controller\.pumpChat\(true\);\s*\} catch \{/);
   assert.match(server, /later: \(ms\) => setTimeout\(runChat, ms\)\.unref\(\)/);
   assert.match(server, /user\.on\("accountLimitations"/);
+});
+
+// ---- Early leave (controller.mjs leaveEarly, detailsClock) ----
+
+test("early leave sends CMsgAbandonCurrentGame (7035, no fields) through send(), and only from the transport", () => {
+  assert.equal(protos.EDOTAGCMsg.k_EMsgGCAbandonCurrentGame, 7035);
+  assert.equal(encode("AbandonCurrentGame", {}), "");
+  const server = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  assert.match(server, /abandon: \(\) => send\(7035, "AbandonCurrentGame"\)/);
+  // Off unless DOTA_BOT_EARLY_LEAVE lists a kind, parsed before Steam starts.
+  assert.match(server, /const earlyLeave = earlyLeaveKinds\(process\.env\.DOTA_BOT_EARLY_LEAVE\);/);
+  assert.match(server, /earlyLeaveKinds: earlyLeave,/);
+});
+
+test("a match-details request is GC 7095 carrying the uint64 match id, and its answer decodes the outcome", () => {
+  assert.equal(protos.EDOTAGCMsg.k_EMsgGCMatchDetailsRequest, 7095);
+  assert.equal(protos.EDOTAGCMsg.k_EMsgGCMatchDetailsResponse, 7096);
+  const user = new SteamUser({ dataDirectory: null });
+  const dota = new Dota2User(user);
+  user.steamID = { getSteamID64: () => "76561198000000099" };
+  let sent;
+  user.sendToGC = (...args) => {
+    sent = args;
+  };
+  dota.sendPartial(protos.EDOTAGCMsg.k_EMsgGCMatchDetailsRequest, { matchId: "9050201642" });
+  assert.equal(sent[0], 570);
+  assert.equal(sent[1], 7095);
+  // Field 1, varint 9050201642.
+  assert.equal(protos.CMsgGCMatchDetailsRequest.decode(Buffer.from(sent[3])).matchId, "9050201642");
+  // The answer: result 1 (OK), the match with its id as a string and the outcome.
+  const answer = protos.CMsgGCMatchDetailsResponse.encode(
+    protos.CMsgGCMatchDetailsResponse.fromPartial({ result: 1, match: { matchId: "9050201642", matchOutcome: 2 } }),
+  ).finish();
+  const decoded = protos.CMsgGCMatchDetailsResponse.decode(answer);
+  assert.equal(decoded.result, 1);
+  assert.equal(decoded.match.matchId, "9050201642");
+  assert.equal(decoded.match.matchOutcome, 2);
+  // The installed router decodes it for server.mjs's handler.
+  let routed;
+  dota.router.on(protos.EDOTAGCMsg.k_EMsgGCMatchDetailsResponse, (message) => {
+    routed = message;
+  });
+  dota.router.route(7096, Buffer.from(answer));
+  assert.equal(routed.match.matchOutcome, 2);
+  const server = readFileSync(new URL("./server.mjs", import.meta.url), "utf8");
+  assert.match(server, /matchDetails: \(matchId\) =>\s*dota\.sendPartial\(protos\.EDOTAGCMsg\.k_EMsgGCMatchDetailsRequest, \{ matchId \}\)/);
+  assert.match(server, /k_EMsgGCMatchDetailsResponse, \(answer\) => \{\s*try \{\s*controller\.matchDetails\(answer\);\s*\} catch \{/);
+});
+
+test("the lobby's game state is DOTA_GameState, whose GAME_IN_PROGRESS is 5", () => {
+  assert.equal(protos.DOTAGameState.DOTA_GAMERULES_STATE_GAME_IN_PROGRESS, 5);
+  assert.equal(protos.DOTAGameState.DOTA_GAMERULES_STATE_POST_GAME, 6);
+  const lobby = protos.CSODOTALobby.decode(protos.CSODOTALobby.encode(protos.CSODOTALobby.create({ lobbyId: "1", gameState: 5 })).finish());
+  assert.equal(lobby.gameState, 5);
+  // Left out on the wire, it decodes as 0: never "under way".
+  assert.equal(protos.CSODOTALobby.decode(protos.CSODOTALobby.encode(protos.CSODOTALobby.create({ lobbyId: "1" })).finish()).gameState, 0);
 });
