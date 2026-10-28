@@ -22,10 +22,8 @@ import {
   type PoolLastSeason,
 } from "./player-pool";
 import {
-  scoutingRowParts,
   scoutingSentences,
   scoutingTiles,
-  scoutingTitle,
   summarizePubMatches,
   type PubScout,
 } from "./pub-scout";
@@ -330,17 +328,101 @@ describe("draftCardView", () => {
     expect(live.about).toBe("Fresh.");
   });
 
-  it("gives the compact card the /players row's pub line and its hover", () => {
+  it("gives the compact card one strip: the record, then the reads to draft on", () => {
     const counts = pub.scout!;
     const ctx = { roles: "4,5", signupMmr: 3_200, rankTier: 63, league: "us" as const };
+    const tiles = scoutingTiles(counts, ctx);
     const v = view();
-    expect(v.summary).toEqual(scoutingRowParts(counts, ctx));
-    expect(v.summary.length).toBeGreaterThan(0);
-    expect(v.summaryTitle).toBe(scoutingTitle(counts, ctx));
-    // Too few games for a tile: no line either.
+    const reads = tiles.filter(
+      (t) => t.key === "role" || t.key === "level" || t.tone === "warn",
+    );
+    expect(v.segments.map((s) => s.key)).toEqual([
+      "lastSeason",
+      "inhouse",
+      "pubs",
+      ...reads.map((t) => t.key),
+    ]);
+    expect(v.segments.slice(0, 3)).toEqual([
+      {
+        key: "lastSeason",
+        label: "Season 1",
+        value: "Dire Straits · 4W 0D 3L · $12 🏆",
+        title: lastSeasonTitle(lastSeason),
+        tone: "info",
+      },
+      {
+        key: "inhouse",
+        label: "Inhouse",
+        value: "1042 · 7–3",
+        title: inhouseTitle(inhouse),
+        tone: "info",
+      },
+      {
+        key: "pubs",
+        label: "Pubs · 3d ago",
+        value: "55% of 40",
+        title: pubTitle(pub, NOW_MS),
+        tone: "info",
+      },
+    ]);
+    // A pub read keeps its tile's words, tone, hover and medal.
+    const level = tiles.find((t) => t.key === "level")!;
+    expect(v.segments.find((s) => s.key === "level")).toEqual({
+      key: "level",
+      label: level.label,
+      value: level.lead,
+      title: level.title,
+      tone: level.tone,
+      ...(level.rankTier ? { rankTier: level.rankTier } : {}),
+    });
+    // The quiet tiles stay in the full card.
+    const shown = new Set(v.segments.map((s) => s.key));
+    for (const t of tiles) {
+      if (!reads.includes(t)) expect(shown.has(t.key)).toBe(false);
+    }
+    // Any other read joins once it is worth a second look: a US signup
+    // whose pubs are on a European server.
+    const abroad = poolPubRecord(
+      blob(scout(40, { cluster: 133 })),
+      new Date(NOW_MS - 3 * DAY),
+    )!;
+    const server = view({ scout: { pub: abroad } }).segments.find(
+      (s) => s.key === "server",
+    );
+    expect(server?.tone).toBe("warn");
+  });
+
+  it("marks a provisional inhouse record and a quiet account in the strip", () => {
+    const provisional = { ...inhouse, rank: null, wins: 2, losses: 1, games: 3 };
+    expect(
+      view({ scout: { inhouse: provisional } }).segments,
+    ).toEqual([
+      {
+        key: "inhouse",
+        label: "Inhouse",
+        value: "2–1, new",
+        title: inhouseTitle(provisional),
+        tone: "info",
+      },
+    ]);
+    const quietPub = poolPubRecord(
+      blob(scout(), { lastPlayedAt: NOW - 90 * 86_400 }),
+      new Date(NOW_MS - DAY),
+    )!;
+    expect(
+      view({ scout: { pub: quietPub } }).segments.find((s) => s.key === "quiet"),
+    ).toEqual({
+      key: "quiet",
+      label: "Last played",
+      value: "2mo ago",
+      title: PUB_QUIET_TITLE,
+      tone: "warn",
+    });
+    // Too few games for a tile: the record alone.
     const thin = poolPubRecord(blob(scout(3)), new Date(NOW_MS))!;
-    expect(view({ scout: { pub: thin } }).summary).toEqual([]);
-    expect(view({ scout: { pub: thin } }).summaryTitle).toBe("");
+    expect(
+      view({ scout: { pub: thin } }).segments.map((s) => s.key),
+    ).toEqual(["pubs"]);
   });
 
   it("offers the full card only when it shows more than the compact one", () => {

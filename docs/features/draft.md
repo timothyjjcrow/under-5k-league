@@ -508,18 +508,23 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     live tick row, the nominee's favorites and about text from the tick
     too; the map's copy is as old as the tab's render plus 60s.
   - **Compact until the viewer asks for more** (Tim, 2026-10-27: the full
-    card "takes up a ton of room"). Compact: the record line, the `/players`
-    row's pub line (`scoutingRowParts`, its hover `scoutingTitle`), one line
-    of the about text and one row of 18px hero icons (recent pubs, then
-    favorites; counts and win rates in each icon's hover). "Full scouting"
-    (`aria-expanded`) swaps in the tiles, the hero counts, more about text
-    and "More scouting"; it shows only when the full card has more
-    (`hasMore`: a caption, or an about text past
+    card "takes up a ton of room", "maybe segmented kind of style").
+    Compact: one strip of label-over-value segments (`segments`), each as
+    wide as its words, so desktop reads it in one short row and a phone
+    wraps it into full rows: last season, inhouse, the pub win rate (its
+    label says when the snapshot was taken), then the profile tiles' role
+    and level, and any other tile once its tone is `warn`, with the tiles'
+    marks, spoken tone (`SCOUT_TONE`) and medal. Beside it while the row has
+    room, 18px hero icons (recent pubs, then favorites; counts and win rates
+    in each icon's hover), then one line of the about text. "Full scouting"
+    (`aria-expanded`) swaps in the record line, the tiles, the hero counts,
+    more about text and "More scouting"; it shows only when the full card
+    has more (`hasMore`: a caption, or an about text past
     `DRAFT_ABOUT_COMPACT_CHARS`). One choice per viewer for both cards,
     kept in their browser (`usePersistedFlag("draftScoutFull", false)`),
     owned by the room, so the card stays presentational. Measured as a
-    captain at 390x844: the lot card 90px compact (473px full), the pool's
-    header on the first screen at 784px (1,167px with the full card).
+    captain: about 100px at 390x844 (473px full) with the pool's header on
+    the first screen; one 48px row at 1440x900.
   - **On the block** the card (`DraftPlayerCard`, presentational) sits under
     the bid controls, outside the action zone, then the Discord, Profile and
     Dotabuff links, then the bid trail last, since it grows through a lot.

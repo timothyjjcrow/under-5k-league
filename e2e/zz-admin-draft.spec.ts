@@ -254,9 +254,12 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
     name: "Scouting: Topson",
   });
   await expect(topsonPoolCard).toBeVisible({ timeout: 15_000 });
-  // Compact first: the /players row's pub line and a row of hero icons.
+  // Compact first: one strip of label-over-value segments and a row of
+  // hero icons.
   await expect(topsonPoolCard).toContainText("Recent pubs");
-  await expect(topsonPoolCard).toContainText(/Pubs: plays /);
+  await expect(
+    topsonPoolCard.getByRole("list", { name: "Scouting at a glance" }),
+  ).toContainText("Role");
   await expect(topsonPoolCard).not.toContainText(/Their last \d+ public games/);
   // "Full scouting" opens the tiles, and the choice holds for the lot card.
   const fullScouting = topsonPoolCard.getByRole("button", {
@@ -368,7 +371,9 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   });
   await expect(capTwoDendiCard).toBeVisible({ timeout: 15_000 });
   // Compact for Cap Two, who never opened the full card.
-  await expect(capTwoDendiCard).toContainText(/Pubs: plays /);
+  await expect(
+    capTwoDendiCard.getByRole("list", { name: "Scouting at a glance" }),
+  ).toContainText("Role");
   await expect(
     capTwoDendiCard.getByRole("button", { name: "Full scouting" }),
   ).toBeVisible();

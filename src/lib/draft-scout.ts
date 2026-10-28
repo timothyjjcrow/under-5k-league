@@ -26,22 +26,22 @@ import {
 } from "./player-pool";
 import {
   pubScoutCaption,
-  scoutingRowParts,
   scoutingSentences,
   scoutingTiles,
-  scoutingTitle,
   type PubScout,
   type ScoutContext,
-  type ScoutPart,
   type ScoutTile,
+  type ScoutTone,
 } from "./pub-scout";
 import {
   pubCheckedAgo,
   pubHasWindow,
   pubLastPlayed,
   poolPubRecord,
+  pubWinRate,
   type PubHero,
 } from "./pub-stats";
+import { seriesRecordText } from "./team-matches";
 import { hasText } from "./utils";
 
 /** One pool player's scouting facts. Every field is optional and present
@@ -146,15 +146,92 @@ export type DraftRecordToken = {
   warn: boolean;
 };
 
+/** One segment of the compact card's strip: a small label over a short
+ *  value, its full sentence in the hover. */
+export type DraftSegment = {
+  key: string;
+  label: string;
+  value: string;
+  title: string;
+  tone: ScoutTone;
+  /** The medal the level segment shows beside its value. */
+  rankTier?: number;
+};
+
+/** The pub reads the compact strip always shows; the others (modes,
+ *  server, form, early leaves) join it only when they are worth a second
+ *  look, and the full card has them all. */
+const SEGMENT_TILES: ReadonlySet<ScoutTile["key"]> = new Set(["role", "level"]);
+
+/** The league and pub record as segments: the same facts as the record
+ *  line's tokens, in the label-over-value form, with the tokens' hovers. */
+function recordSegments(
+  scout: DraftScout | undefined,
+  nowMs: number,
+): DraftSegment[] {
+  const out: DraftSegment[] = [];
+  const ls = scout?.lastSeason;
+  if (ls) {
+    const value = [
+      `${ls.teamName}${ls.captain ? " (captain)" : ""}`,
+      ls.record ? seriesRecordText(ls.record) : null,
+      ls.price != null ? `$${ls.price}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    out.push({
+      key: "lastSeason",
+      label: ls.seasonName,
+      value: ls.champion ? `${value} 🏆` : value,
+      title: lastSeasonTitle(ls),
+      tone: "info",
+    });
+  }
+  const ih = scout?.inhouse;
+  if (ih) {
+    out.push({
+      key: "inhouse",
+      label: "Inhouse",
+      value:
+        ih.rank != null
+          ? `${ih.rating} · ${ih.wins}–${ih.losses}`
+          : `${ih.wins}–${ih.losses}, new`,
+      title: inhouseTitle(ih),
+      tone: "info",
+    });
+  }
+  const pub = scout?.pub;
+  const rate = pub && pubHasWindow(pub) ? pubWinRate(pub) : null;
+  if (pub && rate != null) {
+    const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+    out.push({
+      key: "pubs",
+      label: checked ? `Pubs · ${checked}` : "Pubs",
+      value: `${Math.round(rate * 100)}% of ${pub.recentWins + pub.recentLosses}`,
+      title: pubTitle(pub, nowMs),
+      tone: "info",
+    });
+  }
+  const activity = pub ? pubLastPlayed(pub, nowMs) : null;
+  if (activity?.quiet) {
+    out.push({
+      key: "quiet",
+      label: "Last played",
+      value: activity.label,
+      title: PUB_QUIET_TITLE,
+      tone: "warn",
+    });
+  }
+  return out;
+}
+
 export type DraftCardView = {
   /** The map has an entry for this player (it may be empty). */
   known: boolean;
   record: DraftRecordToken[];
-  /** The compact card's pub line, the /players pool row's own words:
-   *  "plays Pos 2 · in Legend games · solo · US East". Empty without tiles. */
-  summary: ScoutPart[];
-  /** Every finding as a sentence, the summary's hover. */
-  summaryTitle: string;
+  /** The compact card's segmented strip, in order: the league and pub
+   *  record, then the pub reads a captain drafts on. */
+  segments: DraftSegment[];
   /** What the tiles and recent heroes rest on (the window, and the
    *  snapshot's age when no Pubs token says it); null without either. */
   caption: string | null;
@@ -258,10 +335,19 @@ export function draftCardView(input: {
   return {
     known: scout !== undefined,
     record,
-    summary:
-      scoutCounts && tiles.length > 0 ? scoutingRowParts(scoutCounts, ctx) : [],
-    summaryTitle:
-      scoutCounts && tiles.length > 0 ? scoutingTitle(scoutCounts, ctx) : "",
+    segments: [
+      ...recordSegments(scout, nowMs),
+      ...tiles
+        .filter((t) => SEGMENT_TILES.has(t.key) || t.tone === "warn")
+        .map((t) => ({
+          key: t.key,
+          label: t.label,
+          value: t.lead,
+          title: t.title,
+          tone: t.tone,
+          ...(t.rankTier ? { rankTier: t.rankTier } : {}),
+        })),
+    ],
     caption,
     tiles,
     heroes,

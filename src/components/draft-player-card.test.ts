@@ -123,15 +123,19 @@ describe("draft-player-card.tsx is presentational", () => {
     expect(src).toContain("<PubRecentHeroes");
   });
 
-  it("shows the tiles and findings only in the full card", () => {
+  it("shows the record line, tiles and findings only in the full card", () => {
     const src = card();
-    const compact = src.indexOf("{!showFull && view.summary.length > 0 ? (");
+    const record = src.indexOf("{showFull && view.record.length > 0 ? (");
     const tiles = src.indexOf("{showFull && view.caption ? (");
     const fullBody = src.indexOf("{showFull ? (", tiles);
     const compactBody = src.indexOf(") : (", fullBody);
-    for (const at of [compact, tiles, fullBody, compactBody]) {
+    for (const at of [record, tiles, fullBody, compactBody]) {
       expect(at).toBeGreaterThan(-1);
     }
+    // The compact body is the segmented strip, in the profile's tones.
+    const strip = src.indexOf("view.segments.map(");
+    expect(strip).toBeGreaterThan(compactBody);
+    expect(src.slice(compactBody)).toContain("SCOUT_TONE[seg.tone].spoken");
     expect(src.indexOf("<ScoutTileGrid")).toBeGreaterThan(tiles);
     expect(src.indexOf("<ScoutTileGrid")).toBeLessThan(fullBody);
     // "More scouting" sits in the full body, not the compact one.
