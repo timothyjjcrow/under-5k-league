@@ -33,7 +33,7 @@ import { createPlayoffBracket } from "@/lib/playoff-service";
 import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { announceAdminRetime } from "@/lib/retime-announcement";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { matchNightForWeek } from "@/lib/schedule";
+import { matchNightForWeek, shiftMatchNight } from "@/lib/schedule";
 import type { ActionResult } from "@/lib/action-result";
 import {
   generateRegularSchedule,
@@ -390,6 +390,16 @@ describe("admin schedule writes only touch the rows they claim to", () => {
       }),
     );
     const night = new Date(original.getTime() + 3 * 864e5);
+    // The cascade keeps later fixtures' local clock times
+    // (`shiftMatchNight`), so across a clock change the later match moves
+    // by 3 days plus or minus an hour, not by 3 * 24 hours.
+    const firstWeekNight = matches.find((match) => match.week === firstWeek)!
+      .scheduledAt!;
+    const expectedLater = shiftMatchNight(
+      stillScheduled.scheduledAt!,
+      firstWeekNight,
+      night,
+    ).getTime();
 
     const out = await setWeekNight(
       {},
@@ -414,7 +424,7 @@ describe("admin schedule writes only touch the rows they claim to", () => {
           where: { id: stillScheduled.id },
         })
       ).scheduledAt?.getTime(),
-    ).toBe(original.getTime() + 3 * 864e5);
+    ).toBe(expectedLater);
   });
 
   it.each([SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT, SEASON_STATUS.COMPLETE])(
