@@ -302,9 +302,10 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **The draft room shows the same facts** for the player on the block and
   for any pool row tapped open, phrased by the same helpers through
   `draftCardView` (`src/lib/draft-scout.ts`), from a map the `/draft` render
-  builds: the profile's tiles (`ScoutTileGrid`), "Recent pubs" kept apart
-  from "Favorite heroes", and every finding in full under "More scouting"
-  ([draft](draft.md#the-draft-room-client)).
+  builds: compact, a strip of segments from the record and the profile's
+  role and level tiles; under "Full scouting", the profile's tiles (`ScoutTileGrid`), "Recent
+  pubs" kept apart from "Favorite heroes", and every finding in full under
+  "More scouting" ([draft](draft.md#the-draft-room-client)).
 - **Coverage limit:** no test renders the scouting cells; check them at
   390/768/1024/1440 with `npm run fixture:signups`.
 

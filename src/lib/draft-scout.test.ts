@@ -3,6 +3,7 @@ import {
   buildDraftScoutInfo,
   clipAbout,
   DRAFT_ABOUT_CLIP,
+  DRAFT_ABOUT_COMPACT_CHARS,
   draftCardView,
   draftScoutWanted,
   inspectedAfterChange,
@@ -325,6 +326,129 @@ describe("draftCardView", () => {
     const live = view({ live: { favoriteHeroes: "", about: "Fresh." } });
     expect(live.favoriteHeroes).toBe("");
     expect(live.about).toBe("Fresh.");
+  });
+
+  it("gives the compact card one strip: the record, then the reads to draft on", () => {
+    const counts = pub.scout!;
+    const ctx = { roles: "4,5", signupMmr: 3_200, rankTier: 63, league: "us" as const };
+    const tiles = scoutingTiles(counts, ctx);
+    const v = view();
+    const reads = tiles.filter(
+      (t) => t.key === "role" || t.key === "level" || t.tone === "warn",
+    );
+    expect(v.segments.map((s) => s.key)).toEqual([
+      "lastSeason",
+      "inhouse",
+      "pubs",
+      ...reads.map((t) => t.key),
+    ]);
+    expect(v.segments.slice(0, 3)).toEqual([
+      {
+        key: "lastSeason",
+        label: "Season 1",
+        value: "Dire Straits · 4W 0D 3L · $12 🏆",
+        title: lastSeasonTitle(lastSeason),
+        tone: "info",
+      },
+      {
+        key: "inhouse",
+        label: "Inhouse",
+        value: "1042 · 7–3",
+        title: inhouseTitle(inhouse),
+        tone: "info",
+      },
+      {
+        key: "pubs",
+        label: "Pubs · 3d ago",
+        value: "55% of 40",
+        title: pubTitle(pub, NOW_MS),
+        tone: "info",
+      },
+    ]);
+    // A pub read keeps its tile's words, tone, hover and medal.
+    const level = tiles.find((t) => t.key === "level")!;
+    expect(v.segments.find((s) => s.key === "level")).toEqual({
+      key: "level",
+      label: level.label,
+      value: level.lead,
+      title: level.title,
+      tone: level.tone,
+      ...(level.rankTier ? { rankTier: level.rankTier } : {}),
+    });
+    // The quiet tiles stay in the full card.
+    const shown = new Set(v.segments.map((s) => s.key));
+    for (const t of tiles) {
+      if (!reads.includes(t)) expect(shown.has(t.key)).toBe(false);
+    }
+    // Any other read joins once it is worth a second look: a US signup
+    // whose pubs are on a European server.
+    const abroad = poolPubRecord(
+      blob(scout(40, { cluster: 133 })),
+      new Date(NOW_MS - 3 * DAY),
+    )!;
+    const server = view({ scout: { pub: abroad } }).segments.find(
+      (s) => s.key === "server",
+    );
+    expect(server?.tone).toBe("warn");
+  });
+
+  it("marks a provisional inhouse record and a quiet account in the strip", () => {
+    const provisional = { ...inhouse, rank: null, wins: 2, losses: 1, games: 3 };
+    expect(
+      view({ scout: { inhouse: provisional } }).segments,
+    ).toEqual([
+      {
+        key: "inhouse",
+        label: "Inhouse",
+        value: "2–1, new",
+        title: inhouseTitle(provisional),
+        tone: "info",
+      },
+    ]);
+    const quietPub = poolPubRecord(
+      blob(scout(), { lastPlayedAt: NOW - 90 * 86_400 }),
+      new Date(NOW_MS - DAY),
+    )!;
+    expect(
+      view({ scout: { pub: quietPub } }).segments.find((s) => s.key === "quiet"),
+    ).toEqual({
+      key: "quiet",
+      label: "Last played",
+      value: "2mo ago",
+      title: PUB_QUIET_TITLE,
+      tone: "warn",
+    });
+    // Too few games for a tile: the record alone.
+    const thin = poolPubRecord(blob(scout(3)), new Date(NOW_MS))!;
+    expect(
+      view({ scout: { pub: thin } }).segments.map((s) => s.key),
+    ).toEqual(["pubs"]);
+  });
+
+  it("offers the full card only when it shows more than the compact one", () => {
+    // Tiles and findings.
+    expect(view().hasMore).toBe(true);
+    // Nothing but a short about text: the compact card is the whole card.
+    const short = { about: "Pos 4 main." };
+    expect(view({ scout: short }).hasMore).toBe(false);
+    expect(view({ scout: {} }).hasMore).toBe(false);
+    // An about text too long for the compact card's one line.
+    const long = { about: "x".repeat(DRAFT_ABOUT_COMPACT_CHARS + 1) };
+    expect(view({ scout: long }).hasMore).toBe(true);
+    expect(
+      view({ scout: { about: "x".repeat(DRAFT_ABOUT_COMPACT_CHARS) } }).hasMore,
+    ).toBe(false);
+    // The live about text is the one measured.
+    expect(
+      view({ scout: long, live: { favoriteHeroes: "", about: "Short." } })
+        .hasMore,
+    ).toBe(false);
+    // A few Turbo games' heroes are captioned in the full card.
+    const turbo = poolPubRecord(
+      blob(scout(7, { game_mode: 23 }), { recentWins: 0, recentLosses: 0 }),
+      new Date(NOW_MS - 3 * DAY),
+    )!;
+    expect(view({ scout: { pub: turbo } }).hasMore).toBe(true);
   });
 
   it("tells an empty entry from a missing one", () => {

@@ -461,10 +461,21 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
   runs the toggle reads "Tap to turn on alerts", and that tap turns the bell
   on rather than muting it (`soundToggleNext`, `src/lib/room-sound.ts`,
   shared with the inhouse room).
-- **Phone order follows the viewer:** a captain or admin gets the pool
-  first; everyone else gets Recent sales, then the rosters, then the pool (DOM
-  order, so screen readers match). Desktop is fixed by grid placement. "next:
-  Team" shows at every size.
+- **Desktop is two columns from the top** (Tim, 2026-10-27: the player
+  "taking up too much space", Recent sales and Available "easily
+  accessible"). Left, across two thirds: the lot (the player and the
+  bidding), the primer, then the teams. Right: Recent sales above the
+  pool. One grid of four rows (`lg:grid-rows-[auto_auto_auto_1fr]`): the
+  lot spans rows 1-2 and the feed takes row 1, so the pool (rows 2-4)
+  starts right under the feed however tall the lot is; the primer and the
+  teams take rows 3 and 4. The pool is sticky under the header and the
+  clock bar (`lg:top-[7.5rem]`, 64px + 44px + a gap) while the teams
+  scroll, and its list is the window's height less about 19.5rem, so it
+  fits a 720px laptop.
+- **Phone order follows the viewer:** the lot, the primer, then for a
+  captain or admin the pool first; everyone else gets Recent sales, then
+  the rosters, then the pool (DOM order, so screen readers match; desktop
+  is placed by the grid). "next: Team" shows at every size.
 - **The admin's Auto-nominate panel names an absent captain** ("X isn't in
   the room — nominate for … or auto-nominate"), from the presence the poll
   already carries.
@@ -507,10 +518,29 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     to read a tile's finding on a phone. MMR, medal and roles come from the
     live tick row, the nominee's favorites and about text from the tick
     too; the map's copy is as old as the tab's render plus 60s.
+  - **Compact until the viewer asks for more** (Tim, 2026-10-27: the full
+    card "takes up a ton of room", "maybe segmented kind of style").
+    Compact: one strip of label-over-value segments (`segments`), each as
+    wide as its words, so desktop reads it in one short row and a phone
+    wraps it into full rows: last season, inhouse, the pub win rate (its
+    label says when the snapshot was taken), then the profile tiles' role
+    and level, and any other tile once its tone is `warn`, with the tiles'
+    marks, spoken tone (`SCOUT_TONE`) and medal. Beside it while the row has
+    room, 18px hero icons (recent pubs, then favorites; counts and win rates
+    in each icon's hover), then one line of the about text. "Full scouting"
+    (`aria-expanded`) swaps in the record line, the tiles, the hero counts,
+    more about text and "More scouting"; it shows only when the full card
+    has more (`hasMore`: a caption, or an about text past
+    `DRAFT_ABOUT_COMPACT_CHARS`). One choice per viewer for both cards,
+    kept in their browser (`usePersistedFlag("draftScoutFull", false)`),
+    owned by the room, so the card stays presentational. Measured as a
+    captain: about 100px at 390x844 (473px full) with the pool's header on
+    the first screen; one 48px row at 1440x900.
   - **On the block** the card (`DraftPlayerCard`, presentational) sits under
     the bid controls, outside the action zone, then the Discord, Profile and
     Dotabuff links, then the bid trail last, since it grows through a lot.
-    Keyed by the nominee, so a new lot opens with "More" shut.
+    Keyed by the nominee, so a new lot opens with "More" shut (the
+    compact-or-full choice is the room's, so it carries over).
   - **In the pool** one card opens under its row at a time. A captain lining
     up a pick sees the lined-up player's (`poolPanelOpenId`); everyone else
     taps a row (`aria-expanded`, a second tap closes it). Their card closes
@@ -533,9 +563,11 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     map behind `draftScoutWanted`, and that `draft-service.ts` never reads
     `pubStats`. `draft-scout.itest.ts` covers the loader.
     `e2e/zz-admin-draft.spec.ts` opens the cards through the real room: the
-    lined-up pick's card arriving with the Start refresh, the lot card after
-    Nominate, a non-picker's toggle, and no horizontal overflow at 375px;
-    `zz2-draft-mobile.spec.ts` opens one on a phone. Both assert zero client
+    lined-up pick's card arriving compact with the Start refresh, "Full
+    scouting" opening it and holding for the lot card after Nominate, a
+    non-picker's toggle, another captain's compact card, and no horizontal
+    overflow at 375px; `zz2-draft-mobile.spec.ts` opens one on a phone and
+    checks it stays under 260px. Both assert zero client
     errors. Their pub snapshots come from `e2e/seed-draft-scouting.ts`,
     which `e2e/global-setup.ts` runs after the seed (a change under
     `prisma/` would force a database release).

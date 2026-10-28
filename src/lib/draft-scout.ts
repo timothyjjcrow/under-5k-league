@@ -31,14 +31,17 @@ import {
   type PubScout,
   type ScoutContext,
   type ScoutTile,
+  type ScoutTone,
 } from "./pub-scout";
 import {
   pubCheckedAgo,
   pubHasWindow,
   pubLastPlayed,
   poolPubRecord,
+  pubWinRate,
   type PubHero,
 } from "./pub-stats";
+import { seriesRecordText } from "./team-matches";
 import { hasText } from "./utils";
 
 /** One pool player's scouting facts. Every field is optional and present
@@ -59,6 +62,22 @@ export type DraftScoutInfo = Record<string, DraftScout>;
 /** The pool card shows two lines of the about text and the profile has the
  *  rest, so the page never ships a 2,000-character box per player. */
 export const DRAFT_ABOUT_CLIP = 300;
+
+/** The compact card shows one line of the about text; past about this many
+ *  characters it may not fit, so the full card has the rest. */
+export const DRAFT_ABOUT_COMPACT_CHARS = 90;
+
+/** How many recent pub heroes each card shows, compact and full. */
+export const DRAFT_CARD_HEROES = {
+  lot: { compact: 5, full: 6 },
+  pool: { compact: 4, full: 4 },
+} as const;
+
+/** The toggle between the compact card and the full one, in both states. */
+export const DRAFT_SCOUT_TOGGLE = {
+  more: "Full scouting",
+  less: "Less scouting",
+} as const;
 
 export const DRAFT_SCOUT_NOTHING_ON_FILE =
   "Nothing on file yet from pubs, inhouses or past seasons.";
@@ -127,10 +146,92 @@ export type DraftRecordToken = {
   warn: boolean;
 };
 
+/** One segment of the compact card's strip: a small label over a short
+ *  value, its full sentence in the hover. */
+export type DraftSegment = {
+  key: string;
+  label: string;
+  value: string;
+  title: string;
+  tone: ScoutTone;
+  /** The medal the level segment shows beside its value. */
+  rankTier?: number;
+};
+
+/** The pub reads the compact strip always shows; the others (modes,
+ *  server, form, early leaves) join it only when they are worth a second
+ *  look, and the full card has them all. */
+const SEGMENT_TILES: ReadonlySet<ScoutTile["key"]> = new Set(["role", "level"]);
+
+/** The league and pub record as segments: the same facts as the record
+ *  line's tokens, in the label-over-value form, with the tokens' hovers. */
+function recordSegments(
+  scout: DraftScout | undefined,
+  nowMs: number,
+): DraftSegment[] {
+  const out: DraftSegment[] = [];
+  const ls = scout?.lastSeason;
+  if (ls) {
+    const value = [
+      `${ls.teamName}${ls.captain ? " (captain)" : ""}`,
+      ls.record ? seriesRecordText(ls.record) : null,
+      ls.price != null ? `$${ls.price}` : null,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    out.push({
+      key: "lastSeason",
+      label: ls.seasonName,
+      value: ls.champion ? `${value} 🏆` : value,
+      title: lastSeasonTitle(ls),
+      tone: "info",
+    });
+  }
+  const ih = scout?.inhouse;
+  if (ih) {
+    out.push({
+      key: "inhouse",
+      label: "Inhouse",
+      value:
+        ih.rank != null
+          ? `${ih.rating} · ${ih.wins}–${ih.losses}`
+          : `${ih.wins}–${ih.losses}, new`,
+      title: inhouseTitle(ih),
+      tone: "info",
+    });
+  }
+  const pub = scout?.pub;
+  const rate = pub && pubHasWindow(pub) ? pubWinRate(pub) : null;
+  if (pub && rate != null) {
+    const checked = pubCheckedAgo(pub.checkedAt, nowMs);
+    out.push({
+      key: "pubs",
+      label: checked ? `Pubs · ${checked}` : "Pubs",
+      value: `${Math.round(rate * 100)}% of ${pub.recentWins + pub.recentLosses}`,
+      title: pubTitle(pub, nowMs),
+      tone: "info",
+    });
+  }
+  const activity = pub ? pubLastPlayed(pub, nowMs) : null;
+  if (activity?.quiet) {
+    out.push({
+      key: "quiet",
+      label: "Last played",
+      value: activity.label,
+      title: PUB_QUIET_TITLE,
+      tone: "warn",
+    });
+  }
+  return out;
+}
+
 export type DraftCardView = {
   /** The map has an entry for this player (it may be empty). */
   known: boolean;
   record: DraftRecordToken[];
+  /** The compact card's segmented strip, in order: the league and pub
+   *  record, then the pub reads a captain drafts on. */
+  segments: DraftSegment[];
   /** What the tiles and recent heroes rest on (the window, and the
    *  snapshot's age when no Pubs token says it); null without either. */
   caption: string | null;
@@ -147,6 +248,9 @@ export type DraftCardView = {
   moreScout: PubScout | null;
   /** In the map with nothing to show: say so, rather than a blank card. */
   nothingOnFile: boolean;
+  /** The full card shows more than the compact one: the tiles and findings,
+   *  or an about text too long for one line. Without it there is no toggle. */
+  hasMore: boolean;
 };
 
 /**
@@ -226,17 +330,31 @@ export function draftCardView(input: {
       : null;
   const findings =
     scoutCounts && tiles.length > 0 ? scoutingSentences(scoutCounts, ctx) : [];
+  const about = input.live ? input.live.about : (scout?.about ?? "");
 
   return {
     known: scout !== undefined,
     record,
+    segments: [
+      ...recordSegments(scout, nowMs),
+      ...tiles
+        .filter((t) => SEGMENT_TILES.has(t.key) || t.tone === "warn")
+        .map((t) => ({
+          key: t.key,
+          label: t.label,
+          value: t.lead,
+          title: t.title,
+          tone: t.tone,
+          ...(t.rankTier ? { rankTier: t.rankTier } : {}),
+        })),
+    ],
     caption,
     tiles,
     heroes,
     favoriteHeroes: input.live
       ? input.live.favoriteHeroes
       : (scout?.favoriteHeroes ?? ""),
-    about: input.live ? input.live.about : (scout?.about ?? ""),
+    about,
     findings,
     moreScout: findings.length > 0 ? scoutCounts : null,
     nothingOnFile:
@@ -244,6 +362,7 @@ export function draftCardView(input: {
       record.length === 0 &&
       tiles.length === 0 &&
       heroes === null,
+    hasMore: caption !== null || about.length > DRAFT_ABOUT_COMPACT_CHARS,
   };
 }
 

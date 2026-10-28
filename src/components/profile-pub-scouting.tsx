@@ -24,7 +24,9 @@ const STRIP_HEROES = 6;
 /** Games in a role before its averages are worth a line. */
 const ROLE_LINE_MIN_GAMES = 5;
 
-const TONE: Record<
+/** How each tone looks and is spoken: the profile's tiles, and the draft
+ *  room's segments (draft-player-card.tsx). */
+export const SCOUT_TONE: Record<
   ScoutTone,
   { tile: string; lead: string; mark: string | null; spoken: string }
 > = {
@@ -234,7 +236,7 @@ function ScoutTileView({
   tile: ScoutTile;
   compact?: boolean;
 }) {
-  const tone = TONE[tile.tone];
+  const tone = SCOUT_TONE[tile.tone];
   return (
     <li
       className={cn(

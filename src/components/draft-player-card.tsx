@@ -1,18 +1,22 @@
-import { HeroList } from "@/components/ui";
+import { HeroList, RankMedal, textLink } from "@/components/ui";
 import { PubHeroStrip } from "@/components/player-pool";
 import {
   PubRecentHeroes,
   PubRoleAverageLines,
   PubScoutingMethod,
+  SCOUT_TONE,
   ScoutTileGrid,
 } from "@/components/profile-pub-scouting";
 import {
+  DRAFT_CARD_HEROES,
   DRAFT_SCOUT_NOTHING_ON_FILE,
+  DRAFT_SCOUT_TOGGLE,
   draftCardView,
   type DraftScout,
 } from "@/lib/draft-scout";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { pubHeroTitle } from "@/lib/player-pool";
+import { pubHeroRows } from "@/lib/pub-scout";
 import { cn } from "@/lib/utils";
 
 /**
@@ -22,11 +26,15 @@ import { cn } from "@/lib/utils";
  * Dotabuff links beside it, and the pool row keeps its ↗. What shows, and in
  * what words, is `draftCardView`'s call (src/lib/draft-scout.ts).
  *
- * Order: league and pub record (or "Nothing on file yet…"), the pub
- * scouting tiles, recent pub heroes beside their favorite heroes (never
- * merged: one is what they play, the other what they say), the about text,
- * then every finding in full behind "More scouting", which is the only way
- * to read a tile's finding on a phone.
+ * Compact by default, so the pool stays on a phone's first screen: one
+ * strip of label-over-value segments (`segments`: last season, inhouse, pub
+ * win rate, role, the level of their games, and any other read worth a
+ * second look), a row of small recent pub heroes beside their favorite
+ * heroes (never merged: one is what they play, the other what they say)
+ * and one line of the about text. "Full scouting" shows the record line,
+ * the profile's tiles, more heroes and about text, and every finding
+ * behind "More scouting", the only way to read one on a phone. The room
+ * owns the choice (one per viewer, kept in their browser) and passes it in.
  */
 export function DraftPlayerCard({
   variant,
@@ -36,6 +44,8 @@ export function DraftPlayerCard({
   scout,
   live,
   nowMs,
+  full,
+  onFullChange,
 }: {
   variant: "lot" | "pool";
   name: string;
@@ -48,6 +58,9 @@ export function DraftPlayerCard({
   live?: { favoriteHeroes: string; about: string };
   /** The server's clock (`state.now`). */
   nowMs: number;
+  /** The full card, or the compact one (the room's per-viewer choice). */
+  full: boolean;
+  onFullChange: (next: boolean) => void;
 }) {
   const view = draftCardView({
     player,
@@ -57,6 +70,24 @@ export function DraftPlayerCard({
     nowMs,
   });
   const lot = variant === "lot";
+  const showFull = full && view.hasMore;
+  const heroLimit = DRAFT_CARD_HEROES[variant][showFull ? "full" : "compact"];
+  const compactHeroes =
+    view.heroes?.kind === "recent"
+      ? pubHeroRows(view.heroes.scout).slice(0, heroLimit)
+      : view.heroes?.kind === "mostPlayed"
+        ? view.heroes.heroes.slice(0, heroLimit)
+        : [];
+  const toggle = view.hasMore ? (
+    <button
+      type="button"
+      onClick={() => onFullChange(!full)}
+      aria-expanded={full}
+      className={textLink("text-xs")}
+    >
+      {full ? DRAFT_SCOUT_TOGGLE.less : DRAFT_SCOUT_TOGGLE.more}
+    </button>
+  ) : null;
   const empty =
     view.record.length === 0 &&
     view.tiles.length === 0 &&
@@ -72,7 +103,8 @@ export function DraftPlayerCard({
       role="group"
       aria-label={`Scouting: ${name}`}
       className={cn(
-        "@container min-w-0 space-y-3",
+        "@container min-w-0",
+        showFull ? "space-y-3" : "space-y-2",
         !lot &&
           "mb-2 mt-1 rounded-md border border-line-soft bg-surface-2/30 p-3 text-sm",
       )}
@@ -81,7 +113,7 @@ export function DraftPlayerCard({
       {view.nothingOnFile ? (
         <p className="text-xs text-muted">{DRAFT_SCOUT_NOTHING_ON_FILE}</p>
       ) : null}
-      {view.record.length > 0 ? (
+      {showFull && view.record.length > 0 ? (
         <ul
           aria-label="League and pub record"
           className={cn(
@@ -104,7 +136,7 @@ export function DraftPlayerCard({
         </ul>
       ) : null}
 
-      {view.caption ? (
+      {showFull && view.caption ? (
         <div className="space-y-2">
           <p className="text-xs text-muted">
             <span className="font-medium text-fg">Pub scouting</span> ·{" "}
@@ -114,62 +146,150 @@ export function DraftPlayerCard({
         </div>
       ) : null}
 
-      {view.heroes || view.favoriteHeroes ? (
-        <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
-          {view.heroes?.kind === "recent" ? (
-            <PubRecentHeroes
-              scout={view.heroes.scout}
-              label="Recent pubs"
-              limit={lot ? 6 : 4}
-            />
-          ) : view.heroes?.kind === "mostPlayed" ? (
-            <span className="text-xs text-muted">
-              <PubHeroStrip
-                label="Most played (pubs)"
-                heroes={view.heroes.heroes}
-                titleOf={pubHeroTitle}
-              />
-            </span>
-          ) : null}
-          {view.favoriteHeroes ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-xs text-muted">Favorite heroes</span>
-              <HeroList value={view.favoriteHeroes} size={lot ? 26 : 22} />
+      {showFull ? (
+        <>
+          {view.heroes || view.favoriteHeroes ? (
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+              {view.heroes?.kind === "recent" ? (
+                <PubRecentHeroes
+                  scout={view.heroes.scout}
+                  label="Recent pubs"
+                  limit={heroLimit}
+                />
+              ) : view.heroes?.kind === "mostPlayed" ? (
+                <span className="text-xs text-muted">
+                  <PubHeroStrip
+                    label="Most played (pubs)"
+                    heroes={view.heroes.heroes}
+                    titleOf={pubHeroTitle}
+                  />
+                </span>
+              ) : null}
+              {view.favoriteHeroes ? (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted">Favorite heroes</span>
+                  <HeroList value={view.favoriteHeroes} size={lot ? 26 : 22} />
+                </div>
+              ) : null}
             </div>
           ) : null}
-        </div>
-      ) : null}
 
-      {view.about ? (
-        // Clamped: the profile has the whole text.
-        <p
-          className={cn(
-            "[overflow-wrap:anywhere]",
-            lot ? "line-clamp-3" : "line-clamp-2",
-          )}
-        >
-          <span className="text-muted">About this player:</span> {view.about}
-        </p>
-      ) : null}
+          {view.about ? (
+            // Clamped: the profile has the whole text.
+            <p
+              className={cn(
+                "[overflow-wrap:anywhere]",
+                lot ? "line-clamp-3" : "line-clamp-2",
+              )}
+            >
+              <span className="text-muted">About this player:</span>{" "}
+              {view.about}
+            </p>
+          ) : null}
 
-      {view.findings.length > 0 ? (
-        <details className="text-xs text-muted">
-          <summary className="cursor-pointer select-none py-1 hover:text-fg">
-            More scouting: every finding in full, averages by role
-          </summary>
-          <div className="mt-2 space-y-2">
-            <ul className="list-disc space-y-1 pl-4 [overflow-wrap:anywhere]">
-              {view.findings.map((finding) => (
-                <li key={finding}>{finding}</li>
-              ))}
-            </ul>
-            {view.moreScout ? (
-              <PubRoleAverageLines scout={view.moreScout} />
+          {view.findings.length > 0 ? (
+            <details className="text-xs text-muted">
+              <summary className="cursor-pointer select-none py-1 hover:text-fg">
+                More scouting: every finding in full, averages by role
+              </summary>
+              <div className="mt-2 space-y-2">
+                <ul className="list-disc space-y-1 pl-4 [overflow-wrap:anywhere]">
+                  {view.findings.map((finding) => (
+                    <li key={finding}>{finding}</li>
+                  ))}
+                </ul>
+                {view.moreScout ? (
+                  <PubRoleAverageLines scout={view.moreScout} />
+                ) : null}
+                <PubScoutingMethod />
+              </div>
+            </details>
+          ) : null}
+          {toggle}
+        </>
+      ) : (
+        <>
+          {/* One strip of label-over-value segments, each as wide as its
+              words, then the hero icons and the toggle beside it while the
+              row has room: the facts sit together instead of spanning the
+              card in lines. On a phone the strip wraps into full rows. */}
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            {view.segments.length > 0 ? (
+              <ul
+                aria-label="Scouting at a glance"
+                className="flex w-fit max-w-full flex-wrap gap-px overflow-hidden rounded-lg border border-line bg-line"
+              >
+                {view.segments.map((seg) => (
+                  <li
+                    key={seg.key}
+                    title={seg.title}
+                    className="min-w-0 grow bg-surface px-3 py-1.5"
+                  >
+                    <span className="flex items-center gap-1 whitespace-nowrap text-[10px] font-medium uppercase tracking-wide text-muted">
+                      {seg.label}
+                      {SCOUT_TONE[seg.tone].mark ? (
+                        <span
+                          aria-hidden
+                          className={
+                            seg.tone === "warn" ? "text-accent" : "text-success"
+                          }
+                        >
+                          {SCOUT_TONE[seg.tone].mark}
+                        </span>
+                      ) : null}
+                    </span>
+                    <span
+                      className={cn(
+                        "flex min-w-0 items-center gap-1 text-sm font-semibold tabular-nums",
+                        SCOUT_TONE[seg.tone].lead,
+                      )}
+                    >
+                      {seg.rankTier ? (
+                        <RankMedal rankTier={seg.rankTier} size={16} />
+                      ) : null}
+                      <span className="min-w-0 [overflow-wrap:anywhere]">
+                        {SCOUT_TONE[seg.tone].spoken ? (
+                          <span className="sr-only">
+                            {SCOUT_TONE[seg.tone].spoken}
+                          </span>
+                        ) : null}
+                        {seg.value}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
             ) : null}
-            <PubScoutingMethod />
+            {compactHeroes.length > 0 || view.favoriteHeroes ? (
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+                {compactHeroes.length > 0 ? (
+                  <PubHeroStrip
+                    label={
+                      view.heroes?.kind === "recent"
+                        ? "Recent pubs"
+                        : "Most played (pubs)"
+                    }
+                    heroes={compactHeroes}
+                    titleOf={pubHeroTitle}
+                  />
+                ) : null}
+                {view.favoriteHeroes ? (
+                  <span className="flex items-center gap-1">
+                    <span>Favorites</span>
+                    <HeroList value={view.favoriteHeroes} size={18} />
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
+            {toggle ? <span className="ml-auto">{toggle}</span> : null}
           </div>
-        </details>
-      ) : null}
+          {view.about ? (
+            <p className="line-clamp-1 [overflow-wrap:anywhere]">
+              <span className="text-muted">About:</span> {view.about}
+            </p>
+          ) : null}
+        </>
+      )}
     </div>
   );
 }

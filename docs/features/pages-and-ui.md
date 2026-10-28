@@ -428,7 +428,10 @@ image has changed. The rules are in `next.config.ts`, and
   Section bars pin only from `lg` up: on a phone, header plus tab bar plus
   chips took a quarter of the screen.
 - **The draft room puts the player pool FIRST in the DOM** for captains on a
-  phone; grid placement (`lg:col-start-*`, `lg:row-start-*`) fixes desktop.
+  phone; grid placement (`lg:col-start-*`, `lg:row-start-*`) fixes desktop:
+  the lot and the teams on the left, Recent sales above the sticky pool on
+  the right, both from the top
+  ([draft](draft.md#the-draft-room-client)).
   Keep the `#player-pool` anchor and `NominateBar`'s link to it. Each
   Available row is one control (the pick or the scouting toggle) plus its ↗
   profile link, and a row's scouting card opens inline under it, never in a
