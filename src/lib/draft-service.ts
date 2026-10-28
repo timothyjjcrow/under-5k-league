@@ -14,9 +14,12 @@ import {
   bidClockSeconds,
   canBid,
   canNominate,
+  draftClocks,
   maxBid,
+  nominationDeadline,
   teamNeed,
   nextNominatorIndex,
+  type DraftClocks,
   type DraftTeam,
 } from "./draft";
 import { draftBudgetsForDisplay } from "./draft-budgets";
@@ -54,10 +57,10 @@ export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
 /**
  * When the bid clock runs out on a lot about to stand at `price`, held by
- * `highBidderTeamId`: the full clock, or the short one when no other team can
- * top that price (bidClockSeconds). Every caller reads this inside its own
- * transaction and writes it in its own guarded claim, and that claim is what
- * keeps the deadline honest:
+ * `highBidderTeamId`: the season's full clock, or its short one when no other
+ * team can top that price (bidClockSeconds). Every caller reads this inside
+ * its own transaction and writes it in its own guarded claim, and that claim
+ * is what keeps the deadline honest:
  *
  * - The price and the high bidder are what the claim itself writes, and the
  *   claim re-asserts the lot/turn it read, so a rival bid or nomination that
@@ -74,6 +77,7 @@ async function bidDeadline(
   lot: {
     seasonId: string;
     teamSize: number;
+    clocks: DraftClocks;
     price: number;
     highBidderTeamId: string | null;
   },
@@ -91,6 +95,7 @@ async function bidDeadline(
     teamSize: lot.teamSize,
     price: lot.price,
     highBidderTeamId: lot.highBidderTeamId,
+    clocks: lot.clocks,
   });
   return new Date(Date.now() + seconds * 1000);
 }
@@ -236,9 +241,7 @@ export async function resolveExpiredNomination(seasonId: string): Promise<boolea
         data: {
           nominatorTeamId: teams[nextIdx].id,
           nominationIndex: nextIdx,
-          nominationEndsAt: new Date(
-            Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-          ),
+          nominationEndsAt: nominationDeadline(draftClocks(season), Date.now()),
         },
       });
     }
@@ -471,9 +474,7 @@ export async function resolveStalledNomination(
           data: {
             nominatorTeamId: teams[nextIdx].id,
             nominationIndex: nextIdx,
-            nominationEndsAt: new Date(
-              Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-            ),
+            nominationEndsAt: nominationDeadline(draftClocks(season), Date.now()),
           },
         });
         if (adv.count === 0) return false;
@@ -522,6 +523,7 @@ export async function resolveStalledNomination(
     const bidEndsAt = await bidDeadline(tx, {
       seasonId,
       teamSize: season.teamSize,
+      clocks: draftClocks(season),
       price: amount,
       highBidderTeamId: nominator.id,
     });
@@ -627,14 +629,13 @@ export async function resumeDraft(
           bidEndsAt: await bidDeadline(tx, {
             seasonId,
             teamSize: season.teamSize,
+            clocks: draftClocks(season),
             price: draft.currentBid,
             highBidderTeamId: draft.currentBidTeamId,
           }),
         }
       : {
-          nominationEndsAt: new Date(
-            Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-          ),
+          nominationEndsAt: nominationDeadline(draftClocks(season), Date.now()),
         };
     // Cancellation deliberately touches even an already-PAUSED draft. A
     // Resume that authorized itself just before that lifecycle write must lose
@@ -935,7 +936,7 @@ export async function undoLastSale(
         nominationIndex: nomIdx < 0 ? draft.nominationIndex : nomIdx,
         nominationEndsAt: wasPaused
           ? null
-          : new Date(Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000),
+          : nominationDeadline(draftClocks(season), Date.now()),
       },
     });
     if (reopened.count === 0) {
@@ -1619,6 +1620,9 @@ export function buildDraftState(
     budgetsProjected: displayBudgets.isProjected,
     teamSize: season.teamSize,
     minBid: DEFAULTS.MIN_BID,
+    // The clocks' lengths, for the room's rules; the running deadlines are
+    // bidEndsAt and nominationEndsAt.
+    clocks: draftClocks(season),
     now,
     bidEndsAt: draft?.bidEndsAt?.getTime() ?? null,
     nominationEndsAt: draft?.nominationEndsAt?.getTime() ?? null,
@@ -1796,6 +1800,7 @@ export async function nominatePlayer(
     const bidEndsAt = await bidDeadline(tx, {
       seasonId,
       teamSize: season.teamSize,
+      clocks: draftClocks(season),
       price: amount,
       highBidderTeamId: nominator.id,
     });
@@ -1935,6 +1940,7 @@ export async function placeBid(
     const bidEndsAt = await bidDeadline(tx, {
       seasonId,
       teamSize: season.teamSize,
+      clocks: draftClocks(season),
       price: amount,
       highBidderTeamId: myTeam.id,
     });

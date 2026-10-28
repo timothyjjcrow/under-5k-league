@@ -24,6 +24,7 @@ import {
   MATCH_STATUS,
   MATCH_PHASE,
   HARD_MMR_CEILING,
+  DRAFT_CLOCK_LIMITS,
   type SeasonStatus,
 } from "@/lib/constants";
 import {
@@ -57,6 +58,7 @@ import {
   CARRIED_SEASON_SELECT,
   carriedSeasonSettings,
 } from "@/lib/season-handoff";
+import { draftClocksLine, normalizeDraftClocks } from "@/lib/draft";
 import { draftSetupLockedMessage, draftSetupOpen } from "@/lib/draft-setup";
 import { normalizeStreamUrl, streamEmbed } from "@/lib/broadcast";
 import { parseLeagueId } from "@/lib/dota";
@@ -1014,8 +1016,10 @@ export async function setMaxMmr(
  * These were write-once at Create-season: the only way to change a team size
  * or budget you'd second-guessed was a NEW season, which orphans every
  * registration made so far. They only take effect at `startDraft` (budgets)
- * and during the auction (team size), so editing them before the draft is
- * safe; afterwards the numbers are baked into rosters and spend, so refuse.
+ * and during the auction (team size, the clocks), so editing them before the
+ * draft is safe; afterwards the numbers are baked into rosters, spend and the
+ * running clocks, so refuse. A form without the clock fields (rendered by an
+ * older build) keeps the stored clocks.
  */
 export async function setDraftSettings(
   _prev: ActionResult,
@@ -1043,6 +1047,31 @@ export async function setDraftSettings(
     0,
     50,
   );
+  // The bounds are the engine's (normalizeDraftClocks), which also keeps the
+  // short clock no longer than the full one; the toast says what was stored.
+  const clocks = normalizeDraftClocks({
+    bidSeconds: clampInt(
+      formData,
+      "draftBidSeconds",
+      season.draftBidSeconds,
+      DRAFT_CLOCK_LIMITS.bidSeconds.min,
+      DRAFT_CLOCK_LIMITS.bidSeconds.max,
+    ),
+    uncontestedBidSeconds: clampInt(
+      formData,
+      "draftUncontestedBidSeconds",
+      season.draftUncontestedBidSeconds,
+      DRAFT_CLOCK_LIMITS.uncontestedBidSeconds.min,
+      DRAFT_CLOCK_LIMITS.uncontestedBidSeconds.max,
+    ),
+    nominationSeconds: clampInt(
+      formData,
+      "draftNominationSeconds",
+      season.draftNominationSeconds,
+      DRAFT_CLOCK_LIMITS.nominationSeconds.min,
+      DRAFT_CLOCK_LIMITS.nominationSeconds.max,
+    ),
+  });
   await raceHook("admin.setDraftSettings.beforeTx");
   try {
     await prisma.$transaction(
@@ -1076,7 +1105,15 @@ export async function setDraftSettings(
             status: currentSeason.status,
             updatedAt: claim.expectedUpdatedAt,
           },
-          data: { teamSize, minTeams, draftBudget, budgetMmrWeight },
+          data: {
+            teamSize,
+            minTeams,
+            draftBudget,
+            budgetMmrWeight,
+            draftBidSeconds: clocks.bidSeconds,
+            draftUncontestedBidSeconds: clocks.uncontestedBidSeconds,
+            draftNominationSeconds: clocks.nominationSeconds,
+          },
         });
         if (updated.count === 0) throw new ActiveSeasonChangedError();
       },
@@ -1098,13 +1135,13 @@ export async function setDraftSettings(
   await publishDraftRoomChange();
   await logAdminAction({
     action: "setDraftSettings",
-    summary: `Set draft configuration to teams of ${teamSize}, target ${minTeams}, $${draftBudget}, MMR weight ${budgetMmrWeight}%`,
+    summary: `Set draft configuration to teams of ${teamSize}, target ${minTeams}, $${draftBudget}, MMR weight ${budgetMmrWeight}%, ${draftClocksLine(clocks)}`,
     seasonId: season.id,
   });
   refresh();
   return {
     // The team goal too: it moves Home's "N more to reach the goal" count.
-    message: `Draft settings saved · teams of ${teamSize}, a ${minTeams}-team goal, $${draftBudget} budget`,
+    message: `Draft settings saved · teams of ${teamSize}, a ${minTeams}-team goal, $${draftBudget} budget · ${draftClocksLine(clocks)}`,
   };
 }
 

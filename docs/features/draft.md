@@ -19,8 +19,25 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
   nominator clock. A signed-in room tick resolves only when the room's copy
   shows the running clock run out (`draftRoomDue`), and then only the
   winner of the `draftRoomMaintenanceAt` 2s claim; anonymous ticks are
-  read-only (the tick, below). Timers are `DEFAULTS` in `constants.ts`; a
-  lot nobody can outbid gets the short clock (`bidClockSeconds`).
+  read-only (the tick, below). A lot nobody can outbid gets the short clock
+  (`bidClockSeconds`).
+- **The clocks are the season's, set before Start.** `Season.draftBidSeconds`,
+  `draftUncontestedBidSeconds` and `draftNominationSeconds` (defaults 30, 5
+  and 90, the clocks every season ran before) are three boxes in the draft
+  settings on `/admin`, saved by `setDraftSettings` and locked with the rest
+  at Start, so a running clock never changes length. Every read goes through
+  `draftClocks` (`draft.ts`), which clamps to `DRAFT_CLOCK_LIMITS` (bid
+  20-120s, uncontested 3-30s and never longer than the bid clock, nomination
+  30-300s): the action stores what it returns and its toast states it. The
+  engine arms each clock from the season row its transaction already reads;
+  Start records them on the run (`rulesSnapshot`); the room's primer, the
+  rules page and the Undo confirm read the same values (`state.clocks`), and a
+  source guard in `draft.test.ts` keeps the `DEFAULTS` timers out of every
+  other file. New seasons carry them over (`carriedSeasonSettings`). The room's
+  poll rates are sized for the shortest bid clock (`room-poll.test.ts`). A form
+  without the clock fields (an older build's) keeps the stored clocks. Tests:
+  "the season's own clocks" in `draft.itest.ts`, the settings and Start cases
+  in `captain-draft-readiness.itest.ts`.
 - **Phase is the outer gate.** Resolvers and draft mutations no-op unless the
   season is active and in DRAFT, so a live Draft row stranded outside DRAFT
   never auto-sells before an admin repairs it.
@@ -74,7 +91,7 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
   budgets and phase. Both doors raced in `admin-flow-audit.itest.ts`.
 - **Setup locks at Start.** `addCaptain`, `removeCaptain` (seam
   `admin.removeCaptain.beforeTx`), `randomizeDraftOrder` and
-  `setDraftSettings` require `draftSetupOpen` and re-read season and draft in
+  `setDraftSettings` (the clocks included) require `draftSetupOpen` and re-read season and draft in
   a Serializable transaction.
 - **No unique index on draft order.** Serializable `addCaptain` plus
   `startDraft` refusing duplicates cover it; `@@unique([seasonId,

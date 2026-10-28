@@ -12,7 +12,7 @@ import {
   undoLastSale,
 } from "@/lib/draft-service";
 import { DEFAULTS, DRAFT_STATUS } from "@/lib/constants";
-import { bidClockSeconds } from "@/lib/draft";
+import { bidClockSeconds, draftClocks } from "@/lib/draft";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import {
   ON_POSTGRES,
@@ -726,13 +726,16 @@ async function clockSetBy(
   const before = Date.now();
   await act();
   const after = Date.now();
-  const draft = await prisma.draft.findUniqueOrThrow({ where: { seasonId } });
+  const [draft, season] = await Promise.all([
+    prisma.draft.findUniqueOrThrow({ where: { seasonId } }),
+    prisma.season.findUniqueOrThrow({ where: { id: seasonId } }),
+  ]);
   expect(draft.bidEndsAt, "a live lot has a bid clock").not.toBeNull();
   const ends = draft.bidEndsAt!.getTime();
-  const fits = [
-    DEFAULTS.BID_TIMER_SECONDS,
-    DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
-  ].filter((s) => ends >= before + s * 1000 && ends <= after + s * 1000);
+  const clocks = draftClocks(season);
+  const fits = [clocks.bidSeconds, clocks.uncontestedBidSeconds].filter(
+    (s) => ends >= before + s * 1000 && ends <= after + s * 1000,
+  );
   expect(fits, "the clock was set during this call").toHaveLength(1);
   return fits[0];
 }
@@ -756,6 +759,7 @@ async function expectedClockFor(seasonId: string): Promise<number> {
     teamSize: season.teamSize,
     price: draft.currentBid,
     highBidderTeamId: draft.currentBidTeamId,
+    clocks: draftClocks(season),
   });
 }
 
@@ -898,6 +902,129 @@ describe("draft auction — the short clock when nobody else can bid", () => {
         expect((await resumeDraft(season.id, admin)).ok).toBe(true);
       }),
     ).toBe(FULL);
+  });
+});
+
+/** The nomination clock a call armed, in whole seconds from the call. */
+async function nominationClockSetBy(
+  seasonId: string,
+  act: () => Promise<unknown>,
+): Promise<number> {
+  const before = Date.now();
+  await act();
+  const draft = await prisma.draft.findUniqueOrThrow({ where: { seasonId } });
+  expect(draft.nominationEndsAt, "a nomination clock runs").not.toBeNull();
+  return Math.round((draft.nominationEndsAt!.getTime() - before) / 1000);
+}
+
+describe("draft auction — the season's own clocks", () => {
+  // Not the defaults (30s, 5s, 90s), so a clock read from DEFAULTS fails.
+  const CLOCKS = {
+    draftBidSeconds: 45,
+    draftUncontestedBidSeconds: 8,
+    draftNominationSeconds: 120,
+  };
+
+  it("bids run the season's full and short clocks", async () => {
+    // Caps (teamSize 3, $1 kept back): A $9, B $99, C $29, as above.
+    const season = await makeSeason({ teamSize: 3, ...CLOCKS });
+    const capA = await makeCaptain(season.id, "Captain A", 10, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    await makeCaptain(season.id, "Captain C", 30, 2);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await startDraftState(season.id);
+
+    expect(
+      await clockSetBy(season.id, () =>
+        nominatePlayer(season.id, sessionFor(capA.user), star.id, 1),
+      ),
+    ).toBe(45);
+    expect(
+      await clockSetBy(season.id, async () => {
+        expect((await placeBid(season.id, sessionFor(capB.user), 30)).ok).toBe(
+          true,
+        );
+      }),
+    ).toBe(8);
+  });
+
+  it("a sale hands the next team the season's nomination clock", async () => {
+    const season = await makeSeason({ teamSize: 3, ...CLOCKS });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await makePlayer(season.id, "Next", 4000);
+    await startDraftState(season.id);
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5);
+    await expireClock(season.id);
+
+    expect(
+      await nominationClockSetBy(season.id, async () => {
+        expect(await resolveExpiredNomination(season.id)).toBe(true);
+      }),
+    ).toBe(120);
+  });
+
+  it("a turn skipped past a team that can't pay gets the season's nomination clock", async () => {
+    // A has an open seat and no money, so its stalled turn moves on to B.
+    const season = await makeSeason({ teamSize: 3, ...CLOCKS });
+    const capA = await makeCaptain(season.id, "Captain A", 0, 0);
+    const capB = await makeCaptain(season.id, "Captain B", 100, 1);
+    await makePlayer(season.id, "Pool", 4000);
+    await startDraftState(season.id);
+    await expireNominationClock(season.id);
+
+    expect(
+      await nominationClockSetBy(season.id, async () => {
+        expect(await resolveStalledNomination(season.id)).toBe(true);
+      }),
+    ).toBe(120);
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+    });
+    expect(draft.nominatorTeamId).toBe(capB.team.id);
+    expect(draft.nominatorTeamId).not.toBe(capA.team.id);
+  });
+
+  it("undo hands the buyer the season's nomination clock", async () => {
+    const season = await makeSeason({ teamSize: 3, ...CLOCKS });
+    const capA = await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    const star = await makePlayer(season.id, "Star", 5000);
+    await makePlayer(season.id, "Next", 4000);
+    const admin = sessionFor(await makeUser("Undo Admin", "ADMIN"));
+    await startDraftState(season.id);
+    await nominatePlayer(season.id, sessionFor(capA.user), star.id, 5);
+    await expireClock(season.id);
+    expect(await resolveExpiredNomination(season.id)).toBe(true);
+    // The sale armed the next turn's clock; push it out of the way so the
+    // undo's own clock is the one measured.
+    await expireNominationClock(season.id);
+
+    expect(
+      await nominationClockSetBy(season.id, async () => {
+        expect(
+          (await undoLastSale(season.id, admin, await undoTargetId(season.id)))
+            .ok,
+        ).toBe(true);
+      }),
+    ).toBe(120);
+  });
+
+  it("resume re-arms an empty turn with the season's nomination clock", async () => {
+    const season = await makeSeason({ teamSize: 3, ...CLOCKS });
+    await makeCaptain(season.id, "Captain A", 100, 0);
+    await makeCaptain(season.id, "Captain B", 100, 1);
+    await makePlayer(season.id, "Pool", 4000);
+    await startDraftState(season.id);
+    const admin = sessionFor(await makeUser("Clock Admin", "ADMIN"));
+    expect((await pauseDraft(season.id, admin)).ok).toBe(true);
+
+    expect(
+      await nominationClockSetBy(season.id, async () => {
+        expect((await resumeDraft(season.id, admin)).ok).toBe(true);
+      }),
+    ).toBe(120);
   });
 });
 

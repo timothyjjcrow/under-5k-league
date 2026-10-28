@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULTS } from "./constants";
+import { sourceFiles } from "../../test/support/source-files";
+import { DEFAULTS, DRAFT_CLOCK_LIMITS } from "./constants";
 import {
+  DEFAULT_DRAFT_CLOCKS,
+  draftClocks,
+  draftClocksLine,
+  nominationDeadline,
+  normalizeDraftClocks,
   adminNominationTeam,
   bidAllowanceLine,
   bidClockSeconds,
@@ -710,6 +716,7 @@ describe("lotContested / bidClockSeconds", () => {
     minBid: 1,
     price,
     highBidderTeamId,
+    clocks: DEFAULT_DRAFT_CLOCKS,
   });
 
   it("keeps the full clock while another team can top the price", () => {
@@ -769,8 +776,122 @@ describe("lotContested / bidClockSeconds", () => {
         teamSize: 3,
         price: 1,
         highBidderTeamId: "a",
+        clocks: DEFAULT_DRAFT_CLOCKS,
       }),
     ).toBe(DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS);
+  });
+
+  it("runs the season's own clocks", () => {
+    const clocks = {
+      bidSeconds: 45,
+      uncontestedBidSeconds: 8,
+      nominationSeconds: 120,
+    };
+    expect(bidClockSeconds({ ...lot(8), clocks })).toBe(45);
+    expect(bidClockSeconds({ ...lot(30), clocks })).toBe(8);
+  });
+});
+
+describe("draft clocks", () => {
+  it("defaults to the clocks every season ran before they were settable", () => {
+    expect(DEFAULT_DRAFT_CLOCKS).toEqual({
+      bidSeconds: 30,
+      uncontestedBidSeconds: 5,
+      nominationSeconds: 90,
+    });
+    expect(normalizeDraftClocks(DEFAULT_DRAFT_CLOCKS)).toEqual(
+      DEFAULT_DRAFT_CLOCKS,
+    );
+  });
+
+  it("keeps an admin's clocks inside the limits", () => {
+    const { bidSeconds, uncontestedBidSeconds, nominationSeconds } =
+      DRAFT_CLOCK_LIMITS;
+    expect(
+      normalizeDraftClocks({
+        bidSeconds: 1,
+        uncontestedBidSeconds: 0,
+        nominationSeconds: 5,
+      }),
+    ).toEqual({
+      bidSeconds: bidSeconds.min,
+      uncontestedBidSeconds: uncontestedBidSeconds.min,
+      nominationSeconds: nominationSeconds.min,
+    });
+    expect(
+      normalizeDraftClocks({
+        bidSeconds: 10_000,
+        uncontestedBidSeconds: 10_000,
+        nominationSeconds: 10_000,
+      }),
+    ).toEqual({
+      bidSeconds: bidSeconds.max,
+      uncontestedBidSeconds: uncontestedBidSeconds.max,
+      nominationSeconds: nominationSeconds.max,
+    });
+  });
+
+  it("never lets the short clock outlast the full one", () => {
+    expect(
+      normalizeDraftClocks({
+        bidSeconds: 20,
+        uncontestedBidSeconds: 25,
+        nominationSeconds: 90,
+      }).uncontestedBidSeconds,
+    ).toBe(20);
+  });
+
+  it("falls back to the default for a value that isn't a number", () => {
+    expect(
+      normalizeDraftClocks({
+        bidSeconds: Number.NaN,
+        uncontestedBidSeconds: Number.NaN,
+        nominationSeconds: Number.NaN,
+      }),
+    ).toEqual(DEFAULT_DRAFT_CLOCKS);
+  });
+
+  it("reads a season's columns through the same limits", () => {
+    expect(
+      draftClocks({
+        draftBidSeconds: 0,
+        draftUncontestedBidSeconds: 8,
+        draftNominationSeconds: 120,
+      }),
+    ).toEqual({
+      bidSeconds: DRAFT_CLOCK_LIMITS.bidSeconds.min,
+      uncontestedBidSeconds: 8,
+      nominationSeconds: 120,
+    });
+  });
+
+  it("arms a nomination clock from now", () => {
+    expect(
+      nominationDeadline(
+        { ...DEFAULT_DRAFT_CLOCKS, nominationSeconds: 120 },
+        1_000,
+      ).getTime(),
+    ).toBe(121_000);
+  });
+
+  it("is the only reader of the default clock constants", () => {
+    // Every clock comes from the season (draftClocks): a DEFAULTS timer read
+    // anywhere else would run, or state, the old fixed clock instead of the
+    // one the admin set.
+    const readers = sourceFiles("src/**/*.{ts,tsx}", 300)
+      .filter((f) =>
+        /\b(?:BID_TIMER_SECONDS|UNCONTESTED_BID_TIMER_SECONDS|NOMINATION_TIMER_SECONDS)\b/.test(
+          f.text,
+        ),
+      )
+      .map((f) => f.path);
+    expect(readers).toEqual(["src/lib/constants.ts", "src/lib/draft.ts"]);
+  });
+
+  it("states the clocks in a few words", () => {
+    expect(draftClocksLine(DEFAULT_DRAFT_CLOCKS)).toBe(
+      "30s bids (5s uncontested), 90s to nominate",
+    );
   });
 });
 

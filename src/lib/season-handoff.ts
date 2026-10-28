@@ -4,6 +4,7 @@
 
 import type { Season } from "@prisma/client";
 import { SOFT_MMR_LIMIT } from "./constants";
+import { DEFAULT_DRAFT_CLOCKS, draftClocks, draftClocksLine } from "./draft";
 
 /**
  * Every league setting a new season copies from the season before it. The
@@ -19,6 +20,9 @@ export type CarriedSeasonSettings = Pick<
   | "minTeams"
   | "draftBudget"
   | "budgetMmrWeight"
+  | "draftBidSeconds"
+  | "draftUncontestedBidSeconds"
+  | "draftNominationSeconds"
   | "maxMmr"
   | "regularBestOf"
   | "playoffBestOf"
@@ -32,6 +36,9 @@ export const CARRIED_SEASON_SELECT = {
   minTeams: true,
   draftBudget: true,
   budgetMmrWeight: true,
+  draftBidSeconds: true,
+  draftUncontestedBidSeconds: true,
+  draftNominationSeconds: true,
   maxMmr: true,
   regularBestOf: true,
   playoffBestOf: true,
@@ -49,6 +56,9 @@ const FIRST_SEASON: CarriedSeasonSettings = {
   minTeams: 4,
   draftBudget: 100,
   budgetMmrWeight: 20,
+  draftBidSeconds: DEFAULT_DRAFT_CLOCKS.bidSeconds,
+  draftUncontestedBidSeconds: DEFAULT_DRAFT_CLOCKS.uncontestedBidSeconds,
+  draftNominationSeconds: DEFAULT_DRAFT_CLOCKS.nominationSeconds,
   maxMmr: SOFT_MMR_LIMIT,
   regularBestOf: 2,
   playoffBestOf: 3,
@@ -67,6 +77,9 @@ export function carriedSeasonSettings(
     minTeams: previous.minTeams,
     draftBudget: previous.draftBudget,
     budgetMmrWeight: previous.budgetMmrWeight,
+    draftBidSeconds: previous.draftBidSeconds,
+    draftUncontestedBidSeconds: previous.draftUncontestedBidSeconds,
+    draftNominationSeconds: previous.draftNominationSeconds,
     maxMmr: previous.maxMmr,
     regularBestOf: previous.regularBestOf,
     playoffBestOf: previous.playoffBestOf,
@@ -77,8 +90,9 @@ export function carriedSeasonSettings(
 
 /**
  * The carried settings in one line, e.g. "Teams of 5 · 4 teams to start ·
- * $100 budget · 20% MMR budget weighting · 4,500 soft MMR limit ·
- * Bo2 / Bo3 / Bo5 series · league id 17654". The soft limit is a review
+ * $100 budget · 20% MMR budget weighting · 30s bids (5s uncontested), 90s
+ * to nominate · 4,500 soft MMR limit · Bo2 / Bo3 / Bo5 series · league id
+ * 17654". The soft limit is a review
  * threshold, never a block, and the wording says only "limit".
  */
 export function carriedSettingsLine(s: CarriedSeasonSettings): string {
@@ -89,6 +103,7 @@ export function carriedSettingsLine(s: CarriedSeasonSettings): string {
     s.budgetMmrWeight > 0
       ? `${s.budgetMmrWeight}% MMR budget weighting`
       : "flat budgets",
+    draftClocksLine(draftClocks(s)),
     s.maxMmr > 0
       ? `${s.maxMmr.toLocaleString("en-US")} soft MMR limit`
       : "no soft MMR limit",

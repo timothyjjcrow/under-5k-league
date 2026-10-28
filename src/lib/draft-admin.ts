@@ -1,4 +1,4 @@
-import { DEFAULTS, DRAFT_STATUS, SEASON_STATUS } from "./constants";
+import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 
 // The admin's live-draft controls, shared by the draft room's admin bar and the
 // Captains & draft card on /admin. Both surfaces offer the same Pause / Resume /
@@ -108,6 +108,8 @@ export function undoSaleTarget<T extends UndoCandidate>(
 export function undoSaleConfirm(o: {
   draftComplete: boolean;
   sale: UndoSale | null;
+  /** The season's nomination clock (Season.draftNominationSeconds). */
+  nominationSeconds: number;
 }): string {
   const what = o.sale
     ? `the most recent sale (${o.sale.name} → ${o.sale.teamName}, $${o.sale.price})`
@@ -116,7 +118,7 @@ export function undoSaleConfirm(o: {
   const buyer = o.sale ? o.sale.teamName : "the buying team";
   const effect = `The player goes back to the pool, and ${buyer} gets the money back and nominates next.`;
   return o.draftComplete
-    ? `Undo ${what}? This reopens the finished auction with a live ${DEFAULTS.NOMINATION_TIMER_SECONDS}-second nomination clock. ${effect} If nobody nominates in time, the draft picks a player for them. The draft completes again on its own when the open seats are filled or the pool runs out.`
+    ? `Undo ${what}? This reopens the finished auction with a live ${o.nominationSeconds}-second nomination clock. ${effect} If nobody nominates in time, the draft picks a player for them. The draft completes again on its own when the open seats are filled or the pool runs out.`
     : `Undo ${what}? ${effect}`;
 }
 

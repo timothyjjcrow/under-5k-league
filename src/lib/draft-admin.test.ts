@@ -77,7 +77,7 @@ describe("undoSaleConfirm", () => {
   const sale = { name: "Player 1", teamName: "Team 4", price: 12 };
 
   it("warns that undoing a finished auction reopens it on a live clock", () => {
-    const text = undoSaleConfirm({ draftComplete: true, sale });
+    const text = undoSaleConfirm({ draftComplete: true, sale, nominationSeconds: 90 });
     expect(text).toContain("Player 1 → Team 4, $12");
     expect(text).toContain(
       "reopens the finished auction with a live 90-second nomination clock",
@@ -90,8 +90,14 @@ describe("undoSaleConfirm", () => {
     expect(text).not.toMatch(/finish the draft/i);
   });
 
+  it("names the season's own nomination clock", () => {
+    expect(
+      undoSaleConfirm({ draftComplete: true, sale, nominationSeconds: 150 }),
+    ).toContain("with a live 150-second nomination clock");
+  });
+
   it("keeps the mid-auction confirm short", () => {
-    const text = undoSaleConfirm({ draftComplete: false, sale });
+    const text = undoSaleConfirm({ draftComplete: false, sale, nominationSeconds: 90 });
     expect(text).toBe(
       "Undo the most recent sale (Player 1 → Team 4, $12)? The player goes back to the pool, and Team 4 gets the money back and nominates next.",
     );
@@ -99,14 +105,14 @@ describe("undoSaleConfirm", () => {
   });
 
   it("reads without a named sale", () => {
-    expect(undoSaleConfirm({ draftComplete: true, sale: null })).toMatch(
+    expect(undoSaleConfirm({ draftComplete: true, sale: null, nominationSeconds: 90 })).toMatch(
       /^Undo the most recent auction sale\? This reopens/,
     );
     // Mid-sentence, so lowercase: "and the buying team gets the money back".
-    expect(undoSaleConfirm({ draftComplete: false, sale: null })).toContain(
+    expect(undoSaleConfirm({ draftComplete: false, sale: null, nominationSeconds: 90 })).toContain(
       "and the buying team gets the money back",
     );
-    expect(undoSaleConfirm({ draftComplete: true, sale: null })).not.toContain(
+    expect(undoSaleConfirm({ draftComplete: true, sale: null, nominationSeconds: 90 })).not.toContain(
       "The buying team",
     );
   });

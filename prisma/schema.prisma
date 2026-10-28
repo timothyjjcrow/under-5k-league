@@ -178,6 +178,11 @@ model Season {
   teamSize        Int       @default(5)
   draftBudget     Int       @default(100)
   budgetMmrWeight Int       @default(20) // % budget swing by captain MMR (low-MMR captains get more; 0 = flat budgets)
+  // The auction's clocks in seconds (draftClocks clamps them; DRAFT_CLOCK_LIMITS).
+  // Set with the draft settings until Start, like the budget.
+  draftBidSeconds            Int @default(30) // each bid resets the lot to this
+  draftUncontestedBidSeconds Int @default(5) // a lot no other team can top
+  draftNominationSeconds     Int @default(90) // the team on the clock, before an auto-nomination
   maxMmr          Int       @default(0) // SOFT review threshold — does NOT block signup; only HARD_MMR_CEILING refuses (0 = none). See registrationGate.
   regularBestOf   Int       @default(2) // series length for regular-season matches
   playoffBestOf   Int       @default(3) // series length for playoff (non-final) matches

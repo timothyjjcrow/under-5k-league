@@ -27,7 +27,12 @@ import {
   DEFAULTS,
   HARD_MMR_CEILING,
 } from "@/lib/constants";
-import { mmrWeightedBudgets, shuffle } from "@/lib/draft";
+import {
+  draftClocks,
+  mmrWeightedBudgets,
+  nominationDeadline,
+  shuffle,
+} from "@/lib/draft";
 import {
   captainTransferOpen,
   draftReminderDue,
@@ -1283,9 +1288,10 @@ export async function startDraft(
           })),
           (currentSeason.teamSize - 1) * DEFAULTS.MIN_BID,
         );
-        const nominationEndsAt = new Date(
-          Date.now() + DEFAULTS.NOMINATION_TIMER_SECONDS * 1000,
-        );
+        // The clocks are the season's from here on: setDraftSettings is
+        // closed once the Draft row says IN_PROGRESS.
+        const clocks = draftClocks(currentSeason);
+        const nominationEndsAt = nominationDeadline(clocks, Date.now());
 
         // The singleton Draft row is the one-shot claim. Every later failure
         // throws, rolling it back together with budgets and phase.
@@ -1364,7 +1370,7 @@ export async function startDraft(
           seasonId: currentSeason.id, actor, rules: {
             teamSize: currentSeason.teamSize, draftBudget: currentSeason.draftBudget,
             budgetMmrWeight: currentSeason.budgetMmrWeight,
-          }, teams, registrations: regs, budgets,
+          }, clocks, teams, registrations: regs, budgets,
         });
 
         return {

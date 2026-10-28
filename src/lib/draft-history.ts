@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Bid, Draft, DraftLot, DraftRun, Prisma, TeamMember } from "@prisma/client";
 import { DEFAULTS } from "./constants";
+import type { DraftClocks } from "./draft";
 import type { DraftedPlayer } from "./draft-recap";
 import { captureRosterTenure, type HistoryActor, recordHistoryAction } from "./roster-history";
 import { raceHook } from "./race-hook";
@@ -37,6 +38,8 @@ async function nextRunNumber(tx: Tx, seasonId: string) {
 export async function startDraftRun(tx: Tx, input: {
   seasonId: string; actor: HistoryActor;
   rules: { teamSize: number; draftBudget: number; budgetMmrWeight: number };
+  /** The clocks this run starts on (the season's, fixed from Start). */
+  clocks: DraftClocks;
   teams: { id: string; name: string; captainId: string; draftOrder: number }[];
   registrations: { userId: string; mmr: number; roles: string }[];
   budgets: Map<string, number>;
@@ -46,9 +49,9 @@ export async function startDraftRun(tx: Tx, input: {
     seasonId: input.seasonId, runNumber: await nextRunNumber(tx, input.seasonId),
     provenance: "COMMAND", status: "RUNNING", startedAt: now, startedById: input.actor.id,
     rulesSnapshot: JSON.stringify({ version: 1, ...input.rules, minimumBid: DEFAULTS.MIN_BID,
-      bidTimerSeconds: DEFAULTS.BID_TIMER_SECONDS,
-      uncontestedBidTimerSeconds: DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
-      nominationTimerSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
+      bidTimerSeconds: input.clocks.bidSeconds,
+      uncontestedBidTimerSeconds: input.clocks.uncontestedBidSeconds,
+      nominationTimerSeconds: input.clocks.nominationSeconds,
       budgetAlgorithm: "mmrWeightedBudgets-v1" }),
     openingTeamsSnapshot: JSON.stringify({ version: 1, teams: input.teams.map((team) => ({
       ...team, captainMmr: byUser.get(team.captainId)?.mmr || null,

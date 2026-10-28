@@ -164,6 +164,9 @@ type SeasonOverrides = Partial<{
   minTeams: number;
   draftBudget: number;
   budgetMmrWeight: number;
+  draftBidSeconds: number;
+  draftUncontestedBidSeconds: number;
+  draftNominationSeconds: number;
   maxMmr: number;
   status: string;
   isActive: boolean;
