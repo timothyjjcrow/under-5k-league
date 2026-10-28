@@ -1,5 +1,6 @@
 import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { inhouseDetectWindow } from "./inhouse";
+import { duelRoomClocks } from "./inhouse-duel";
 import { inhouseRoomDue, type InhouseRoomDueInput } from "./inhouse-room-due";
 
 // PURE: when a held state request (the room's long-poll) must answer on its
@@ -10,7 +11,8 @@ import { inhouseRoomDue, type InhouseRoomDueInput } from "./inhouse-room-due";
 // (inhouseRoomDue mirrors them: the accept, vote and pick deadlines, the
 // abandon floors, the queue's idle reset) or where the reply itself reads
 // differently (a queued player turning away, a played game's result window
-// opening the "Game over" button, the viewer's post-game banner ending), or,
+// opening the "Game over" button, the viewer's post-game banner ending, the
+// 1v1 block's queue expiries, presence and results window), or,
 // for a signed-in viewer, where a throttled Discord board edit can be
 // retried. The request wakes LONG_POLL_CLOCK_GRACE_MS after it, so the
 // signed-in poll that wakes finds the work due. The automation gate
@@ -31,6 +33,8 @@ export type InhouseRoomWakeInput = InhouseRoomDueInput & {
     completedAt: Date | null;
     players: readonly { userId: string }[];
   }[];
+  /** The 1v1 rows (loadDuelRoomRows): their queue and duels. */
+  duel?: Parameters<typeof duelRoomClocks>[0];
 };
 
 /**
@@ -131,6 +135,9 @@ export function inhouseRoomWakeAt(
       }
     }
   }
+  // The 1v1 block's own boundaries, for every viewer: a queue row's expiry,
+  // a waiter turning away, a result leaving its window (duelRoomClocks).
+  if (rows.duel) for (const at of duelRoomClocks(rows.duel)) clock(at);
   if (o.maintains) clock(o.boardRetryAtMs);
   return next === Infinity ? null : next;
 }

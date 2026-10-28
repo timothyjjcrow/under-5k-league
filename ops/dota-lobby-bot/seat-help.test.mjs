@@ -111,9 +111,11 @@ function ready(c, s = spec) {
 const joined = (c, overrides = {}) =>
   c.chatJoined({ channelName: `Lobby_${LOBBY}`, channelType: 3, channelId: CHANNEL, ...overrides });
 
-test("seat help is for inhouse games only", () => {
+test("seat help is for inhouse games and duels, never season games", () => {
   assert.equal(seatHelpKey("inhouse:4242:1"), true);
   assert.equal(seatHelpKey("eu:inhouse:4242:1"), true);
+  assert.equal(seatHelpKey("duel:4242:1"), true);
+  assert.equal(seatHelpKey("eu:duel:4242:1"), true);
   assert.equal(seatHelpKey("season:fixture:1"), false);
   assert.equal(seatHelpKey("eu:season:fixture:1"), false);
   assert.equal(seatHelpKey(undefined), false);
@@ -906,4 +908,81 @@ test("a whole night of seat help and chat logs counts and reasons only", (t) => 
     assert.ok(logs.some((line) => line.includes(` [dota-bot] ${event} `)), event);
   for (const reason of ["greet", "side", "stranger"])
     assert.ok(logs.some((line) => line.endsWith(` chat-line key=inhouse:4242:1 reason=${reason}`)), reason);
+});
+
+// ---- 1v1 mid duels ----
+
+const duel = {
+  key: "duel:4242:1",
+  name: "GGD2L 1v1 4242",
+  password: "inhouse123",
+  leagueId: 20004,
+  gameMode: 21,
+  serverRegion: 2,
+  radiant: [ids[0]],
+  dire: [ids[5]],
+  names: { [ids[0]]: "Sam", [ids[5]]: "Ivy" },
+};
+const duelLobby = (seats, overrides = {}) => lobby(seats, { gameName: duel.name, gameMode: 21, ...overrides });
+
+test("a duel's two players sitting swapped get one swap, and a duel's lines say players", (t) => {
+  const { c, of, time } = setup(t);
+  c.request("create", duel);
+  c.snapshot(duelLobby([]));
+  assert.equal(joined(c), true);
+  c.snapshot(duelLobby([[ids[0], 1], [ids[5], 0]]));
+  assert.deepEqual(of("flip"), [["flip"]]);
+  assert.deepEqual(of("kick"), []);
+  assert.deepEqual(of("chat").map((s) => s[2]), ["Both players sat on the wrong sides, so I swapped Radiant and Dire."]);
+  c.snapshot(duelLobby([[ids[0], 0], [ids[5], 1]]));
+  assert.equal(c.request("status", duel).state, "ready");
+  // A stranger on a side is moved, with the duel's line.
+  time.at += SEAT_FIX_GAP_MS;
+  c.snapshot(duelLobby([[ids[0], 0], [ids[5], 1], [stranger, 0]]));
+  assert.deepEqual(of("kick"), [["kick", stranger]]);
+  time.at += CHAT_LINE_GAP_MS;
+  c.pumpChat(true);
+  assert.equal(of("chat").at(-1)[2], "That seat is for a player in this 1v1, so you were moved to unassigned.");
+});
+
+test("a duel player on the wrong side alone is moved back to the pool", (t) => {
+  const { c, of } = setup(t);
+  c.request("create", duel);
+  c.snapshot(duelLobby([[ids[0], 1]]));
+  assert.deepEqual(of("kick"), [["kick", ids[0]]]);
+  assert.deepEqual(of("flip"), []);
+});
+
+test("a duel's greeting names both players and their sides in one line", (t) => {
+  const { c, of, time } = setup(t);
+  c.request("create", duel);
+  c.snapshot(duelLobby([]));
+  joined(c);
+  c.snapshot(duelLobby([[ids[0], 4]]));
+  time.at += CHAT_GREET_SETTLE_MS;
+  c.tick();
+  assert.deepEqual(of("chat").map((s) => s[2]), ["1v1 mid: Sam on Radiant, Ivy on Dire. Take your side."]);
+  // The other player gets it once they arrive; nobody gets it twice.
+  c.snapshot(duelLobby([[ids[0], 4], [ids[5], 4]]));
+  time.at += Math.max(CHAT_GREET_SETTLE_MS, CHAT_LINE_GAP_MS);
+  c.tick();
+  time.at += CHAT_LINE_GAP_MS;
+  c.tick();
+  assert.equal(of("chat").length, 2);
+  assert.equal(of("chat")[1][2], "1v1 mid: Sam on Radiant, Ivy on Dire. Take your side.");
+});
+
+test("a duel's lines without names, and the longest names, still fit one chat line", () => {
+  const plain = { ...duel, names: undefined };
+  assert.equal(greetLine(0, [ids[0]], rosterNames(plain), plain), "1v1 mid: take the side the site shows you, Radiant or Dire.");
+  const long = { ...duel, names: { [ids[0]]: "😀".repeat(40), [ids[5]]: "W".repeat(40) } };
+  assert.equal(greetLine(1, [ids[5]], rosterNames(long), long), "1v1 mid: take the side the site shows you, Radiant or Dire.");
+  const max = { ...duel, names: { [ids[0]]: "W".repeat(40), [ids[5]]: "M".repeat(40) } };
+  const line = greetLine(1, [ids[5]], rosterNames(max), max);
+  assert.equal(line, `1v1 mid: ${"W".repeat(32)} on Radiant, ${"M".repeat(32)} on Dire. Take your side.`);
+  assert.ok(line.length <= CHAT_LINE_MAX);
+  // Inhouse lines are unchanged when a spec is passed.
+  assert.equal(moveLine("stranger", undefined, undefined, spec), "That seat is for a drafted player, so you were moved to unassigned.");
+  assert.equal(moveLine("flip", undefined, undefined, spec), "Both teams sat on the wrong sides, so I swapped Radiant and Dire.");
+  assert.equal(greetLine(0, [ids[0]], rosterNames(spec), spec), "Sam: you're on Radiant. Take a Radiant slot.");
 });

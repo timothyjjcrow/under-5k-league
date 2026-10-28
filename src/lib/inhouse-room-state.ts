@@ -28,6 +28,8 @@ import {
   type InhouseState,
 } from "./inhouse-service";
 import { createRoomCache } from "./inhouse-room-cache";
+import { duelHeartbeatAction } from "./inhouse-duel";
+import { touchDuelQueueHeartbeat } from "./inhouse-duel-service";
 import {
   readRoomBoardMemo,
   writeRoomBoardMemo,
@@ -66,6 +68,9 @@ import { claimThrottle, SETTING_KEYS } from "./settings";
 //   (inhouse-room-state.test.ts guards the source).
 // - With nothing due, the board is checked when what it shows has moved since
 //   this instance last checked, under the same claim.
+//
+// - The viewer's 1v1 queue row heartbeats the same way (duelHeartbeatAction,
+//   touchDuelQueueHeartbeat); the 1v1's resolvers are the worker's alone.
 //
 // Anonymous polls only read: no heartbeat, claim, board, publish or resolver.
 //
@@ -218,6 +223,33 @@ export async function pollInhouseState(
         // shows them present, `needed` counts them, and they can be the tenth
         // that forms a lobby on this same poll. Presence is something the
         // gate schedules on.
+        await publishInhouseRoomChange();
+        invalidateGate = true;
+        snap = await roomCache.get();
+      }
+    }
+    // The same for the viewer's 1v1 queue row (touchDuelQueueHeartbeat),
+    // whose presence is what lets a join pair with them. Its seenAt entry
+    // is keyed apart from the 5v5's. No resolver: the 1v1's clocks and its
+    // pairing sweep are the worker's.
+    const myDuelRow =
+      snap.rows.duel.queue.find((q) => q.userId === viewer.id) ?? null;
+    const duelSeenKey = `duel:${viewer.id}`;
+    const duelHeartbeat = duelHeartbeatAction(
+      myDuelRow,
+      snap.seenAt.get(duelSeenKey) ?? null,
+      Date.now(),
+    );
+    if (duelHeartbeat !== "skip") {
+      // Seam: as the 5v5's. A rival heartbeat can land here; the WHERE
+      // must refuse.
+      await raceHook("inhouse.pollInhouseState.beforeDuelHeartbeat");
+      const touchedAtMs = Date.now();
+      const written = await touchDuelQueueHeartbeat(viewer.id);
+      if (written > 0) snap.seenAt.set(duelSeenKey, touchedAtMs);
+      if (duelHeartbeat === "writeAndRefresh") {
+        // Away in the rows, present now: everyone's 1v1 card shows them
+        // present, and the worker's pairing sweep may pair them.
         await publishInhouseRoomChange();
         invalidateGate = true;
         snap = await roomCache.get();

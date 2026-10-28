@@ -96,7 +96,8 @@ describe("DotaLobbyControls invite controls (source)", () => {
   it("says which other game holds the bot, and offers Create only through createOpen", () => {
     expect(code).toMatch(/const busy = view\?\.status \? lobbyBusyElsewhere\(view\) : null;/);
     expect(code).toMatch(/\? busy\s*\? lobbyBusyLabel\(busy\)\s*: lobbyStatusLabel\(view\.status\)/);
-    expect(code).toMatch(/lobbyBusyNote\(busy, view\.canControl\)/);
+    // A 1v1 waits for the bot instead of going by hand (lobbyBusyNote's kind).
+    expect(code).toMatch(/lobbyBusyNote\(busy, view\.canControl, kind\)/);
     // No bot lobby will exist, so its name and password stay off the card.
     expect(code).toMatch(/\{busyLive \? null : \(\s*<dl/);
     expect(code).toMatch(
@@ -126,9 +127,12 @@ describe("DotaLobbyControls lifecycle (source)", () => {
     sourceFile("src/components/dota-lobby-controls.tsx").text,
   );
 
-  it("words the status line, a pending release and a game over through the helpers", () => {
+  it("words the status line, a pending release, a game over and a game the bot left through the helpers", () => {
     expect(code).toMatch(/lobbyStatusLabel\(view\.status\)/);
-    expect(code).toMatch(/\{releasing \? \(\s*<p[^>]*>\{LOBBY_RELEASING_NOTE\}<\/p>\s*\) : over \? \(\s*<p[^>]*>\{LOBBY_OVER_NOTE\}<\/p>/);
+    expect(code).toMatch(
+      /\{releasing \? \(\s*<p[^>]*>\{LOBBY_RELEASING_NOTE\}<\/p>\s*\) : over \? \(\s*<p[^>]*>\{LOBBY_OVER_NOTE\}<\/p>\s*\) : left \? \(\s*<p[^>]*>\{LOBBY_LEFT_NOTE\}<\/p>/,
+    );
+    expect(code).toMatch(/const left = view\?\.status\?\.left === true;/);
   });
 
   it("offers Release only through releaseOpen, so never a second press while one is pending", () => {
@@ -265,9 +269,9 @@ describe("DotaLobbyControls seats (source)", () => {
     );
   });
 
-  it("says what the bot does about the sides only in a ready in-house lobby", () => {
+  it("says what the bot does about the sides only in a ready in-house lobby or 1v1", () => {
     expect(code).toMatch(
-      /\{kind === "inhouse" && state === "ready" && !releasing \? \(\s*<p className="text-xs text-muted">\{INHOUSE_SEAT_RULE_NOTE\}<\/p>/,
+      /\{kind !== "season" && state === "ready" && !releasing \? \(\s*<p className="text-xs text-muted">\{INHOUSE_SEAT_RULE_NOTE\}<\/p>/,
     );
   });
 });
@@ -283,5 +287,36 @@ describe("DotaLobbyControls Start (source)", () => {
       /\{!recoveryOnly && startOpen\(view\) \? \(\s*<button(?:(?!<\/button>)[^])*>\s*Start game with bot\s*<\/button>/,
     );
     expect(code.match(/Start game with bot/g)).toHaveLength(1);
+  });
+});
+
+// SOURCE GUARD: a 1v1's panel (kind "duel") names its own game mode, never
+// sends a joiner to "a captain", and is never hand-hosted: the copy that
+// differs comes from the kind.
+describe("DotaLobbyControls for a 1v1 (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/dota-lobby-controls.tsx").text,
+  );
+  it("heads the panel with 1v1 Solo Mid for a duel", () => {
+    expect(code).toMatch(
+      /\{duel \? DUEL_GAME_MODE\.name : LEAGUE_GAME_MODE\.name\}/,
+    );
+    expect(code).toMatch(/const duel = kind === "duel";/);
+  });
+  it("never tells a 1v1's viewer to wait for a captain", () => {
+    expect(code).toMatch(
+      /\{!duel && !view\.canControl && !busy && \["idle", "released"\]\.includes\(state\) \? \(/,
+    );
+  });
+});
+
+describe("DotaLobbyControls for a 1v1 (render)", () => {
+  it("renders the hosts' panel for a duel on its first render", () => {
+    const html = renderToStaticMarkup(
+      createElement(DotaLobbyControls, { kind: "duel", id: "d1" }),
+    );
+    expect(html).toContain("Steam lobby bot");
+    expect(html).toContain("1v1 Solo Mid");
+    expect(html).not.toContain("Captains Mode");
   });
 });

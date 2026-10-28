@@ -188,6 +188,7 @@ function rows(over: Partial<InhouseRoomRows> = {}): InhouseRoomRows {
     pending: [pendingGame("pending-1", pendIds)],
     recentResults: [],
     signupRoles: [{ userId: "q3", roles: "4,5" }],
+    duel: { queue: [], duels: [] },
     ...over,
   };
 }

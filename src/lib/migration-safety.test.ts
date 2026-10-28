@@ -177,7 +177,8 @@ describe("migration SQL safety gate", () => {
       "20261020120000_roll_call",
       "20261024120000_season_format",
       "20261025120000_standin_request",
-      "20261027120000_draft_clocks",
+      "20261028120000_inhouse_duel",
+      "20261028130000_draft_clocks",
     ]);
   });
 

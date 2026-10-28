@@ -25,6 +25,13 @@ import {
   endInhouseGameFromBot,
   markInhouseGameStartedFromBot,
 } from "@/lib/inhouse-service";
+import { applyDuelBotStatus } from "@/lib/inhouse-duel-service";
+import { duelBotSavedForA5v5 } from "@/lib/inhouse-duel-bot";
+import {
+  DUEL_BOT_SAVED_FOR_5V5,
+  duelBotEndedWithoutGame,
+  duelTakesResult,
+} from "@/lib/inhouse-duel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,7 +63,7 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) return parsed.response;
   const { kind, id, action } = parsed.value;
   if (
-    (kind !== "inhouse" && kind !== "season") ||
+    (kind !== "inhouse" && kind !== "season" && kind !== "duel") ||
     typeof id !== "string" ||
     typeof action !== "string" ||
     !["status", "create", "start", "release", "invite"].includes(action)
@@ -102,7 +109,7 @@ export async function POST(req: NextRequest) {
     // host an in-house game, so its players' panel reads like a bot that
     // isn't set up, which the setup card hides behind its by-hand steps. Only
     // an admin's panel says what is missing. Before any read or bot call.
-    if (kind === "inhouse" && inhouseLobbyTicketId() === null) {
+    if ((kind === "inhouse" || kind === "duel") && inhouseLobbyTicketId() === null) {
       if (viewer.role !== "ADMIN")
         return NextResponse.json(
           { enabled: false },
@@ -113,7 +120,7 @@ export async function POST(req: NextRequest) {
         { status: 400, headers: { "Cache-Control": "no-store" } },
       );
     }
-    const { spec, canControl, playable, roster } = await resolveDotaLobby(
+    const { spec, canControl, playable, roster, duel } = await resolveDotaLobby(
       viewer,
       kind,
       id,
@@ -134,16 +141,24 @@ export async function POST(req: NextRequest) {
       );
     if ((action === "create" || action === "start") && !playable)
       throw new UserFacingError(
-        kind === "inhouse"
-          ? "Only a live in-house game can create or start a Dota lobby, once its teams are locked."
-          : "This match is not open for play.",
+        kind === "duel"
+          ? "Only a 1v1 whose game hasn't started can create or start a Dota lobby."
+          : kind === "inhouse"
+            ? "Only a live in-house game can create or start a Dota lobby, once its teams are locked."
+            : "This match is not open for play.",
       );
     if (action === "invite" && !inviteScope)
       throw new UserFacingError(
-        kind === "inhouse"
-          ? "Only a live in-house game's bot can invite players, once its teams are locked."
-          : "This match is not open for play.",
+        kind === "duel"
+          ? "Only a 1v1 whose game hasn't started can invite its players."
+          : kind === "inhouse"
+            ? "Only a live in-house game's bot can invite players, once its teams are locked."
+            : "This match is not open for play.",
       );
+    // The one bot is saved for a 5v5 being set up: a 1v1's lobby then could
+    // hold it through the 5v5's whole setup. Before any bot call.
+    if (kind === "duel" && action === "create" && (await duelBotSavedForA5v5()))
+      throw new UserFacingError(DUEL_BOT_SAVED_FOR_5V5);
     let status;
     try {
       status = await callLobbyBot(
@@ -165,12 +180,20 @@ export async function POST(req: NextRequest) {
       // it (one health read, one release) and say what the release did; a
       // refused release leaves the BUSY answer as it is.
       if (action === "create" && error instanceof LobbyBotBusyError) {
-        const freed = await freeBotFromClosedInhouseGame();
+        // A 5v5's Create also frees the bot from a 1v1 whose game hasn't
+        // started (the 5v5 comes first); a 1v1's Create never does.
+        const freed = await freeBotFromClosedInhouseGame(kind);
         // Progress, not a failure: the panel words it as information.
         if (freed)
           return NextResponse.json(
             { error: freeingBotMessage(freed), freeing: true },
             { status: 400, headers: { "Cache-Control": "no-store" } },
+          );
+        // A 1v1 is never hosted by hand: it waits for the bot, and the
+        // worker asks for its lobby again each pass.
+        if (kind === "duel")
+          throw new UserFacingError(
+            "The bot is hosting another game. It makes your 1v1 lobby as soon as it's free.",
           );
       }
       throw error;
@@ -192,6 +215,28 @@ export async function POST(req: NextRequest) {
         }
       } catch {
         console.error("[dota-lobby] bot-driven game update failed");
+      }
+    }
+    if (kind === "duel" && duel && duelTakesResult(duel.status)) {
+      // The 1v1's own bot-driven writes (applyDuelBotStatus): over ->
+      // AWAITING_RESULT, started -> PLAYING with the bot's match id, a job
+      // released after its game started -> CANCELLED. A READY duel whose
+      // game never started stays playable on a `released` read (a dropped
+      // Create, a lobby gone after a reconnect, a Release before the start):
+      // Create makes it a fresh lobby, and so does the worker. Each is a
+      // guarded claim that publishes the room and wakes the automation gate
+      // before this response; the worker's read does the same, so a failure
+      // only delays.
+      if (
+        status.over ||
+        status.state === "started" ||
+        duelBotEndedWithoutGame(status, duel)
+      )
+        stillPlayable = false;
+      try {
+        await applyDuelBotStatus(duel, status);
+      } catch {
+        console.error("[dota-lobby] bot-driven 1v1 update failed");
       }
     }
     // The bot's list carries Steam ids: the browser gets the roster's names
@@ -223,6 +268,7 @@ export async function POST(req: NextRequest) {
           matchId: status.matchId,
           ...(status.releasing ? { releasing: true } : {}),
           ...(status.over ? { over: true } : {}),
+          ...(status.left ? { left: true } : {}),
         },
         ...(players ? { players } : {}),
         ...(busyElsewhere ? { busyElsewhere } : {}),

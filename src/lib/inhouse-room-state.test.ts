@@ -62,10 +62,17 @@ describe("the room poll's source", () => {
     const touch = body.indexOf("touchQueueHeartbeat(");
     expect(seam).toBeGreaterThan(-1);
     expect(touch).toBeGreaterThan(seam);
-    // No write of its own to the inhouse tables.
+    // The 1v1 queue heartbeat too: through its one guarded writer, after its
+    // own seam, and after the 5v5's.
+    const duelSeam = body.indexOf('raceHook("inhouse.pollInhouseState.beforeDuelHeartbeat")');
+    const duelTouch = body.indexOf("touchDuelQueueHeartbeat(");
+    expect(duelSeam).toBeGreaterThan(touch);
+    expect(duelTouch).toBeGreaterThan(duelSeam);
+    expect(body.slice(0, duelTouch)).toMatch(/duelHeartbeatAction\(/);
+    // No write of its own to the inhouse tables, the 1v1's included.
     for (const file of poll) {
       expect(code(file.text)).not.toMatch(
-        /\.(inhouseQueueEntry|inhouseLobby|inhouseLobbyPlayer)\.(update|updateMany|create|createMany|upsert|delete|deleteMany)\(/,
+        /\.(inhouseQueueEntry|inhouseLobby|inhouseLobbyPlayer|inhouseDuelQueueEntry|inhouseDuel)\.(update|updateMany|create|createMany|upsert|delete|deleteMany)\(/,
       );
     }
   });
@@ -149,6 +156,7 @@ describe("the room poll's source", () => {
     expect(body).toContain("waitForInhouseRoomChange(");
     for (const forbidden of [
       "touchQueueHeartbeat(",
+      "touchDuelQueueHeartbeat(",
       "claimThrottle(",
       "publishInhouseRoomChange(",
       "getInhouseState(",

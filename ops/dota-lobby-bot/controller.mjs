@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { eventLog } from "./event-log.mjs";
 import { LOBBY_CHANNEL_TYPE, lobbyChannelName } from "./lobby-wire.mjs";
+import { KEY_PATTERN, gameModeFor, keyKind, sideSize } from "./lobby-kind.mjs";
 import {
   CHAT_JOIN_TIMEOUT_MS,
   CHAT_LINE_GAP_MS,
@@ -27,8 +28,6 @@ function validRegions(regions) {
     regions.every((region) => [2, 3].includes(region)) && new Set(regions).size === regions.length;
 }
 
-const KEY_PATTERN = /^(?:eu:)?(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
-
 export function validSpec(s, serverRegion = 2) {
   const regions = Array.isArray(serverRegion) ? serverRegion : [serverRegion];
   const ids = [...(s?.radiant ?? []), ...(s?.dire ?? [])];
@@ -45,7 +44,8 @@ export function validSpec(s, serverRegion = 2) {
     Number.isInteger(s.leagueId) &&
     s.leagueId > 0 &&
     s.leagueId <= 0xffffffff &&
-    s.gameMode === 2 &&
+    // Captains Mode for season and inhouse games, 1v1 Solo Mid for a duel.
+    s.gameMode === gameModeFor(s.key) &&
     validRegions(regions) &&
     regions.includes(s.serverRegion) &&
     // Shared workers reserve legacy keys for the US. EU always carries its
@@ -56,6 +56,9 @@ export function validSpec(s, serverRegion = 2) {
     Array.isArray(s.dire) &&
     s.radiant.length <= 10 &&
     s.dire.length <= 10 &&
+    // A duel is exactly one player a side, two different players.
+    (keyKind(s.key) !== "duel" ||
+      (s.radiant.length === 1 && s.dire.length === 1 && s.radiant[0] !== s.dire[0])) &&
     ids.every(
       (id) =>
         typeof id === "string" &&
@@ -103,6 +106,10 @@ export const LAUNCH_SETTLE_MS = 2 * 60_000;
 // screen with nobody joining, leaving or changing sides, so a game given up
 // during setup (or cancelled on the site) can't hold the one bot for good.
 export const IDLE_RELEASE_MS = 30 * 60_000;
+// A duel lobby nobody starts frees the bot sooner: two players either show
+// up within minutes or not at all, and the bot is wanted for the next game.
+export const DUEL_IDLE_RELEASE_MS = 10 * 60_000;
+const idleReleaseMs = (key) => (keyKind(key) === "duel" ? DUEL_IDLE_RELEASE_MS : IDLE_RELEASE_MS);
 // A launch still assigning or setting up a server this long after Start is
 // dead: Dota does either in seconds. Leaving then can't cost a real game.
 export const LAUNCH_STALL_MS = 10 * 60_000;
@@ -126,6 +133,26 @@ export const STARTED_BACKSTOP_MS = 3 * 60 * 60_000;
 // so an end Dota showed and the bot never got (2026-10-18) holds the bot
 // about this long past the check, not until the backstop.
 export const RECHECK_AFTER_MS = 15 * 60_000;
+// Early leave (DOTA_BOT_EARLY_LEAVE, off unless a kind is listed): once a
+// launched game is under way the bot sends AbandonCurrentGame and a Leave,
+// so it is free for the next game instead of sitting in this one's lobby
+// until its postgame. At most this many tries a job, this far apart; a try
+// Dota doesn't confirm within LEAVE_CONFIRM_MS is no resync, the bot simply
+// stays to the postgame as before.
+export const EARLY_LEAVE_MAX_TRIES = 2;
+export const EARLY_LEAVE_GAP_MS = 60_000;
+// DOTA_GameState's DOTA_GAMERULES_STATE_GAME_IN_PROGRESS: every player has
+// loaded and the horn has sounded, so a failed load or a server that never
+// started (which today come back to the lobby screen) are past.
+export const GAME_IN_PROGRESS = 5;
+// A game the bot left early can't show it its postgame, so it asks the Game
+// Coordinator for the match's details instead (k_EMsgGCMatchDetailsRequest):
+// first this long after the leave, then once a minute, one request in flight
+// (dropped after DETAILS_TIMEOUT_MS), until an outcome or DETAILS_FOR_MS.
+export const DETAILS_AFTER_MS = 8 * 60_000;
+export const DETAILS_EVERY_MS = 60_000;
+export const DETAILS_TIMEOUT_MS = 30_000;
+export const DETAILS_FOR_MS = 3 * 60 * 60_000;
 
 /** Named invite targets must be on the request's own roster. */
 export function validInviteTargets(spec) {
@@ -142,17 +169,19 @@ export function validInviteTargets(spec) {
 
 export function rosterMatches(lobby, spec) {
   // These are GC team enums (0/1), distinct from match-data Radiant/Dire 2/3.
+  // Five a side, or one in a duel (lobby-kind.mjs).
   const members = currentMembers(lobby);
+  const size = sideSize(spec.key);
   return (
     [spec.radiant, spec.dire].every((expected, side) => {
       const actual = members.filter((m) => m.team === side).map((m) => m.id);
       return (
-        expected.length === 5 &&
-        actual.length === 5 &&
-        new Set(expected).size === 5 &&
+        expected.length === size &&
+        actual.length === size &&
+        new Set(expected).size === size &&
         expected.every((id) => actual.includes(id))
       );
-    }) && new Set([...spec.radiant, ...spec.dire]).size === 10
+    }) && new Set([...spec.radiant, ...spec.dire]).size === size * 2
   );
 }
 
@@ -311,8 +340,23 @@ const sameLobby = (lobby, job) =>
  * truth; nothing else ever frees a claim on a guess.
  */
 export class LobbyController {
-  constructor({ file, transport, now = Date.now, serverRegion = 2, serverRegions = [serverRegion], log = eventLog() }) {
+  constructor({
+    file,
+    transport,
+    now = Date.now,
+    serverRegion = 2,
+    serverRegions = [serverRegion],
+    log = eventLog(),
+    // The kinds early leave is on for (lobby-kind.mjs earlyLeaveKinds):
+    // none unless DOTA_BOT_EARLY_LEAVE lists them.
+    earlyLeaveKinds = [],
+  }) {
     if (!validRegions(serverRegions)) throw new Error("Unsupported bot server regions");
+    if (!Array.isArray(earlyLeaveKinds) || earlyLeaveKinds.some((kind) => !["season", "inhouse", "duel"].includes(kind)))
+      throw new Error("Unsupported early leave kinds");
+    this.earlyLeaveKinds = Object.freeze([...earlyLeaveKinds]);
+    // The one match-details request out for a game the bot left early.
+    this.detailsInFlight = null;
     this.file = file;
     this.transport = transport;
     this.now = now;
@@ -392,6 +436,8 @@ export class LobbyController {
     if (spec?.withLifecycle === true) {
       if (this.data.active === key && job.releasing) body.releasing = true;
       if (gameOver(job)) body.over = true;
+      // The bot left this running game early: it is free, the game goes on.
+      if (job.left === true && job.state === "started") body.left = true;
     }
     return body;
   }
@@ -518,7 +564,7 @@ export class LobbyController {
         result = "failed";
       }
       this.log("seat-flip", { key, result, n: job.seatFlips.count });
-      if (result === "sent") this.say(job, moveLine("flip"), "flip");
+      if (result === "sent") this.say(job, moveLine("flip", undefined, undefined, job.spec), "flip");
       return;
     }
     if (!plan.kicks.length) return;
@@ -541,7 +587,7 @@ export class LobbyController {
       sent[why] += 1;
       // One line a move: so at most one about a player every 30 s. It tells
       // a drafted player their side, so it is their greeting too.
-      this.say(job, moveLine(why, side, names.get(id)), why, why === "side" ? [id] : []);
+      this.say(job, moveLine(why, side, names.get(id), job.spec), why, why === "side" ? [id] : []);
     }
     // Counts only: never who was moved.
     for (const why of ["side", "stranger"])
@@ -707,7 +753,7 @@ export class LobbyController {
     const line =
       chat.queue.shift() ??
       {
-        text: greetLine(greet.due.side, greet.due.ids, rosterNames(job.spec)),
+        text: greetLine(greet.due.side, greet.due.ids, rosterNames(job.spec), job.spec),
         reason: "greet",
         about: greet.due.ids,
       };
@@ -950,7 +996,10 @@ export class LobbyController {
       // Any other lobby stays untouched.
       const done = finishedJob(this.data.jobs, lobby);
       if (!done) return;
-      if (!(done.launchFailed && showsGame(lobby))) {
+      // A game the bot left early is never claimed back, even one Dota later
+      // called not scored (launchFailed): the bot already went, so its old
+      // lobby is a leftover like any finished game's.
+      if (done.left === true || !(done.launchFailed && showsGame(lobby))) {
         // A played game's end, seen after its claim was freed, still reaches
         // the site as `over`.
         const recorded = done.state === "started" && recordEnd(done, lobby, now);
@@ -969,6 +1018,12 @@ export class LobbyController {
     }
     const was = job.state;
     if (!sameLobby(lobby, job)) {
+      // The old lobby of a game the bot left early, replayed while a new
+      // claim holds the bot: its end still counts (`over`), but the bot never
+      // leaves it from here, since a Leave would leave whatever lobby the bot
+      // is really in. The new job reads blocked, as with any foreign lobby.
+      const left = finishedJob(this.data.jobs, lobby);
+      if (left?.left === true && left.state === "started") recordEnd(left, lobby, now);
       job.state = "blocked";
       this.save();
       this.logJob(job, was, "foreign-lobby");
@@ -1059,7 +1114,148 @@ export class LobbyController {
             ? "release"
             : null;
     if (reason) this.leave(job, reason);
+    else if (this.earlyLeaveDue(job, lobby, now)) this.leaveEarly(job);
     return failed;
+  }
+  /** Leave this launched game now, while it runs? Only for a kind listed in
+   * DOTA_BOT_EARLY_LEAVE, only the active claim's own lobby, only once the
+   * game is under way (RUN at DOTA_GAMERULES_STATE_GAME_IN_PROGRESS, so a
+   * failed load or a server that never started is past; a snapshot without a
+   * game state never qualifies) with its match id known, only while the bot
+   * sits on neither side, never at the game's end, and within the tries. */
+  earlyLeaveDue(job, lobby, now) {
+    const bot = this.transport.steamId();
+    return (
+      this.earlyLeaveKinds.includes(keyKind(job?.spec?.key)) &&
+      this.online &&
+      !!lobby &&
+      this.data.active === job.spec.key &&
+      job.state === "started" &&
+      !job.launchFailed &&
+      sameLobby(lobby, job) &&
+      lobby.state === 2 &&
+      lobby.gameState === GAME_IN_PROGRESS &&
+      !atPostgame(lobby) &&
+      hasMatchId(lobby) &&
+      job.matchId === lobby.matchId &&
+      !currentMembers(lobby).some((m) => m.id === bot && (m.team === 0 || m.team === 1)) &&
+      job.earlyLeavePendingAt === undefined &&
+      job.leavePendingAt === undefined &&
+      (job.earlyLeaves ?? 0) < EARLY_LEAVE_MAX_TRIES &&
+      now - (job.earlyLeaveSentAt ?? -Infinity) >= EARLY_LEAVE_GAP_MS
+    );
+  }
+  /** AbandonCurrentGame, then a Leave, recorded and saved first. Dota's
+   * departure (Destroy, a removal, an unsubscribe, a welcome with no lobby)
+   * confirms it and frees the claim (departed); none within LEAVE_CONFIRM_MS
+   * just ends the try (tick): no resync, the bot stays to the postgame. */
+  leaveEarly(job) {
+    const now = this.now();
+    job.earlyLeaves = (job.earlyLeaves ?? 0) + 1;
+    job.earlyLeaveSentAt = now;
+    job.earlyLeavePendingAt = now;
+    this.save();
+    this.log("leave-sent", { key: job.spec.key, reason: "early", lobbyState: this.lobby?.state ?? null, n: job.earlyLeaves });
+    try {
+      this.transport.abandon();
+      this.transport.leave();
+    } catch {
+      // Steam dropped: the try counts, and the next one waits its minute.
+      delete job.earlyLeavePendingAt;
+      this.save();
+      this.log("early-leave", { key: job.spec.key, result: "send-failed", n: job.earlyLeaves });
+    }
+  }
+  /** An early leave Dota hasn't confirmed in LEAVE_CONFIRM_MS ends its try,
+   * and a try still due (the second, a minute after the first) goes out from
+   * the clock when no lobby update brings it. */
+  earlyLeaveClock(job, now) {
+    if (!job) return;
+    if (job.earlyLeavePendingAt !== undefined && now - job.earlyLeavePendingAt >= LEAVE_CONFIRM_MS) {
+      delete job.earlyLeavePendingAt;
+      job.earlyLeaveUnconfirmedAt = now;
+      this.save();
+      this.log("early-leave", { key: job.spec.key, result: "unconfirmed", n: job.earlyLeaves });
+    }
+    if (this.lobby && this.earlyLeaveDue(job, this.lobby, now)) this.leaveEarly(job);
+  }
+  /** Ask the Game Coordinator for the details of one game the bot left early,
+   * whose end it can no longer see: DETAILS_AFTER_MS after the leave, then at
+   * most once a DETAILS_EVERY_MS per game, the longest-unasked first, one
+   * request in flight, only online, until an outcome or DETAILS_FOR_MS. True
+   * when it sent one. */
+  detailsClock(now) {
+    if (this.detailsInFlight && now - this.detailsInFlight.at < DETAILS_TIMEOUT_MS) return false;
+    this.detailsInFlight = null;
+    if (!this.online) return false;
+    let pick;
+    for (const job of Object.values(this.data.jobs)) {
+      if (job.left !== true || job.state !== "started" || !job.matchId || won(job.postgameOutcome)) continue;
+      if (job.detailsGaveUpAt !== undefined) continue;
+      const since = job.leftAt ?? job.departedAt ?? now;
+      if (now - since >= DETAILS_FOR_MS) {
+        job.detailsGaveUpAt = now;
+        this.save();
+        this.log("match-details", { key: job.spec.key, result: "gave-up", n: job.detailsAsks ?? 0 });
+        continue;
+      }
+      if (now - since < DETAILS_AFTER_MS || now - (job.detailsAskedAt ?? -Infinity) < DETAILS_EVERY_MS) continue;
+      if (!pick || (job.detailsAskedAt ?? -Infinity) < (pick.detailsAskedAt ?? -Infinity)) pick = job;
+    }
+    if (!pick) return false;
+    pick.detailsAskedAt = now;
+    pick.detailsAsks = (pick.detailsAsks ?? 0) + 1;
+    this.save();
+    this.detailsInFlight = { key: pick.spec.key, matchId: pick.matchId, at: now };
+    try {
+      this.transport.matchDetails(pick.matchId);
+    } catch {
+      this.detailsInFlight = null;
+      this.log("match-details", { key: pick.spec.key, result: "send-failed", n: pick.detailsAsks });
+      return false;
+    }
+    this.log("match-details", { key: pick.spec.key, result: "asked", matchId: pick.matchId, n: pick.detailsAsks });
+    return true;
+  }
+  /** The Game Coordinator's match details (server.mjs routes 7096). For a
+   * game the bot left early, a winner (2 to 13) is recorded exactly as its
+   * postgame would have been, so status() reads `over`; a not-scored outcome
+   * (64 to 69) is a failed launch, released as one is today; anything else
+   * (the game still running, or not found) waits for the next ask. True when
+   * it recorded an end. */
+  matchDetails({ result, match } = {}) {
+    const matchId = match?.matchId !== undefined && match?.matchId !== null ? String(match.matchId) : null;
+    if (this.detailsInFlight && (!matchId || this.detailsInFlight.matchId === matchId)) this.detailsInFlight = null;
+    if (!matchId || result !== 1) return false;
+    const job = Object.values(this.data.jobs).find(
+      (j) => j.left === true && j.state === "started" && j.matchId === matchId,
+    );
+    if (!job) return false;
+    const outcome = match.matchOutcome;
+    const now = this.now();
+    if (won(outcome) && !won(job.postgameOutcome)) {
+      job.postgameSeen = true;
+      job.postgameAt ??= now;
+      job.postgameOutcome = outcome;
+      job.endBy = "match-details";
+      this.save();
+      this.log("match-details", { key: job.spec.key, result: "over", outcome });
+      return true;
+    }
+    if (notScored(outcome)) {
+      const was = job.state;
+      job.postgameSeen = true;
+      job.postgameAt ??= now;
+      job.postgameOutcome = outcome;
+      job.endBy = "match-details";
+      this.failLaunch(job);
+      job.state = "released";
+      this.save();
+      this.log("match-details", { key: job.spec.key, result: "not-scored", outcome });
+      this.logJob(job, was, "not-scored");
+      return true;
+    }
+    return false;
   }
   /** Release a launch that is over without a game. Its claim holds until Dota
    * confirms the departure, which then reads released: Create works again for
@@ -1164,6 +1360,8 @@ export class LobbyController {
       this.save();
       this.logJob(job, was, "unconfirmed");
     }
+    this.earlyLeaveClock(job, now);
+    this.detailsClock(now);
     this.resyncClock(now);
     const lobby = this.lobby;
     if (!this.online || !job || job.releasing) return false;
@@ -1193,7 +1391,7 @@ export class LobbyController {
       lobby.state === 0 &&
       !job.launchRequested &&
       ["ready", "blocked"].includes(job.state) &&
-      now - Math.max(job.changedAt, job.activeAt ?? 0) >= IDLE_RELEASE_MS
+      now - Math.max(job.changedAt, job.activeAt ?? 0) >= idleReleaseMs(job.spec.key)
     ) {
       job.releasing = true;
       reason = "idle";
@@ -1280,6 +1478,15 @@ export class LobbyController {
     const job = this.data.jobs[this.data.active];
     if (job) {
       const was = job.state;
+      // A game the bot left early (or tried to), gone before its end: the
+      // game goes on without the bot, which is free for the next one.
+      const left = job.state === "started" && (job.earlyLeaves ?? 0) > 0 && !job.postgameSeen;
+      const confirmed = job.earlyLeavePendingAt !== undefined;
+      delete job.earlyLeavePendingAt;
+      if (left) {
+        job.left = true;
+        job.leftAt ??= now;
+      }
       // A launch Dota showed, whose lobby then went away before it ran, is
       // over: it reads released, like any failed launch.
       if (job.state !== "started" && job.launchSeen && !job.releasing)
@@ -1303,6 +1510,8 @@ export class LobbyController {
       this.log("departed", { key: job.spec.key, source, lobbyId: job.lobbyId ?? null });
       this.logJob(job, was, source);
       if (free) this.log("claim-freed", { key: job.spec.key, reason: source });
+      if (left)
+        this.log("early-leave", { key: job.spec.key, result: confirmed ? "confirmed" : "left", n: job.earlyLeaves });
     } else {
       const done = this.lobby ? finishedJob(this.data.jobs, this.lobby) : undefined;
       if (done) {

@@ -43,6 +43,14 @@ describe("readBotReply", () => {
       });
   });
 
+  // The bot's early leave (2026-10-27): a started job may carry `left`. The
+  // transport passes the body through untouched; parseLobbyLifecycle
+  // (dota-lobby.ts) reads the flag strictly.
+  it("passes a started job's left flag through with its match id", async () => {
+    const body = { state: "started", matchId: "8123456789", left: true, over: true };
+    expect(await readBotReply(json(body))).toEqual({ status: 200, body });
+  });
+
   it.each([401, 404, 413, 500, 502, 524])(
     "refuses status %i: outside the bot's contract",
     async (status) => {

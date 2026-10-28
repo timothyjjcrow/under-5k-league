@@ -92,6 +92,8 @@ import {
 } from "./inhouse-mmr-cap";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
+import { buildDuelState } from "./inhouse-duel";
+import { loadDuelRoomRows } from "./inhouse-duel-room";
 import { runAfterResponse } from "./after-response";
 import { raceHook } from "./race-hook";
 import {
@@ -3386,7 +3388,11 @@ export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
     }
   }
 
-  return { queue, lobbies, pending, recentResults, signupRoles };
+  // The 1v1 queue and duels (inhouse-duel-room.ts), after the 5v5's reads:
+  // the reply's additive `duel` block (buildDuelState) is built from them.
+  const duel = await loadDuelRoomRows(nowMs);
+
+  return { queue, lobbies, pending, recentResults, signupRoles, duel };
 }
 
 export type InhouseRoomRows = Awaited<ReturnType<typeof loadInhouseRoomRows>>;
@@ -3834,6 +3840,18 @@ export function buildInhouseState(
           ? effectiveInhouseRoles(extras.inhouseRoles, extras.signupRoles)
           : null,
     },
+    /**
+     * The 1v1 mid queue and duels (buildDuelState, inhouse-duel.ts): a
+     * separate block, after every 5v5 field. Its MMR-cap refusal is the
+     * page's own `joinRefusal` prop (the same rule), so a poll reads nothing
+     * more for it; joinDuelQueue refuses the same.
+     */
+    duel: buildDuelState(
+      viewer,
+      rows.duel,
+      { in5v5: inLobby, mmrRefusal: null },
+      now,
+    ),
   };
 }
 

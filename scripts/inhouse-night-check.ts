@@ -72,6 +72,7 @@ async function main() {
   for (const t of [
     prisma.inhouseCreditEntry, prisma.inhouseCredit, prisma.inhouseBet,
     prisma.inhouseLobbyPlayer, prisma.inhouseLobby, prisma.inhouseQueueEntry,
+    prisma.inhouseDuel, prisma.inhouseDuelQueueEntry,
     prisma.adminAction, prisma.setting,
   ]) await (t as { deleteMany: () => Promise<unknown> }).deleteMany();
   await prisma.user.deleteMany();
