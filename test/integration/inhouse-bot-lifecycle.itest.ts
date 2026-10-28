@@ -723,7 +723,7 @@ describe("Create's BUSY", () => {
   const busy = new Response(JSON.stringify({ code: "BUSY" }), { status: 409 });
 
   const busyCopy =
-    "The bot is hosting another game's lobby. It hosts one game at a time and is free again when that game ends: try again then, or host this game by hand.";
+    "The bot is hosting another game's lobby. It's free again once it leaves that game, usually a few minutes after it starts (or when it ends): try again then, or host this game by hand.";
   const leavingCopy = (id: string) =>
     `Asked the bot to leave finished game #${inhouseLobbyCode(id)}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
 
