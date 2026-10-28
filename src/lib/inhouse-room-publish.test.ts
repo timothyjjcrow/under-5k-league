@@ -35,7 +35,7 @@ function fn(src: string, name: string): string {
 
 const PUBLISH = "publishInhouseRoomChange(";
 const ROOM_TABLE_WRITE =
-  /\.(inhouseQueueEntry|inhouseLobby|inhouseLobbyPlayer)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/;
+  /\.(inhouseQueueEntry|inhouseLobby|inhouseLobbyPlayer|inhouseDuelQueueEntry|inhouseDuel)\.(create|createMany|update|updateMany|upsert|delete|deleteMany)\(/;
 
 /** `before` occurs, and the first `after` following it comes later still. */
 function ordered(body: string, ...marks: string[]) {
@@ -168,6 +168,48 @@ describe("rule P: who publishes the inhouse room's changes", () => {
   });
 });
 
+describe("rule P: the 1v1 duel engine publishes its own commits", () => {
+  const duel = code(sourceFile("src/lib/inhouse-duel-service.ts").text);
+  // Writers that leave the publish to someone else, and why.
+  const PUBLISHED_BY_CALLER: Record<string, string> = {
+    claimPair:
+      "runs inside joinDuelQueue's and pairDuelQueue's transactions; both publish after the commit",
+    touchDuelQueueHeartbeat:
+      "the room poll publishes when the heartbeat turned the viewer present (it moves only lastSeenAt otherwise)",
+  };
+
+  it("every top-level function that writes a 1v1 table publishes, or is listed", () => {
+    const names = [
+      ...duel.matchAll(/\n(?:export )?(?:async )?function (\w+)\b/g),
+    ].map((m) => m[1]);
+    const writers = names.filter((name) => ROOM_TABLE_WRITE.test(fn(duel, name)));
+    // The queue, the pairing, every transition, the result and the scan.
+    expect(writers.length).toBeGreaterThanOrEqual(15);
+    for (const name of writers) {
+      if (PUBLISHED_BY_CALLER[name]) continue;
+      expect(fn(duel, name), `${name} writes a 1v1 table`).toContain(PUBLISH);
+    }
+    for (const name of Object.keys(PUBLISHED_BY_CALLER)) {
+      expect(writers, `${name} no longer writes: drop it from the list`).toContain(name);
+    }
+  });
+
+  it("every importer of the heartbeat publishes", () => {
+    const importers = sourceFiles("src/**/*.{ts,tsx}", 300).filter((f) =>
+      /import\s*\{[^}]*\btouchDuelQueueHeartbeat\b[^}]*\}\s*from/.test(f.text),
+    );
+    expect(importers.map((f) => f.path)).toEqual(["src/lib/inhouse-room-state.ts"]);
+    const body = code(fn(importers[0].text, "pollInhouseState"));
+    ordered(
+      body,
+      "touchDuelQueueHeartbeat(viewer.id)",
+      'if (duelHeartbeat === "writeAndRefresh") {',
+      PUBLISH,
+      "snap = await roomCache.get()",
+    );
+  });
+});
+
 describe("rule P: the publish sites, in order", () => {
   const service = code(sourceFile("src/lib/inhouse-service.ts").text);
 
@@ -189,7 +231,8 @@ describe("rule P: the publish sites, in order", () => {
 
   it("syncInhouse publishes after the resolvers and before the OpenDota scan, and its caller in a finally", () => {
     const sync = sourceFile("src/lib/result-sync-service.ts");
-    const body = code(fn(sync.text, "syncInhouse"));
+    // The 5v5 half; the 1v1 half publishes inside the duel engine.
+    const body = code(fn(sync.text, "syncInhouseLobbies"));
     ordered(body, "await resolveStalledPick()", PUBLISH, "maybeAutoDetectResult(");
     expect(code(sync.text)).toMatch(
       /settle\(async \(\) => \{\s*try \{\s*return await syncInhouse\(options\);\s*\} finally \{\s*await publishInhouseRoomChange\(\);/,

@@ -7,6 +7,10 @@ import { expect, type BrowserContext, type Locator, type Page } from "@playwrigh
  * placeholder, and nothing replays it. Next 16.4's dev server answers a page
  * sooner than it hydrates, so a click straight after an anchor jump missed
  * (zz-match-night-poll.spec.ts).
+ *
+ * The idle wait is capped: a page whose main thread never goes idle (CI,
+ * 2026-10-28: /admin under a busy dev server) never runs an uncapped
+ * callback, and the wait ate 113 s of a 120 s test.
  */
 export async function untilHydrated(page: Page, target: Locator): Promise<void> {
   await expect
@@ -17,7 +21,10 @@ export async function untilHydrated(page: Page, target: Locator): Promise<void> 
     )
     .toBe(true);
   await page.evaluate(
-    () => new Promise((resolve) => requestIdleCallback(() => resolve(null))),
+    () =>
+      new Promise((resolve) =>
+        requestIdleCallback(() => resolve(null), { timeout: 2_000 }),
+      ),
   );
 }
 

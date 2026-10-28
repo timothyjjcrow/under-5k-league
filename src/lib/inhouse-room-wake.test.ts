@@ -9,6 +9,7 @@ import {
   type InhouseRoomDueInput,
 } from "./inhouse-room-due";
 import { inhouseRoomWakeAt, type InhouseRoomWakeInput } from "./inhouse-room-wake";
+import { INHOUSE_DUEL, INHOUSE_DUEL_STATUS } from "./constants";
 
 // When a held state request answers on its own (inhouse-room-wake.ts): each
 // clock is a boundary where the due check or the reply flips, so a request
@@ -283,5 +284,26 @@ describe("a throttled board edit's retry", () => {
     expect(inhouseRoomWakeAt(rows, NOW, { ...member, boardRetryAtMs: null })).toBe(
       inhouseRoomWakeAt(rows, NOW, spectator),
     );
+  });
+
+  it("wakes for the 1v1 block's own clocks, for any viewer", () => {
+    const expiresAt = new Date(NOW + 2 * MIN);
+    const rows = room({
+      duel: {
+        queue: [{ lastSeenAt: new Date(NOW - 5 * SEC), expiresAt }],
+        duels: [
+          {
+            status: INHOUSE_DUEL_STATUS.COMPLETED,
+            completedAt: new Date(NOW - INHOUSE_DUEL.LAST_RESULT_WINDOW_MS + 30 * SEC),
+          },
+        ],
+      },
+    });
+    // The result leaves its window first (30s), then the waiter turns away.
+    expect(inhouseRoomWakeAt(rows, NOW, spectator)).toBe(NOW + 30 * SEC + 1 + GRACE);
+    const later = room({
+      duel: { queue: [{ lastSeenAt: new Date(NOW), expiresAt }], duels: [] },
+    });
+    expect(inhouseRoomWakeAt(later, NOW, spectator)).toBe(expiresAt.getTime() + GRACE);
   });
 });

@@ -19,6 +19,8 @@ const prismaMocks = vi.hoisted(() => ({
   setting: { findMany: vi.fn(), findUnique: vi.fn() },
   inhouseLobby: { findMany: vi.fn(), findFirst: vi.fn() },
   inhouseQueueEntry: { findMany: vi.fn() },
+  inhouseDuelQueueEntry: { findMany: vi.fn() },
+  inhouseDuel: { findMany: vi.fn() },
   leagueAnnouncement: { findMany: vi.fn() },
   inhouseAnnouncement: { findMany: vi.fn() },
   importCandidate: { findMany: vi.fn() },
@@ -67,6 +69,9 @@ import {
   AUTO_SYNC,
   DRAFT_REMINDER,
   INHOUSE,
+  INHOUSE_DUEL,
+  INHOUSE_DUEL_RESULT_STATUSES,
+  INHOUSE_DUEL_STATUS,
   INHOUSE_STATUS,
   WEEK_REMINDER,
 } from "./constants";
@@ -144,6 +149,8 @@ function inputs(
     activeLobbies: [],
     awaitingResultLobbies: [],
     queue: [],
+    duelQueue: [],
+    openDuels: [],
     repairableInhouseResult: false,
     leagueOutbox: [],
     inhouseOutboxes: [],
@@ -172,7 +179,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 13,
+      version: 14,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -266,7 +273,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 13,
+      version: 14,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -922,6 +929,118 @@ describe("computeAutomationGateSnapshot", () => {
     expect(snapshot).toMatchObject({
       nextWakeAtMs: formed + INHOUSE.ABANDON_READY_HOURS * 3_600_000 + 1,
       reason: "INHOUSE",
+    });
+  });
+
+  describe("1v1 duels (duelQueue, openDuels)", () => {
+    const MIN = 60_000;
+    type Duel = AutomationGateInputs["openDuels"][number];
+    const duel = (overrides: Partial<Duel> = {}): Duel => ({
+      status: INHOUSE_DUEL_STATUS.AWAITING_RESULT,
+      createdAt: new Date(NOW - 20 * MIN),
+      startedAt: new Date(NOW - 18 * MIN),
+      checkedAt: new Date(NOW - MIN),
+      ...overrides,
+    });
+    const waiter = (seenAgoMs: number, expiresInMs = 20 * MIN) => ({
+      lastSeenAt: new Date(NOW - seenAgoMs),
+      expiresAt: new Date(NOW + expiresInMs),
+    });
+
+    it("runs every pass while a duel is live: the bot's reads and the lobby create retry", () => {
+      for (const status of [INHOUSE_DUEL_STATUS.READY, INHOUSE_DUEL_STATUS.PLAYING]) {
+        expect(
+          computeAutomationGateSnapshot(
+            inputs({ openDuels: [duel({ status, startedAt: null })] }),
+            NOW,
+          ),
+        ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+      }
+    });
+
+    it("sleeps an awaiting duel to its next scan, never into a 5v5 slot", () => {
+      const snapshot = computeAutomationGateSnapshot(
+        inputs({ openDuels: [duel()] }),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({
+        nextWakeAtMs: NOW - MIN + INHOUSE_DUEL.SCAN_EVERY_SECONDS * 1000,
+        reason: "INHOUSE",
+      });
+      // Duels hold no game slot: a full set of live 5v5s still validates.
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({ openDuels: [duel(), duel(), duel()] }),
+          NOW,
+        ),
+      ).not.toThrow();
+    });
+
+    it("wakes for the queue's expiry, and at once for two present waiters", () => {
+      expect(
+        computeAutomationGateSnapshot(inputs({ duelQueue: [waiter(5_000)] }), NOW),
+      ).toMatchObject({ nextWakeAtMs: NOW + 20 * MIN, reason: "INHOUSE" });
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ duelQueue: [waiter(5_000), waiter(10_000, 25 * MIN)] }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+      // One of the two away: nobody to pair until they come back.
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({
+            duelQueue: [
+              waiter(5_000),
+              waiter(INHOUSE_DUEL.PRESENT_SECONDS * 1000 + 1, 25 * MIN),
+            ],
+          }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: NOW + 20 * MIN });
+    });
+
+    it("refuses an unknown duel status", () => {
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({ openDuels: [duel({ status: INHOUSE_DUEL_STATUS.COMPLETED })] }),
+          NOW,
+        ),
+      ).toThrow(/duel status/);
+    });
+
+    it("the loader reads only open duels, and the 1v1 queue", async () => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW);
+      prismaMocks.automationRunState.findUnique.mockResolvedValue({
+        lastStatus: "SUCCEEDED",
+        leaseExpiresAt: null,
+        lastFinishedAt: new Date(NOW),
+        consecutiveFailures: 0,
+        lastSummary: "{}",
+      });
+      prismaMocks.season.findMany.mockResolvedValue([]);
+      prismaMocks.setting.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseLobby.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseLobby.findFirst.mockResolvedValue(null);
+      prismaMocks.inhouseQueueEntry.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseDuelQueueEntry.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseDuel.findMany.mockResolvedValue([
+        duel({ status: INHOUSE_DUEL_STATUS.PLAYING }),
+      ]);
+      prismaMocks.leagueAnnouncement.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseAnnouncement.findMany.mockResolvedValue([]);
+      boardNeedsSyncMock.mockResolvedValue(false);
+      try {
+        const snapshot = await loadAutomationGateSnapshot(NOW);
+        expect(snapshot).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+        expect(prismaMocks.inhouseDuel.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+          }),
+        );
+      } finally {
+        vi.restoreAllMocks();
+      }
     });
   });
 
@@ -2029,6 +2148,8 @@ describe("cached decision boundary", () => {
     prismaMocks.inhouseLobby.findMany.mockResolvedValue([]);
     prismaMocks.inhouseLobby.findFirst.mockResolvedValue(null);
     prismaMocks.inhouseQueueEntry.findMany.mockResolvedValue([]);
+    prismaMocks.inhouseDuelQueueEntry.findMany.mockResolvedValue([]);
+    prismaMocks.inhouseDuel.findMany.mockResolvedValue([]);
     prismaMocks.leagueAnnouncement.findMany.mockResolvedValue([]);
     prismaMocks.inhouseAnnouncement.findMany.mockResolvedValue([]);
     let stored: unknown;
@@ -2076,7 +2197,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 13,
+      version: 14,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
@@ -2141,6 +2262,10 @@ describe("loadAutomationGateSnapshot", () => {
       prismaMocks.setting.findUnique.mockResolvedValue(null);
       prismaMocks.inhouseLobby.findFirst.mockResolvedValue(null);
       prismaMocks.inhouseQueueEntry.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseDuelQueueEntry.findMany.mockResolvedValue([]);
+      prismaMocks.inhouseDuel.findMany.mockResolvedValue([]);
+    prismaMocks.inhouseDuelQueueEntry.findMany.mockResolvedValue([]);
+    prismaMocks.inhouseDuel.findMany.mockResolvedValue([]);
       prismaMocks.leagueAnnouncement.findMany.mockResolvedValue([]);
       prismaMocks.inhouseAnnouncement.findMany.mockResolvedValue([]);
       // The live-slot query and the marked-over query are both findMany on

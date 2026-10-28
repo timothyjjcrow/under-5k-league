@@ -31,6 +31,7 @@ note before changing that area: it is required reading, not background.
 | [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover and the standin MMR rule's requests, check-ins, the week reminder |
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
 | [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal (`/admin/inhouse-players`) |
+| [inhouse-duels](docs/features/inhouse-duels.md) | the 1v1 mid queue and duels: pairing, their bot lobbies, results and clocks, the 1v1 card on `/inhouse`, the 1v1 leaderboard |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
 | [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |

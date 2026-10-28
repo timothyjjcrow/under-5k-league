@@ -340,6 +340,7 @@ const FILES = [
   "src/lib/participant-admin.ts",
   "src/lib/import-candidates.ts",
   "src/lib/inhouse-service.ts",
+  "src/lib/inhouse-duel-service.ts",
   "src/lib/match-import.ts",
   "src/lib/reschedule-service.ts",
   "src/lib/scrim-service.ts",

@@ -4,6 +4,7 @@ import {
   DRAFT_STATUS,
   INHOUSE,
   INHOUSE_ACTIVE_STATUSES,
+  INHOUSE_DUEL_RESULT_STATUSES,
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
@@ -16,6 +17,7 @@ import { databaseNow } from "./database-time";
 import { draftReminderOpensAt, draftSetupOpen } from "./draft-setup";
 import { detectIntervalSeconds, inhouseDetectWindow } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
+import { duelWorkerWakeAtMs } from "./inhouse-duel";
 import { prisma } from "./prisma";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
@@ -186,6 +188,19 @@ export type AutomationGateInputs = {
     joinedAt: Date;
     lastSeenAt: Date;
     idleExpiresAt: Date | null;
+  }>;
+  /**
+   * The 1v1 mid queue and every duel a result can still land on
+   * (docs/features/inhouse-duels.md). Kept apart from activeLobbies and its
+   * slot-count invariant: a duel holds no 5v5 game slot. Their wake is
+   * duelWorkerWakeAtMs.
+   */
+  duelQueue: Array<{ lastSeenAt: Date; expiresAt: Date }>;
+  openDuels: Array<{
+    status: string;
+    createdAt: Date;
+    startedAt: Date | null;
+    checkedAt: Date | null;
   }>;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
@@ -814,6 +829,28 @@ export function computeAutomationGateSnapshot(
   if (inputs.repairableInhouseResult) {
     addCandidate(candidates, nowMs, nowMs, "INHOUSE");
   }
+  // The 1v1 duels' worker steps (runDuelWorkerSteps): every pass while a
+  // duel is live (the bot's reads, the READY duel's lobby create retry) or
+  // two present waiters could pair, else the queue expiries and each open
+  // duel's scan, setup call-off and give-up clocks.
+  for (const [index, entry] of inputs.duelQueue.entries()) {
+    dateMs(entry.lastSeenAt, `duelQueue[${index}].lastSeenAt`);
+    dateMs(entry.expiresAt, `duelQueue[${index}].expiresAt`);
+  }
+  for (const [index, duel] of inputs.openDuels.entries()) {
+    invariant(
+      INHOUSE_DUEL_RESULT_STATUSES.includes(duel.status as never),
+      "duel status is unknown",
+    );
+    dateMs(duel.createdAt, `openDuels[${index}].createdAt`);
+    optionalDateMs(duel.startedAt, `openDuels[${index}].startedAt`);
+    optionalDateMs(duel.checkedAt, `openDuels[${index}].checkedAt`);
+  }
+  const duelWakeAt = duelWorkerWakeAtMs(
+    { queue: inputs.duelQueue, duels: inputs.openDuels },
+    nowMs,
+  );
+  if (duelWakeAt !== null) addCandidate(candidates, nowMs, duelWakeAt, "INHOUSE");
 
   if (inputs.leagueDeliveryAvailable && inputs.leagueOutbox.length > 0) {
     for (const row of inputs.leagueOutbox) {
@@ -1289,6 +1326,8 @@ export async function loadAutomationGateSnapshot(
     activeLobbies,
     awaitingResultLobbies,
     queue,
+    duelQueue,
+    openDuels,
     repairableInhouseResult,
     leagueOutbox,
     inhouseOutboxes,
@@ -1371,6 +1410,23 @@ export async function loadAutomationGateSnapshot(
         joinedAt: true,
         lastSeenAt: true,
         idleExpiresAt: true,
+      },
+    }),
+    prisma.inhouseDuelQueueEntry.findMany({
+      // The 1v1 queue is short-lived (QUEUE_MINUTES); the cap only bounds a
+      // pathological pile-up.
+      take: 200,
+      select: { lastSeenAt: true, expiresAt: true },
+    }),
+    prisma.inhouseDuel.findMany({
+      where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      take: 200,
+      select: {
+        status: true,
+        createdAt: true,
+        startedAt: true,
+        checkedAt: true,
       },
     }),
     prisma.inhouseLobby.findFirst({
@@ -1463,6 +1519,8 @@ export async function loadAutomationGateSnapshot(
       activeLobbies,
       awaitingResultLobbies,
       queue,
+      duelQueue,
+      openDuels,
       repairableInhouseResult: repairableInhouseResult !== null,
       leagueOutbox,
       inhouseOutboxes,

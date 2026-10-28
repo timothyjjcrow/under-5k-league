@@ -30,6 +30,9 @@ message CreateLobby {
 message KickFromTeam { optional uint32 account_id = 1; }
 // Also CMsgFlipLobbyTeams (7320), which has no fields.
 message Empty {}
+// CMsgAbandonCurrentGame (7035), from dota_gcmessages_client_match_management
+// .proto: no fields. Sent only for early leave (DOTA_BOT_EARLY_LEAVE).
+message AbandonCurrentGame {}
 // From dota_gcmessages_client_chat.proto, inspected 2026-10-18. The enums
 // (DOTAChatChannelType_t, the response's Result) are uint32 here: the same
 // varint on the wire.

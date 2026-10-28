@@ -3,7 +3,9 @@ export const REQUEST_TIMEOUT_MS = 10_000;
 export const LEASE_MS = 90_000;
 export const MAX_PENDING = 64;
 export const INSTANCE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const KEY_PATTERN = /^(?:eu:)?(season|inhouse):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
+// Season, 5v5 inhouse and 1v1 mid duel jobs (the bot's lobby-kind.mjs; a bot
+// test pins the two equal).
+export const KEY_PATTERN = /^(?:eu:)?(season|inhouse|duel):[a-zA-Z0-9_-]{1,128}:[1-9]\d?$/;
 const STATES = new Set(["idle", "creating", "ready", "starting", "started", "blocked", "released"]);
 const ERROR_CODES = new Set(["AUTH", "INVALID", "OFFLINE", "BUSY", "STATE", "ROSTER", "SETTINGS"]);
 const LOBBY_ACTIONS = ["status", "create", "start", "release", "invite"];
@@ -66,13 +68,14 @@ export function validReply(value, action) {
       nullableId(body.lobbyId) && nullableUint(body.gameMode) && nullableUint(body.serverRegion) && nullableUint(body.leagueId);
   }
   if (!LOBBY_ACTIONS.includes(action)) return false;
-  // players answers a spec's withPlayers, releasing and over its withLifecycle;
-  // only an invite reports how many it sent.
-  const keys = ["state", "lobbyId", "matchId", "players", "releasing", "over", ...(action === "invite" ? ["invited"] : [])];
+  // players answers a spec's withPlayers, releasing, over and left its
+  // withLifecycle (left: the bot left the running game early); only an invite
+  // reports how many it sent.
+  const keys = ["state", "lobbyId", "matchId", "players", "releasing", "over", "left", ...(action === "invite" ? ["invited"] : [])];
   return onlyKeys(body, keys) && STATES.has(body.state) &&
     (body.lobbyId === undefined || id(body.lobbyId)) && (body.matchId === undefined || id(body.matchId)) &&
     optionalPlayers(body.players) && optionalInvited(body.invited) &&
-    optionalTrue(body.releasing) && optionalTrue(body.over);
+    optionalTrue(body.releasing) && optionalTrue(body.over) && optionalTrue(body.left);
 }
 
 export function leaseAlive(attachment, automaticResponseAt, now) {

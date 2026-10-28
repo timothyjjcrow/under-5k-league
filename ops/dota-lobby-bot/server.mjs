@@ -14,6 +14,7 @@ import { readSteamAuth, writeSteamAuth } from "./auth-store.mjs";
 import { RelayClient, relayConnection } from "./relay-client.mjs";
 import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegions } from "./region.mjs";
+import { earlyLeaveKinds } from "./lobby-kind.mjs";
 import { lobbyHealth } from "./health.mjs";
 import { offlineWatchdog, OFFLINE_RESTART_MS } from "./watchdog.mjs";
 import { accountIdOf, lobbyChannelName, LOBBY_CHANNEL_TYPE, markWireTeams, readMessage } from "./lobby-wire.mjs";
@@ -25,6 +26,9 @@ const say = (message) => console.log(stamp(message));
 const warn = (message) => console.error(stamp(message));
 
 const serverRegions = gameServerRegions(process.env.DOTA_GAME_SERVER_REGIONS, process.env.DOTA_GAME_SERVER_REGION);
+// Off unless listed: "duel", or "duel,inhouse,season" (docs/DOTA-LOBBY-BOT.md,
+// Early leave). An unknown kind stops startup.
+const earlyLeave = earlyLeaveKinds(process.env.DOTA_BOT_EARLY_LEAVE);
 const secret = process.env.DOTA_LOBBY_BOT_SECRET ?? "";
 if (secret.length < 32 || secret.length > 512 || /\s/.test(secret))
   throw new Error(
@@ -69,6 +73,7 @@ const resync = gcResync({
 });
 const controller = new LobbyController({
   serverRegions,
+  earlyLeaveKinds: earlyLeave,
   log,
   file: resolve(stateDir, "lobbies.json"),
   transport: {
@@ -99,6 +104,13 @@ const controller = new LobbyController({
       setTimeout(runClock, LEAVE_CONFIRM_MS + 1000).unref();
     },
     resync: () => resync.start(),
+    // Early leave (DOTA_BOT_EARLY_LEAVE): CMsgAbandonCurrentGame (7035, no
+    // fields), sent just before the Leave above, once a game is under way.
+    abandon: () => send(7035, "AbandonCurrentGame"),
+    // A game the bot left early: its details, for the end it can't see.
+    // Dota2User's own encoder, like the invite (the match id is a uint64).
+    matchDetails: (matchId) =>
+      dota.sendPartial(protos.EDOTAGCMsg.k_EMsgGCMatchDetailsRequest, { matchId }),
     removeBotFromTeam: () =>
       send(8047, "KickFromTeam", { accountId: user.steamID.accountid }),
     // Dota2User's own encoder: the fixed64 Steam ID goes as a string, and
@@ -274,6 +286,14 @@ user.on("accountLimitations", (limited) => {
   if (limitedLogged === !!limited) return;
   limitedLogged = !!limited;
   log("account", { limited: !!limited });
+});
+// The answer to a match-details request for a game the bot left early.
+dota.router.on(EDOTAGCMsg.k_EMsgGCMatchDetailsResponse, (answer) => {
+  try {
+    controller.matchDetails(answer);
+  } catch {
+    // Unreadable or late: the next ask, or the site's OpenDota result, covers it.
+  }
 });
 dota.router.on(ESOMsg.k_ESOMsg_Destroy, (obj) => removed(obj, "destroy"));
 dota.router.on(ESOMsg.k_ESOMsg_UpdateMultiple, (update) => {

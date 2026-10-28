@@ -15,9 +15,9 @@ import {
   weekReminderKey,
   weekReminderPrefix,
 } from "@/lib/settings";
-import { AUTO_SYNC } from "@/lib/constants";
+import { AUTO_SYNC, INHOUSE_DUEL, INHOUSE_DUEL_STATUS } from "@/lib/constants";
 import { RESULT_NUDGE } from "@/lib/result-nudge";
-import { makeSeason, makeTeam } from "./factories";
+import { makeSeason, makeTeam, makeUser } from "./factories";
 import { serializeInhouseNight } from "@/lib/inhouse-night";
 
 const NOW = Date.parse("2026-09-05T20:00:00.000Z");
@@ -159,6 +159,39 @@ describe("automation gate database reads", () => {
     expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       reason: null,
+    });
+  });
+
+  it("reads the 1v1 duels: every pass while one is live, then its next clock, closed ones never", async () => {
+    const [a, b] = await Promise.all([makeUser("Gate A"), makeUser("Gate B")]);
+    const pair = { radiantUserId: a.id, direUserId: b.id };
+    // Closed duels wake nothing.
+    await prisma.inhouseDuel.create({
+      data: { ...pair, status: INHOUSE_DUEL_STATUS.CANCELLED, createdAt: new Date(NOW - 60_000) },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({ reason: null });
+
+    const awaiting = await prisma.inhouseDuel.create({
+      data: {
+        ...pair,
+        status: INHOUSE_DUEL_STATUS.AWAITING_RESULT,
+        createdAt: new Date(NOW - 30 * 60_000),
+        startedAt: new Date(NOW - 25 * 60_000),
+        checkedAt: new Date(NOW - 60_000),
+      },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: NOW - 60_000 + INHOUSE_DUEL.SCAN_EVERY_SECONDS * 1000,
+      reason: "INHOUSE",
+    });
+
+    await prisma.inhouseDuel.update({
+      where: { id: awaiting.id },
+      data: { status: INHOUSE_DUEL_STATUS.READY, startedAt: null },
+    });
+    expect(await loadAutomationGateSnapshot(NOW)).toMatchObject({
+      nextWakeAtMs: NOW,
+      reason: "INHOUSE",
     });
   });
 

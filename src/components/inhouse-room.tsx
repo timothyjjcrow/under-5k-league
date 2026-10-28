@@ -95,6 +95,8 @@ import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
 import { PendingResultsView } from "@/components/inhouse/pending-results-view";
 import { InhouseAdminTools } from "@/components/inhouse/admin-tools";
+import { DuelSection } from "@/components/inhouse/duel-section";
+import { duelStake } from "@/lib/inhouse-duel";
 
 /**
  * The lobby whose phase sets the poll rate: the viewer's own game, or the
@@ -111,6 +113,7 @@ export function InhouseRoom({
   joinRefusal = null,
   firstGame = false,
   botStatus = null,
+  duelBotReady = false,
 }: {
   pollMs?: number;
   /**
@@ -134,6 +137,12 @@ export function InhouseRoom({
   firstGame?: boolean;
   /** The lobby bot's status for an admin, shown in the room's admin panel. */
   botStatus?: ReactNode;
+  /**
+   * The lobby bot can host this league's 1v1s (inhouseLobbyBotConfigured: a
+   * connection and the in-house ticket). 1v1s are bot only: without it the
+   * 1v1 card offers no Join.
+   */
+  duelBotReady?: boolean;
 }) {
   const router = useRouter();
   const [state, setState] = useState<InhouseState | null>(null);
@@ -282,7 +291,9 @@ export function InhouseRoom({
     if (!accept) return false; // lost the response race — stale
     hasLoadedRef.current = true;
     latestStateRef.current = s;
-    hasStakeRef.current = s.me.inLobby || s.me.inQueue;
+    // A 1v1 queue row or duel is a stake too (duelStake): a hidden tab
+    // keeps heartbeating so a join can still pair with them.
+    hasStakeRef.current = s.me.inLobby || s.me.inQueue || duelStake(s.duel.me);
     const receivedAt = Date.now();
     setOffsetMs((prev) => nextClockOffset(prev, s.now, receivedAt));
     setState(s);
@@ -1408,6 +1419,18 @@ export function InhouseRoom({
       ) : null}
 
       {otherLobbies.map(otherGame)}
+
+      {/* The 1v1 mid card: its own section under every 5v5 card (never above
+          or inside the 5v5 queue card, whose first-screen fit is pinned). */}
+      <DuelSection
+        duel={state.duel}
+        viewerId={me.userId}
+        joinRefusal={joinRefusal}
+        botReady={duelBotReady}
+        offset={offset}
+        pending={pending}
+        act={act}
+      />
 
       {/* Every admin control in one panel at the end of the room: taking a
           player out of the queue, voiding the last result between games,

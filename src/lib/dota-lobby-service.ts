@@ -2,7 +2,9 @@ import { createHmac } from "node:crypto";
 import type { SessionUser } from "./auth";
 import { prisma } from "./prisma";
 import {
+  DUEL_GAME_MODE,
   INHOUSE,
+  INHOUSE_DUEL_STATUS,
   INHOUSE_PLAYING_STATUSES,
   INHOUSE_STATUS,
   LEAGUE_GAME_MODE,
@@ -108,18 +110,31 @@ function regionalLobbyKey(kind: LobbyKind, id: string, game: number) {
   return `${LEAGUE_CONFIG.region === "eu" ? "eu:" : ""}${kind}:${id}:${game}`;
 }
 
+/**
+ * A job key of this league, parsed: `season:<id>:<game>`, `inhouse:<id>:1`
+ * or `duel:<id>:1`, with Europe's `eu:` in front. Null for any other key,
+ * the other league's included. An in-house game and a 1v1 are one Dota game
+ * each, so their game number is always 1.
+ */
 function ownLobbyKey(key: string) {
-  const match = /^(eu:)?(season|inhouse):([a-zA-Z0-9_-]{1,128}):([1-9]\d?)$/.exec(key);
+  const match = /^(eu:)?(season|inhouse|duel):([a-zA-Z0-9_-]{1,128}):([1-9]\d?)$/.exec(key);
   if (!match || (match[1] ? "eu" : "us") !== LEAGUE_CONFIG.region) return null;
   const kind = match[2] as LobbyKind;
   const game = Number(match[4]);
-  if (kind === "inhouse" && game !== 1) return null;
+  if (kind !== "season" && game !== 1) return null;
   return { kind, id: match[3], game };
 }
 
-/** The single bot is reserved for in-house games unless explicitly opted in. */
+/**
+ * The single bot is reserved for in-house games (5v5 and 1v1) unless season
+ * matches are explicitly opted in.
+ */
 export function lobbyBotKindEnabled(kind: LobbyKind) {
-  return kind === "inhouse" || process.env.DOTA_SEASON_LOBBY_BOT_ENABLED === "true";
+  return (
+    kind === "inhouse" ||
+    kind === "duel" ||
+    process.env.DOTA_SEASON_LOBBY_BOT_ENABLED === "true"
+  );
 }
 
 /**
@@ -288,6 +303,45 @@ async function closedInhouseLobbyForBotKey(
   return lobby?.id ?? null;
 }
 
+/** The duel statuses whose bot job nothing needs any more. */
+const CLOSED_DUEL_STATUSES = [
+  INHOUSE_DUEL_STATUS.COMPLETED,
+  INHOUSE_DUEL_STATUS.CANCELLED,
+  INHOUSE_DUEL_STATUS.AWAITING_RESULT,
+];
+
+/**
+ * The 1v1 the bot's active job belongs to, when it is this league's and the
+ * database shows it closed (completed, cancelled, or over with its result on
+ * the way). With `freeUnstarted` (a 5v5's Create), also a READY 1v1 whose game
+ * hasn't started (`unstarted`): the 5v5 comes first, and that 1v1 stays READY
+ * and waits for the bot again (its lobby is made anew once the bot is free and
+ * no 5v5 is being set up). Null otherwise. Create's BUSY self-heal frees the
+ * bot from exactly these, as it does from closed in-house games.
+ */
+async function freeableDuelForBotKey(
+  activeKey: string | null,
+  freeUnstarted: boolean,
+): Promise<{ id: string; unstarted: boolean } | null> {
+  if (activeKey === null) return null;
+  const key = ownLobbyKey(activeKey);
+  if (key?.kind !== "duel") return null;
+  const duel = await prisma.inhouseDuel.findUnique({
+    where: { id: key.id },
+    select: { id: true, status: true, startedAt: true },
+  });
+  if (!duel) return null;
+  if ((CLOSED_DUEL_STATUSES as readonly string[]).includes(duel.status))
+    return { id: duel.id, unstarted: false };
+  if (
+    freeUnstarted &&
+    duel.status === INHOUSE_DUEL_STATUS.READY &&
+    duel.startedAt === null
+  )
+    return { id: duel.id, unstarted: true };
+  return null;
+}
+
 /**
  * Admin health exposes only a closed in-house room confirmed by the database:
  * finished, cancelled, or marked over (its result on the way). A game marked
@@ -321,36 +375,58 @@ export async function recoverableInhouseBotLobby(viewer: SessionUser) {
  * its lobby now (`leavingNow`), or leave once Dota lets it (a game still
  * running in Dota, or a release whose answer was lost).
  */
-export type FreedBot = { id: string; leavingNow: boolean };
+export type FreedBot = {
+  id: string;
+  leavingNow: boolean;
+  /** The closed game was a 1v1 (absent: an in-house 5v5 game). */
+  duel?: true;
+  /** That 1v1 hadn't started: a 5v5's Create took the bot first. */
+  unstarted?: true;
+};
 
 /**
- * Create's BUSY self-heal. When the bot's active job is this league's
- * in-house game and the database shows that game closed, ask the bot to
- * release it. Null when there is nothing to free, or when the bot refused the
+ * Create's BUSY self-heal, for a Create of `forKind`. When the bot's active
+ * job is this league's in-house game or 1v1 and the database shows it closed,
+ * ask the bot to release it. A 5v5's Create (in-house or season) also frees
+ * the bot from a 1v1 lobby whose game hasn't started (freeableDuelForBotKey):
+ * the 1v1 stays READY and its lobby is made again later; a 1v1's Create never
+ * takes another 1v1's bot. Null when there is nothing to free, or when the bot refused the
  * release (it can't leave yet, isn't running, or the game's spec can't be
  * built): that changed nothing, so the BUSY answer stands. A release the bot
  * accepted for a game still running in Dota (`started`) only leaves at that
  * game's end, and a lost answer may or may not have landed: neither is
  * `leavingNow`. One health read and at most one release; never throws.
  */
-export async function freeBotFromClosedInhouseGame(): Promise<FreedBot | null> {
+export async function freeBotFromClosedInhouseGame(
+  forKind: LobbyKind,
+): Promise<FreedBot | null> {
   try {
     const connection = lobbyBotConnection();
     if (!connection) return null;
     const health = await readLobbyBotHealth(connection);
     if (health === "offline") return null;
-    const id = await closedInhouseLobbyForBotKey(health.activeKey);
+    const lobbyId = await closedInhouseLobbyForBotKey(health.activeKey);
+    const freeable = lobbyId
+      ? null
+      : await freeableDuelForBotKey(health.activeKey, forKind !== "duel");
+    const duelId = freeable?.id ?? null;
+    const id = lobbyId ?? duelId;
     if (!id) return null;
+    const duel = freeable
+      ? ({ duel: true, ...(freeable.unstarted ? { unstarted: true } : {}) } as const)
+      : {};
     let reply: DotaLobbyBotReply | null;
     try {
-      reply = await releaseInhouseBotLobby(id);
+      reply = duelId
+        ? await releaseDuelBotLobby(duelId)
+        : await releaseInhouseBotLobby(id);
     } catch (error) {
       return error instanceof LobbyBotOutcomeUnknownError
-        ? { id, leavingNow: false }
+        ? { id, leavingNow: false, ...duel }
         : null;
     }
     if (!reply) return null;
-    return { id, leavingNow: reply.state !== "started" };
+    return { id, leavingNow: reply.state !== "started", ...duel };
   } catch {
     return null;
   }
@@ -358,10 +434,14 @@ export async function freeBotFromClosedInhouseGame(): Promise<FreedBot | null> {
 
 /** Create's answer when the self-heal sent the closed game's release. */
 export function freeingBotMessage(freed: FreedBot) {
-  const game = `#${inhouseLobbyCode(freed.id)}`;
+  const game = freed.unstarted
+    ? "a 1v1 lobby that hadn't started"
+    : freed.duel
+      ? "a finished 1v1"
+      : `finished game #${inhouseLobbyCode(freed.id)}`;
   return freed.leavingNow
-    ? `Freeing the bot from finished game ${game}. Press “Create Dota lobby” again in a few seconds.`
-    : `Asked the bot to leave finished game ${game}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
+    ? `Freeing the bot from ${game}. Press “Create Dota lobby” again in a few seconds.`
+    : `Asked the bot to leave ${game}. It leaves as soon as Dota lets it: at once if that game's lobby is gone, otherwise when that game ends in Dota. Press “Create Dota lobby” again in a minute, or host this game by hand.`;
 }
 
 /** The status cache's key for the shared health read (no job key looks like it). */
@@ -372,9 +452,14 @@ const HEALTH_CACHE_KEY = "health";
  * hosting, if any. Reads the bot's health through the status cache, so every
  * panel in this process shares one health read per TTL. This league's
  * in-house job names its game (`#1234`) and whether the site has closed it;
- * any other job (a season match, the other league's game) is `game: null`.
- * Null when the bot holds nothing, holds this game, or can't be read: the
- * panel then shows what it shows today. Never throws, never changes the bot.
+ * this league's 1v1 is "a 1v1" (`duel`; for a 5v5's panel a 1v1 whose game
+ * hasn't started reads closed and `unstarted`, since that panel's Create frees
+ * the bot from it); any other job (a season match, the other league's game)
+ * is `game: null`. Null when the bot holds nothing,
+ * holds this game, or can't be read: the panel then shows what it shows
+ * today. A running game the bot has left early (`left`) is no claim at all:
+ * the bot frees its active claim when it leaves, so its health names no key
+ * and nothing reads as busy. Never throws, never changes the bot.
  */
 export async function botBusyElsewhere(
   spec: Pick<DotaLobbySpec, "key">,
@@ -392,6 +477,28 @@ export async function botBusyElsewhere(
     )
       return null;
     const key = ownLobbyKey(health.activeKey);
+    if (key?.kind === "duel") {
+      const duel = await prisma.inhouseDuel.findUnique({
+        where: { id: key.id },
+        select: { status: true, startedAt: true },
+      });
+      // A 5v5's panel (in-house or season) comes first: a 1v1 lobby whose
+      // game hasn't started is one its Create frees (never hand hosting).
+      const fiveVFive = ownLobbyKey(spec.key)?.kind !== "duel";
+      if (
+        fiveVFive &&
+        duel?.status === INHOUSE_DUEL_STATUS.READY &&
+        duel.startedAt === null
+      )
+        return { game: "a 1v1", closed: true, duel: true, unstarted: true };
+      return {
+        game: "a 1v1",
+        closed:
+          !duel ||
+          (CLOSED_DUEL_STATUSES as readonly string[]).includes(duel.status),
+        duel: true,
+      };
+    }
     if (key?.kind !== "inhouse") return { game: null, closed: false };
     const lobby = await prisma.inhouseLobby.findUnique({
       where: { id: key.id },
@@ -501,6 +608,66 @@ function inhouseLobbySpec(lobby: InhouseSpecLobby): DotaLobbySpec {
   return inhouseLobbyPlan(lobby, null).spec;
 }
 
+/** What a 1v1's bot spec is built from: its id and its two sides' players. */
+export type DuelSpecDuel = {
+  id: string;
+  radiantUser: DotaAccountIdentity & { id?: string; name?: string | null };
+  direUser: DotaAccountIdentity & { id?: string; name?: string | null };
+};
+
+/**
+ * The bot spec for a 1v1 mid duel, and its roster: the in-house 5v5's
+ * ticket, password and region, game mode 1v1 Solo Mid, one playing Steam id
+ * per side, and a lobby name unique to the duel (players find it in Dota's
+ * Custom Lobbies browser by it). One builder for the panel, the auto-create,
+ * the worker's read and every release, so all address the same job. Throws
+ * a UserFacingError when the ticket is unset or a player has no usable Dota
+ * account.
+ */
+function duelLobbyPlan(
+  duel: DuelSpecDuel,
+  viewerId: string | null,
+): { spec: DotaLobbySpec; roster: LobbyRosterEntry[] } {
+  const leagueId = inhouseLobbyTicketId();
+  if (!leagueId)
+    throw new UserFacingError(
+      "An admin must configure the numeric in-house league ticket ID before using the bot.",
+    );
+  const entry = (
+    user: DuelSpecDuel["radiantUser"],
+    side: LobbySide,
+  ): LobbyRosterEntry => ({
+    name: user.name ?? "Player",
+    side,
+    steamId: playingSteamId(user),
+    self: viewerId !== null && user.id === viewerId,
+  });
+  const roster = [entry(duel.radiantUser, "radiant"), entry(duel.direUser, "dire")];
+  return {
+    spec: {
+      key: regionalLobbyKey("duel", duel.id, 1),
+      name: `${LEAGUE_CONFIG.name} 1v1 ${duel.id.slice(-6)}`,
+      password: INHOUSE.LOBBY_PASSWORD,
+      leagueId,
+      gameMode: DUEL_GAME_MODE.id,
+      serverRegion: LEAGUE_CONFIG.gameServerRegionId,
+      radiant: sideSteamIds(roster, "radiant"),
+      dire: sideSteamIds(roster, "dire"),
+      radiantName: roster[0].name,
+      direName: roster[1].name,
+      // The bot's lobby chat tells each player which side is theirs.
+      radiantNames: sideChatNames(roster, "radiant"),
+      direNames: sideChatNames(roster, "dire"),
+    },
+    roster,
+  };
+}
+
+/** A 1v1's bot spec (see duelLobbyPlan); throws as it does. */
+export function duelLobbySpec(duel: DuelSpecDuel): DotaLobbySpec {
+  return duelLobbyPlan(duel, null).spec;
+}
+
 /** A player's name and the columns their playing Steam id is built from. */
 const BOT_IDENTITY_SELECT = {
   name: true,
@@ -522,6 +689,16 @@ const INHOUSE_SPEC_SELECT = {
       user: { select: BOT_IDENTITY_SELECT },
     },
   },
+} as const;
+
+/** What a 1v1's bot spec is built from, its status and its stored bot match id. */
+const DUEL_SPEC_SELECT = {
+  id: true,
+  status: true,
+  startedAt: true,
+  botMatchId: true,
+  radiantUser: { select: { id: true, ...BOT_IDENTITY_SELECT } },
+  direUser: { select: { id: true, ...BOT_IDENTITY_SELECT } },
 } as const;
 
 /** A season side's display name, captain, standing and roster identities. */
@@ -548,7 +725,38 @@ export async function resolveDotaLobby(
   let roster: LobbyRosterEntry[];
   let canControl = false;
   let playable = false;
-  if (kind === "inhouse") {
+  /** A 1v1's status and stored bot match id, for the route's bot-driven writes. */
+  let duel: {
+    id: string;
+    status: string;
+    startedAt: Date | null;
+    botMatchId: string | null;
+  } | null = null;
+  if (kind === "duel") {
+    const row = await prisma.inhouseDuel.findUnique({
+      where: { id },
+      select: DUEL_SPEC_SELECT,
+    });
+    if (!row) throw new UserFacingError("1v1 not found.");
+    const member =
+      row.radiantUser.id === viewer.id || row.direUser.id === viewer.id;
+    if (!member && !admin)
+      throw new UserFacingError(
+        "Only this 1v1's players and admins can use its bot controls.",
+      );
+    // Either player runs the lobby (there are no captains in a 1v1). Only a
+    // paired duel whose game hasn't launched can create, start or invite;
+    // any duel can still read its job and release the bot.
+    canControl = true;
+    playable = row.status === INHOUSE_DUEL_STATUS.READY;
+    duel = {
+      id: row.id,
+      status: row.status,
+      startedAt: row.startedAt,
+      botMatchId: row.botMatchId,
+    };
+    ({ spec, roster } = duelLobbyPlan(row, viewer.id));
+  } else if (kind === "inhouse") {
     const lobby = await prisma.inhouseLobby.findUnique({
       where: { id },
       select: INHOUSE_SPEC_SELECT,
@@ -660,7 +868,7 @@ export async function resolveDotaLobby(
   }
   // `roster` holds Steam ids: server only. The browser gets
   // `lobbyPlayerViews`, which leaves them out.
-  return { spec, canControl, playable, roster };
+  return { spec, canControl, playable, roster, duel };
 }
 
 /**
@@ -833,9 +1041,11 @@ async function askLobbyBot(
       // Inhouses have no match page and no stand-ins: the ten drafted
       // players are the whole roster.
       ROSTER:
-        kind === "inhouse"
-          ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
-          : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
+        kind === "duel"
+          ? "Both players must sit on their own sides (Radiant or Dire) before the bot can start."
+          : kind === "inhouse"
+            ? "All ten players must sit on their assigned side (Radiant or Dire) before the bot can start."
+            : "All ten registered players must join their assigned sides before starting. Check stand-ins on the match page.",
       SETTINGS:
         "Dota has not confirmed the required ticket and lobby settings. Ask an admin to check the bot's ticket permissions.",
       STATE:
@@ -875,6 +1085,7 @@ async function askLobbyBot(
     state: body.state as DotaLobbyStatus["state"],
     lobbyId: parseLobbyDigits(body.lobbyId),
     matchId: parseLobbyDigits(body.matchId),
+    // `releasing`, `over`, and `left` (a running game the bot has left).
     ...parseLobbyLifecycle(body),
   };
   // A malformed list or count is unknown: left out, never read as "not
@@ -905,6 +1116,22 @@ async function releaseInhouseBotLobby(
   });
   if (!lobby) return null;
   return callLobbyBot(inhouseLobbySpec(lobby), "release");
+}
+
+/**
+ * Ask the bot to release this 1v1's job, built from the duel's stored
+ * players, and return its answer. Throws what callLobbyBot throws; a missing
+ * duel is a no-op (null).
+ */
+export async function releaseDuelBotLobby(
+  duelId: string,
+): Promise<DotaLobbyBotReply | null> {
+  const duel = await prisma.inhouseDuel.findUnique({
+    where: { id: duelId },
+    select: DUEL_SPEC_SELECT,
+  });
+  if (!duel) return null;
+  return callLobbyBot(duelLobbySpec(duel), "release");
 }
 
 /**
@@ -956,6 +1183,19 @@ export async function inhouseBotGameStatus(
   lobby: InhouseSpecLobby,
   options: { deadlineMs?: number; signal?: AbortSignal } = {},
 ): Promise<DotaLobbyStatus | null> {
+  return boundedBotStatus(() => inhouseLobbySpec(lobby), options);
+}
+
+/**
+ * One status read of a job, outside any request (the worker, "Game over"),
+ * bounded by the caller's deadline and BOT_STATUS_TIMEOUT_MS, never from the
+ * cache. Null for no bot, a misconfigured or unreachable one, too little time
+ * left, or a spec that can't be built. Never throws, never changes the bot.
+ */
+export async function boundedBotStatus(
+  buildSpec: () => DotaLobbySpec,
+  options: { deadlineMs?: number; signal?: AbortSignal } = {},
+): Promise<DotaLobbyStatus | null> {
   try {
     if (!lobbyBotConnection()) return null;
     const remaining =
@@ -967,7 +1207,7 @@ export async function inhouseBotGameStatus(
     const timeout = AbortSignal.timeout(
       Math.min(BOT_STATUS_TIMEOUT_MS, remaining),
     );
-    return await callLobbyBot(inhouseLobbySpec(lobby), undefined, {
+    return await callLobbyBot(buildSpec(), undefined, {
       signal: options.signal
         ? AbortSignal.any([options.signal, timeout])
         : timeout,

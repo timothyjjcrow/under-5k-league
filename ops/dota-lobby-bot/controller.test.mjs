@@ -4,6 +4,13 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  DETAILS_AFTER_MS,
+  DETAILS_EVERY_MS,
+  DETAILS_FOR_MS,
+  DETAILS_TIMEOUT_MS,
+  DUEL_IDLE_RELEASE_MS,
+  EARLY_LEAVE_GAP_MS,
+  EARLY_LEAVE_MAX_TRIES,
   IDLE_RELEASE_MS,
   LAUNCH_SETTLE_MS,
   LAUNCH_STALL_MS,
@@ -70,6 +77,9 @@ function setup(t, configuration = {}) {
     resync: () => calls.push("resync"),
     removeBotFromTeam: () => calls.push("kick"),
     invite: (id) => invites.push(id),
+    // Early leave only (off unless a test lists its kind).
+    abandon: () => calls.push("abandon"),
+    matchDetails: (id) => calls.push(`details:${id}`),
   };
   // Every event line exactly as the bot writes it.
   const logs = [];
@@ -2257,4 +2267,435 @@ test("the log carries timestamps and never a lobby's name, password or anyone's 
     assert.match(line, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z \[dota-bot\] [a-z-]+( [a-zA-Z]+=[^ ]+)*$/);
   for (const event of ["create-sent", "start-sent", "lobby", "job", "leave-sent", "departed", "claim-freed", "resync", "resync-done", "welcome", "release-pending", "invites-sent", "request"])
     assert.ok(logs.some((line) => line.includes(` [dota-bot] ${event} `) || line.endsWith(` [dota-bot] ${event}`)), event);
+});
+
+// ---- 1v1 mid duels (duel keys, Solo Mid, one a side) ----
+
+const duel = {
+  key: "duel:clx1duel:1",
+  name: "GGD2L 1v1 x1duel",
+  password: "private123",
+  leagueId: 12345,
+  gameMode: 21,
+  serverRegion: 2,
+  radiant: [ids[0]],
+  dire: [ids[5]],
+};
+const duelSnapshot = (overrides = {}) =>
+  snapshot({
+    gameName: duel.name,
+    gameMode: 21,
+    memberIndices: [0, 1],
+    allMembers: [{ id: ids[0], team: 0 }, { id: ids[5], team: 1 }],
+    ...overrides,
+  });
+// Create, start and run a duel: started, its lobby at RUN under way.
+function duelRunning(c, overrides = {}) {
+  c.request("create", duel);
+  c.snapshot(duelSnapshot());
+  c.request("start", duel);
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5, ...overrides }));
+}
+
+test("a duel key needs 1v1 Solo Mid, one player a side and two different players; other kinds keep Captains Mode", () => {
+  assert.equal(validSpec(duel), true);
+  assert.equal(validSpec({ ...duel, key: "eu:duel:clx1duel:1", serverRegion: 3 }, [2, 3]), true);
+  for (const bad of [
+    { ...duel, gameMode: 2 },
+    { ...duel, radiant: [ids[0], ids[1]] },
+    { ...duel, dire: [] },
+    { ...duel, radiant: [], dire: [] },
+    { ...duel, dire: [ids[0]] },
+    { ...duel, leagueId: 0 },
+    { ...duel, key: "duel:clx1duel:0" },
+    { ...duel, key: "eu:duel:clx1duel:1" },
+  ])
+    assert.equal(validSpec(bad), false, JSON.stringify([bad.key, bad.gameMode, bad.radiant, bad.dire, bad.leagueId]));
+  // Season and inhouse keys stay Captains Mode only.
+  assert.equal(validSpec({ ...spec, gameMode: 21 }), false);
+  assert.equal(validSpec({ ...spec, key: "inhouse:7:1", gameMode: 21 }), false);
+  assert.equal(validSpec({ ...spec, key: "inhouse:7:1" }), true);
+});
+
+test("a duel starts with exactly its two players, one on each assigned side", (t) => {
+  const { controller: c, calls } = setup(t);
+  assert.equal(c.request("create", duel).state, "creating");
+  c.snapshot(duelSnapshot({ memberIndices: [0] }));
+  assert.equal(c.status(duel.key).state, "ready");
+  assert.throws(() => c.request("start", duel), /ROSTER/);
+  // A stranger on a side, or the two swapped, holds Start back.
+  const stranger = duelSnapshot({ memberIndices: [0, 1, 2], allMembers: [{ id: ids[0], team: 0 }, { id: ids[5], team: 1 }, { id: ids[2], team: 0 }] });
+  assert.equal(rosterMatches(stranger, duel), false);
+  assert.equal(rosterMatches(duelSnapshot({ allMembers: [{ id: ids[0], team: 1 }, { id: ids[5], team: 0 }] }), duel), false);
+  assert.equal(rosterMatches(duelSnapshot(), duel), true);
+  // A five-a-side roster check never passes a duel lobby, nor the reverse.
+  assert.equal(rosterMatches(duelSnapshot(), { ...duel, key: "inhouse:7:1" }), false);
+  assert.equal(rosterMatches(snapshot(), { ...spec, key: "duel:x:1" }), false);
+  // A lobby in Captains Mode is never this duel's.
+  c.snapshot(duelSnapshot({ gameMode: 2 }));
+  assert.equal(c.status(duel.key).state, "blocked");
+  c.snapshot(duelSnapshot());
+  assert.equal(c.request("start", duel).state, "starting");
+  assert.deepEqual(calls, ["create", "start"]);
+});
+
+test("a duel lobby nobody starts is released after 10 minutes; others keep 30", (t) => {
+  const { controller: c, calls } = setup(t);
+  c.request("create", duel);
+  c.snapshot(duelSnapshot({ memberIndices: [0] }));
+  const at = c.data.jobs[duel.key].changedAt;
+  c.now = () => at + DUEL_IDLE_RELEASE_MS - 1;
+  assert.equal(c.tick(), false);
+  c.now = () => at + DUEL_IDLE_RELEASE_MS;
+  assert.equal(c.tick(), true);
+  assert.deepEqual(calls, ["create", "leave"]);
+  assert.equal(c.data.jobs[duel.key].leaveReason, "idle");
+  c.departed("destroy");
+  assert.equal(c.status(duel.key).state, "released");
+  // An inhouse lobby is still idle only at 30 minutes.
+  const { controller: d, calls: sent } = setup(t);
+  const inhouse = { ...spec, key: "inhouse:7:1" };
+  d.request("create", inhouse);
+  d.snapshot(snapshot());
+  const start = d.data.jobs[inhouse.key].changedAt;
+  d.now = () => start + DUEL_IDLE_RELEASE_MS;
+  assert.equal(d.tick(), false);
+  d.now = () => start + IDLE_RELEASE_MS;
+  assert.equal(d.tick(), true);
+  assert.deepEqual(sent, ["create", "leave"]);
+});
+
+// ---- Early leave (DOTA_BOT_EARLY_LEAVE) ----
+
+const early = (kinds = ["duel"]) => ({ earlyLeaveKinds: kinds });
+
+test("early leave waits for the game under way: RUN, GAME_IN_PROGRESS, a match id, the bot on no side, a listed kind", (t) => {
+  const cases = {
+    "loading (no game state)": { gameState: 0 },
+    "hero selection": { gameState: 2 },
+    "pre-game": { gameState: 4 },
+    "post-game state": { gameState: 6 },
+    "no match id": { matchId: "0" },
+    "the bot on a side": {
+      memberIndices: [0, 1, 2],
+      allMembers: [{ id: ids[0], team: 0 }, { id: ids[5], team: 1 }, { id: bot, team: 1 }],
+    },
+    "a winner already": { matchOutcome: 2 },
+  };
+  for (const [name, overrides] of Object.entries(cases)) {
+    const { controller: c, calls } = setup(t, early());
+    duelRunning(c, overrides);
+    assert.ok(!calls.includes("abandon"), name);
+  }
+  // Server allocation is never RUN.
+  {
+    const { controller: c, calls } = setup(t, early());
+    duelRunning(c, { state: 6 });
+    assert.ok(!calls.includes("abandon"));
+  }
+  // Off for a kind the list doesn't name.
+  {
+    const { controller: c, calls } = setup(t, early(["inhouse", "season"]));
+    duelRunning(c);
+    assert.deepEqual(calls, ["create", "start"]);
+  }
+  // Under way: AbandonCurrentGame, then the Leave, once while it is out.
+  const { controller: c, calls, logs, options } = setup(t, early());
+  duelRunning(c, { gameState: 4 });
+  assert.deepEqual(calls, ["create", "start"]);
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  c.tick();
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
+  // Saved before it went out, and logged.
+  const saved = new LobbyController(options).data.jobs[duel.key];
+  assert.equal(saved.earlyLeaves, 1);
+  assert.equal(saved.earlyLeavePendingAt, c.now());
+  assert.ok(logs.some((line) => / leave-sent key=duel:clx1duel:1 reason=early lobbyState=2 n=1$/.test(line)));
+  // No ordinary Leave clock: an unconfirmed try never resyncs.
+  assert.equal(saved.leavePendingAt, undefined);
+});
+
+test("a confirmed early leave frees the bot at once: the job stays started with its match id, reads left, and a new Create works", (t) => {
+  for (const source of ["destroy", "removed", "unsubscribed", "welcome"]) {
+    const { controller: c, calls, logs } = setup(t, early());
+    duelRunning(c);
+    assert.throws(() => c.request("create", nextGame), /BUSY/);
+    if (source === "welcome") assert.equal(welcome(c), true);
+    else c.departed(source);
+    assert.equal(c.data.active, null, source);
+    assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), {
+      state: "started",
+      lobbyId: LOBBY,
+      matchId: MATCH,
+      left: true,
+    }, source);
+    // Only a request that asks for the lifecycle flags gets it.
+    assert.deepEqual(c.status(duel.key), { state: "started", lobbyId: LOBBY, matchId: MATCH }, source);
+    assert.equal(c.request("create", nextGame).state, "creating", source);
+    assert.deepEqual(calls, ["create", "start", "abandon", "leave", "create"], source);
+    assert.ok(logs.some((line) => / early-leave key=duel:clx1duel:1 result=confirmed n=1$/.test(line)), source);
+    const job = c.data.jobs[duel.key];
+    assert.equal(job.left, true);
+    assert.equal(job.leftAt, job.freedAt);
+    assert.equal(job.earlyLeavePendingAt, undefined);
+    // The same key's Create and Release change nothing: the game goes on.
+    assert.equal(c.request("create", duel).state, "started");
+    assert.throws(() => c.request("release", duel), /STATE/);
+  }
+});
+
+test("left passes the relay's reply check", (t) => {
+  const { controller: c } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  const body = c.request("status", { ...duel, withLifecycle: true, withPlayers: true });
+  assert.equal(body.left, true);
+  assert.equal(validReply({ id: "00000000-0000-4000-8000-000000000000", status: 200, body }, "status"), true);
+});
+
+test("an early leave Dota doesn't confirm is tried once more, never resyncs, and the bot stays to the postgame as before", (t) => {
+  const { controller: c, calls, logs, options } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
+  time.at += LEAVE_CONFIRM_MS;
+  c.tick();
+  assert.ok(logs.some((line) => / early-leave key=duel:clx1duel:1 result=unconfirmed n=1$/.test(line)));
+  assert.equal(resyncs(calls), 0);
+  assert.throws(() => c.request("create", nextGame), /BUSY/);
+  // The second try waits its minute, then goes out from the clock.
+  time.at += EARLY_LEAVE_GAP_MS - LEAVE_CONFIRM_MS - 1;
+  c.tick();
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
+  time.at += 1;
+  c.tick();
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave", "abandon", "leave"]);
+  time.at += LEAVE_CONFIRM_MS;
+  c.tick();
+  // Never a third, not even after a restart.
+  for (let i = 0; i < 5; i++) {
+    time.at += EARLY_LEAVE_GAP_MS;
+    c.tick();
+    c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  }
+  const resumed = new LobbyController({ ...options, now: () => time.at });
+  resumed.online = true;
+  resumed.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  assert.equal(c.data.jobs[duel.key].earlyLeaves, EARLY_LEAVE_MAX_TRIES);
+  assert.equal(resyncs(calls), 0);
+  assert.equal(calls.filter((call) => call === "abandon").length, 2);
+  // The postgame: the ordinary Leave, `over`, and the claim freed on departure.
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+  assert.equal(c.data.jobs[duel.key].leaveReason, "postgame");
+  assert.equal(calls.at(-1), "leave");
+  c.departed("destroy");
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true });
+  assert.equal(c.data.jobs[duel.key].left, undefined);
+  assert.equal(c.request("create", nextGame).state, "creating");
+});
+
+test("after an unconfirmed early leave a not-scored end is still a failed launch, released for a retry", (t) => {
+  const { controller: c, calls } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  time.at += LEAVE_CONFIRM_MS;
+  c.tick();
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 66 }));
+  assert.equal(calls.at(-1), "leave");
+  assert.equal(c.data.jobs[duel.key].leaveReason, "failed-launch");
+  c.departed("destroy");
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "released", lobbyId: LOBBY, matchId: undefined });
+  assert.equal(c.request("create", duel).state, "creating");
+});
+
+test("the old lobby replayed after an early leave freed the claim is never claimed back, and is left like any finished game's", (t) => {
+  const { controller: c, calls } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  // The Game Coordinator replays it, still running: no claim, no Leave at RUN,
+  // no second early leave.
+  const run = duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 });
+  c.snapshot(run);
+  assert.equal(c.data.active, null);
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
+  // A Create meanwhile answers BUSY and checks it once, as today.
+  assert.throws(() => c.request("create", nextGame), /BUSY/);
+  assert.equal(resyncs(calls), 1);
+  welcome(c, [run]);
+  // Its postgame: left as an orphan, and its end reads over.
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 3 }));
+  assert.equal(calls.at(-1), "leave");
+  assert.equal(c.data.jobs[duel.key].leaveReason, "orphan");
+  assert.equal(c.status(duel.key, { ...duel, withLifecycle: true }).over, true);
+  c.departed("destroy");
+  assert.equal(c.request("create", nextGame).state, "creating");
+});
+
+test("the old lobby replayed while a new claim holds the bot: the new job reads blocked, no Leave goes out, its end still counts", (t) => {
+  const { controller: c, calls } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  c.request("create", nextGame);
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  assert.equal(c.status(nextGame.key).state, "blocked");
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+  assert.deepEqual(calls, ["create", "start", "abandon", "leave", "create"]);
+  assert.equal(c.status(duel.key, { ...duel, withLifecycle: true }).over, true);
+  // Its own lobby then turns up: ready as usual.
+  c.snapshot(snapshot({ gameName: nextGame.name }));
+  assert.equal(c.status(nextGame.key).state, "ready");
+});
+
+test("a game left early asks the Game Coordinator for its result: a winner reads over, as its postgame would", (t) => {
+  const { controller: c, calls, logs, options } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  c.departed("destroy");
+  const asks = () => calls.filter((call) => call.startsWith("details:"));
+  time.at += DETAILS_AFTER_MS - 1;
+  c.tick();
+  assert.deepEqual(asks(), []);
+  time.at += 1;
+  c.tick();
+  assert.deepEqual(asks(), [`details:${MATCH}`]);
+  // One a minute, and never a second in flight.
+  time.at += DETAILS_EVERY_MS - 1;
+  c.tick();
+  assert.equal(asks().length, 1);
+  // Still running (no outcome yet), or not found: ask again next minute.
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 0 } }), false);
+  assert.equal(c.matchDetails({ result: 2 }), false);
+  time.at += 1;
+  c.tick();
+  assert.equal(asks().length, 2);
+  // Someone else's match changes nothing.
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: "999", matchOutcome: 2 } }), false);
+  // The winner: recorded exactly as a postgame is.
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 3 } }), true);
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), {
+    state: "started",
+    lobbyId: LOBBY,
+    matchId: MATCH,
+    over: true,
+    left: true,
+  });
+  const saved = new LobbyController(options).data.jobs[duel.key];
+  assert.equal(saved.postgameOutcome, 3);
+  assert.equal(saved.postgameSeen, true);
+  assert.equal(saved.postgameAt, time.at);
+  assert.ok(logs.some((line) => / match-details key=duel:clx1duel:1 result=over outcome=3$/.test(line)));
+  // Then never asked again.
+  for (let i = 0; i < 5; i++) {
+    time.at += DETAILS_EVERY_MS;
+    c.tick();
+  }
+  assert.equal(asks().length, 2);
+});
+
+test("a game left early that Dota ends as not scored is released, like today's not-scored end", (t) => {
+  const { controller: c } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  c.departed("destroy");
+  time.at += DETAILS_AFTER_MS;
+  c.tick();
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 66 } }), true);
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "released", lobbyId: LOBBY, matchId: undefined });
+  assert.equal(c.data.jobs[duel.key].failedMatchId, MATCH);
+  // The same game may be hosted again.
+  assert.equal(c.request("create", duel).state, "creating");
+});
+
+test("the old lobby of a game left early and then not scored, replayed with no claim, is never claimed back", (t) => {
+  const { controller: c, calls, logs } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c);
+  c.departed("destroy");
+  time.at += DETAILS_AFTER_MS;
+  c.tick();
+  assert.equal(c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 66 } }), true);
+  const before = calls.length;
+  // The Game Coordinator replays the old lobby, still showing the game.
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  assert.equal(c.data.active, null);
+  assert.ok(!logs.some((line) => / claim-back /.test(line)));
+  // No Leave at RUN, and the job still reads released.
+  assert.deepEqual(calls.slice(before), []);
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "released", lobbyId: LOBBY, matchId: undefined });
+  // Its lobby screen or postgame: left like any finished game's.
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, matchOutcome: 3 }));
+  assert.equal(calls.at(-1), "leave");
+  assert.equal(c.data.jobs[duel.key].leaveReason, "orphan");
+  assert.equal(c.data.active, null);
+});
+
+test("match-details asks stop after three hours, skip while offline, keep one in flight, and never block a Create", (t) => {
+  const { controller: c, calls, logs } = setup(t, early(["duel", "season"]));
+  const time = clock(c);
+  // Two games left early.
+  duelRunning(c);
+  c.departed("destroy");
+  running(c, { gameState: 5 });
+  c.departed("destroy");
+  assert.equal(c.data.jobs[spec.key].left, true);
+  const asks = () => calls.filter((call) => call.startsWith("details:"));
+  time.at += DETAILS_AFTER_MS;
+  // Offline: none.
+  c.online = false;
+  c.tick();
+  assert.deepEqual(asks(), []);
+  c.online = true;
+  c.tick();
+  assert.equal(asks().length, 1);
+  // The other waits for the answer, or the timeout.
+  c.tick();
+  assert.equal(asks().length, 1);
+  time.at += DETAILS_TIMEOUT_MS;
+  c.tick();
+  assert.equal(asks().length, 2);
+  // A Create meanwhile works.
+  assert.equal(c.request("create", nextGame).state, "creating");
+  // Three hours after each leave: no more, logged once.
+  time.at += DETAILS_FOR_MS;
+  c.tick();
+  const before = asks().length;
+  for (let i = 0; i < 5; i++) {
+    time.at += DETAILS_EVERY_MS;
+    c.tick();
+  }
+  assert.equal(asks().length, before);
+  assert.equal(logs.filter((line) => / match-details key=duel:clx1duel:1 result=gave-up/.test(line)).length, 1);
+  assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "started", lobbyId: LOBBY, matchId: MATCH, left: true });
+});
+
+test("early leave unset is today's behaviour exactly: the bot stays to the postgame and asks nothing", (t) => {
+  // The same game, under way, with early leave off (the default) and with it
+  // on for the other kinds only: identical commands, files and replies.
+  const runs = [];
+  for (const configuration of [{}, early([]), early(["duel", "inhouse"])]) {
+    const { controller: c, calls, options } = setup(t, configuration);
+    const time = clock(c);
+    running(c, { gameState: 5 });
+    for (let i = 0; i < 20; i++) {
+      time.at += EARLY_LEAVE_GAP_MS;
+      c.tick();
+      c.snapshot(snapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+    }
+    assert.throws(() => c.request("create", nextGame), /BUSY/);
+    c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+    c.departed("destroy");
+    time.at += DETAILS_FOR_MS;
+    c.tick();
+    runs.push({
+      calls,
+      job: readFileSync(options.file, "utf8"),
+      reply: c.status(spec.key, lifecycle),
+    });
+  }
+  assert.deepEqual(runs[0].calls, ["create", "start", "leave"]);
+  assert.deepEqual(runs[0].reply, { state: "started", lobbyId: LOBBY, matchId: MATCH, over: true });
+  for (const run of runs.slice(1)) assert.deepEqual(run, runs[0]);
+  assert.doesNotMatch(runs[0].job, /earlyLeave|"left"|"leftAt"|details|endBy/);
 });

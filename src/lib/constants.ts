@@ -175,7 +175,7 @@ export const ROOM_ACTION_TIMEOUT_MS = 15_000;
  */
 export const INHOUSE_SCAN_ACTION_TIMEOUT_MS = 45_000;
 /** The inhouse actions that legitimately go to OpenDota (see above). */
-export const INHOUSE_SCAN_ACTIONS = ["detect", "record"] as const;
+export const INHOUSE_SCAN_ACTIONS = ["detect", "record", "duelRecord"] as const;
 
 /**
  * Consecutive failed polls before a room declares itself disconnected (see
@@ -583,6 +583,82 @@ export const INHOUSE = {
   // longer than this.
   ROOM_SNAPSHOT_MAX_AGE_MS: 15_000,
 } as const;
+
+// ---------- 1v1 mid inhouse ("duel"; docs/features/inhouse-duels.md) ----------
+//
+// Its own queue and games (InhouseDuelQueueEntry, InhouseDuel), beside the 5v5.
+// Only the lobby bot hosts a duel (Tim, 2026-10-27): PLAYING comes from its
+// started read and AWAITING_RESULT from its over read, with a player's "1v1
+// over" kept as the fallback for a bot game whose end the bot missed.
+
+export const INHOUSE_DUEL_STATUS = {
+  // Paired; waiting for the bot to host and launch the lobby.
+  READY: "READY",
+  // The bot saw the game launch.
+  PLAYING: "PLAYING",
+  // The game is over in Dota; the result is on its way from OpenDota.
+  AWAITING_RESULT: "AWAITING_RESULT",
+  COMPLETED: "COMPLETED",
+  CANCELLED: "CANCELLED",
+} as const;
+export type InhouseDuelStatus =
+  (typeof INHOUSE_DUEL_STATUS)[keyof typeof INHOUSE_DUEL_STATUS];
+
+// A duel holds its two players until its game is over: they can't join the
+// 1v1 queue again meanwhile.
+export const INHOUSE_DUEL_LIVE_STATUSES: InhouseDuelStatus[] = [
+  INHOUSE_DUEL_STATUS.READY,
+  INHOUSE_DUEL_STATUS.PLAYING,
+];
+
+// Where a result can land, and the only statuses the scan ever looks at.
+export const INHOUSE_DUEL_RESULT_STATUSES: InhouseDuelStatus[] = [
+  INHOUSE_DUEL_STATUS.READY,
+  INHOUSE_DUEL_STATUS.PLAYING,
+  INHOUSE_DUEL_STATUS.AWAITING_RESULT,
+];
+
+export const INHOUSE_DUEL = {
+  // A waiter counts as present (and can be paired) when their room heartbeat
+  // is at most this old.
+  PRESENT_SECONDS: 180,
+  // The heartbeat writes at most this often (the 5v5 queue's throttle).
+  HEARTBEAT_SECONDS: 30,
+  // A queue row expires this long after the (latest) join.
+  QUEUE_MINUTES: 30,
+  // A READY duel with no started game this long after it was paired is
+  // called off ("never-played"), whether the bot was busy or nobody came.
+  SETUP_MINUTES: 30,
+  // A PLAYING or AWAITING_RESULT duel with no result this long after it was
+  // paired is given up on ("result-never-showed").
+  GIVE_UP_HOURS: 3,
+  // The worker's OpenDota scan, only for a duel whose game started (a READY
+  // duel has none: PLAYING comes only from the bot): first look this long
+  // after pairing, then at most once per SCAN_EVERY_SECONDS per duel, an
+  // interval that grows with the game's age (1/20 of it, like the 5v5's
+  // detectIntervalSeconds) up to SCAN_MAX_SECONDS; at most SCAN_PER_PASS
+  // duels per pass, stalest checkedAt first.
+  SCAN_AFTER_MINUTES: 5,
+  SCAN_EVERY_SECONDS: 180,
+  SCAN_MAX_SECONDS: 1800,
+  SCAN_PER_PASS: 3,
+  // While OpenDota lacks the bot's match id, each scan looks that one match up
+  // and skips both players' histories (which can't hold an unpublished game
+  // either), for this long after the game started (the 5v5's
+  // DETECT_BOT_MATCH_WAIT_MINUTES).
+  BOT_MATCH_WAIT_MINUTES: 120,
+  // A match may have started this long before the duel was paired (clock
+  // skew between Valve and the box) and still be this duel's.
+  START_GRACE_SECONDS: 120,
+  // How many recent matches per player the scan reads.
+  SCAN_RECENT_MATCHES: 10,
+  // The viewer's last duel result shows in the 1v1 card for this long.
+  LAST_RESULT_WINDOW_MS: 10 * 60_000,
+} as const;
+
+// Dota's 1v1 Solo Mid (DOTA_GAMEMODE_1V1MID). The bot creates duel lobbies
+// with `id`; a result must be in this mode.
+export const DUEL_GAME_MODE = { id: 21, name: "1v1 Solo Mid" } as const;
 
 // Match-night Discord reminder: announced by the leased maintenance worker for
 // the next week whose matches kick off inside the window. Sent at most once per

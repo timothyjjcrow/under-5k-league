@@ -3,11 +3,13 @@ import {
   botGameOverRefusal,
   botHoldsUnlaunchedLobby,
   createOpen,
+  DUEL_BOT_WAITING_NOTE,
   INHOUSE_SEAT_RULE_NOTE,
   inviteResultToast,
   inviteUnknownToast,
   LOBBY_CHAT_NAME_MAX,
   LOBBY_INVITES,
+  LOBBY_LEFT_NOTE,
   LOBBY_OVER_NOTE,
   LOBBY_PANEL_POLL_MS,
   LOBBY_PANEL_STARTED_POLL_MS,
@@ -839,5 +841,132 @@ describe("INHOUSE_SEAT_RULE_NOTE", () => {
       "moves anyone on the wrong side, and anyone not in this game, back to unassigned",
     );
     expect(INHOUSE_SEAT_RULE_NOTE).toContain("may post in lobby chat");
+  });
+});
+
+// AMENDMENT 2 (2026-10-27): the bot may leave a launched game early. A
+// `left` job is a running game with the bot free: never a failed launch,
+// never over by itself, never a claim to release. A job without `left` reads
+// exactly as before.
+describe("a running game the bot has left (left)", () => {
+  it("parses left only as the boolean true on a started job", () => {
+    expect(parseLobbyLifecycle({ state: "started", left: true })).toEqual({ left: true });
+    expect(
+      parseLobbyLifecycle({ state: "started", left: true, over: true }),
+    ).toEqual({ over: true, left: true });
+    for (const state of ["idle", "ready", "released", "blocked", undefined])
+      expect(parseLobbyLifecycle({ state, left: true })).toEqual({});
+    for (const value of ["true", 1, false, null, {}])
+      expect(parseLobbyLifecycle({ state: "started", left: value })).toEqual({});
+  });
+
+  it("changes nothing for a status without left", () => {
+    expect(parseLobbyLifecycle({ state: "started", releasing: true })).toEqual({
+      releasing: true,
+    });
+    expect(lobbyStatusLabel({ state: "started" })).toBe("Game started");
+    expect(lobbyPanelPollMs("started", false)).toBe(LOBBY_PANEL_STARTED_POLL_MS);
+  });
+
+  it("reads as running with the bot gone, and its later over as over", () => {
+    expect(lobbyStatusLabel({ state: "started", left: true })).toBe(
+      "Game running — the bot has left it",
+    );
+    expect(lobbyStatusLabel({ state: "started", left: true, over: true })).toBe(
+      "Game over in Dota",
+    );
+    expect(LOBBY_LEFT_NOTE).toMatch(/free|next one/);
+    // The bot still reports the game's end after leaving: keep reading.
+    expect(lobbyPanelPollMs("started", false)).toBe(LOBBY_PANEL_STARTED_POLL_MS);
+    expect(botHoldsUnlaunchedLobby({ state: "started", left: true })).toBe(false);
+  });
+
+  it("offers no Release for a game the bot has left", () => {
+    const view = { canRelease: true };
+    expect(releaseOpen({ ...view, status: { state: "started" } })).toBe(true);
+    expect(releaseOpen({ ...view, status: { state: "started", left: true } })).toBe(false);
+  });
+});
+
+describe("a 1v1's panel (kind duel)", () => {
+  it("names a 1v1 holding the bot, open or finished", () => {
+    expect(lobbyBusyLabel({ game: "a 1v1", closed: false, duel: true })).toBe(
+      "The bot is hosting a 1v1",
+    );
+    expect(lobbyBusyLabel({ game: "a 1v1", closed: true, duel: true })).toBe(
+      "The bot is still leaving a finished 1v1",
+    );
+    expect(lobbyBusyLabel({ game: "#1234", closed: false })).toBe(
+      "The bot is hosting game #1234",
+    );
+  });
+
+  it("waits for the bot instead of hosting by hand", () => {
+    const busy = { game: "#1234", closed: false };
+    expect(lobbyBusyNote(busy, true, "duel")).toBe(DUEL_BOT_WAITING_NOTE);
+    expect(DUEL_BOT_WAITING_NOTE).toBe(
+      "Waiting for the lobby bot — it makes your lobby as soon as it's free.",
+    );
+    // Today's 5v5 wording is unchanged, with or without the kind.
+    expect(lobbyBusyNote(busy, true)).toBe(lobbyBusyNote(busy, true, "inhouse"));
+    expect(lobbyBusyNote(busy, true)).toMatch(/Host this game by hand/);
+    // A closed game's hold is freed by Create, for a 1v1 too.
+    expect(lobbyBusyNote({ ...busy, closed: true }, true, "duel")).toMatch(
+      /Create Dota lobby/,
+    );
+  });
+
+  const summary = (
+    players: { name: string; side: "radiant" | "dire"; seat: LobbySeat }[],
+    canStart = true,
+  ) =>
+    lobbySeatSummary({
+      kind: "duel",
+      playable: true,
+      status: { state: "ready" },
+      players,
+      canStart,
+    });
+
+  it("says Both seated, highlighting Start for whoever has it", () => {
+    const seated = [
+      { name: "Mid A", side: "radiant" as const, seat: "radiant" as const },
+      { name: "Mid B", side: "dire" as const, seat: "dire" as const },
+    ];
+    expect(summary(seated)).toEqual({
+      allSeated: true,
+      start: true,
+      text: "Both seated — press “Start game with bot”.",
+    });
+    expect(summary(seated, false)).toMatchObject({
+      allSeated: true,
+      start: false,
+      text: "Both seated — waiting for a player to start the game.",
+    });
+  });
+
+  it("names whom it still waits for", () => {
+    expect(
+      summary([
+        { name: "Mid A", side: "radiant", seat: "radiant" },
+        { name: "Mid B", side: "dire", seat: "absent" },
+      ]),
+    ).toEqual({ allSeated: false, start: false, text: "Waiting for Mid B to sit on their side." });
+    expect(
+      summary([
+        { name: "Mid A", side: "radiant", seat: "dire" },
+        { name: "Mid B", side: "dire", seat: "unassigned" },
+      ])?.text,
+    ).toBe("Waiting for Mid A and Mid B to sit on their side.");
+  });
+
+  it("has no summary while the lobby isn't ready or the duel can't start", () => {
+    const players = [{ name: "A", side: "radiant" as const, seat: "radiant" as const }];
+    expect(
+      lobbySeatSummary({ kind: "duel", playable: false, status: { state: "ready" }, players, canStart: true }),
+    ).toBeNull();
+    expect(
+      lobbySeatSummary({ kind: "duel", playable: true, status: { state: "starting" }, players, canStart: true }),
+    ).toBeNull();
   });
 });

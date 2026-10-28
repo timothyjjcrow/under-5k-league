@@ -102,6 +102,8 @@ export async function resetDb() {
   await prisma.inhouseLobbyPlayer.deleteMany();
   await prisma.inhouseLobby.deleteMany();
   await prisma.inhouseQueueEntry.deleteMany();
+  await prisma.inhouseDuel.deleteMany();
+  await prisma.inhouseDuelQueueEntry.deleteMany();
   // Same relationless shape, and it was already missing — an AdminAction row
   // written by one test was visible to the next.
   await prisma.adminAction.deleteMany();

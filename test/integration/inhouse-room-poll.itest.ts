@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prisma } from "@/lib/prisma";
-import { INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import { INHOUSE, INHOUSE_DUEL, INHOUSE_STATUS } from "@/lib/constants";
 import { onceAt, setRaceHook } from "@/lib/race-hook";
 import type { SessionUser } from "@/lib/auth";
 import { requeueLastSeenAt } from "@/lib/inhouse";
@@ -741,6 +741,107 @@ describe("room poll — the heartbeat", () => {
     expect(hb.calls()).toBe(1);
     expect(await hb.written()).toBe(0);
     expect((await row(p.id)).lastSeenAt.getTime()).toBe(rivalSeen.getTime());
+  });
+});
+
+describe("room poll — the 1v1 queue heartbeat", () => {
+  const duelRow = (userId: string, seenAgoMs: number) =>
+    prisma.inhouseDuelQueueEntry.create({
+      data: {
+        userId,
+        joinedAt: new Date(Date.now() - 10 * MIN),
+        lastSeenAt: new Date(Date.now() - seenAgoMs),
+        expiresAt: new Date(Date.now() + 20 * MIN),
+      },
+    });
+  const seen = async (userId: string) =>
+    (
+      await prisma.inhouseDuelQueueEntry.findUniqueOrThrow({ where: { userId } })
+    ).lastSeenAt.getTime();
+  function duelHeartbeatSpy() {
+    const spy = vi.spyOn(prisma.inhouseDuelQueueEntry, "updateMany");
+    return {
+      calls: () => spy.mock.calls.length,
+      async written() {
+        let total = 0;
+        for (const r of spy.mock.results) total += (await r.value).count;
+        return total;
+      },
+    };
+  }
+
+  it("issues no statement for a fresh row or a viewer not in the 1v1 queue", async () => {
+    const [p, outsider] = await players(2, "D");
+    await duelRow(p.id, 5 * SEC);
+    const hb = duelHeartbeatSpy();
+    await pollInhouseState(p.session);
+    await pollInhouseState(outsider.session);
+    expect(hb.calls()).toBe(0);
+  });
+
+  it("writes a stale present row once, with no publish, and not again within the interval", async () => {
+    const [p] = await players(1, "D");
+    await duelRow(p.id, INHOUSE_DUEL.HEARTBEAT_SECONDS * SEC + 5 * SEC);
+    const before = await seen(p.id);
+    const hb = duelHeartbeatSpy();
+
+    const first = await pollInhouseState(p.session);
+    expect(await hb.written()).toBe(1);
+    expect(first.invalidateGate).toBe(false);
+    expect(await readInhouseRoomVersion()).toBeNull();
+    expect(first.state.duel.me?.inQueue).toBe(true);
+
+    await pollInhouseState(p.session);
+    expect(hb.calls()).toBe(1);
+    expect(await seen(p.id)).toBeGreaterThan(before);
+  });
+
+  it("an away waiter's poll makes them present: published, the gate expired, the reply shows it", async () => {
+    const [p] = await players(1, "D");
+    await duelRow(p.id, INHOUSE_DUEL.PRESENT_SECONDS * SEC + 30 * SEC);
+
+    const polled = await pollInhouseState(p.session);
+
+    expect(polled.invalidateGate).toBe(true);
+    expect(await readInhouseRoomVersion()).not.toBeNull();
+    expect(polled.state.duel.queue.players).toEqual([
+      expect.objectContaining({ userId: p.id, present: true }),
+    ]);
+    expect(polled.state.duel.queue.present).toBe(1);
+  });
+
+  it("the seam: a rival heartbeat landing between the decision and the write stands", async () => {
+    const [p] = await players(1, "D");
+    await duelRow(p.id, 60 * SEC);
+    const rivalSeen = new Date(Date.now() - 1_234);
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.pollInhouseState.beforeDuelHeartbeat", async () => {
+        fired = true;
+        await prisma.inhouseDuelQueueEntry.update({
+          where: { userId: p.id },
+          data: { lastSeenAt: rivalSeen },
+        });
+      }),
+    );
+    const hb = duelHeartbeatSpy();
+
+    await pollInhouseState(p.session);
+
+    expect(fired).toBe(true);
+    expect(hb.calls()).toBe(1);
+    expect(await hb.written()).toBe(0);
+    expect(await seen(p.id)).toBe(rivalSeen.getTime());
+  });
+
+  it("an anonymous poll reads the 1v1 block and writes nothing", async () => {
+    const [p] = await players(1, "D");
+    await duelRow(p.id, 60 * SEC);
+    const hb = duelHeartbeatSpy();
+    const polled = await pollInhouseState(null);
+    expect(hb.calls()).toBe(0);
+    expect(polled.state.duel.me).toBeNull();
+    expect(polled.state.duel.queue.players.map((q) => q.userId)).toEqual([p.id]);
   });
 });
 

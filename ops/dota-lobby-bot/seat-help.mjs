@@ -34,16 +34,17 @@ export const CHAT_NAME_MAX_UNITS = 64;
 // Dota's own chat box takes about this many characters.
 export const CHAT_LINE_MAX = 127;
 
+import { keyKind, sideSize } from "./lobby-kind.mjs";
+
 // GC team enums: 0 GOOD_GUYS (Radiant), 1 BAD_GUYS (Dire). 2 broadcaster, 3
 // spectator, 4 player pool and 5 no team are left alone.
 const SIDE_NAMES = ["Radiant", "Dire"];
 const NO_COACH = 5;
 
-const INHOUSE_KEY = /^(?:eu:)?inhouse:/;
-
-/** Seat help is for inhouse games only: a season game's late stand-in isn't
- * on the job's roster. */
-export const seatHelpKey = (key) => typeof key === "string" && INHOUSE_KEY.test(key);
+/** Seat help is for inhouse games and duels: a season game's late stand-in
+ * isn't on the job's roster. */
+export const seatHelpKey = (key) => ["inhouse", "duel"].includes(keyKind(key));
+const isDuel = (spec) => keyKind(spec?.key) === "duel";
 
 // Control, format, surrogate, private-use and unassigned characters go
 // (zero-width spaces, bidi overrides and isolates among them), except what a
@@ -130,16 +131,37 @@ const personalLine = (side, name) => `${name}: you're on ${SIDE_NAMES[side]}. Ta
 
 /** The greeting for drafted players of one side who just arrived: "Sam:
  * you're on Radiant. Take a Radiant slot." for one, "Radiant: Sam, Lee. Take
- * a Radiant slot." for more, or the plain side line with no names. */
-export function greetLine(side, ids, names) {
+ * a Radiant slot." for more, or the plain side line with no names. A duel's
+ * (pass its spec) names both players at once: "1v1 mid: Sam on Radiant, Lee
+ * on Dire. Take your side." */
+export function greetLine(side, ids, names, spec) {
+  if (isDuel(spec)) return duelLine(spec, names);
   if (ids.length === 1 && names.has(ids[0])) return personalLine(side, names.get(ids[0]));
   return sideLine(side, ids, names);
 }
 
-/** What the bot says when it moved someone, or swapped the sides. */
-export function moveLine(why, side, name) {
-  if (why === "flip") return "Both teams sat on the wrong sides, so I swapped Radiant and Dire.";
-  if (why === "stranger") return "That seat is for a drafted player, so you were moved to unassigned.";
+/** A duel's one greeting with both names, or the plain line when a name is
+ * missing or the two don't fit one chat line (CHAT_LINE_MAX). */
+function duelLine(spec, names) {
+  const plain = "1v1 mid: take the side the site shows you, Radiant or Dire.";
+  const radiant = names.get(spec.radiant[0]);
+  const dire = names.get(spec.dire[0]);
+  if (!radiant || !dire) return plain;
+  const line = `1v1 mid: ${radiant} on Radiant, ${dire} on Dire. Take your side.`;
+  return line.length <= CHAT_LINE_MAX ? line : plain;
+}
+
+/** What the bot says when it moved someone, or swapped the sides. A duel's
+ * (pass its spec) stranger and swap lines say players, not drafted teams. */
+export function moveLine(why, side, name, spec) {
+  if (why === "flip")
+    return isDuel(spec)
+      ? "Both players sat on the wrong sides, so I swapped Radiant and Dire."
+      : "Both teams sat on the wrong sides, so I swapped Radiant and Dire.";
+  if (why === "stranger")
+    return isDuel(spec)
+      ? "That seat is for a player in this 1v1, so you were moved to unassigned."
+      : "That seat is for a drafted player, so you were moved to unassigned.";
   const sideName = SIDE_NAMES[side];
   return name ? personalLine(side, name) : `Moved a ${sideName} player to unassigned. Take a ${sideName} slot.`;
 }
@@ -150,16 +172,18 @@ const coaching = (m) => m.coachTeam !== undefined && m.coachTeam !== NO_COACH;
 const teamKnown = (m) => m.teamOnWire !== false;
 
 /** Every roster player seated on the opposite side and nobody else on a
- * side: one swap fixes it. Ten distinct players, five a side. */
+ * side: one swap fixes it. Distinct players, the kind's number a side (five,
+ * or one in a duel). */
 export function mirrored(members, spec) {
+  const size = sideSize(spec.key);
   const radiant = members.filter((m) => m.team === 0).map((m) => m.id);
   const dire = members.filter((m) => m.team === 1).map((m) => m.id);
   return (
-    spec.radiant.length === 5 &&
-    spec.dire.length === 5 &&
-    new Set([...spec.radiant, ...spec.dire]).size === 10 &&
-    radiant.length === 5 &&
-    dire.length === 5 &&
+    spec.radiant.length === size &&
+    spec.dire.length === size &&
+    new Set([...spec.radiant, ...spec.dire]).size === size * 2 &&
+    radiant.length === size &&
+    dire.length === size &&
     spec.dire.every((id) => radiant.includes(id)) &&
     spec.radiant.every((id) => dire.includes(id))
   );

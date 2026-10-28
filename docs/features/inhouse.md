@@ -6,6 +6,10 @@ draft and an OpenDota result feeding an Elo ladder. Rules: `src/lib/inhouse.ts`,
 `POST /api/inhouse`. Room: `src/components/inhouse-room.tsx` (shell) plus one
 file per stage in `src/components/inhouse/`. Lifecycle overview:
 `docs/ARCHITECTURE.md` section 3. Board and pings: `docs/features/discord.md`.
+The 1v1 mid queue and its duels (their own tables, card, bot lobbies,
+worker steps and leaderboard on the same page and room) are
+[inhouse-duels](inhouse-duels.md); the room's reply carries them as an
+additive `duel` block after every 5v5 field.
 
 ## Scope and where it runs
 
@@ -338,7 +342,22 @@ be marked over.
   game's Create answers BUSY for that whole game ("hosts one game at a time
   and is free again when that game ends"), so its captains host it by hand
   under its own lobby name. Never word the bot as free "once that game
-  starts".
+  starts". The bot's early leave (`DOTA_BOT_EARLY_LEAVE`, DECISIONS
+  2026-10-27) ships off; with a kind turned on, a game the bot has `left`
+  reads "Game running — the bot has left it": the game stays IN_PROGRESS,
+  its result still records itself by the bot's match id, "Game over — queue
+  again" still frees its ten, it never counts as a failed launch or as over,
+  and `botBusyElsewhere` never names it. A 1v1 mid lobby holds the bot like
+  any game once its game has started
+  ([inhouse-duels](inhouse-duels.md#the-lobby-bot)). Before that the 5v5
+  comes first: no 1v1 lobby is created while a 5v5 is being set up, and a
+  1v1 lobby made before the 5v5 formed (its game not started) reads to the
+  5v5's panel as one Create frees (`botBusyElsewhere` says closed and
+  `unstarted`, never the hand-hosting latch): the 5v5's Create answers BUSY,
+  releases that 1v1 lobby (`freeBotFromClosedInhouseGame(kind)`) and asks
+  for a second press. The 1v1 stays READY and gets a fresh lobby later. A
+  1v1 that has started holds the bot to its postgame, and a 5v5 then is
+  hosted by hand, as with any running game.
 
 ## Game over (result pending)
 

@@ -616,6 +616,18 @@ backoff even when the room is idle. The webhook API has no idempotency key, so
 delivery is at-least-once across a crash after Discord accepts a message but
 before `sentAt` commits. Routine queue/cancel notifications remain best-effort.
 
+**The 1v1 mid duels** ([inhouse-duels](features/inhouse-duels.md)) ride the
+same page, room and route on their own tables (`InhouseDuelQueueEntry`,
+`InhouseDuel`): pure rules in `src/lib/inhouse-duel.ts`, the engine in
+`inhouse-duel-service.ts`, the room's rows in `inhouse-duel-room.ts` (an
+additive `duel` block in the room's reply), the bot side in
+`inhouse-duel-bot.ts`, and `duel*` actions on `POST /api/inhouse`. Join pairs
+at once (READY), the bot's reads move a duel to PLAYING and AWAITING_RESULT,
+and OpenDota's match closes it COMPLETED (or a clock, a call-off or an admin
+CANCELLED). Their clocks, the bot's reads and the result scan are
+worker-only (`syncInhouseDuels` after the 5v5 half of `syncInhouse`); the
+1v1 Elo is derived from completed duels, like the 5v5 ladder.
+
 ## 4. Architecture: the layering rules
 
 **Five layers, with naming conventions that tell you where you are:**
