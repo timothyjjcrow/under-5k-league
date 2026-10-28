@@ -79,6 +79,11 @@ const TEAMS_LOCKED: InhouseDesktopAlert = {
   body: "Get into the Dota lobby.",
   urgent: false,
 };
+const DUEL_FOUND: InhouseDesktopAlert = {
+  title: "1v1 found — accept now",
+  body: "Accept your 1v1 mid before the timer ends.",
+  urgent: true,
+};
 const RESULT_IN: InhouseDesktopAlert = {
   title: "Your inhouse result is in",
   body: "Open the room for the score and your Elo.",
@@ -112,6 +117,7 @@ export function inhouseDesktopAlert(
     return TEAMS_LOCKED;
   }
   if (alerts.includes("vote-opened")) return VOTE_OPEN;
+  if (alerts.includes("duel-found")) return DUEL_FOUND;
   if (alerts.includes("teams-ready")) return TEAMS_LOCKED;
   if (alerts.includes("game-ended")) return RESULT_IN;
   return null;

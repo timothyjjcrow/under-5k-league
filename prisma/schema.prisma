@@ -1118,8 +1118,9 @@ model InhouseDuelQueueEntry {
   @@index([joinedAt])
 }
 
-// One 1v1: READY (paired) -> PLAYING -> AWAITING_RESULT -> COMPLETED |
-// CANCELLED (INHOUSE_DUEL_STATUS). Two players, one per side: no player table.
+// One 1v1: ACCEPTING (paired) -> READY (both accepted) -> PLAYING ->
+// AWAITING_RESULT -> COMPLETED | CANCELLED (INHOUSE_DUEL_STATUS). Two
+// players, one per side: no player table.
 model InhouseDuel {
   id             String    @id @default(cuid())
   status         String    @default("READY")
@@ -1128,6 +1129,11 @@ model InhouseDuel {
   radiantUserId  String
   direUserId     String
   createdAt      DateTime  @default(now())
+  // ACCEPTING: when each side accepted (INHOUSE_DUEL.ACCEPT_SECONDS after
+  // createdAt at the latest). Both set makes it READY. Null on a duel paired
+  // before the accept step existed.
+  radiantAcceptedAt DateTime?
+  direAcceptedAt    DateTime?
   // PLAYING: the bot saw the game launch, or a player pressed "We're playing".
   startedAt      DateTime?
   // AWAITING_RESULT: "1v1 over", or the bot saw Dota's postgame.

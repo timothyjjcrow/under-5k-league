@@ -780,6 +780,23 @@ describe("inhouseAlerts", () => {
     ).toEqual([]);
   });
 
+  it("rings a paired 1v1 player once, keyed on the duel waiting for their accept", () => {
+    // Only the two paired players' duel blocks carry an id here, so nobody
+    // else in the room (5v5 queue, spectators) is ever rung for it.
+    expect(inhouseAlerts(snap(), snap({ duelAcceptId: "d1" }))).toEqual(["duel-found"]);
+    expect(inhouseAlerts(snap({ duelAcceptId: "d1" }), snap({ duelAcceptId: "d1" }))).toEqual([]);
+    // Accepting clears it: never a bell.
+    expect(inhouseAlerts(snap({ duelAcceptId: "d1" }), snap())).toEqual([]);
+    // A second pairing inside one hidden-tab gap still rings.
+    expect(inhouseAlerts(snap({ duelAcceptId: "d1" }), snap({ duelAcceptId: "d2" }))).toEqual([
+      "duel-found",
+    ]);
+    // Never on the first payload after mount.
+    expect(inhouseAlerts(null, snap({ duelAcceptId: "d1" }))).toEqual([]);
+    // The 5v5's own alerts are untouched by it.
+    expect(inhouseAlerts(snap({ duelAcceptId: "d1" }), inCheck)).toEqual(["lobby-formed"]);
+  });
+
   it("rings when the lobby forms under the viewer", () => {
     expect(inhouseAlerts(snap(), inCheck)).toEqual(["lobby-formed"]);
   });

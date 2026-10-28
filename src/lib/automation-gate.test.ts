@@ -70,7 +70,7 @@ import {
   DRAFT_REMINDER,
   INHOUSE,
   INHOUSE_DUEL,
-  INHOUSE_DUEL_RESULT_STATUSES,
+  INHOUSE_DUEL_OPEN_STATUSES,
   INHOUSE_DUEL_STATUS,
   INHOUSE_STATUS,
   WEEK_REMINDER,
@@ -179,7 +179,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 14,
+      version: 15,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -273,7 +273,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 14,
+      version: 15,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -1035,7 +1035,7 @@ describe("computeAutomationGateSnapshot", () => {
         expect(snapshot).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
         expect(prismaMocks.inhouseDuel.findMany).toHaveBeenCalledWith(
           expect.objectContaining({
-            where: { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+            where: { status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
           }),
         );
       } finally {
@@ -2197,7 +2197,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 14,
+      version: 15,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

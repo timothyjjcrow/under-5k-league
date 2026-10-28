@@ -20,11 +20,31 @@ long-poll, rule P, the worker) is [inhouse](inhouse.md); the bot's protocol is
 
 - **Join 1v1 pairs at once, or waits.** The joiner pairs with the oldest
   waiter who is present (their room heartbeat at most `PRESENT_SECONDS`, 180,
-  old), in no live 5v5 lobby and in no live 1v1 (`pickDuelOpponent`). No
-  accept step; sides are random (`assignDuelSides`). With nobody to pair, the
+  old), in no live 5v5 lobby and in no live 1v1 (`pickDuelOpponent`). Sides
+  are random (`assignDuelSides`). With nobody to pair, the
   joiner waits; a queue row expires `QUEUE_MINUTES` (30) after the join, and a
   repeat join refreshes it. The worker's sweep (`pairDuelQueue`) pairs two
   present waiters a join couldn't (one was away, or in a 5v5).
+- **Both accept before the bot is asked** (Tim's call, 2026-10-28). A new
+  pair is ACCEPTING for `ACCEPT_SECONDS` (60) from its pairing
+  (`duelAcceptEndsAtMs`). Each player presses **Accept 1v1** (`acceptDuel`:
+  a claim on ACCEPTING, their own side's empty stamp and the deadline,
+  `duelAcceptOpenAfter`); the accept that completes the pair makes it READY
+  (`promoteAcceptedDuel`) and only then asks the bot for the lobby. **Decline
+  1v1** (`declineDuel`) cancels it at once. Whoever didn't accept (the decliner, or
+  a player the time ran out on) leaves the 1v1 queue; whoever did, and on a
+  decline the other player, goes back to its front (`requeueAtFront`:
+  `joinedAt` is the ended pairing, `lastSeenAt` their accept or the pairing,
+  so a player who never answered isn't counted present longer than they
+  were; `duelRequeueAfterAccept`). The worker's `settleDuelAccepts` closes a
+  duel out of time and makes READY one both accepted whose promote never ran.
+  An admin cancel of an ACCEPTING duel puts nobody back.
+- **The accept is the two players' alone.** The duel block is per viewer, so
+  only the two paired players get the prompt, the room's bell and the desktop
+  alert ("1v1 found — accept now"; the alert `duel-found`, from the snapshot's
+  `duelAcceptId`). The 5v5's ready check, vote, draft, alerts and toasts read
+  nothing of it, and a 5v5 moment the player must act on wins the one desktop
+  alert a poll shows (`inhouseDesktopAlert`).
 - **Only where the lobby bot can host 1v1s** (`inhouseLobbyBotConfigured`:
   a connection and the in-house ticket; Europe has no ticket today). 1v1s
   are bot only, so without it a pair could never play: the card shows
@@ -38,18 +58,22 @@ long-poll, rule P, the worker) is [inhouse](inhouse.md); the bot's protocol is
   does not refuse a player in a 1v1 (open question; the 5v5 is unchanged).
 - **No cap on how many 1v1s exist.** The one bot hosts one lobby at a time,
   so 1v1s wait their turn for it.
-- **Statuses** (`INHOUSE_DUEL_STATUS`): READY (paired) → PLAYING (the bot read
-  the launch) → AWAITING_RESULT (the bot read Dota's end, or a player pressed
-  "1v1 over") → COMPLETED | CANCELLED. Live is READY and PLAYING
-  (`INHOUSE_DUEL_LIVE_STATUSES`); a result can land on READY, PLAYING and
-  AWAITING_RESULT (`INHOUSE_DUEL_RESULT_STATUSES`). AWAITING_RESULT frees the
+- **Statuses** (`INHOUSE_DUEL_STATUS`): ACCEPTING (paired) → READY (both
+  accepted) → PLAYING (the bot read the launch) → AWAITING_RESULT (the bot
+  read Dota's end, or a player pressed "1v1 over") → COMPLETED | CANCELLED.
+  Live (holding its players) is ACCEPTING, READY and PLAYING
+  (`INHOUSE_DUEL_LIVE_STATUSES`); the bot's reads cover READY and PLAYING
+  only (`INHOUSE_DUEL_BOT_STATUSES`: an ACCEPTING duel has no lobby); a
+  result can land on READY, PLAYING and AWAITING_RESULT
+  (`INHOUSE_DUEL_RESULT_STATUSES`); open is ACCEPTING plus those
+  (`INHOUSE_DUEL_OPEN_STATUSES`: the room shows it, an admin can cancel it). AWAITING_RESULT frees the
   two: they may join the 1v1 queue again while the result is on its way.
 - **Bot only, never by hand** (Tim's amendment). There is no "host it
   yourselves" path and no "We're playing" press: PLAYING comes only from the
   bot's started read. "1v1 over" stays as the fallback for a bot game whose
   end the bot missed (PLAYING only).
 - **Call it off** (either player): a READY 1v1 whose game never started is
-  CANCELLED. **Admin**: cancel any 1v1 a result can still land on, void a
+  CANCELLED. **Admin**: cancel any open 1v1, void a
   COMPLETED one (the ladder recomputes without it), and take a player out of
   the 1v1 queue. All logged (`logAdminAction`; the void's `AdminAction`
   commits with its claim).
@@ -63,7 +87,9 @@ long-poll, rule P, the worker) is [inhouse](inhouse.md); the bot's protocol is
 ## Data
 
 - `InhouseDuelQueueEntry {userId @unique, joinedAt, lastSeenAt, expiresAt}`.
-- `InhouseDuel {status, radiantUserId, direUserId, createdAt, startedAt,
+- `InhouseDuel {status, radiantUserId, direUserId, createdAt,
+  radiantAcceptedAt, direAcceptedAt (migration
+  `20261029120000_inhouse_duel_accept`), startedAt,
   finishedAt, completedAt (the closing clock: when a result, a cancel, a
   give-up or a void closed it), checkedAt (the scan's
   claim), botMatchId, dotaMatchId @unique, winnerTeam (1 Radiant won, 2 Dire),
@@ -87,9 +113,11 @@ caught outside and retried). The claims are in the mutation ratchet
 
 ## The lobby bot
 
-- **Auto-create.** A pair formed by a join asks the bot for its lobby after
-  the response (`runAfterResponse(createDuelBotLobby)`, after the commit and
-  the publish; never inside a transaction or a room poll). A busy bot, or one
+- **Auto-create.** The accept that completes a pair asks the bot for its
+  lobby after the response (`promoteAcceptedDuel`'s
+  `runAfterResponse(createDuelBotLobby)`, after the commit and the publish;
+  never inside a transaction or a room poll). An ACCEPTING duel never reaches
+  the bot. A busy bot, or one
   saved for a 5v5, is retried by the worker once a pass for the oldest READY
   1v1 with no bot lobby (`retryDuelBotCreate`), until the bot is free or the
   1v1 leaves READY.
@@ -166,6 +194,11 @@ can paste the match id ("Record the 1v1 by match ID", `duelRecord`) under the
 
 ## Clocks
 
+- **Not accepted:** an ACCEPTING 1v1 `ACCEPT_SECONDS` (60) after pairing,
+  without both accepts, is CANCELLED by the worker's next pass
+  (`settleDuelAccepts`, run before the pairing sweep so a player put back can
+  pair again in the same pass). A live duel wakes the worker every pass, and
+  the held long-poll wakes at the deadline (canAccept turns false).
 - **Never played:** a READY 1v1 with no started game `SETUP_MINUTES` (30)
   after pairing is CANCELLED (this includes waiting too long for a busy bot).
   Where a bot can host 1v1s, only on the bot's read taken in the same worker
@@ -177,7 +210,7 @@ can paste the match id ("Record the 1v1 by match ID", `duelRecord`) under the
   `GIVE_UP_HOURS` (3) after pairing is CANCELLED.
 - **The scan never runs forever:** only PLAYING and AWAITING_RESULT 1v1s
   are scanned, and the give-ups close them.
-- **The worker wakes** (`automation-gate.ts`, `duelWorkerWakeAtMs`, gate v14):
+- **The worker wakes** (`automation-gate.ts`, `duelWorkerWakeAtMs`, gate v15):
   every pass while a 1v1 is live (the bot's reads and the create retry) or two
   present waiters could pair; otherwise at the earliest queue expiry and each
   open 1v1's next scan, setup call-off or give-up (`duelNextClockMs`). 1v1s
@@ -231,8 +264,10 @@ helpers in `inhouse-duel.ts` (`duelJoinRow`, `duelResultLine`,
   queue), Join 1v1, or Leave 1v1 with `DUEL_WAITING_NOTE` ("…plays you while
   this page is open.") and the queue's expiry (`LocalTime`); a refusal, or
   `DUEL_NO_BOT_NOTE`, in Join's place.
-- The viewer's 1v1 (`DuelGameCard`): the opponent with their medal, each
-  side, the bot's panel or the waiting note, the setup countdown
+- The viewer's 1v1 (`DuelGameCard`): "1v1 found" while ACCEPTING, with the
+  accept panel (`DuelAcceptPanel`: **Accept 1v1** and **Decline 1v1** with
+  the time left, then "You accepted. Waiting for X to accept."); the opponent
+  with their medal, each side, the bot's panel or the waiting note, the setup countdown
   (`role="timer"`), "Call it off" while it hasn't started, "1v1 over" in
   PLAYING, the give-up time, and "Record the 1v1 by match ID".
 - The viewer's last result for 10 minutes ("You beat X" / "X won"), or,
@@ -246,10 +281,12 @@ helpers in `inhouse-duel.ts` (`duelJoinRow`, `duelResultLine`,
   "Admin: void 1v1 result", each confirmed; nothing at all while there is
   nothing to act on, `duelAdminToolsVisible`).
 - **No control shares a 5v5 name** ("Join queue", "Leave queue", "ACCEPT
-  MATCH", "Game over — queue again", "Get into the Dota lobby", "Your side",
+  MATCH", "Decline", "Game over — queue again", "Get into the Dota lobby", "Your side",
   "Record by match ID", an input labelled MMR): the 5v5 e2e specs find their
   controls by those names.
-- No sound or desktop alert (the room pins exactly two `playChime()` calls).
+- The card itself never rings: the accept's bell and desktop alert come from
+  the room's one ring (`inhouseAlerts`' `duel-found`; the room pins exactly
+  two `playChime()` calls).
 - A new result refreshes the page, so the server-rendered leaderboard shows it.
 
 ## Leaderboard

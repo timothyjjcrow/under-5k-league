@@ -7,7 +7,7 @@
 import { prisma } from "./prisma";
 import {
   INHOUSE_DUEL,
-  INHOUSE_DUEL_RESULT_STATUSES,
+  INHOUSE_DUEL_OPEN_STATUSES,
   INHOUSE_DUEL_STATUS,
 } from "./constants";
 import type { DuelRoomRows } from "./inhouse-duel";
@@ -17,7 +17,8 @@ const userDisplay = {
 } as const;
 
 /**
- * The 1v1 queue (unexpired rows), every duel a result can still land on, and
+ * The 1v1 queue (unexpired rows), every open duel (accepting, or a result can
+ * still land on it), and
  * the duels completed or cancelled in the last LAST_RESULT_WINDOW_MS. Display
  * fields only.
  * `nowMs` opens the result window; buildDuelState narrows it with its own
@@ -39,7 +40,7 @@ export async function loadDuelRoomRows(nowMs: number = Date.now()): Promise<Duel
     prisma.inhouseDuel.findMany({
       where: {
         OR: [
-          { status: { in: INHOUSE_DUEL_RESULT_STATUSES } },
+          { status: { in: INHOUSE_DUEL_OPEN_STATUSES } },
           {
             // Closed in the window: a result, or a cancel its players are
             // told about (a closed duel's completedAt is when it closed).
@@ -65,6 +66,8 @@ export async function loadDuelRoomRows(nowMs: number = Date.now()): Promise<Duel
         radiantHeroId: true,
         direHeroId: true,
         endReason: true,
+        radiantAcceptedAt: true,
+        direAcceptedAt: true,
         radiantUser: userDisplay,
         direUser: userDisplay,
       },
