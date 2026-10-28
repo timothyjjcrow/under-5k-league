@@ -174,6 +174,8 @@ describe("rule P: the 1v1 duel engine publishes its own commits", () => {
   const PUBLISHED_BY_CALLER: Record<string, string> = {
     claimPair:
       "runs inside joinDuelQueue's and pairDuelQueue's transactions; both publish after the commit",
+    requeueAtFront:
+      "runs inside declineDuel's and settleDuelAccepts' transactions; both publish after the commit",
     touchDuelQueueHeartbeat:
       "the room poll publishes when the heartbeat turned the viewer present (it moves only lastSeenAt otherwise)",
   };

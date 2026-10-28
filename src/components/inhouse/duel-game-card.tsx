@@ -45,8 +45,102 @@ function DuelCountdown({
 }
 
 /**
- * The viewer's own 1v1 (READY, PLAYING or AWAITING_RESULT): the opponent
- * with their medal, the side each plays, the lobby bot's panel (kind
+ * The accept step of the viewer's own 1v1 (ACCEPTING): Accept 1v1 and
+ * Decline with the time left, or, once they accepted, who it waits for. Its
+ * own words, never the 5v5 ready check's ("ACCEPT MATCH"), whose e2e specs
+ * find their controls by name.
+ */
+function DuelAcceptPanel({
+  game,
+  opponentName,
+  opponentAccepted,
+  canAccept,
+  canDecline,
+  offset,
+  pending,
+  actOn,
+}: {
+  game: DuelGameView;
+  opponentName: string;
+  opponentAccepted: boolean;
+  canAccept: boolean;
+  canDecline: boolean;
+  offset: number;
+  pending: boolean;
+  actOn: (body: Record<string, unknown>) => Promise<boolean>;
+}) {
+  const accepted = !canAccept && game.acceptEndsAt !== null;
+  const seconds = useSecondsLeft(game.acceptEndsAt ?? 0, offset);
+  const timeUp = seconds <= 0;
+  return (
+    <div className="space-y-3 rounded-lg border border-accent/50 bg-accent/10 p-3">
+      <p className="flex flex-wrap items-center gap-x-2 text-sm">
+        {canAccept ? (
+          <span className="font-semibold text-fg">Accept your 1v1 to start the lobby.</span>
+        ) : timeUp ? (
+          <span className="text-muted">Time&apos;s up. Closing this 1v1…</span>
+        ) : opponentAccepted ? (
+          <span className="text-muted">Both accepted. Starting the lobby…</span>
+        ) : (
+          <span className="text-muted">
+            You accepted. Waiting for {opponentName} to accept.
+          </span>
+        )}
+        {game.acceptEndsAt !== null && !timeUp ? (
+          <DuelCountdown
+            endsAtMs={game.acceptEndsAt}
+            offsetMs={offset}
+            label="Time to accept the 1v1"
+          />
+        ) : null}
+      </p>
+      {canAccept || (canDecline && accepted && !timeUp) ? (
+        <div className="flex flex-wrap gap-2">
+          {canAccept ? (
+            <button
+              type="button"
+              disabled={pending || timeUp}
+              onClick={async () => {
+                if (await actOn({ action: "duelAccept" })) {
+                  pushToast("success", "1v1 accepted");
+                }
+              }}
+              className={buttonClasses("accent", "md")}
+            >
+              Accept 1v1
+            </button>
+          ) : null}
+          {canDecline ? (
+            <button
+              type="button"
+              disabled={pending || timeUp}
+              onClick={async () => {
+                if (
+                  !window.confirm(
+                    `Decline your 1v1 with ${opponentName}? You leave the 1v1 queue, and ${opponentName} goes back to its front.`,
+                  )
+                ) {
+                  return;
+                }
+                if (await actOn({ action: "duelDecline" })) {
+                  pushToast("info", "1v1 declined");
+                }
+              }}
+              className={buttonClasses("ghost", "md")}
+            >
+              Decline 1v1
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * The viewer's own 1v1 (ACCEPTING, READY, PLAYING or AWAITING_RESULT): the
+ * opponent with their medal, the side each plays, the accept step while it
+ * is ACCEPTING (DuelAcceptPanel), the lobby bot's panel (kind
  * "duel": either player can create, start, re-invite or release, as 5v5
  * captains do) or, while the bot can't answer, the waiting note (1v1s are
  * bot only, never hosted by hand; a bot that can't host here at all says
@@ -57,6 +151,8 @@ function DuelCountdown({
 export function DuelGameCard({
   game,
   viewerId,
+  canAccept,
+  canDecline,
   canCallOff,
   canOver,
   canRecord,
@@ -66,6 +162,8 @@ export function DuelGameCard({
 }: {
   game: DuelGameView;
   viewerId: string;
+  canAccept: boolean;
+  canDecline: boolean;
   canCallOff: boolean;
   canOver: boolean;
   canRecord: boolean;
@@ -81,6 +179,8 @@ export function DuelGameCard({
   const opponent = iAmRadiant ? game.dire : game.radiant;
   const mine = sideMeta(iAmRadiant);
   const theirs = sideMeta(!iAmRadiant);
+  const accepting = game.status === INHOUSE_DUEL_STATUS.ACCEPTING;
+  const opponentAccepted = iAmRadiant ? game.direAccepted : game.radiantAccepted;
   const live =
     game.status === INHOUSE_DUEL_STATUS.READY ||
     game.status === INHOUSE_DUEL_STATUS.PLAYING;
@@ -91,10 +191,17 @@ export function DuelGameCard({
     act({ ...body, duelId: game.id });
 
   return (
-    <div className="min-w-0 space-y-3 rounded-xl border border-accent/30 bg-surface-2/40 p-4">
+    <div
+      className={cn(
+        "min-w-0 space-y-3 rounded-xl border bg-surface-2/40 p-4",
+        accepting ? "border-accent/70" : "border-accent/30",
+      )}
+    >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-        <h3 className="min-w-0 text-sm font-semibold text-fg">Your 1v1</h3>
-        <Badge tone={game.status === INHOUSE_DUEL_STATUS.READY ? "accent" : "info"}>
+        <h3 className="min-w-0 text-sm font-semibold text-fg">
+          {accepting ? "1v1 found" : "Your 1v1"}
+        </h3>
+        <Badge tone={accepting || game.status === INHOUSE_DUEL_STATUS.READY ? "accent" : "info"}>
           {duelStageLabel(game.status)}
         </Badge>
       </div>
@@ -121,6 +228,19 @@ export function DuelGameCard({
           </p>
         </div>
       </div>
+
+      {accepting ? (
+        <DuelAcceptPanel
+          game={game}
+          opponentName={opponent.name}
+          opponentAccepted={opponentAccepted}
+          canAccept={canAccept}
+          canDecline={canDecline}
+          offset={offset}
+          pending={pending}
+          actOn={actOn}
+        />
+      ) : null}
 
       {live ? (
         <>

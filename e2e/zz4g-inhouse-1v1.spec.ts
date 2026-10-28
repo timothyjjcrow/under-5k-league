@@ -183,3 +183,89 @@ test("with no lobby bot the 1v1 card offers no Join; a 1v1 is called off, and a 
 
   assertNoPageErrors();
 });
+
+test("a new 1v1 asks only its two players to accept, apart from the 5v5; a decline puts the other back at the front", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  await removeOwnDuelRows();
+  const assertNoPageErrors = trackPageErrors(page);
+  // "Decline 1v1" confirms.
+  page.on("dialog", (d) => d.accept());
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const waiter = await apiPlayer(WAITER.name, WAITER.steamId);
+  await page.goto(
+    `/api/auth/dev?name=${encodeURIComponent(JOINER.name)}&steamId=${JOINER.steamId}&redirect=/inhouse`,
+  );
+  const [joiner, waiterUser] = await Promise.all([
+    db.user.findFirstOrThrow({ where: { steamId: JOINER.steamId }, select: { id: true } }),
+    db.user.findFirstOrThrow({ where: { steamId: WAITER.steamId }, select: { id: true } }),
+  ]);
+
+  // A pair just formed (while a bot could host), written straight to the
+  // database: ACCEPTING, nobody has accepted yet.
+  const pair = await db.inhouseDuel.create({
+    data: { status: "ACCEPTING", radiantUserId: joiner.id, direUserId: waiterUser.id },
+    select: { id: true },
+  });
+  expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
+  await page.goto("/inhouse");
+
+  const card = page.getByRole("region", { name: "1v1 mid", exact: true });
+  await expect(card.getByRole("heading", { name: "1v1 found" })).toBeVisible();
+  await expect(card.getByRole("link", { name: WAITER.name })).toBeVisible();
+  await expect(card.getByRole("timer", { name: /Time to accept the 1v1/ })).toBeVisible();
+  // Nothing of it reaches the 5v5: its queue card still offers its own join,
+  // and no 5v5 ready check shows.
+  await expect(page.getByRole("button", { name: /Join queue/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "ACCEPT MATCH" })).toHaveCount(0);
+  await expectNoHorizontalOverflow(page, "/inhouse with a 1v1 to accept at 390px");
+
+  const accept = card.getByRole("button", { name: "Accept 1v1", exact: true });
+  await untilHydrated(page, accept);
+  await accept.click();
+  await expect(page.getByText("1v1 accepted")).toBeVisible();
+  await expect(card.getByText(`You accepted. Waiting for ${WAITER.name} to accept.`)).toBeVisible();
+  await expect(card.getByRole("button", { name: "Accept 1v1", exact: true })).toHaveCount(0);
+
+  // The waiter accepts too: the pair is READY, and the card moves on to the
+  // lobby bot (which can't host on the e2e server).
+  expect((await act(waiter, { action: "duelAccept", duelId: pair.id })).ok).toBe(true);
+  expect((await db.inhouseDuel.findUniqueOrThrow({ where: { id: pair.id } })).status).toBe("READY");
+  await expect(card.getByRole("heading", { name: "Your 1v1" })).toBeVisible({ timeout: 30_000 });
+  await expect(card.getByText(/The lobby bot can't host 1v1s here right now\./)).toBeVisible();
+  await expect(card.getByRole("button", { name: "Decline 1v1" })).toHaveCount(0);
+
+  // A second pair: the joiner declines. They leave the 1v1 queue; the waiter
+  // goes back to its front, and their card says so.
+  await db.inhouseDuel.update({
+    where: { id: pair.id },
+    data: { status: "CANCELLED", completedAt: new Date(Date.now() - 20 * 60_000) },
+  });
+  const second = await db.inhouseDuel.create({
+    data: { status: "ACCEPTING", radiantUserId: waiterUser.id, direUserId: joiner.id },
+    select: { id: true, createdAt: true },
+  });
+  expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
+  await page.goto("/inhouse");
+  const decline = card.getByRole("button", { name: "Decline 1v1", exact: true });
+  await untilHydrated(page, decline);
+  await decline.click();
+  await expect(page.getByText("1v1 declined")).toBeVisible();
+  await expect(card.getByText("The 1v1 was declined, so it was called off.")).toBeVisible();
+  await expect(card.getByRole("heading", { name: "1v1 found" })).toHaveCount(0);
+  expect(await db.inhouseDuelQueueEntry.findUnique({ where: { userId: joiner.id } })).toBeNull();
+  const back = await db.inhouseDuelQueueEntry.findUniqueOrThrow({ where: { userId: waiterUser.id } });
+  expect(back.joinedAt).toEqual(second.createdAt);
+  const waiterView = (await act(waiter, { action: "state" })).json.duel as {
+    me: { inQueue: boolean; lastCancelled: { line: string } | null };
+  };
+  expect(waiterView.me.inQueue).toBe(true);
+  expect(waiterView.me.lastCancelled?.line).toBe(
+    "The 1v1 was declined, so it was called off. You're back at the front of the 1v1 queue.",
+  );
+
+  await waiter.dispose();
+  assertNoPageErrors();
+});

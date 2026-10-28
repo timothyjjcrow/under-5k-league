@@ -16,10 +16,12 @@ import {
 } from "@/lib/inhouse-duel";
 import type { OpenDotaMatch, OpenDotaRecentMatch } from "@/lib/dota";
 import {
+  acceptDuel,
   applyDuelResult,
   callOffDuel,
   cancelDuel,
   cancelDuelFromBot,
+  declineDuel,
   endDuelFromBot,
   expireDuelQueue,
   finishDuel,
@@ -33,6 +35,7 @@ import {
   recordDuelMatch,
   removeFromDuelQueue,
   resetDuelLadderMemoForTests,
+  settleDuelAccepts,
   touchDuelQueueHeartbeat,
   voidDuelResult,
 } from "@/lib/inhouse-duel-service";
@@ -103,6 +106,8 @@ async function makeDuel(
     dotaMatchId: string | null;
     winnerTeam: number | null;
     completedAt: Date | null;
+    radiantAcceptedAt: Date | null;
+    direAcceptedAt: Date | null;
   }> = {},
 ) {
   return prisma.inhouseDuel.create({
@@ -163,6 +168,278 @@ afterEach(() => {
   setRaceHook(null);
 });
 
+describe("the accept step", () => {
+  const acceptingDuel = (
+    radiant: U,
+    dire: U,
+    extra: Parameters<typeof makeDuel>[3] = {},
+  ) => makeDuel(radiant, dire, INHOUSE_DUEL_STATUS.ACCEPTING, extra);
+  const lateBy = (s: number) =>
+    new Date(Date.now() - (INHOUSE_DUEL.ACCEPT_SECONDS + s) * 1000);
+
+  it("pairs into ACCEPTING, and only both accepts make it READY", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    await joinDuelQueue(sessionFor(a));
+    await joinDuelQueue(sessionFor(b));
+    const duel = await prisma.inhouseDuel.findFirstOrThrow();
+    expect(duel.status).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    // Paired players can't queue again meanwhile.
+    expect(await joinDuelQueue(sessionFor(a))).toEqual({ ok: false, error: DUEL_REFUSAL.IN_DUEL });
+
+    expect(await acceptDuel(sessionFor(a), duel.id)).toEqual({ ok: true });
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    expect(await acceptDuel(sessionFor(b), duel.id)).toEqual({ ok: true });
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+    // A press after it went through is fine and changes nothing.
+    expect(await acceptDuel(sessionFor(a), duel.id)).toEqual({ ok: true });
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+  });
+
+  for (const side of ["radiant", "dire"] as const) {
+    it(`one accept (${side}) leaves it ACCEPTING, and a second press keeps the first stamp`, async () => {
+      const a = await makeUser("A");
+      const b = await makeUser("B");
+      const duel = await acceptingDuel(a, b);
+      const player = side === "radiant" ? a : b;
+      expect(await acceptDuel(sessionFor(player), duel.id)).toEqual({ ok: true });
+      const first = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
+      expect(first.status).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+      const stamp = side === "radiant" ? first.radiantAcceptedAt : first.direAcceptedAt;
+      expect(stamp).not.toBeNull();
+      await new Promise((r) => setTimeout(r, 5));
+      expect(await acceptDuel(sessionFor(player), duel.id)).toEqual({ ok: true });
+      const again = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
+      expect(side === "radiant" ? again.radiantAcceptedAt : again.direAcceptedAt).toEqual(stamp);
+      expect(again.status).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    });
+
+    it(`refuses a late accept (${side}) and writes nothing`, async () => {
+      const a = await makeUser("A");
+      const b = await makeUser("B");
+      const duel = await acceptingDuel(a, b, { createdAt: lateBy(1) });
+      const player = side === "radiant" ? a : b;
+      expect(await acceptDuel(sessionFor(player), duel.id)).toEqual({
+        ok: false,
+        error: "Too late: the time to accept this 1v1 ran out.",
+      });
+      const row = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
+      expect([row.radiantAcceptedAt, row.direAcceptedAt]).toEqual([null, null]);
+    });
+  }
+
+  it("is only the two players' to accept or decline, never an admin's or a stranger's", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const admin = await makeUser("Admin", "ADMIN");
+    const duel = await acceptingDuel(a, b);
+    expect((await acceptDuel(sessionFor(admin), duel.id)).ok).toBe(false);
+    expect((await declineDuel(sessionFor(admin), duel.id)).ok).toBe(false);
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    // A READY duel has nothing to decline.
+    const ready = await makeDuel(a, b);
+    expect((await declineDuel(sessionFor(a), ready.id)).ok).toBe(false);
+  });
+
+  it("a decline cancels it, drops the decliner and puts the other back at the front", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const older = await makeUser("Older");
+    const duel = await acceptingDuel(a, b, { createdAt: new Date(Date.now() - 20_000) });
+    // Someone who joined after the pairing waits behind the one put back.
+    await queueRow(older, { joinedAgoS: 5 });
+    expect(await declineDuel(sessionFor(a), duel.id)).toEqual({ ok: true });
+    const closed = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
+    expect(closed.status).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    expect(closed.endReason).toBe(duelEndReason.declined("A"));
+    expect(closed.completedAt).not.toBeNull();
+    expect(await prisma.inhouseDuelQueueEntry.findUnique({ where: { userId: a.id } })).toBeNull();
+    const back = await prisma.inhouseDuelQueueEntry.findUniqueOrThrow({ where: { userId: b.id } });
+    expect(back.joinedAt).toEqual(closed.createdAt);
+    // The next joiner pairs with the one put back, not the later joiner.
+    const next = await makeUser("Next");
+    await joinDuelQueue(sessionFor(next));
+    const paired = await prisma.inhouseDuel.findFirstOrThrow({
+      where: { status: INHOUSE_DUEL_STATUS.ACCEPTING },
+    });
+    expect([paired.radiantUserId, paired.direUserId].sort()).toEqual([b.id, next.id].sort());
+  });
+
+  it("the worker closes an unaccepted duel: whoever accepted goes back, whoever didn't is dropped", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const c = await makeUser("C");
+    const d = await makeUser("D");
+    const oneAccepted = await acceptingDuel(a, b, {
+      createdAt: lateBy(5),
+      radiantAcceptedAt: lateBy(-10),
+    });
+    const noneAccepted = await acceptingDuel(c, d, { createdAt: lateBy(5) });
+    const fresh = await acceptingDuel(await makeUser("E"), await makeUser("F"));
+    expect(await settleDuelAccepts()).toEqual({ readied: 0, expired: 2 });
+    const closed = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: oneAccepted.id } });
+    expect(closed.status).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    expect(closed.endReason).toBe(duelEndReason.notAccepted(["B"]));
+    expect(
+      (await prisma.inhouseDuelQueueEntry.findMany()).map((q) => q.userId),
+    ).toEqual([a.id]);
+    expect((await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: noneAccepted.id } })).endReason).toBe(
+      duelEndReason.notAccepted(["C", "D"]),
+    );
+    expect(await statusOf(fresh.id)).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+  });
+
+  it("the worker makes READY a duel both accepted whose promote never ran", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b, {
+      radiantAcceptedAt: new Date(),
+      direAcceptedAt: new Date(),
+    });
+    expect(await settleDuelAccepts()).toEqual({ readied: 1, expired: 0 });
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+  });
+
+  it("an admin can cancel an accepting duel, and nobody is put back", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const admin = await makeUser("Admin", "ADMIN");
+    const duel = await acceptingDuel(a, b, { radiantAcceptedAt: new Date() });
+    vi.mocked((await import("@/lib/auth")).getSessionUser).mockResolvedValueOnce(
+      sessionFor(admin),
+    );
+    expect(await cancelDuel(sessionFor(admin), duel.id)).toEqual({ ok: true });
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
+  });
+
+  it("the room shows an accepting duel and its stamps", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b, { direAcceptedAt: new Date() });
+    const rows = await loadDuelRoomRows();
+    const row = rows.duels.find((d) => d.id === duel.id);
+    expect(row?.status).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    expect(row?.radiantAcceptedAt).toBeNull();
+    expect(row?.direAcceptedAt).not.toBeNull();
+  });
+
+  it("raced accepts from both players make it READY exactly once", async () => {
+    for (let i = 0; i < 4; i += 1) {
+      const a = await makeUser(`A${i}`);
+      const b = await makeUser(`B${i}`);
+      const duel = await acceptingDuel(a, b);
+      const results = await raceAll([
+        () => acceptDuel(sessionFor(a), duel.id),
+        () => acceptDuel(sessionFor(b), duel.id),
+      ]);
+      expect(results).toEqual([{ ok: true }, { ok: true }]);
+      expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+    }
+  });
+
+  it("an accept loses to a decline that lands after its read", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b);
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.acceptDuel.beforeClaim", async () => {
+        fired = true;
+        expect(await declineDuel(sessionFor(b), duel.id)).toEqual({ ok: true });
+      }),
+    );
+    expect(await acceptDuel(sessionFor(a), duel.id)).toEqual({
+      ok: false,
+      error: "That 1v1 was called off before it started.",
+    });
+    expect(fired).toBe(true);
+    const row = await prisma.inhouseDuel.findUniqueOrThrow({ where: { id: duel.id } });
+    expect(row.status).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+    expect(row.radiantAcceptedAt).toBeNull();
+  });
+
+  it("a decline loses to the accept that made it READY after its read", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b, { radiantAcceptedAt: new Date() });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.declineDuel.beforeClaim", async () => {
+        fired = true;
+        expect(await acceptDuel(sessionFor(b), duel.id)).toEqual({ ok: true });
+      }),
+    );
+    expect((await declineDuel(sessionFor(a), duel.id)).ok).toBe(false);
+    expect(fired).toBe(true);
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+    expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
+  });
+
+  it("the promote never brings back a duel cancelled after its read", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const admin = await makeUser("Admin", "ADMIN");
+    const duel = await acceptingDuel(a, b, {
+      radiantAcceptedAt: new Date(),
+      direAcceptedAt: new Date(),
+    });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.promoteAcceptedDuel.beforeClaim", async () => {
+        fired = true;
+        expect(await cancelDuel(sessionFor(admin), duel.id)).toEqual({ ok: true });
+      }),
+    );
+    expect(await settleDuelAccepts()).toEqual({ readied: 0, expired: 0 });
+    expect(fired).toBe(true);
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.CANCELLED);
+  });
+
+  it("the expiry loses to an accept that completed the pair after its read", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b, { radiantAcceptedAt: new Date() });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.settleDuelAccepts.beforeExpireClaim", async () => {
+        fired = true;
+        // In real time the accept is still in time; the worker judged a
+        // later clock.
+        expect(await acceptDuel(sessionFor(b), duel.id)).toEqual({ ok: true });
+      }),
+    );
+    const later = Date.now() + (INHOUSE_DUEL.ACCEPT_SECONDS + 5) * 1000;
+    expect(await settleDuelAccepts(later)).toEqual({ readied: 0, expired: 0 });
+    expect(fired).toBe(true);
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.READY);
+    expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
+  });
+
+  it("the expiry never closes a pair whose second stamp landed after its read, before the promote", async () => {
+    const a = await makeUser("A");
+    const b = await makeUser("B");
+    const duel = await acceptingDuel(a, b, { radiantAcceptedAt: new Date() });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouseDuel.settleDuelAccepts.beforeExpireClaim", async () => {
+        fired = true;
+        // An accept's own write, its promote still to come.
+        await prisma.inhouseDuel.update({
+          where: { id: duel.id },
+          data: { direAcceptedAt: new Date() },
+        });
+      }),
+    );
+    const later = Date.now() + (INHOUSE_DUEL.ACCEPT_SECONDS + 5) * 1000;
+    expect(await settleDuelAccepts(later)).toEqual({ readied: 0, expired: 0 });
+    expect(fired).toBe(true);
+    expect(await statusOf(duel.id)).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
+    // The next pass makes it READY.
+    expect(await settleDuelAccepts()).toEqual({ readied: 1, expired: 0 });
+  });
+});
+
 describe("joining and pairing", () => {
   it("waits with nobody to pair, then pairs the next joiner", async () => {
     const a = await makeUser("Alpha");
@@ -177,7 +454,7 @@ describe("joining and pairing", () => {
     expect(await joinDuelQueue(sessionFor(b))).toEqual({ ok: true });
     const duels = await prisma.inhouseDuel.findMany();
     expect(duels).toHaveLength(1);
-    expect(duels[0].status).toBe(INHOUSE_DUEL_STATUS.READY);
+    expect(duels[0].status).toBe(INHOUSE_DUEL_STATUS.ACCEPTING);
     expect([duels[0].radiantUserId, duels[0].direUserId].sort()).toEqual([a.id, b.id].sort());
     expect(await prisma.inhouseDuelQueueEntry.count()).toBe(0);
   });

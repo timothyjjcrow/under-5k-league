@@ -61,6 +61,19 @@ describe("inhouseDesktopAlert", () => {
     expect(inhouseDesktopAlert([], "READY_CHECK")).toBeNull();
   });
 
+  it("asks a paired 1v1 player to accept, after any 5v5 moment they must act on first", () => {
+    expect(inhouseDesktopAlert(["duel-found"], null)).toMatchObject({
+      title: "1v1 found — accept now",
+      urgent: true,
+    });
+    expect(inhouseDesktopAlert(["lobby-formed", "duel-found"], "READY_CHECK")).toMatchObject({
+      title: "Match found — accept now",
+    });
+    expect(inhouseDesktopAlert(["my-turn", "duel-found"], "DRAFTING")).toMatchObject({
+      title: "Your pick",
+    });
+  });
+
   it("names the stage the player's new game is in now, not the one it started in", () => {
     // A hidden tab can first see its game already in the vote or the draft
     // (lobby-formed keys on the lobby appearing): "accept now" would send
