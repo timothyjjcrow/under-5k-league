@@ -334,17 +334,17 @@ be marked over.
 - **Elo stays correct with overlap.** `summarizeInhouse` rates in formation
   order (id breaks a tie), and since the two games' players are disjoint, a
   later-formed game finishing first never changes the other's deltas.
-- **One bot hosts one game at a time, until that game's postgame**
-  (docs/DOTA-LOBBY-BOT.md; DECISIONS 2026-10-18, superseding the 2026-10-09
-  "leaves each game once it runs"). Dota's Game Coordinator ignores a leave
-  while a game runs, so the Steam account stays in a game's lobby until Dota
-  shows it over, keeping the match id for the result lookup. The other
-  game's Create answers BUSY for that whole game ("hosts one game at a time
-  and is free again when that game ends"), so its captains host it by hand
-  under its own lobby name. Never word the bot as free "once that game
-  starts". The bot's early leave (`DOTA_BOT_EARLY_LEAVE`, DECISIONS
-  2026-10-27) ships off; with a kind turned on, a game the bot has `left`
-  reads "Game running — the bot has left it": the game stays IN_PROGRESS,
+- **One bot sets up one lobby at a time, and leaves each game once it is
+  under way** (docs/DOTA-LOBBY-BOT.md#early-leave; DECISIONS 2026-10-28,
+  `DOTA_BOT_EARLY_LEAVE=duel,inhouse`). At the horn the bot sends
+  AbandonCurrentGame and a Leave; once Dota confirms it, the bot is free for
+  the other game's lobby, so two 5v5s, or a 5v5 and a 1v1, play side by
+  side. A leave Dota doesn't confirm (tried twice) leaves the bot in the
+  game to its postgame, as before 2026-10-28 (DECISIONS 2026-10-18): the
+  other game's Create answers BUSY meanwhile, and its card says the bot is
+  free again once it leaves that game, "usually a few minutes after it
+  starts (or when it ends)", with the by-hand steps for starting sooner. A
+  game the bot has `left` reads "Game running — the bot has left it": the game stays IN_PROGRESS,
   its result still records itself by the bot's match id, "Game over — queue
   again" still frees its ten, it never counts as a failed launch or as over,
   and `botBusyElsewhere` never names it. A 1v1 mid lobby holds the bot like
@@ -356,8 +356,8 @@ be marked over.
   `unstarted`, never the hand-hosting latch): the 5v5's Create answers BUSY,
   releases that 1v1 lobby (`freeBotFromClosedInhouseGame(kind)`) and asks
   for a second press. The 1v1 stays READY and gets a fresh lobby later. A
-  1v1 that has started holds the bot to its postgame, and a 5v5 then is
-  hosted by hand, as with any running game.
+  1v1 that has started holds the bot until it leaves, and a 5v5 then is
+  hosted by hand, as with any running game, until the bot leaves it.
 
 ## Game over (result pending)
 

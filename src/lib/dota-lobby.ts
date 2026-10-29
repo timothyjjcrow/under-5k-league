@@ -308,10 +308,13 @@ export const DUEL_BOT_WAITING_NOTE =
   "Waiting for the lobby bot — it makes your lobby as soon as it's free.";
 
 /**
- * The line under it. A game still being played keeps the one bot until it
- * ends in Dota, so this game is hosted by hand (the card's steps, unfolded);
- * a closed one is freed by this game's Create. A 1v1 is never hosted by
- * hand: it waits for the bot.
+ * The line under it. A game still being played keeps the one bot until the
+ * bot leaves it: a few minutes after that game is under way where early
+ * leave is on (DOTA-LOBBY-BOT.md#early-leave), else at its end in Dota.
+ * Create comes back on this card by itself then (the panel keeps reading),
+ * and the card's by-hand steps, unfolded, are for starting sooner. A closed
+ * game is freed by this game's Create. A 1v1 is never hosted by hand: it
+ * waits for the bot.
  */
 export function lobbyBusyNote(
   busy: BotBusyElsewhere,
@@ -323,7 +326,7 @@ export function lobbyBusyNote(
       ? "Press “Create Dota lobby”: it frees the bot from that game first."
       : "A captain's “Create Dota lobby” frees the bot from that game first.";
   if (kind === "duel") return DUEL_BOT_WAITING_NOTE;
-  return "The bot hosts one game at a time and is free again when that game ends in Dota. Host this game by hand with the steps on this card.";
+  return "The bot is free again once it leaves that game, usually a few minutes after it starts (or when it ends), and “Create Dota lobby” comes back here then. To start sooner, host this game by hand with the steps on this card.";
 }
 
 /**

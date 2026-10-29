@@ -80,7 +80,7 @@ class LobbyBotOutcomeUnknownError extends UserFacingError {
 export class LobbyBotBusyError extends UserFacingError {
   constructor() {
     super(
-      "The bot is hosting another game's lobby. It hosts one game at a time and is free again when that game ends: try again then, or host this game by hand.",
+      "The bot is hosting another game's lobby. It's free again once it leaves that game, usually a few minutes after it starts (or when it ends): try again then, or host this game by hand.",
     );
   }
 }
