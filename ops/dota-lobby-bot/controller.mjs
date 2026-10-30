@@ -134,17 +134,21 @@ export const STARTED_BACKSTOP_MS = 3 * 60 * 60_000;
 // about this long past the check, not until the backstop.
 export const RECHECK_AFTER_MS = 15 * 60_000;
 // Early leave (DOTA_BOT_EARLY_LEAVE, off unless a kind is listed): once a
-// launched game is under way the bot sends AbandonCurrentGame and a Leave,
+// launched game is under way (its hero draft on) the bot sends AbandonCurrentGame and a Leave,
 // so it is free for the next game instead of sitting in this one's lobby
 // until its postgame. At most this many tries a job, this far apart; a try
 // Dota doesn't confirm within LEAVE_CONFIRM_MS is no resync, the bot simply
 // stays to the postgame as before.
 export const EARLY_LEAVE_MAX_TRIES = 2;
 export const EARLY_LEAVE_GAP_MS = 60_000;
-// DOTA_GameState's DOTA_GAMERULES_STATE_GAME_IN_PROGRESS: every player has
-// loaded and the horn has sounded, so a failed load or a server that never
-// started (which today come back to the lobby screen) are past.
-export const GAME_IN_PROGRESS = 5;
+// The DOTA_GameState values an early leave may go out at (Tim's call,
+// 2026-10-30: leave at picks, so a second game's lobby waits minutes, not the
+// whole draft): HERO_SELECTION (2), STRATEGY_TIME (3), PRE_GAME (4),
+// GAME_IN_PROGRESS (5) and TEAM_SHOWCASE (8). Every player has loaded by
+// then, so a failed load (WAIT_FOR_PLAYERS_TO_LOAD, 1) or a server that never
+// started (no game state, 0) is past. Never POST_GAME (6) or the custom-game
+// states.
+export const EARLY_LEAVE_GAME_STATES = [2, 3, 4, 5, 8];
 // A game the bot left early can't show it its postgame, so it asks the Game
 // Coordinator for the match's details instead (k_EMsgGCMatchDetailsRequest):
 // first this long after the leave, then once a minute, one request in flight
@@ -1119,10 +1123,11 @@ export class LobbyController {
   }
   /** Leave this launched game now, while it runs? Only for a kind listed in
    * DOTA_BOT_EARLY_LEAVE, only the active claim's own lobby, only once the
-   * game is under way (RUN at DOTA_GAMERULES_STATE_GAME_IN_PROGRESS, so a
-   * failed load or a server that never started is past; a snapshot without a
-   * game state never qualifies) with its match id known, only while the bot
-   * sits on neither side, never at the game's end, and within the tries. */
+   * game is under way (RUN at a game state in EARLY_LEAVE_GAME_STATES, from
+   * the hero draft on, so a failed load or a server that never started is
+   * past; a snapshot without a game state never qualifies) with its match id
+   * known, only while the bot sits on neither side, never at the game's
+   * end, and within the tries. */
   earlyLeaveDue(job, lobby, now) {
     const bot = this.transport.steamId();
     return (
@@ -1134,7 +1139,7 @@ export class LobbyController {
       !job.launchFailed &&
       sameLobby(lobby, job) &&
       lobby.state === 2 &&
-      lobby.gameState === GAME_IN_PROGRESS &&
+      EARLY_LEAVE_GAME_STATES.includes(lobby.gameState) &&
       !atPostgame(lobby) &&
       hasMatchId(lobby) &&
       job.matchId === lobby.matchId &&
