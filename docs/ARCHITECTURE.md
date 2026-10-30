@@ -162,8 +162,9 @@ the parsers in `src/lib/draft-http.ts`; stale tabs, replayed requests, a
 replaced season, or a recovered lot fail closed instead of applying to the new
 state.
 
-Clocks (30s bid, 90s nomination — `DEFAULTS` in `src/lib/constants.ts`) are
-server-authoritative and resolve **lazily**: `getDraftState` runs both
+Clocks (the season's `draft*Seconds`, by default 30s bid, 5s uncontested and
+90s nomination; `draftClocks` in `src/lib/draft.ts`, set with the draft
+settings until Start) are server-authoritative and resolve **lazily**: `getDraftState` runs both
 resolvers before every read and the action routes
 (`/api/draft/bid|nominate|admin-nominate`) funnel through it; the room's
 `/api/draft/tick` long-polls on a draft room version and answers from one

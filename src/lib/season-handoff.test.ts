@@ -114,6 +114,9 @@ describe("carried season settings", () => {
     minTeams: 5,
     draftBudget: 1200,
     budgetMmrWeight: 0,
+    draftBidSeconds: 45,
+    draftUncontestedBidSeconds: 8,
+    draftNominationSeconds: 120,
     maxMmr: 0,
     regularBestOf: 3,
     playoffBestOf: 5,
@@ -142,6 +145,9 @@ describe("carried season settings", () => {
       minTeams: 4,
       draftBudget: 100,
       budgetMmrWeight: 20,
+      draftBidSeconds: 30,
+      draftUncontestedBidSeconds: 5,
+      draftNominationSeconds: 90,
       maxMmr: SOFT_MMR_LIMIT,
       regularBestOf: 2,
       playoffBestOf: 3,
@@ -152,10 +158,10 @@ describe("carried season settings", () => {
 
   it("states them in one line", () => {
     expect(carriedSettingsLine(carriedSeasonSettings(null))).toBe(
-      "Teams of 5 · 4 teams to start · $100 budget · 20% MMR budget weighting · 4,500 soft MMR limit · Bo2 / Bo3 / Bo5 series · no league id",
+      "Teams of 5 · 4 teams to start · $100 budget · 20% MMR budget weighting · 30s bids (5s uncontested), 90s to nominate · 4,500 soft MMR limit · Bo2 / Bo3 / Bo5 series · no league id",
     );
     expect(carriedSettingsLine(carriedSeasonSettings(customised))).toBe(
-      "Teams of 6 · 5 teams to start · $1,200 budget · flat budgets · no soft MMR limit · Bo3 / Bo5 / Bo7 series · league id 17654",
+      "Teams of 6 · 5 teams to start · $1,200 budget · flat budgets · 45s bids (8s uncontested), 120s to nominate · no soft MMR limit · Bo3 / Bo5 / Bo7 series · league id 17654",
     );
   });
 });

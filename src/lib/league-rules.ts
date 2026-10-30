@@ -21,7 +21,7 @@ import {
   MATCH_STATUS,
   SEASON_STATUS,
 } from "./constants";
-import { BUDGET_FULL_EFFECT_GAP } from "./draft";
+import { BUDGET_FULL_EFFECT_GAP, draftClocks } from "./draft";
 import { eligibilityText, resultsCopy } from "./how-it-works";
 import { LEAGUE_CONFIG } from "./league-config";
 import { matchResultsOpen } from "./league-lifecycle";
@@ -541,6 +541,7 @@ function signupsSection(s: CarriedSeasonSettings): RuleSection {
 }
 
 function draftSection(s: CarriedSeasonSettings): RuleSection {
+  const clocks = draftClocks(s);
   const rules = [
     `Captains are on their own teams and buy their other ${plural(s.teamSize - 1, "player")} in a live auction. Only player signups are in it, not standins.`,
     `Each captain has ${money(s.draftBudget)} to spend.`,
@@ -552,9 +553,9 @@ function draftSection(s: CarriedSeasonSettings): RuleSection {
   }
   rules.push(
     "Captains take turns nominating in draft order: a simple rotation, not a snake. Teams that are full, or can't afford the minimum bid, are skipped.",
-    `Bids are whole dollars from ${money(DEFAULTS.MIN_BID)}. Each bid resets the clock to ${plural(DEFAULTS.BID_TIMER_SECONDS, "second")}, or ${plural(DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS, "second")} when no other team can top it.`,
+    `Bids are whole dollars from ${money(DEFAULTS.MIN_BID)}. Each bid resets the clock to ${plural(clocks.bidSeconds, "second")}, or ${plural(clocks.uncontestedBidSeconds, "second")} when no other team can top it.`,
     `A bid must leave ${money(DEFAULTS.MIN_BID)} for each seat still to fill, so every team can finish its roster.`,
-    `A captain who doesn't nominate within ${plural(DEFAULTS.NOMINATION_TIMER_SECONDS, "second")} has the highest-MMR player left nominated for them at ${money(DEFAULTS.MIN_BID)}.`,
+    `A captain who doesn't nominate within ${plural(clocks.nominationSeconds, "second")} has the highest-MMR player left nominated for them at ${money(DEFAULTS.MIN_BID)}.`,
     "If the player pool runs out first, the auction ends and teams still short fill their open seats with standins.",
   );
   return { id: "draft", title: "The auction draft", rules };

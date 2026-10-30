@@ -368,6 +368,121 @@ describe("draft order and settings setup boundaries", () => {
     });
   });
 
+  it("saves the draft clocks with the settings and says what was stored", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    await makeNotStartedDraft(season.id);
+
+    const result = await setDraftSettings(
+      {},
+      setupForm(season.id, {
+        expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+        teamSize: 3,
+        minTeams: 2,
+        draftBudget: 100,
+        budgetMmrWeight: 20,
+        draftBidSeconds: 45,
+        draftUncontestedBidSeconds: 8,
+        draftNominationSeconds: 120,
+      }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    expect(result?.message).toContain(
+      "45s bids (8s uncontested), 120s to nominate",
+    );
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({
+      draftBidSeconds: 45,
+      draftUncontestedBidSeconds: 8,
+      draftNominationSeconds: 120,
+    });
+  });
+
+  it("clamps the clocks to the limits and the short clock to the full one", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    await makeNotStartedDraft(season.id);
+
+    const result = await setDraftSettings(
+      {},
+      setupForm(season.id, {
+        expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+        draftBidSeconds: 20,
+        draftUncontestedBidSeconds: 30,
+        draftNominationSeconds: 9999,
+      }),
+    );
+
+    expect(result?.message).toContain(
+      "20s bids (20s uncontested), 300s to nominate",
+    );
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({
+      draftBidSeconds: 20,
+      draftUncontestedBidSeconds: 20,
+      draftNominationSeconds: 300,
+    });
+  });
+
+  it("keeps the stored clocks when a form has no clock fields", async () => {
+    // A settings form rendered by the build before the clocks existed.
+    const season = await makeSeason({
+      status: SEASON_STATUS.DRAFT,
+      draftBidSeconds: 45,
+      draftUncontestedBidSeconds: 8,
+      draftNominationSeconds: 120,
+    });
+    await makeNotStartedDraft(season.id);
+
+    const result = await setDraftSettings(
+      {},
+      setupForm(season.id, {
+        expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+        teamSize: 4,
+        minTeams: 2,
+        draftBudget: 100,
+        budgetMmrWeight: 20,
+      }),
+    );
+
+    expect(result?.error).toBeUndefined();
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({
+      teamSize: 4,
+      draftBidSeconds: 45,
+      draftUncontestedBidSeconds: 8,
+      draftNominationSeconds: 120,
+    });
+  });
+
+  it("refuses to change the clocks once the auction has started", async () => {
+    const season = await makeSeason({ status: SEASON_STATUS.DRAFT });
+    await prisma.draft.create({
+      data: { seasonId: season.id, status: DRAFT_STATUS.IN_PROGRESS },
+    });
+
+    const result = await setDraftSettings(
+      {},
+      setupForm(season.id, {
+        expectedSeasonUpdatedAt: season.updatedAt.toISOString(),
+        draftBidSeconds: 60,
+        draftUncontestedBidSeconds: 10,
+        draftNominationSeconds: 200,
+      }),
+    );
+
+    expect(result?.error).toBeDefined();
+    expect(
+      await prisma.season.findUniqueOrThrow({ where: { id: season.id } }),
+    ).toMatchObject({
+      draftBidSeconds: 30,
+      draftUncontestedBidSeconds: 5,
+      draftNominationSeconds: 90,
+    });
+  });
+
   it.each([
     SEASON_STATUS.REGULAR_SEASON,
     SEASON_STATUS.PLAYOFFS,
@@ -430,6 +545,32 @@ describe("starting the draft from a verified setup snapshot", () => {
       (await prisma.season.findUniqueOrThrow({ where: { id: season.id } }))
         .status,
     ).toBe(status);
+  });
+
+  it("arms the season's nomination clock and records its clocks on the run", async () => {
+    const { season } = await startableSeason({
+      draftBidSeconds: 45,
+      draftUncontestedBidSeconds: 8,
+      draftNominationSeconds: 120,
+    });
+
+    const before = Date.now();
+    const result = await startDraft({}, setupForm(season.id));
+    const after = Date.now();
+
+    expect(result?.error).toBeUndefined();
+    const draft = await prisma.draft.findUniqueOrThrow({
+      where: { seasonId: season.id },
+      include: { activeRun: true },
+    });
+    const ends = draft.nominationEndsAt!.getTime();
+    expect(ends).toBeGreaterThanOrEqual(before + 120_000);
+    expect(ends).toBeLessThanOrEqual(after + 120_000);
+    expect(JSON.parse(draft.activeRun!.rulesSnapshot!)).toMatchObject({
+      bidTimerSeconds: 45,
+      uncontestedBidTimerSeconds: 8,
+      nominationTimerSeconds: 120,
+    });
   });
 
   it("requires at least two teams", async () => {

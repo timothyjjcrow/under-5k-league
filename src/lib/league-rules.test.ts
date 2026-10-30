@@ -476,6 +476,20 @@ describe("leagueRules", () => {
     );
   });
 
+  it("states the season's own draft clocks", () => {
+    const rules = build({
+      season: season({
+        draftBidSeconds: 45,
+        draftUncontestedBidSeconds: 8,
+        draftNominationSeconds: 120,
+      }),
+    });
+    expect(section(rules, "draft")).toContain(
+      "Each bid resets the clock to 45 seconds, or 8 seconds when no other team can top it.",
+    );
+    expect(section(rules, "draft")).toContain("within 120 seconds");
+  });
+
   it("says where admins aren't held to the captains' limits", () => {
     const rules = build();
     // Captains' proposals are checked (reschedule-service.ts); an admin's

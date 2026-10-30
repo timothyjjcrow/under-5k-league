@@ -118,6 +118,15 @@ export const DEFAULTS = {
   MIN_BID: 1,
 } as const;
 
+// The range an admin may set each draft clock in, in seconds (the draft
+// settings on /admin, before Start; normalizeDraftClocks in draft.ts). The
+// room's poll rates are sized for the shortest bid clock (room-poll.test.ts).
+export const DRAFT_CLOCK_LIMITS = {
+  bidSeconds: { min: 20, max: 120 },
+  uncontestedBidSeconds: { min: 3, max: 30 },
+  nominationSeconds: { min: 30, max: 300 },
+} as const;
+
 // Draft-room client poll cadence (ms). Mirrors the inhouse room's adaptive
 // loop: a fixed 1.2s setInterval meant every open tab — including hidden and
 // spectator ones — burned 50 req/min against /api/draft/tick's 300/min per-IP

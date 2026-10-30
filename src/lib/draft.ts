@@ -1,4 +1,4 @@
-import { DEFAULTS } from "./constants";
+import { DEFAULTS, DRAFT_CLOCK_LIMITS } from "./constants";
 import { roleCoverage } from "./pool-stats";
 
 // Pure auction-draft rules. DB effects live in the server actions; these
@@ -89,10 +89,92 @@ export function lotContested(s: {
   );
 }
 
+/** A season's three auction clocks, in seconds. */
+export type DraftClocks = {
+  /** Each bid resets the lot's clock to this. */
+  bidSeconds: number;
+  /** The lot's clock instead when no other team can top the price. */
+  uncontestedBidSeconds: number;
+  /** The team on the clock's time to nominate before the draft does. */
+  nominationSeconds: number;
+};
+
+/** The clocks every season ran before they were settable (the columns' defaults). */
+export const DEFAULT_DRAFT_CLOCKS: DraftClocks = {
+  bidSeconds: DEFAULTS.BID_TIMER_SECONDS,
+  uncontestedBidSeconds: DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS,
+  nominationSeconds: DEFAULTS.NOMINATION_TIMER_SECONDS,
+};
+
+function clampClock(
+  value: number,
+  limits: { min: number; max: number },
+  fallback: number,
+): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(limits.max, Math.max(limits.min, Math.round(value)));
+}
+
+/**
+ * Clocks inside DRAFT_CLOCK_LIMITS, with the short clock never longer than
+ * the full one (it is the clock for a lot with nothing left to decide). The
+ * one rule for what setDraftSettings stores and what the engine reads, so a
+ * stored value outside the range can't make a lot sell at once.
+ */
+export function normalizeDraftClocks(raw: DraftClocks): DraftClocks {
+  const bidSeconds = clampClock(
+    raw.bidSeconds,
+    DRAFT_CLOCK_LIMITS.bidSeconds,
+    DEFAULT_DRAFT_CLOCKS.bidSeconds,
+  );
+  return {
+    bidSeconds,
+    uncontestedBidSeconds: Math.min(
+      bidSeconds,
+      clampClock(
+        raw.uncontestedBidSeconds,
+        DRAFT_CLOCK_LIMITS.uncontestedBidSeconds,
+        DEFAULT_DRAFT_CLOCKS.uncontestedBidSeconds,
+      ),
+    ),
+    nominationSeconds: clampClock(
+      raw.nominationSeconds,
+      DRAFT_CLOCK_LIMITS.nominationSeconds,
+      DEFAULT_DRAFT_CLOCKS.nominationSeconds,
+    ),
+  };
+}
+
+/** The clocks a season's draft runs on (its `draft*Seconds` columns). */
+export function draftClocks(season: {
+  draftBidSeconds: number;
+  draftUncontestedBidSeconds: number;
+  draftNominationSeconds: number;
+}): DraftClocks {
+  return normalizeDraftClocks({
+    bidSeconds: season.draftBidSeconds,
+    uncontestedBidSeconds: season.draftUncontestedBidSeconds,
+    nominationSeconds: season.draftNominationSeconds,
+  });
+}
+
+/**
+ * The clocks in a few words, e.g. "30s bids (5s uncontested), 90s to
+ * nominate": the admin panel's handoff line and its draft settings toast.
+ */
+export function draftClocksLine(clocks: DraftClocks): string {
+  return `${clocks.bidSeconds}s bids (${clocks.uncontestedBidSeconds}s uncontested), ${clocks.nominationSeconds}s to nominate`;
+}
+
+/** When the team on the clock must have nominated by, from `nowMs`. */
+export function nominationDeadline(clocks: DraftClocks, nowMs: number): Date {
+  return new Date(nowMs + clocks.nominationSeconds * 1000);
+}
+
 /**
  * Seconds to put on the bid clock when a lot opens, a bid lands or a paused
- * lot resumes: the full BID_TIMER_SECONDS while another team can still bid,
- * UNCONTESTED_BID_TIMER_SECONDS when nobody can (see lotContested).
+ * lot resumes: the season's full bid clock while another team can still bid,
+ * its uncontested one when nobody can (see lotContested).
  */
 export function bidClockSeconds(s: {
   teams: readonly DraftTeam[];
@@ -100,10 +182,9 @@ export function bidClockSeconds(s: {
   price: number;
   highBidderTeamId: string | null;
   minBid?: number;
+  clocks: DraftClocks;
 }): number {
-  return lotContested(s)
-    ? DEFAULTS.BID_TIMER_SECONDS
-    : DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS;
+  return lotContested(s) ? s.clocks.bidSeconds : s.clocks.uncontestedBidSeconds;
 }
 
 /** Whether `amount` is a legal bid for this team given the current high bid. */

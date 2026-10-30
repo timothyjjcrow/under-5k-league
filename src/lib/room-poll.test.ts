@@ -17,6 +17,7 @@ import {
 } from "./room-poll";
 import {
   DEFAULTS,
+  DRAFT_CLOCK_LIMITS,
   DRAFT_ROOM,
   INHOUSE,
   INHOUSE_STATUS,
@@ -722,12 +723,18 @@ describe("draftPollCadence", () => {
     ).toEqual({ skip: false, delayMs: DRAFT_ROOM.POLL_WATCH_MS });
   });
 
-  it("keeps the watch rate slow for the budget but well inside the 30s bid clock", () => {
+  it("keeps the watch rate slow for the budget but well inside the bid clock", () => {
     // A bid resets the clock, so a pool player watching their own lot still
     // follows it; the hosting budget asks for the slowest rate that holds.
-    const bidClockMs = DEFAULTS.BID_TIMER_SECONDS * 1000;
+    // The default 30s clock gets six looks, the shortest an admin can set
+    // (DRAFT_CLOCK_LIMITS) four: a watcher only follows, never bids.
     expect(DRAFT_ROOM.POLL_WATCH_MS).toBeGreaterThanOrEqual(5000);
-    expect(DRAFT_ROOM.POLL_WATCH_MS).toBeLessThanOrEqual(bidClockMs / 6);
+    expect(DRAFT_ROOM.POLL_WATCH_MS).toBeLessThanOrEqual(
+      (DEFAULTS.BID_TIMER_SECONDS * 1000) / 6,
+    );
+    expect(DRAFT_ROOM.POLL_WATCH_MS).toBeLessThanOrEqual(
+      (DRAFT_CLOCK_LIMITS.bidSeconds.min * 1000) / 4,
+    );
     expect(DRAFT_ROOM.POLL_WATCH_IDLE_MS).toBeGreaterThanOrEqual(DRAFT_ROOM.POLL_WATCH_MS);
   });
 

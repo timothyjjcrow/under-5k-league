@@ -64,6 +64,7 @@ import {
   uncoveredRoles,
   upcomingNominatorTeamId,
   upNextLine,
+  type DraftClocks,
 } from "@/lib/draft";
 import { DRAFT_PASSED_LABEL } from "@/lib/season-copy";
 import {
@@ -109,7 +110,6 @@ import {
   issueSequence,
 } from "@/lib/room-sequence";
 import {
-  DEFAULTS,
   ROOM_ACTION_TIMEOUT_MS,
   ROOM_POLL_TIMEOUT_MS,
 } from "@/lib/constants";
@@ -1497,6 +1497,7 @@ export function DraftRoom({
         <AuctionPrimer
           minBid={state.minBid}
           teamSize={state.teamSize}
+          clocks={state.clocks}
           defaultOpen
         />
         {state.teams.length > 0 ? (
@@ -2312,6 +2313,7 @@ export function DraftRoom({
           <AuctionPrimer
             minBid={state.minBid}
             teamSize={state.teamSize}
+            clocks={state.clocks}
             defaultOpen={false}
           />
         </div>
@@ -2465,6 +2467,7 @@ function DraftAdminToolbar({
             disabled={disabled}
             confirm={undoSaleConfirm({
               draftComplete: state.status === "COMPLETE",
+              nominationSeconds: state.clocks.nominationSeconds,
               sale: {
                 name: undoSale.name,
                 teamName: undoSale.teamName,
@@ -2887,10 +2890,13 @@ function NominateBar({
 function AuctionPrimer({
   minBid,
   teamSize,
+  clocks,
   defaultOpen,
 }: {
   minBid: number;
   teamSize: number;
+  /** The season's clocks (the admin's draft settings). */
+  clocks: DraftClocks;
   defaultOpen: boolean;
 }) {
   return (
@@ -2912,25 +2918,25 @@ function AuctionPrimer({
         </li>
         <li>
           <strong className="text-fg">
-            Idle for {DEFAULTS.NOMINATION_TIMER_SECONDS}s on your nomination
+            Idle for {clocks.nominationSeconds}s on your nomination
           </strong>{" "}
           and the draft auto-nominates the top available player at ${minBid} for
           you — take your time, but not all of it.
         </li>
         <li>
           <strong className="text-fg">
-            Every bid resets the {DEFAULTS.BID_TIMER_SECONDS}s clock.
+            Every bid resets the {clocks.bidSeconds}s clock.
           </strong>{" "}
           When it hits zero, the high bidder wins the player.
         </li>
         <li>
           <strong className="text-fg">
-            Nobody left to outbid? {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS}s.
+            Nobody left to outbid? {clocks.uncontestedBidSeconds}s.
           </strong>{" "}
           When no other team has an open seat and the money to top the price,
-          the clock runs {DEFAULTS.UNCONTESTED_BID_TIMER_SECONDS} seconds
+          the clock runs {clocks.uncontestedBidSeconds} seconds
           instead, so late lots don&apos;t sit through{" "}
-          {DEFAULTS.BID_TIMER_SECONDS} seconds of waiting.
+          {clocks.bidSeconds} seconds of waiting.
         </li>
         <li>
           <strong className="text-fg">Your max bid is capped</strong> — the room

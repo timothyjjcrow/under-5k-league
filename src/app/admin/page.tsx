@@ -277,7 +277,7 @@ import {
   seasonPhasePolicy,
 } from "@/lib/season-phase-policy";
 import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
-import { mmrWeightedBudgets } from "@/lib/draft";
+import { draftClocks, mmrWeightedBudgets } from "@/lib/draft";
 import {
   profileSyncAllowed,
   undoSaleConfirm,
@@ -301,6 +301,7 @@ import {
 import {
   MATCH_SCHEDULE,
   HARD_MMR_CEILING,
+  DRAFT_CLOCK_LIMITS,
 } from "@/lib/constants";
 import {
   nextRegularKickoff,
@@ -2306,13 +2307,49 @@ function SeasonControls({
                   className="h-9 w-28 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
                 />
               </Field>
+              {/* The auction's clocks, fixed once it starts. The bounds are
+                  the engine's (DRAFT_CLOCK_LIMITS), which the action clamps
+                  to and its toast states. */}
+              <Field label="Bid clock (s)" htmlFor="cfgBidSeconds">
+                <input
+                  id="cfgBidSeconds"
+                  name="draftBidSeconds"
+                  type="number"
+                  min={DRAFT_CLOCK_LIMITS.bidSeconds.min}
+                  max={DRAFT_CLOCK_LIMITS.bidSeconds.max}
+                  defaultValue={season.draftBidSeconds}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Uncontested lot (s)" htmlFor="cfgUncontestedSeconds">
+                <input
+                  id="cfgUncontestedSeconds"
+                  name="draftUncontestedBidSeconds"
+                  type="number"
+                  min={DRAFT_CLOCK_LIMITS.uncontestedBidSeconds.min}
+                  max={DRAFT_CLOCK_LIMITS.uncontestedBidSeconds.max}
+                  defaultValue={season.draftUncontestedBidSeconds}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
+              <Field label="Nomination clock (s)" htmlFor="cfgNominationSeconds">
+                <input
+                  id="cfgNominationSeconds"
+                  name="draftNominationSeconds"
+                  type="number"
+                  min={DRAFT_CLOCK_LIMITS.nominationSeconds.min}
+                  max={DRAFT_CLOCK_LIMITS.nominationSeconds.max}
+                  defaultValue={season.draftNominationSeconds}
+                  className="h-9 w-24 rounded-md border border-line bg-surface-2/50 px-2 text-sm"
+                />
+              </Field>
               <SubmitButton variant="secondary" size="sm" disabled={configLocked}>
                 Save draft settings
               </SubmitButton>
               <span className="text-xs text-muted">
                 {configLocked
                   ? draftSetupLockedMessage(season.status, data.draft?.status)
-                  : "applied when the draft starts"}
+                  : "applied when the draft starts · every bid resets the bid clock; a lot no other team can top gets the uncontested one"}
               </span>
             </ActionForm>
             <ActionForm
@@ -2736,6 +2773,7 @@ function CaptainControls({
                     draftComplete:
                       data.draft?.status === DRAFT_STATUS.COMPLETE,
                     sale: lastAuctionSale,
+                    nominationSeconds: draftClocks(season).nominationSeconds,
                   })}
                 >
                   Undo last sale
