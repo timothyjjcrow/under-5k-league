@@ -149,6 +149,17 @@ export const EARLY_LEAVE_GAP_MS = 60_000;
 // started (no game state, 0) is past. Never POST_GAME (6) or the custom-game
 // states.
 export const EARLY_LEAVE_GAME_STATES = [2, 3, 4, 5, 8];
+// Dota sends a launched game's lobby no update between its players' loading
+// (1) and its postgame: every game since 2026-10-18 logged 1 and then 6, and
+// the hero draft only ever showed in a resync's welcome (2026-10-30). So a
+// game early leave is on for, still loading this long after Start, gets a
+// resync (an early check), and at most this many, this far apart, always
+// leaving one of MAX_RESYNCS_PER_JOB for a Release or an unconfirmed Leave.
+// The welcome's replay is the lobby's real state: from the hero draft on, the
+// next tick sends the early leave.
+export const EARLY_CHECK_AFTER_MS = 2 * 60_000;
+export const EARLY_CHECK_EVERY_MS = 2 * 60_000;
+export const EARLY_CHECKS_MAX = 2;
 // A game the bot left early can't show it its postgame, so it asks the Game
 // Coordinator for the match's details instead (k_EMsgGCMatchDetailsRequest):
 // first this long after the leave, then once a minute, one request in flight
@@ -1150,6 +1161,35 @@ export class LobbyController {
       now - (job.earlyLeaveSentAt ?? -Infinity) >= EARLY_LEAVE_GAP_MS
     );
   }
+  /** Ask Dota where a game early leave is waiting on has got to? The same
+   * game early leave would act on, but still loading (Dota sends no update
+   * until its postgame), EARLY_CHECK_AFTER_MS after Start, EARLY_CHECK_EVERY_MS
+   * after the job's last resync, before any early leave went out, never while
+   * it is being released, and within EARLY_CHECKS_MAX with a resync to
+   * spare. */
+  earlyCheckDue(job, lobby, now) {
+    const bot = this.transport.steamId();
+    return (
+      this.earlyLeaveKinds.includes(keyKind(job?.spec?.key)) &&
+      !!lobby &&
+      this.data.active === job.spec.key &&
+      job.state === "started" &&
+      !job.releasing &&
+      !job.launchFailed &&
+      sameLobby(lobby, job) &&
+      lobby.state === 2 &&
+      !EARLY_LEAVE_GAME_STATES.includes(lobby.gameState) &&
+      !atPostgame(lobby) &&
+      hasMatchId(lobby) &&
+      job.matchId === lobby.matchId &&
+      !currentMembers(lobby).some((m) => m.id === bot && (m.team === 0 || m.team === 1)) &&
+      (job.earlyLeaves ?? 0) === 0 &&
+      (job.earlyChecks ?? 0) < EARLY_CHECKS_MAX &&
+      (job.resyncs ?? 0) + 1 < MAX_RESYNCS_PER_JOB &&
+      now - (job.startedAt ?? job.changedAt) >= EARLY_CHECK_AFTER_MS &&
+      now - (job.lastResyncAt ?? -Infinity) >= EARLY_CHECK_EVERY_MS
+    );
+  }
   /** AbandonCurrentGame, then a Leave, recorded and saved first. Dota's
    * departure (Destroy, a removal, an unsubscribe, a welcome with no lobby)
    * confirms it and frees the claim (departed); none within LEAVE_CONFIRM_MS
@@ -1315,6 +1355,7 @@ export class LobbyController {
     this.data.lastResyncAt = now;
     delete job.resyncWanted;
     if (reason === "backstop") job.backstopAt = now;
+    if (reason === "early-check") job.earlyChecks = (job.earlyChecks ?? 0) + 1;
     this.save();
     this.online = false;
     this.resyncing = { key: job.spec.key, reason, at: now };
@@ -1329,9 +1370,9 @@ export class LobbyController {
     return true;
   }
   /** The resyncs no GC message drives: a Release waiting on one, a Leave
-   * unconfirmed past LEAVE_CONFIRM_MS, and a started game with no end seen
+   * unconfirmed past LEAVE_CONFIRM_MS, a started game with no end seen
    * three hours after Start, whether it still holds the claim or is a
-   * finished job's leftover lobby. */
+   * finished job's leftover lobby, and an early check (earlyCheckDue). */
   resyncClock(now) {
     const job = this.leavingJob();
     if (!job) return false;
@@ -1344,7 +1385,9 @@ export class LobbyController {
             job.backstopAt === undefined &&
             now - (job.startedAt ?? job.changedAt) >= STARTED_BACKSTOP_MS
           ? "backstop"
-          : null);
+          : this.earlyCheckDue(job, this.lobby, now)
+            ? "early-check"
+            : null);
     return reason ? this.resync(job, reason) : false;
   }
   /** The clocks no GC message drives: a Launch Dota never showed or that
