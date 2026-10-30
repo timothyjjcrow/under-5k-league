@@ -560,10 +560,11 @@ export const INHOUSE = {
   // never reach on its own: the first person to queue is invisible to anyone
   // not already on the site, so nothing pulls the count upward and the ping
   // that exists to pull people in sits downstream of the problem it solves.
-  // Four is early enough to be a rally and late enough to be real — half a
-  // lobby is genuinely worth interrupting someone for. Raise it if the ping
-  // starts crying wolf; the throttle below is the other tuning knob.
-  QUEUE_PING_AT: 4,
+  // It was then four, and Tim moved it to seven on 2026-10-30: three short of
+  // a lobby is a game that is really about to happen, so the role is rung for
+  // a near-full queue rather than a rally. It must stay below LOBBY_SIZE: the
+  // join that forms a lobby never pings. The throttle below is unchanged.
+  QUEUE_PING_AT: 7,
   // An hour between queue pings, counted from the last one sent. It was 15
   // minutes, and a queue hovering at the line (3, 4, 3, 4) re-pinged the role
   // every quarter hour all evening; Tim asked for about one an hour.
