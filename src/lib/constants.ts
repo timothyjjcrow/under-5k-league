@@ -364,9 +364,10 @@ export const INHOUSE = {
   LOBBY_SIZE: 10, // players needed before a lobby forms
   // How many games can be live at once. Each live lobby holds a numbered slot
   // (InhouseLobby.slot), so twenty queued players play two games side by side
-  // and anyone past that waits for a slot to free up. The lobby bot hosts
-  // one game at a time, until that game's postgame (Dota won't let it leave
-  // a running game); the other game is hosted by hand meanwhile.
+  // and anyone past that waits for a slot to free up. The lobby bot sets up
+  // one lobby at a time: with early leave on (DOTA_BOT_EARLY_LEAVE) it leaves
+  // each game once it is under way and hosts the next, else it stays to that
+  // game's postgame and the other game is hosted by hand meanwhile.
   MAX_LIVE_GAMES: 2,
   // The Discord voice channels each game's teams talk in, one pair per game
   // slot (team 1, team 2). Match the channel names in the Discord server

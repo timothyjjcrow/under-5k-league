@@ -143,11 +143,11 @@ caught outside and retried). The claims are in the mutation ratchet
   release), so it reads like `idle`: the panel stays playable (Create makes a
   fresh lobby), the worker's retry asks for one (`duelBotLobbyMissing`), and
   `SETUP_MINUTES` still bounds the wait. To end one, "Call it off".
-- **Early leave ships off.** The bot can leave a running game early to be
-  free for the next (`DOTA_BOT_EARLY_LEAVE`, a comma list of kinds; unset is
-  today's behaviour exactly). Until a kind is listed after its live test, a
-  1v1 holds the bot to its postgame. The site already handles `left` (game
-  running, bot free).
+- **Early leave is on** (2026-10-28, `DOTA_BOT_EARLY_LEAVE=duel,inhouse`).
+  The bot leaves a 1v1 once its game is under way and is free for the next
+  lobby; the site reads such a duel (`left`) as PLAYING, and its end comes
+  from the bot's match-details check or OpenDota. A leave Dota doesn't
+  confirm leaves the bot in the game to its postgame, as before.
 - **The BUSY self-heal knows 1v1 keys:** a create that finds the bot holding
   a closed 1v1's key (COMPLETED, CANCELLED, AWAITING_RESULT) releases it. A
   5v5's Create (in-house or season, `freeBotFromClosedInhouseGame(kind)`)
