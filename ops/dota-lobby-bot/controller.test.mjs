@@ -9,6 +9,9 @@ import {
   DETAILS_FOR_MS,
   DETAILS_TIMEOUT_MS,
   DUEL_IDLE_RELEASE_MS,
+  EARLY_CHECKS_MAX,
+  EARLY_CHECK_AFTER_MS,
+  EARLY_CHECK_EVERY_MS,
   EARLY_LEAVE_GAP_MS,
   EARLY_LEAVE_MAX_TRIES,
   IDLE_RELEASE_MS,
@@ -2425,6 +2428,85 @@ test("early leave waits for the game under way: RUN from the hero draft on, a ma
   assert.ok(logs.some((line) => / leave-sent key=duel:clx1duel:1 reason=early lobbyState=2 n=1$/.test(line)));
   // No ordinary Leave clock: an unconfirmed try never resyncs.
   assert.equal(saved.leavePendingAt, undefined);
+});
+
+test("2026-10-30 replayed: a game still loading two minutes after Start gets an early check, and a welcome at the hero draft sends the early leave", (t) => {
+  // Dota sent the bot "players loading" and then nothing until the postgame:
+  // the hero draft only ever showed in a resync's welcome.
+  const { controller: c, calls, logs } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c, { gameState: 1 });
+  time.at += EARLY_CHECK_AFTER_MS - 1;
+  c.tick();
+  assert.deepEqual(calls, ["create", "start"]);
+  time.at += 1;
+  c.tick();
+  assert.deepEqual(calls, ["create", "start", "resync"]);
+  assert.ok(logs.some((line) => / resync key=duel:clx1duel:1 reason=early-check n=1$/.test(line)));
+  assert.equal(c.data.jobs[duel.key].earlyChecks, 1);
+  welcome(c, [duelSnapshot({ state: 2, matchId: MATCH, gameState: 2 })]);
+  c.tick();
+  assert.deepEqual(calls, ["create", "start", "resync", "abandon", "leave"]);
+  c.departed("unsubscribed");
+  assert.equal(c.data.active, null);
+  assert.equal(c.data.jobs[duel.key].left, true);
+});
+
+test("early checks: at most two, two minutes apart, a resync to spare, and only where an early leave could follow", (t) => {
+  const { controller: c, calls } = setup(t, early());
+  const time = clock(c);
+  duelRunning(c, { gameState: 1 });
+  const checkedAt = [];
+  for (let i = 0; i < 40; i++) {
+    time.at += 30_000;
+    const before = resyncs(calls);
+    c.tick();
+    if (resyncs(calls) > before) {
+      checkedAt.push(time.at - 100);
+      // Every welcome still shows the players loading.
+      welcome(c, [duelSnapshot({ state: 2, matchId: MATCH, gameState: 1 })]);
+    }
+  }
+  assert.equal(EARLY_CHECKS_MAX, 2);
+  assert.deepEqual(checkedAt, [EARLY_CHECK_AFTER_MS, EARLY_CHECK_AFTER_MS + EARLY_CHECK_EVERY_MS]);
+  assert.ok(MAX_RESYNCS_PER_JOB - c.data.jobs[duel.key].resyncs >= 1);
+  assert.ok(!calls.includes("abandon"));
+  // The game then ends as it always has: the bot leaves at its postgame.
+  c.snapshot(duelSnapshot({ state: 3, matchId: MATCH, gameState: 6, matchOutcome: 2 }));
+  assert.equal(calls.at(-1), "leave");
+  const cases = {
+    "early leave off": [{}, {}],
+    "only another kind listed": [early(["inhouse", "season"]), {}],
+    "the bot on a side": [
+      early(),
+      {
+        memberIndices: [0, 1, 2],
+        allMembers: [{ id: ids[0], team: 0 }, { id: ids[5], team: 1 }, { id: bot, team: 1 }],
+      },
+    ],
+  };
+  for (const [name, [configuration, overrides]] of Object.entries(cases)) {
+    const { controller: d, calls: sent } = setup(t, configuration);
+    const at = clock(d);
+    duelRunning(d, { gameState: 1, ...overrides });
+    for (let i = 0; i < 20; i++) {
+      at.at += 30_000;
+      d.tick();
+    }
+    assert.equal(resyncs(sent), 0, name);
+  }
+  // A game being released has the Release's own check, never an early one.
+  const { controller: r, calls: sent, logs } = setup(t, early());
+  const at = clock(r);
+  duelRunning(r, { gameState: 1 });
+  r.request("release", duel);
+  for (let i = 0; i < 20; i++) {
+    at.at += 30_000;
+    const before = resyncs(sent);
+    r.tick();
+    if (resyncs(sent) > before) welcome(r, [duelSnapshot({ state: 2, matchId: MATCH, gameState: 1 })]);
+  }
+  assert.ok(!logs.some((line) => /reason=early-check/.test(line)));
 });
 
 test("a confirmed early leave frees the bot at once: the job stays started with its match id, reads left, and a new Create works", (t) => {
