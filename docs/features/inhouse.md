@@ -336,8 +336,9 @@ be marked over.
   later-formed game finishing first never changes the other's deltas.
 - **One bot sets up one lobby at a time, and leaves each game once it is
   under way** (docs/DOTA-LOBBY-BOT.md#early-leave; DECISIONS 2026-10-28,
-  `DOTA_BOT_EARLY_LEAVE=duel,inhouse`). At the horn the bot sends
-  AbandonCurrentGame and a Leave; once Dota confirms it, the bot is free for
+  `DOTA_BOT_EARLY_LEAVE=duel,inhouse`). Once every player has loaded and the
+  hero draft is on (DECISIONS 2026-10-30) the bot sends AbandonCurrentGame
+  and a Leave; once Dota confirms it, the bot is free for
   the other game's lobby, so two 5v5s, or a 5v5 and a 1v1, play side by
   side. A leave Dota doesn't confirm (tried twice) leaves the bot in the
   game to its postgame, as before 2026-10-28 (DECISIONS 2026-10-18): the

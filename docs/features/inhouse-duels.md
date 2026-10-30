@@ -144,7 +144,8 @@ caught outside and retried). The claims are in the mutation ratchet
   fresh lobby), the worker's retry asks for one (`duelBotLobbyMissing`), and
   `SETUP_MINUTES` still bounds the wait. To end one, "Call it off".
 - **Early leave is on** (2026-10-28, `DOTA_BOT_EARLY_LEAVE=duel,inhouse`).
-  The bot leaves a 1v1 once its game is under way and is free for the next
+  The bot leaves a 1v1 once its game is under way (its hero pick on) and is
+  free for the next
   lobby; the site reads such a duel (`left`) as PLAYING, and its end comes
   from the bot's match-details check or OpenDota. A leave Dota doesn't
   confirm leaves the bot in the game to its postgame, as before.

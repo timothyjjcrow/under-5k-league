@@ -14,6 +14,7 @@ import {
   membersTeamOnWire,
   readMessage,
 } from "./lobby-wire.mjs";
+import { EARLY_LEAVE_GAME_STATES } from "./controller.mjs";
 
 test("installed Steam/GC adapter and pinned request wire fields interoperate", () => {
   const user = new SteamUser({ dataDirectory: null });
@@ -269,9 +270,20 @@ test("a match-details request is GC 7095 carrying the uint64 match id, and its a
   assert.match(server, /k_EMsgGCMatchDetailsResponse, \(answer\) => \{\s*try \{\s*controller\.matchDetails\(answer\);\s*\} catch \{/);
 });
 
-test("the lobby's game state is DOTA_GameState, whose GAME_IN_PROGRESS is 5", () => {
-  assert.equal(protos.DOTAGameState.DOTA_GAMERULES_STATE_GAME_IN_PROGRESS, 5);
-  assert.equal(protos.DOTAGameState.DOTA_GAMERULES_STATE_POST_GAME, 6);
+test("the lobby's game state is DOTA_GameState: early leave's states are the hero draft to the horn", () => {
+  const states = protos.DOTAGameState;
+  assert.deepEqual(
+    EARLY_LEAVE_GAME_STATES,
+    [
+      states.DOTA_GAMERULES_STATE_HERO_SELECTION,
+      states.DOTA_GAMERULES_STATE_STRATEGY_TIME,
+      states.DOTA_GAMERULES_STATE_PRE_GAME,
+      states.DOTA_GAMERULES_STATE_GAME_IN_PROGRESS,
+      states.DOTA_GAMERULES_STATE_TEAM_SHOWCASE,
+    ],
+  );
+  assert.equal(states.DOTA_GAMERULES_STATE_WAIT_FOR_PLAYERS_TO_LOAD, 1);
+  assert.equal(states.DOTA_GAMERULES_STATE_POST_GAME, 6);
   const lobby = protos.CSODOTALobby.decode(protos.CSODOTALobby.encode(protos.CSODOTALobby.create({ lobbyId: "1", gameState: 5 })).finish());
   assert.equal(lobby.gameState, 5);
   // Left out on the wire, it decodes as 0: never "under way".

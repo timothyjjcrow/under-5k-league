@@ -2369,12 +2369,15 @@ test("a duel lobby nobody starts is released after 10 minutes; others keep 30", 
 
 const early = (kinds = ["duel"]) => ({ earlyLeaveKinds: kinds });
 
-test("early leave waits for the game under way: RUN, GAME_IN_PROGRESS, a match id, the bot on no side, a listed kind", (t) => {
+test("early leave waits for the game under way: RUN from the hero draft on, a match id, the bot on no side, a listed kind", (t) => {
   const cases = {
     "loading (no game state)": { gameState: 0 },
-    "hero selection": { gameState: 2 },
-    "pre-game": { gameState: 4 },
+    "players loading": { gameState: 1 },
     "post-game state": { gameState: 6 },
+    "disconnect": { gameState: 7 },
+    "custom game setup": { gameState: 9 },
+    "map loading": { gameState: 10 },
+    "player draft": { gameState: 12 },
     "no match id": { matchId: "0" },
     "the bot on a side": {
       memberIndices: [0, 1, 2],
@@ -2399,13 +2402,20 @@ test("early leave waits for the game under way: RUN, GAME_IN_PROGRESS, a match i
     duelRunning(c);
     assert.deepEqual(calls, ["create", "start"]);
   }
+  // Every state from the hero draft to the horn qualifies (Tim's call,
+  // 2026-10-30: leave at picks), the first one seen sends.
+  for (const gameState of [2, 3, 4, 5, 8]) {
+    const { controller: c, calls } = setup(t, early());
+    duelRunning(c, { gameState });
+    assert.deepEqual(calls, ["create", "start", "abandon", "leave"], `game state ${gameState}`);
+  }
   // Under way: AbandonCurrentGame, then the Leave, once while it is out.
   const { controller: c, calls, logs, options } = setup(t, early());
-  duelRunning(c, { gameState: 4 });
+  duelRunning(c, { gameState: 1 });
   assert.deepEqual(calls, ["create", "start"]);
-  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 2 }));
   assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
-  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 5 }));
+  c.snapshot(duelSnapshot({ state: 2, matchId: MATCH, gameState: 3 }));
   c.tick();
   assert.deepEqual(calls, ["create", "start", "abandon", "leave"]);
   // Saved before it went out, and logged.
