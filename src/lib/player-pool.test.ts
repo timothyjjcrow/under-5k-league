@@ -136,6 +136,14 @@ describe("filterPoolRows (standins share the /players table)", () => {
     expect(names({ status: "standin" })).toEqual(["Sub", "Spare"]);
     expect(names({ status: "standin", role: "4" })).toEqual(["Spare"]);
   });
+  it("the Players chip hides standins and keeps the other filters", () => {
+    expect(names({ status: "player" })).toEqual(["Drafted", "Free"]);
+    expect(names({ status: "player", role: "1" })).toEqual(["Drafted"]);
+    expect(names({ status: "player", sort: "name" })).toEqual([
+      "Drafted",
+      "Free",
+    ]);
+  });
   it("never counts a standin as a free agent or as drafted", () => {
     expect(names({ status: "free" })).toEqual(["Free"]);
     expect(names({ status: "drafted" })).toEqual(["Drafted"]);
