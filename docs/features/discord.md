@@ -219,9 +219,10 @@ actions: `src/app/actions/admin-discord.ts`.
 - **The queue ping fires only on an upward crossing** of
   `INHOUSE.QUEUE_PING_AT` present players, never on the lobby-forming join, at
   most once an hour (`QUEUE_PING_MIN_MINUTES`, Setting `inhouseQueuePingAt`;
-  15 minutes re-pinged a queue hovering at 3 and 4 all evening). It is
-  low on purpose (the first queuers are invisible to anyone off the site); raise
-  it if it cries wolf. It links `joinLink()` (`/inhouse?join=1`).
+  15 minutes re-pinged a queue hovering at 3 and 4 all evening). The line is
+  seven since 2026-10-30 (it was four): Tim wants the role rung for a queue
+  three short of a game, not for a rally. It must stay below `LOBBY_SIZE`,
+  since the forming join never pings. It links `joinLink()` (`/inhouse?join=1`).
 - **Lobby formed mentions all ten** (`maybeFormLobby`, after commit):
   `<@discordId>` if linked, escaped name otherwise, plus the accept deadline,
   and "(Game 2)" when another game is already live. It goes out after the

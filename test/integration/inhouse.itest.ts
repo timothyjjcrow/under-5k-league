@@ -1764,13 +1764,11 @@ describe("inhouse — discord announcements", () => {
     expect(ping![1]).toEqual({ roles: [] });
   });
 
-  it("pings at a threshold the queue can actually reach on its own", async () => {
-    // It used to be LOBBY_SIZE-2 = 8, which the queue can essentially never
-    // climb to unaided: the first person to queue is invisible to everyone not
-    // already on the site, so the ping meant to pull people in sat downstream
-    // of the problem it exists to solve.
-    expect(INHOUSE.QUEUE_PING_AT).toBeLessThan(INHOUSE.LOBBY_SIZE / 2 + 1);
-    expect(INHOUSE.QUEUE_PING_AT).toBeGreaterThan(1);
+  it("pings at a count a queue reaches before it forms a lobby", async () => {
+    // The join that forms a lobby never pings, so a threshold at LOBBY_SIZE
+    // would never fire. Tim set seven on 2026-10-30 (it was four).
+    expect(INHOUSE.QUEUE_PING_AT).toBe(7);
+    expect(INHOUSE.QUEUE_PING_AT).toBeLessThan(INHOUSE.LOBBY_SIZE);
   });
 });
 

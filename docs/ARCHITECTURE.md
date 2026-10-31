@@ -518,7 +518,7 @@ completion, and the real no-active-season offseason.
    Outsiders may queue for the next game while a lobby is active; nobody in
    a live lobby can queue (a game marked over is not live). An admin can
    take one player out (`removeFromQueue`). A queue crossing
-   4 present players fires a throttled Discord ping. Positions (1 to 5) are
+   7 present players fires a throttled Discord ping. Positions (1 to 5) are
    `User.inhouseRoles`, read with the room's rows, with the latest signup's
    `Registration.roles` standing in until a player picks.
 2. **Formation** — `maybeFormLobby` fills free game slots: each formation
