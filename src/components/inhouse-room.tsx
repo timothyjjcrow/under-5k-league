@@ -94,6 +94,11 @@ import { DraftView } from "@/components/inhouse/draft-view";
 import { ReadyView } from "@/components/inhouse/ready-view";
 import { InProgressView } from "@/components/inhouse/in-progress-view";
 import { PendingResultsView } from "@/components/inhouse/pending-results-view";
+import { ConfirmButton } from "@/components/inhouse/confirm-button";
+import {
+  captainsChosenToast,
+  draftedToast,
+} from "@/lib/inhouse-room-view";
 import { InhouseAdminTools } from "@/components/inhouse/admin-tools";
 import { DuelSection } from "@/components/inhouse/duel-section";
 import { duelStake } from "@/lib/inhouse-duel";
@@ -194,6 +199,13 @@ export function InhouseRoom({
   // never disagree about what just changed. null = nothing seen yet, which is
   // what suppresses alerts for a mid-lobby page load.
   const prevAlertRef = useRef<InhouseAlertSnapshot | null>(null);
+  // The viewer's game as the last poll showed it, for the draft's toasts.
+  const prevDraftRef = useRef<{
+    lobbyId: string | null;
+    status: string | null;
+    myTeam: number | null;
+    vote: RoomLobby["vote"] | null;
+  } | null>(null);
   const originalTitleRef = useRef<string | null>(null);
   // The current stage view, and what the last poll said about it, so the
   // room can bring a stage that needs this member to the top of the screen
@@ -743,6 +755,34 @@ export function InhouseRoom({
     prevAlertRef.current = snap;
   }, [state, soundOn, desktopAlerts.enabled, desktopAlerts.permission]);
 
+  // The moments a poll skips past inside the viewer's own game: the vote's
+  // result (the next poll just shows the draft) and their own name landing
+  // on a side. Tested pure helpers word both and stay quiet on a first poll;
+  // neither rings.
+  useEffect(() => {
+    if (!state) return;
+    const game = state.lobby;
+    const prev = prevDraftRef.current;
+    const chosen = captainsChosenToast(prev, { inLobby: state.me.inLobby }, game);
+    if (chosen) pushToast("info", chosen);
+    const drafted = draftedToast(
+      prev,
+      {
+        myTeam: state.me.myTeam,
+        isCaptain: state.me.isCaptain,
+        userId: state.me.userId,
+      },
+      game,
+    );
+    if (drafted) pushToast("success", drafted);
+    prevDraftRef.current = {
+      lobbyId: game?.id ?? null,
+      status: game?.status ?? null,
+      myTeam: state.me.myTeam,
+      vote: game?.vote ?? null,
+    };
+  }, [state]);
+
   // On a phone the page's title, links and the stage strip sit above the
   // room, so a member reaching a stage that needs them (accept, vote, pick,
   // get into the Dota lobby) could see the clock but not the thing to press.
@@ -1089,32 +1129,32 @@ export function InhouseRoom({
   };
 
   // An admin scraps one game; its ten requeue. The confirm names the game
-  // when two are live.
+  // when two are live, and asks in place (ConfirmButton).
   const cancelButton = (l: RoomLobby) => {
     const label = gameLabel(l);
     return (
-      <div className="text-right">
-        <button
+      <div className="flex justify-end">
+        <ConfirmButton
+          label={label ? `Admin: cancel ${label}` : "Admin: cancel this lobby"}
           disabled={pending}
-          onClick={async () => {
-            if (
-              window.confirm(
-                label
-                  ? `Scrap ${label}? Its ten players go back into the queue.`
-                  : "Scrap the current inhouse lobby? Everyone goes back into the queue.",
-              )
-            ) {
-              // Only claim success once the server agrees — the cancel can
-              // legitimately lose to a result landing mid-confirm.
-              if (await act({ action: "cancel", lobbyId: l.id })) {
-                pushToast("success", "Lobby cancelled — players re-queued");
-              }
+          className={buttonClasses("ghost", "sm", "text-danger-soft")}
+          prompt={
+            label
+              ? `Scrap ${label}? Its ten players go back into the queue.`
+              : "Scrap the current inhouse lobby? Everyone goes back into the queue."
+          }
+          confirmLabel="Scrap it"
+          cancelLabel="Keep it"
+          danger
+          promptClassName="max-w-md"
+          onConfirm={async () => {
+            // Only claim success once the server agrees — the cancel can
+            // legitimately lose to a result landing mid-confirm.
+            if (await act({ action: "cancel", lobbyId: l.id })) {
+              pushToast("success", "Lobby cancelled — players re-queued");
             }
           }}
-          className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-        >
-          {label ? `Admin: cancel ${label}` : "Admin: cancel this lobby"}
-        </button>
+        />
       </div>
     );
   };
@@ -1268,41 +1308,48 @@ export function InhouseRoom({
       {state.lastResult &&
       !lobby &&
       !dismissedResults.has(state.lastResult.lobbyId) ? (
+        // The scoreline on its own line on a phone, the buttons under it;
+        // one row from sm.
         <div
           role="status"
           aria-live="polite"
           className={cn(
-            "flex flex-wrap items-center gap-3 rounded-[var(--radius)] border px-4 py-3",
+            "flex flex-col gap-2 rounded-[var(--radius)] border px-4 py-3 sm:flex-row sm:items-center sm:gap-3",
             state.lastResult.myTeamWon
               ? "border-success/50 bg-success/10"
               : "border-danger/40 bg-danger/10",
           )}
         >
-          <span className="text-lg" aria-hidden>
-            {state.lastResult.myTeamWon ? "🏆" : "💀"}
-          </span>
-          <span className="min-w-0 flex-1 text-sm">
-            <strong>
-              {state.lastResult.winnerSide} win {state.lastResult.radiantScore}–
-              {state.lastResult.direScore}
-            </strong>{" "}
-            — {state.lastResult.myTeamWon ? "victory" : "defeat"} for you,{" "}
-            <strong
-              className={
-                state.lastResult.eloDelta >= 0 ? "text-success" : "text-danger"
-              }
-            >
-              {state.lastResult.eloDelta >= 0 ? "+" : ""}
-              {state.lastResult.eloDelta} Elo
-            </strong>
-            .{" "}
-            <a
-              href={`#result-${state.lastResult.lobbyId}`}
-              className={textLink()}
-            >
-              Box score ↓
-            </a>
-          </span>
+          <p className="flex min-w-0 flex-1 items-start gap-2.5 text-sm">
+            <span className="text-lg leading-5" aria-hidden>
+              {state.lastResult.myTeamWon ? "🏆" : "💀"}
+            </span>
+            <span className="min-w-0">
+              <strong>
+                {state.lastResult.winnerSide} win{" "}
+                {state.lastResult.radiantScore}–{state.lastResult.direScore}
+              </strong>
+              {" · "}
+              {state.lastResult.myTeamWon ? "Victory" : "Defeat"} for you,{" "}
+              <strong
+                className={
+                  state.lastResult.eloDelta >= 0
+                    ? "text-success"
+                    : "text-danger-soft"
+                }
+              >
+                {state.lastResult.eloDelta >= 0 ? "+" : ""}
+                {state.lastResult.eloDelta} Elo
+              </strong>
+              {" · "}
+              <a
+                href={`#result-${state.lastResult.lobbyId}`}
+                className={textLink("whitespace-nowrap")}
+              >
+                Box score ↓
+              </a>
+            </span>
+          </p>
           <span className="flex shrink-0 items-center gap-2">
             {me.canJoin && !joinRefusal ? (
               // The retention moment: everyone's still here, the game just

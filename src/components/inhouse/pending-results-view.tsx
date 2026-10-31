@@ -1,6 +1,7 @@
 "use client";
 
-import { Badge } from "@/components/ui";
+import { Badge, buttonClasses } from "@/components/ui";
+import { ConfirmButton } from "@/components/inhouse/confirm-button";
 import { pushToast } from "@/components/toaster";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { ResultControls } from "@/components/inhouse/result-controls";
@@ -90,64 +91,75 @@ function PendingResultCard({
   pending: boolean;
   act: (body: Record<string, unknown>) => Promise<boolean>;
 }) {
+  // A few lines high, so the queue under it stays on a phone's first screen:
+  // the game, its state and its check in one row; the teams and the match-ID
+  // form behind one disclosure.
   return (
     <section
       aria-label={`Game #${result.code}, result on the way`}
-      className="rounded-[var(--radius)] border border-info/40 bg-info/10 px-4 py-4 text-center sm:px-6"
+      className="rounded-[var(--radius)] border border-info/40 bg-info/10 px-4 py-3"
     >
-      <h2 className="flex flex-wrap items-center justify-center gap-2 font-semibold">
-        {result.mine ? "Your last game" : "Game"}{" "}
-        <span className="font-mono text-sm font-normal text-muted">
-          #{result.code}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <h2 className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm font-semibold">
+          {result.mine ? "Your last game" : "Game"}{" "}
+          <span className="font-mono text-xs font-normal text-muted">
+            #{result.code}
+          </span>
+          <Badge tone="info">Result on the way</Badge>
+        </h2>
+        <span className="text-xs text-muted">
+          {checkedLine(result.lastCheckedAt, serverNow)}
         </span>
-        <Badge tone="info">Result on the way</Badge>
-      </h2>
-      <p className="mx-auto mt-1 max-w-md text-sm text-muted">
-        It records itself, Elo and all, once OpenDota publishes the game:
-        usually 10 to 30 minutes after it ends.
+        {result.canRecord ? (
+          <ResultControls
+            className="sm:ml-auto"
+            scan={{ live: true, minutesLeft: 0 }}
+            pending={pending}
+            act={act}
+          />
+        ) : null}
+      </div>
+      <p className="mt-1 text-xs text-muted">
+        It records itself, Elo and all, once OpenDota has it (usually 10 to 30
+        minutes after it ends).
         {result.mine ? " Queue for the next one meanwhile." : ""}
       </p>
-      <ul className="mx-auto mt-3 grid max-w-xl grid-cols-1 gap-1 text-left text-xs sm:grid-cols-2">
-        {result.sides.map((side) => {
-          const meta = sideMeta(side.isRadiant);
-          return (
-            <li key={meta.name} className="min-w-0">
-              <span className="font-medium text-fg">{meta.name}:</span>{" "}
-              <span className="text-muted">{side.names.join(", ")}</span>
-            </li>
-          );
-        })}
-      </ul>
-      <p className="mt-2 text-xs text-muted">
-        {checkedLine(result.lastCheckedAt, serverNow)}
-      </p>
-      {result.canRecord ? (
-        <ResultControls
-          pendingResult
-          scan={{ live: true, minutesLeft: 0 }}
-          pending={pending}
-          act={act}
-        />
-      ) : null}
+      <details className="group mt-1">
+        <summary className="inline-flex min-h-10 cursor-pointer list-none items-center rounded py-1 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-8 [&::-webkit-details-marker]:hidden">
+          <span aria-hidden className="mr-1.5 transition-transform group-open:rotate-90">
+            ▸
+          </span>
+          Who played
+        </summary>
+        <ul className="mt-1 grid max-w-3xl grid-cols-1 gap-1 text-xs sm:grid-cols-2">
+          {result.sides.map((side) => {
+            const meta = sideMeta(side.isRadiant);
+            return (
+              <li key={meta.name} className="min-w-0">
+                <span className="font-medium text-fg">{meta.name}:</span>{" "}
+                <span className="text-muted">{side.names.join(", ")}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </details>
       {result.canCancel ? (
-        <div className="mt-3 text-right">
-          <button
-            type="button"
+        <div className="mt-2 flex justify-end">
+          <ConfirmButton
+            label={`Admin: give up on #${result.code}'s result`}
             disabled={pending}
-            onClick={async () => {
-              if (
-                window.confirm(
-                  `Give up on game #${result.code}'s result? It won't count for anyone. Nobody is requeued: its players are free already.`,
-                ) &&
-                (await act({ action: "giveup" }))
-              ) {
+            className={buttonClasses("ghost", "sm", "text-danger-soft")}
+            prompt={`Give up on game #${result.code}'s result? It won't count for anyone. Nobody is requeued: its players are free already.`}
+            confirmLabel="Give up on it"
+            cancelLabel="Keep waiting"
+            danger
+            promptClassName="max-w-md"
+            onConfirm={async () => {
+              if (await act({ action: "giveup" })) {
                 pushToast("success", `Gave up on game #${result.code}'s result`);
               }
             }}
-            className="rounded text-xs text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-          >
-            Admin: give up on #{result.code}&apos;s result
-          </button>
+          />
         </div>
       ) : null}
     </section>

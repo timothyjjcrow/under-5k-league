@@ -972,10 +972,25 @@ the league is already draftable and many visitors have joined. Write for both.
   a player sees their own game, with the other folded to one line under it; a
   spectator sees the next-game queue card, then each live game read-only,
   named "Game N" once two are live. Only one pinned clock bar ever shows.
+- **Each stage after the queue is one compact card, side by side where the
+  screen has room** (Tim, 2026-10-31; [inhouse](inhouse.md#the-room-client)
+  has the words). The ready check: the question, its clock (beside the
+  heading at every width) and the answer, with the ten as two columns of
+  slim tiles beside them from lg. The vote: the banner with what it would
+  decide now, then the three methods beside the nominations from lg (slim
+  rows on a phone, the hint left to screen readers while a card shows its
+  pair). The draft: the turn, its clock, the snake and the last pick in one
+  banner, the pool first in the DOM, the teams beside it from lg. Set up: a
+  short "Teams are set!" card, then the setup card beside the rosters from
+  xl (its steps by its own width). Play: one banner with "Game over" at its
+  end and the result checks in one row, the rosters, then the lobby folded.
+  The player's own side's roster says "Your team".
 - **A game marked over gets its own card** ([inhouse](inhouse.md#game-over-result-pending)):
-  "Result on the way" above the queue between games, folded to one line with
+  "Result on the way" above the queue between games, a slim strip (the
+  checks in its row, the teams under "Who played"), folded to one line with
   no controls while the viewer is queued or in their next game, named by
-  `#code`. Positions show on every player row, in the player's order of
+  `#code`. The last result's banner puts the scoreline on its own line on a
+  phone and the buttons under it. Positions show on every player row, in the player's order of
   preference (`RoleBadges ranked`, first choice ringed): `labelled` on queue,
   roster and matchup rows; the vote and draft-pool buttons, whose label
   replaces their contents, carry them (and "fills Pos N") as an

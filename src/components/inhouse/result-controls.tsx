@@ -2,6 +2,7 @@
 
 import { useId, useState } from "react";
 import { buttonClasses } from "@/components/ui";
+import { cn } from "@/lib/utils";
 
 /** The automatic scan's status line (see inhouseScanStatus). */
 export function scanStatusText(scan: { live: boolean; minutesLeft: number }) {
@@ -22,22 +23,23 @@ export function scanStatusText(scan: { live: boolean; minutesLeft: number }) {
  * (inhouseScanStatus): before that the game can't be over, and each press is
  * a ten-player OpenDota scan that could only fail. `folded` (Set up) keeps
  * both behind one disclosure so they don't compete with getting into the
- * Dota lobby. Never worded "Game over": that is the button that frees the
- * ten (GameOverControl), and one name per control.
+ * Dota lobby. Otherwise they sit in one row (the match-ID form opens under
+ * it), so the card holding them stays a few lines high. Never worded "Game
+ * over": that is the button that frees the ten (GameOverControl), and one
+ * name per control. The "records itself" sentence is the card's own line.
  */
 export function ResultControls({
   folded = false,
-  pendingResult = false,
   scan,
   pending,
   act,
+  className,
 }: {
   folded?: boolean;
-  /** On a game marked over: just the two controls, no "after the game" copy. */
-  pendingResult?: boolean;
   scan: { live: boolean; minutesLeft: number };
   pending: boolean;
   act: (body: Record<string, unknown>) => unknown;
+  className?: string;
 }) {
   const [matchId, setMatchId] = useState("");
   // Several of these can be on screen (a game marked over beside a live one).
@@ -67,7 +69,7 @@ export function ResultControls({
         if (!pending && matchId.trim())
           void act({ action: "record", matchId: matchId.trim() });
       }}
-      className="mt-2 flex flex-wrap items-end justify-center gap-2"
+      className="mt-2 flex flex-wrap items-end gap-2"
     >
       <div className="min-w-0 flex-1">
         <label htmlFor={inputId} className="mb-1 block text-xs text-muted">
@@ -97,15 +99,16 @@ export function ResultControls({
     </form>
   );
   const summaryClass =
-    "cursor-pointer rounded py-2 text-center text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
+    "inline-flex min-h-10 cursor-pointer list-none items-center rounded py-2 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 sm:min-h-8 [&::-webkit-details-marker]:hidden";
 
   if (folded) {
     return (
-      <details className="mx-auto mt-4 max-w-lg border-t border-accent/20 pt-2 text-left">
+      <details className={cn("text-left", className)}>
         <summary className={summaryClass}>
+          <span aria-hidden className="mr-1.5">▸</span>
           Played already and no result yet? Record it
         </summary>
-        <div className="mt-2 space-y-3 text-center">
+        <div className="mt-1 max-w-lg space-y-3">
           <p className="text-xs text-muted">{scanStatusText(scan)}</p>
           {checkNow}
           {form}
@@ -114,21 +117,15 @@ export function ResultControls({
     );
   }
   return (
-    <div className="mt-4 space-y-3">
-      {pendingResult ? null : (
-        <div>
-          <p className="text-sm">
-            The result records automatically after the game.
-          </p>
-          <p className="mx-auto mt-1 max-w-sm text-xs text-muted">
-            {scanStatusText(scan)}
-          </p>
-        </div>
-      )}
+    <div className={cn("flex flex-wrap items-center gap-x-3 gap-y-2", className)}>
       {checkNow}
-      <details className="mx-auto max-w-lg border-t border-info/20 pt-2 text-left">
-        <summary className={summaryClass}>Record by match ID</summary>
-        {form}
+      {/* Takes a row of its own once open, so the form sits under both. */}
+      <details className="min-w-0 open:basis-full">
+        <summary className={summaryClass}>
+          <span aria-hidden className="mr-1.5">▸</span>
+          Record by match ID
+        </summary>
+        <div className="max-w-lg">{form}</div>
       </details>
     </div>
   );

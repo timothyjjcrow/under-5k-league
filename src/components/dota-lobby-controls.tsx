@@ -33,6 +33,7 @@ import { DUEL_GAME_MODE, LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { requestSignal } from "@/lib/request-signal";
 import { cn } from "@/lib/utils";
+import { CopyChip } from "./copy-chip";
 import { pushToast } from "./toaster";
 import { buttonClasses } from "./ui";
 
@@ -336,7 +337,7 @@ export function DotaLobbyControls({
   return (
     <section
       aria-label="Steam lobby bot"
-      className="min-w-0 space-y-3 rounded-xl border border-accent/30 bg-accent/5 p-5"
+      className="min-w-0 space-y-3 rounded-xl border border-accent/30 bg-accent/5 p-4"
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-semibold">Steam lobby bot</h3>
@@ -377,12 +378,16 @@ export function DotaLobbyControls({
           {busyLive ? null : (
             <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
               <div className="min-w-0">
-                <dt className="text-xs text-muted">Lobby name</dt>
-                <dd className="break-words font-mono">{view.name}</dd>
+                <dt className="mb-1 text-xs text-muted">Lobby name</dt>
+                <dd>
+                  <CopyChip value={view.name} label="lobby name" />
+                </dd>
               </div>
               <div className="min-w-0">
-                <dt className="text-xs text-muted">Password</dt>
-                <dd className="break-words font-mono">{view.password}</dd>
+                <dt className="mb-1 text-xs text-muted">Password</dt>
+                <dd>
+                  <CopyChip value={view.password} label="password" />
+                </dd>
               </div>
               <div className="min-w-0">
                 <dt className="text-xs text-muted">Radiant</dt>
@@ -537,7 +542,7 @@ export function DotaLobbyControls({
               <button
                 type="button"
                 disabled={pending}
-                className={buttonClasses("primary", "sm")}
+                className={buttonClasses("primary", "md")}
                 onClick={() => void act("create")}
               >
                 Create Dota lobby
@@ -549,7 +554,7 @@ export function DotaLobbyControls({
                 disabled={pending}
                 className={buttonClasses(
                   "primary",
-                  "sm",
+                  "md",
                   startHighlighted
                     ? "ring-2 ring-success ring-offset-2 ring-offset-surface"
                     : undefined,

@@ -468,13 +468,17 @@ itself when the bot sees Dota's postgame (below).
   `inhouse.giveUpOnResult.beforeClaim`), which requeues NOBODY (its ten may
   be queued or in another live game) and logs an `AdminAction`.
   `cancelLobby` reaches live games only: a cancel that finds its game marked
-  over (a confirm dialog left open across a press, or the race at its claim)
+  over (a confirm left open across a press, or the race at its claim)
   refuses and names the give-up control, so a "requeue everyone" click can
   never become an irreversible give-up on a result about to land.
 - **The room's card** (`PendingResultsView`, `state.pendingResults`: the
   viewer's own games marked over, every one for an admin, named by `#code`
   since the slot may be the next game's) carries "Check OpenDota now",
-  "Record by match ID" and the admin give-up, each naming its lobby. Out of
+  "Record by match ID" and the admin give-up, each naming its lobby. It is a
+  slim strip (the game, "Result on the way", the last check and the two
+  controls in one row; the teams under "Who played"; the give-up asking in
+  place), so the queue under it keeps a phone's first screen and the nine
+  others freed by a press can queue at once. Out of
   the queue and between games it sits above the queue; while the viewer is
   queued or in their next game it folds to one line with no controls,
   because a 45-second OpenDota check shares the room's one action lock with
@@ -826,7 +830,9 @@ Every transition is a guarded claim; keep it that way (general rules:
 - **Snake draft:** `nextPickTeam` gives `F O O F F O O F` so summed pick
   positions match; team 2 picks first (`FIRST_PICK_TEAM`). An expired
   `PICK_SECONDS` clock auto-picks; pool and auto-pick sort MMR desc, then
-  `[queuedAt, userId]`.
+  `[queuedAt, userId]`. The room draws the order from the same function
+  (`inhousePickOrder` walks it from an empty draft), never a copy of the
+  pattern.
 
 ## Game setup
 
@@ -834,7 +840,11 @@ Every transition is a guarded claim; keep it that way (general rules:
   (`DotaLobbyControls` `onAvailability` is "on"), its panel is the path and
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
   not working?". Players never see a bot panel that can't help; admins keep
-  its status line. See `docs/DOTA-LOBBY-BOT.md`. While the one bot is
+  its status line. Until the panel's first read answers, players see one
+  "Checking the lobby bot…" line (`inhouseSetupPath`), never the by-hand
+  steps: shown meanwhile, they flashed "create a lobby, set the ticket" at
+  everyone on every load before the bot's panel folded them away. The first
+  read is bounded by its timeout (then "unavailable": by hand). See `docs/DOTA-LOBBY-BOT.md`. While the one bot is
   hosting ANOTHER game still being played (one bot, one game at a time: the
   route's `busyElsewhere`, from one shared health read), availability is
   "busy": the panel says which game (`#1234`), hides the bot's lobby name and
@@ -1005,6 +1015,17 @@ Every transition is a guarded claim; keep it that way (general rules:
   the relay an invite's OFFLINE stays unknown (the relay says it for a lost
   answer); on loopback it is the bot's own word. `resolveDotaLobby` and the
   release select only the spec's fields, never whole user rows.
+- **Under way, the card folds** (`GameSetupCard collapsed`, the Play
+  screen): its body sits under one "Lobby and voice channels" line, after
+  the rosters, since the ten are in the game. The side line stays outside it
+  (it only shows there while the bot still reports seats), and a closed
+  `<details>` keeps its children mounted, so the bot panel inside keeps
+  reading the bot and marking the game started or over. Its steps lay out by
+  the card's own width (`@container`: stacked, then the lobby beside the
+  ticket with voice under both, then three across), because from xl the Set
+  up screen puts the card beside the rosters. Lobby names, passwords and the
+  ticket copy through one `CopyChip` (`src/components/copy-chip.tsx`), in
+  the by-hand steps and the bot panel alike.
 - **By-hand values are per game:** `inhouseHandLobbyName(slot)`
   (`<league name> Inhouse`, `... Inhouse 2` for game 2, so two games never
   share a name in Dota's lobby list), password `ggd2l`, `INHOUSE.LOBBY_TICKET`
@@ -1318,8 +1339,34 @@ Every transition is a guarded claim; keep it that way (general rules:
   `mmrBalance` wraps it for the drafting chips and "X ahead by N avg MMR". A
   copy dividing by the whole roster flipped a side's strength when the last
   pick landed.
-- **Other surfaces:** a compact fixed clock bar in the ready check and vote
-  (`useBannerOffscreen`, `top-16`); "Run it back →" with its dismissal in
+- **Each stage says what the viewer must do next, in one compact card**
+  (Tim, 2026-10-31: compact, side by side where the screen has room,
+  obvious what to do). The words and turn math are pure and tested in
+  `src/lib/inhouse-room-view.ts`:
+  - The ready check's heading asks only until the viewer accepts, then says
+    whom it waits on (`readyCheckHeading`); their own tile says "you".
+  - The vote's banner says what it decides if its clock runs out now
+    (`projectedCaptains`, `voteProjectionText`: `tallyMethod` and
+    `orderCaptains`, the two functions `resolveCaptainVote` runs, so it never
+    names captains the vote wouldn't). The method cards take
+    `CAPTAIN_METHOD_LABEL`'s names.
+  - The draft's banner tells a captain their turn ("You're up next — 2
+    picks", "pick 1 of 2": `draftTurn` over `inhousePickOrder`, the server's
+    `pickTeam` winning), draws the snake as one segment per pick in its
+    side's colour, and names the last pick (`lastDraftPick`) and the MMR
+    balance.
+  - Two toasts cover what a poll skips past, quiet on a first poll and
+    never rung: the vote's result for its ten (`captainsChosenToast`, which
+    names the method only when the last vote the viewer saw projects exactly
+    the captains installed; a later ballot could have changed it), and a
+    player's own name landing on a side (`draftedToast`).
+  - Confirms ask in place (`ConfirmButton`, `src/components/inhouse/`):
+    Decline, "Game over — queue again", an admin's cancel and give-up. A
+    tap swaps the control for its question and two answers; Escape or the
+    cancel answer puts it back with focus on it. `window.confirm` froze the
+    room, its clocks and its polls, while open and covered a phone's room.
+- **Other surfaces:** a compact fixed clock bar in the ready check, vote and
+  draft (`useBannerOffscreen`, `top-16`); "Run it back →" with its dismissal in
   localStorage (`e2e/inhouse-storage.spec.ts` covers blocked storage);
   `router.refresh()` when a lobby ends or after a void; `shouldFocusStage`
   scrolls a member's stage into view once per stage. `/inhouse/history` shows

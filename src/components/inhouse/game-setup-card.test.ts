@@ -44,3 +44,30 @@ describe("GameSetupCard's side line (source)", () => {
     expect(code.match(/aria-label="Your side"/g)).toHaveLength(1);
   });
 });
+
+// SOURCE GUARD: while the bot's first answer is on the way the card shows
+// one line, never the by-hand steps (they flashed "create a lobby, set the
+// ticket" at every player before the bot's panel folded them away). The
+// choice is the tested inhouseSetupPath's.
+describe("GameSetupCard's path while it asks the bot (source)", () => {
+  const code = stripLineComments(
+    sourceFile("src/components/inhouse/game-setup-card.tsx").text,
+  );
+
+  it("picks its path only through inhouseSetupPath", () => {
+    expect(code).toMatch(
+      /const path = inhouseSetupPath\(\{ bot, handHosted \}\);/,
+    );
+    expect(code).toMatch(/const botFirst = path === "bot";/);
+  });
+
+  it("shows no by-hand step while checking", () => {
+    const checking = code.indexOf('{path === "checking" ? (');
+    const bot = code.indexOf(") : botFirst ? (", checking);
+    expect(checking).toBeGreaterThan(-1);
+    expect(bot).toBeGreaterThan(checking);
+    const branch = code.slice(checking, bot);
+    expect(branch).toContain("Checking the lobby bot…");
+    expect(branch).not.toMatch(/\{lobbyStep\}|\{ticketStep\}|\{manualStart\}/);
+  });
+});

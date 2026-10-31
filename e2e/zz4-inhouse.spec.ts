@@ -179,7 +179,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
 }) => {
   test.setTimeout(180_000);
   const errors = trackPageErrors(page);
-  // The Start-game confirm, and the admin cancel at the end.
+  // Nothing in the room opens a browser dialog any more (its confirms ask in
+  // place); a stray one would hang the run, so accept it if one appears.
   page.on("dialog", (d) => d.accept());
 
   // Nine API players queue up (MMRs below the observer's, so the observer
@@ -468,7 +469,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   // Clean up through the BROWSER: an admin scraps the live lobby so a re-run
   // starts from a clean queue. A live game needs no override any more (that
   // existed only for Cred staked on it), so the plain cancel is the one
-  // control, and its confirm is accepted by the dialog handler above.
+  // control. It asks in place: a tap shows the question, "Scrap it" sends it,
+  // and "Keep it" puts the control back without sending anything.
   await page.goto(
     "/api/auth/dev?name=IH+Admin+UI&steamId=76561190000002998&admin=1&redirect=/inhouse",
   );
@@ -476,6 +478,12 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     page.getByRole("button", { name: /force-cancel/i }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: "Admin: cancel this lobby" }).click();
+  await page.getByRole("button", { name: "Keep it" }).click();
+  await expect(
+    page.getByRole("button", { name: "Admin: cancel this lobby" }),
+  ).toBeFocused();
+  await page.getByRole("button", { name: "Admin: cancel this lobby" }).click();
+  await page.getByRole("button", { name: "Scrap it" }).click();
   // The slot is free again: the room falls back to the queue view.
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),

@@ -12,10 +12,27 @@ import { avgKnownMmr } from "@/lib/inhouse";
 import { sideMeta, type RoomLobby } from "@/components/inhouse/shared";
 import { TeamRoleNeeds } from "@/components/inhouse/team-role-needs";
 
-/** Both sides' rosters, shared by the Set up and Play screens. */
-export function MatchupGrid({ lobby }: { lobby: RoomLobby }) {
+/**
+ * Both sides' rosters, shared by the Set up and Play screens. `rail` stacks
+ * them from xl, where they sit in a column beside the setup card.
+ */
+export function MatchupGrid({
+  lobby,
+  rail = false,
+  myTeam = null,
+}: {
+  lobby: RoomLobby;
+  rail?: boolean;
+  /** The viewer's own side, tagged "Your team" (null for a spectator). */
+  myTeam?: number | null;
+}) {
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+    <div
+      className={cn(
+        "grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2",
+        rail && "xl:grid-cols-1",
+      )}
+    >
       {lobby.teams.map((t) => {
         const meta = sideMeta(t.isRadiant);
         const roster = t.captain ? [t.captain, ...t.players] : t.players;
@@ -26,14 +43,19 @@ export function MatchupGrid({ lobby }: { lobby: RoomLobby }) {
           <div
             key={t.team}
             className={cn(
-              "rounded-[var(--radius)] border bg-surface/80",
+              "min-w-0 rounded-[var(--radius)] border bg-surface/80",
               meta.ring,
             )}
           >
-            <div className="flex items-center justify-between border-b border-line px-4 py-3">
+            <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
               <div className="flex items-center gap-2 font-semibold">
                 <span className={cn("h-2.5 w-2.5 rounded-full", meta.dot)} />
                 {meta.name}
+                {myTeam === t.team ? (
+                  <span className="text-xs font-medium text-accent">
+                    Your team
+                  </span>
+                ) : null}
               </div>
               {avgMmr > 0 ? (
                 <span className="text-xs text-muted">avg {avgMmr} MMR</span>
@@ -42,7 +64,7 @@ export function MatchupGrid({ lobby }: { lobby: RoomLobby }) {
             {/* Teams are locked, but a side with nobody on Pos 5 still wants
                 to know who flexes before the game. */}
             <TeamRoleNeeds members={roster} />
-            <div className="space-y-1.5 p-3">
+            <div className="space-y-1.5 px-3 py-2.5">
               {roster.map((p, i) => (
                 <div key={p.userId} className="flex items-center gap-2 text-sm">
                   <Avatar name={p.name} src={p.avatar} size={24} />

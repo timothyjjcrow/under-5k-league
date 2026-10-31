@@ -4,7 +4,9 @@ import { Avatar, buttonClasses } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import { useBannerOffscreen } from "@/components/room-clock";
 import type { InhouseState } from "@/lib/inhouse-service";
+import { readyCheckHeading } from "@/lib/inhouse-room-view";
 import { SecondsClock } from "@/components/inhouse/clocks";
+import { ConfirmButton } from "@/components/inhouse/confirm-button";
 import { scrollToRoomTop, type RoomLobby } from "@/components/inhouse/shared";
 
 export function ReadyCheckView({
@@ -34,9 +36,23 @@ export function ReadyCheckView({
   if (!check) return null;
 
   const waitingOn = check.total - check.acceptedCount;
+  const heading = readyCheckHeading({
+    canAccept: me.canAccept,
+    hasAccepted: me.hasAccepted,
+    waitingOn,
+  });
+  // One line under the controls, only where it adds something: the heading
+  // and the accepted chip already say it once the viewer has accepted.
+  const note = me.canAccept
+    ? me.hasAccepted
+      ? null
+      : "Accept before the timer ends to keep your spot."
+    : me.inQueue
+      ? "You’re in line for the next game."
+      : "Spectating · join the next-game queue above.";
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-3">
       {/* Compact fixed bar while the accept clock is scrolled away. top-16
           matches the 64px header (see useBannerOffscreen). */}
       {offscreen ? (
@@ -64,130 +80,138 @@ export function ReadyCheckView({
         </button>
       ) : null}
 
-      <div
+      {/* One card: the question, its clock and the answer on the left; who
+          has accepted on the right from lg (under it on a phone). */}
+      <section
         ref={bannerRef}
-        className="rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-surface to-surface px-5 py-5 sm:p-6"
+        aria-label="Ready check"
+        className="grid gap-4 rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-surface to-surface p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:gap-6"
       >
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
-              Ready check
-            </p>
-            <h2 className="font-display text-2xl font-semibold">
-              {me.canAccept ? "Match found. You in?" : "A match is filling up"}
-            </h2>
-            <p className="mt-2 text-sm text-muted">
-              {check.acceptedCount}/{check.total} accepted
-              {waitingOn > 0
-                ? ` · waiting on ${waitingOn}`
-                : " · everyone’s ready"}
-            </p>
-            <p className="mt-1 text-xs text-muted">
-              {me.canAccept
-                ? me.hasAccepted
-                  ? "Your spot is confirmed."
-                  : "Accept before the timer ends to keep your spot."
-                : me.inQueue
-                  ? "You’re in line for the next game."
-                  : "Spectating · join the next-game queue above."}
-            </p>
-          </div>
-          <SecondsClock
-            prominent
-            endsAtMs={lobby.acceptEndsAt}
-            offsetMs={offset}
-            urgentAt={10}
-            label={(s) => `${s} seconds left to accept`}
-          />
-        </div>
-
-        <div aria-hidden className="mt-4 flex gap-1.5">
-          {Array.from({ length: check.total }, (_, i) => (
-            <span
-              key={i}
-              className={cn(
-                "h-2 flex-1 rounded-full transition-colors",
-                i < check.acceptedCount ? "bg-success" : "bg-line",
-              )}
+        <div className="min-w-0">
+          {/* The clock stays beside the heading at every width, so the
+              phone's first screen keeps the button high. */}
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+                Ready check
+              </p>
+              <h2 className="font-display text-xl font-semibold sm:text-2xl">
+                {heading}
+              </h2>
+              <p className="mt-1 text-sm text-muted tabular-nums">
+                {check.acceptedCount}/{check.total} accepted
+                {waitingOn > 0
+                  ? ` · waiting on ${waitingOn}`
+                  : " · everyone’s ready"}
+              </p>
+            </div>
+            <SecondsClock
+              prominent
+              endsAtMs={lobby.acceptEndsAt}
+              offsetMs={offset}
+              urgentAt={10}
+              label={(s) => `${s} seconds left to accept`}
             />
-          ))}
+          </div>
+
+          <div aria-hidden className="mt-3 flex gap-1.5">
+            {Array.from({ length: check.total }, (_, i) => (
+              <span
+                key={i}
+                className={cn(
+                  "h-2 flex-1 rounded-full transition-colors",
+                  i < check.acceptedCount ? "bg-success" : "bg-line",
+                )}
+              />
+            ))}
+          </div>
+
+          {me.canAccept ? (
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              {me.hasAccepted ? (
+                <span className="inline-flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-4 py-2.5 text-sm font-semibold text-success">
+                  <span aria-hidden>✓</span> Accepted — waiting for the others
+                </span>
+              ) : (
+                <>
+                  <button
+                    disabled={pending}
+                    onClick={() => act({ action: "accept" })}
+                    className={cn(
+                      buttonClasses("accent", "lg"),
+                      "min-h-14 w-full font-bold sm:w-auto sm:px-12",
+                    )}
+                  >
+                    ACCEPT MATCH
+                  </button>
+                  <ConfirmButton
+                    label="Decline"
+                    disabled={pending}
+                    className={buttonClasses(
+                      "ghost",
+                      "sm",
+                      "hover:text-danger-soft",
+                    )}
+                    prompt="Decline this match? The lobby is scrapped and you leave the queue. Everyone who accepted keeps their spot at the front of the queue."
+                    confirmLabel="Yes, decline"
+                    cancelLabel="Keep my spot"
+                    danger
+                    onConfirm={() => act({ action: "decline" })}
+                  />
+                </>
+              )}
+            </div>
+          ) : null}
+          {note ? <p className="mt-2 text-xs text-muted">{note}</p> : null}
         </div>
 
-        {me.canAccept ? (
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            {me.hasAccepted ? (
-              <span className="inline-flex items-center gap-2 rounded-lg border border-success/40 bg-success/10 px-4 py-2.5 text-sm font-semibold text-success">
-                <span aria-hidden>✓</span> Accepted — waiting for the others
-              </span>
-            ) : (
-              <button
-                disabled={pending}
-                onClick={() => act({ action: "accept" })}
+        {/* Who's in — pending players sort first (they're the holdup). */}
+        <ul
+          aria-label="Who has accepted"
+          className="grid grid-cols-2 content-start gap-1.5"
+        >
+          {check.players.map((p) => {
+            const you = p.userId === me.userId;
+            return (
+              <li
+                key={p.userId}
                 className={cn(
-                  buttonClasses("accent", "lg"),
-                  "min-h-14 w-full font-bold sm:w-auto sm:px-12",
+                  "flex min-w-0 items-center gap-2 rounded-lg border px-2 py-1.5",
+                  p.accepted
+                    ? "border-success/40 bg-success/5"
+                    : "border-line bg-surface-2/40",
+                  you && "ring-1 ring-accent/50",
                 )}
               >
-                ACCEPT MATCH
-              </button>
-            )}
-            {!me.hasAccepted ? (
-              <button
-                disabled={pending}
-                onClick={() => {
-                  if (
-                    window.confirm(
-                      "Decline this match? The lobby is scrapped and you leave the queue. Everyone who accepted keeps their spot at the front of the queue.",
-                    )
-                  ) {
-                    act({ action: "decline" });
-                  }
-                }}
-                className="rounded text-xs text-muted hover:text-danger hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-danger/60"
-              >
-                Decline
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
-
-      {/* Who's in — pending players sort first (they're the holdup). */}
-      <ul className="grid grid-cols-2 gap-2">
-        {check.players.map((p) => (
-          <li
-            key={p.userId}
-            className={cn(
-              "flex min-w-0 items-center gap-2 rounded-xl border px-2.5 py-3",
-              p.accepted
-                ? "border-success/40 bg-success/5"
-                : "border-line bg-surface-2/40",
-            )}
-          >
-            <Avatar name={p.name} src={p.avatar} size={28} />
-            <span className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
-              {p.name}
-            </span>
-            {p.accepted ? (
-              <span
-                role="img"
-                aria-label={`${p.name} accepted`}
-                className="text-sm text-success"
-              >
-                <span aria-hidden>✓</span>
-              </span>
-            ) : (
-              <span
-                role="img"
-                aria-label={`${p.name} hasn't accepted yet`}
-                className="animate-pulse text-sm text-muted motion-reduce:animate-none"
-              >
-                <span aria-hidden>…</span>
-              </span>
-            )}
-          </li>
-        ))}
-      </ul>
+                <Avatar name={p.name} src={p.avatar} size={22} />
+                <span className="min-w-0 flex-1 truncate text-xs font-medium sm:text-sm">
+                  {p.name}
+                </span>
+                {you ? (
+                  <span className="shrink-0 text-[11px] text-muted">you</span>
+                ) : null}
+                {p.accepted ? (
+                  <span
+                    role="img"
+                    aria-label={`${p.name} accepted`}
+                    className="shrink-0 text-sm text-success"
+                  >
+                    <span aria-hidden>✓</span>
+                  </span>
+                ) : (
+                  <span
+                    role="img"
+                    aria-label={`${p.name} hasn't accepted yet`}
+                    className="shrink-0 animate-pulse text-sm text-muted motion-reduce:animate-none"
+                  >
+                    <span aria-hidden>…</span>
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
     </div>
   );
 }

@@ -68,8 +68,7 @@ test("positions in the draft, then Game over frees the ten before the result lan
   test.setTimeout(60_000 + INHOUSE.POLL_IDLE_MS);
   test.setTimeout(180_000);
   const errors = trackPageErrors(page);
-  // "Game over" and the admin give-up both confirm.
-  page.on("dialog", (d) => d.accept());
+  // "Game over" and the admin give-up both ask in place (no browser dialog).
 
   // Nine API players with known positions. The two highest MMRs captain:
   // team 1 plays Pos 4/5 only, and team 2 (which picks first) plays Pos 1
@@ -177,6 +176,10 @@ test("positions in the draft, then Game over frees the ten before the result lan
   // on one folded line while OpenDota publishes it (its checks wait until
   // they're out of the queue: a ready check can open any second).
   await page.getByRole("button", { name: "Game over — queue again" }).click();
+  await expect(
+    page.getByRole("group", { name: "Game over — queue again" }),
+  ).toContainText(/Is game #\d+ over in Dota\?/);
+  await page.getByRole("button", { name: "Yes, it’s over" }).click();
   // On a phone the queue card says it in place of the header's badge (the
   // badge is in the page, hidden there).
   await expect(page.getByText("You’re queued").filter({ visible: true })).toHaveCount(1);
@@ -206,13 +209,13 @@ test("positions in the draft, then Game over frees the ten before the result lan
   // by it (only the two who joined themselves are queued).
   const adminPage = await (await browser.newContext({ baseURL: BASE })).newPage();
   const adminErrors = trackPageErrors(adminPage);
-  adminPage.on("dialog", (d) => d.accept());
   await adminPage.goto(
     "/api/auth/dev?name=GO+Admin+UI&steamId=76561190000003097&admin=1&redirect=/inhouse",
   );
   await adminPage
     .getByRole("button", { name: /^Admin: give up on #\d+'s result$/ })
     .click();
+  await adminPage.getByRole("button", { name: "Give up on it" }).click();
   await expect(adminPage.getByText("Result on the way")).toHaveCount(0);
   const row = await db.inhouseLobby.findUniqueOrThrow({
     where: { id: lobbyId },

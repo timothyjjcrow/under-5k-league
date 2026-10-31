@@ -1,6 +1,7 @@
 "use client";
 
 import { buttonClasses } from "@/components/ui";
+import { ConfirmButton } from "@/components/inhouse/confirm-button";
 import { inhouseGameOverOpen, inhouseLobbyCode } from "@/lib/inhouse";
 import type { InhouseState } from "@/lib/inhouse-service";
 import type { RoomLobby } from "@/components/inhouse/shared";
@@ -36,30 +37,23 @@ export function GameOverControl({
   }
   const player = me.inLobby;
   const code = inhouseLobbyCode(lobby.id);
+  // Asks in place (ConfirmButton): the question carries what the press does,
+  // so the card needs no second line explaining it.
   return (
-    <div className="mt-4 space-y-2">
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => {
-          if (
-            window.confirm(
-              player
-                ? `Is game #${code} over in Dota? You go back in the queue, everyone in it can queue again, and the result still records itself from OpenDota.`
-                : `Mark game #${code} over? Its ten players can queue again, and the result still records itself from OpenDota.`,
-            )
-          ) {
-            act({ action: "finish", requeue: player });
-          }
-        }}
-        className={buttonClasses("accent", "lg")}
-      >
-        {player ? "Game over — queue again" : "Admin: mark game over"}
-      </button>
-      <p className="mx-auto max-w-sm text-xs text-muted">
-        No need to wait for the result: it lands on its own once OpenDota has
-        the game.
-      </p>
-    </div>
+    <ConfirmButton
+      label={player ? "Game over — queue again" : "Admin: mark game over"}
+      disabled={pending}
+      className={buttonClasses("accent", "md", "font-semibold")}
+      prompt={
+        player
+          ? `Is game #${code} over in Dota? You go back in the queue, everyone in it can queue again, and the result still records itself from OpenDota.`
+          : `Mark game #${code} over? Its ten players can queue again, and the result still records itself from OpenDota.`
+      }
+      confirmLabel={player ? "Yes, it’s over" : "Mark it over"}
+      cancelLabel="Not yet"
+      focus="confirm"
+      promptClassName="max-w-md"
+      onConfirm={() => act({ action: "finish", requeue: player })}
+    />
   );
 }

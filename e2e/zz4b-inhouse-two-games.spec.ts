@@ -133,12 +133,18 @@ test("twenty players play two games at once, each in its own room", async ({
   await page.goto(
     "/api/auth/dev?name=2G+Admin&steamId=76561190000004102&admin=1&redirect=/inhouse",
   );
+  // Each cancel asks in place, naming its game; "Scrap it" sends it.
   await page.getByRole("button", { name: "Admin: cancel Game 1" }).click();
+  await expect(
+    page.getByRole("group", { name: "Admin: cancel Game 1" }),
+  ).toContainText("Scrap Game 1?");
+  await page.getByRole("button", { name: "Scrap it" }).click();
   // A lone game 2 is still named: its channels and lobby aren't game 1's.
   await expect(
     page.getByRole("button", { name: "Admin: cancel Game 2" }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Admin: cancel Game 2" }).click();
+  await page.getByRole("button", { name: "Scrap it" }).click();
   await expect(
     page.getByRole("heading", { name: "Inhouse queue", exact: true }),
   ).toBeVisible();
