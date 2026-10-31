@@ -144,6 +144,44 @@ test("pool filters survive a reload and a shared link", async ({ page }) => {
   await expect(page).toHaveURL(/\/players$/);
 });
 
+// Players and Standins split the pool by registration type (the seed signs up
+// three standins). Like every filter, the split lives in the URL.
+test("the Players and Standins chips split the pool and survive a reload", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/players");
+  const status = page.getByRole("group", { name: "Filter by status" });
+  const playersChip = status.getByRole("button", { name: "Players" });
+  const standinsChip = status.getByRole("button", { name: "Standins" });
+  const rows = page.locator("#main ul > li");
+  const standinBadges = rows.getByText("Standin", { exact: true });
+  await expect(standinBadges.first()).toBeVisible();
+
+  await playersChip.click();
+  await expect(playersChip).toHaveAttribute("aria-pressed", "true");
+  await expect(standinBadges).toHaveCount(0);
+  await expect(rows.first()).toBeVisible();
+  await expect(page).toHaveURL(/[?&]status=player/);
+
+  // Re-open the URL cold, as a recipient of the link would.
+  await page.goto(page.url());
+  await expect(playersChip).toHaveAttribute("aria-pressed", "true");
+  await expect(standinBadges).toHaveCount(0);
+
+  // The two are one choice: Standins replaces Players, and lists only them.
+  await standinsChip.click();
+  await expect(playersChip).toHaveAttribute("aria-pressed", "false");
+  await expect(page).toHaveURL(/[?&]status=standin/);
+  await expect(standinBadges.first()).toBeVisible();
+  await expect(rows).toHaveCount(await standinBadges.count());
+
+  // Tapping the pressed chip again shows everyone.
+  await standinsChip.click();
+  await expect(page).toHaveURL(/\/players$/);
+  assertNoErrors();
+});
+
 test("season history lists every season with the current one badged", async ({
   page,
 }) => {

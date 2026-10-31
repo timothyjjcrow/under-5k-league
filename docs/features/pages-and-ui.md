@@ -775,13 +775,17 @@ the league is already draftable and many visitors have joined. Write for both.
   team chip starves the name). **Favorite heroes ride with the roles below
   `md`, hide between `md` and `xl`, and get their own track at `xl`**, where
   `xl:order-*` puts them before status.
-- **The pool is the whole page:** standins are rows with a Standin badge
-  (`?status=standin`); rosters live on `/teams`. "Wants captain" shows only
+- **The pool is the whole page:** standins are rows with a Standin badge;
+  the Players and Standins chips (`?status=player`, `?status=standin`) split
+  the pool by registration type, shown only while there are standins
+  (Tim, 2026-10-30: "you can filter the stand-ins, but you can't just filter
+  the players"). Rosters live on `/teams`. "Wants captain" shows only
   while `captainSelectionOpen`, on volunteers not yet picked.
 - **Filters live in the URL** (`q`, `pos`, `sort`, `cap=1`,
-  `status=drafted|free|standin`, defaults omitted). They seed from
+  `status=drafted|free|player|standin`, defaults omitted). They seed from
   `useSearchParams` on mount (hence the `<Suspense>` around `<PlayerPool>`); a
-  stale `cap=1`/`status=standin` with nothing to match shows everyone. They
+  stale `cap=1` or `status=player|standin` with no chip to show shows
+  everyone. They
   mirror back with `history.replaceState`, never `router.replace` (that re-runs
   the page's server queries per tap), debounced 250ms (browsers rate-limit
   `replaceState`). React is the source of truth. `sort` is not a filter, so

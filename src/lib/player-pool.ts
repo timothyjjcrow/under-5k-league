@@ -406,8 +406,9 @@ export type FilterablePlayer = {
   drafted?: boolean;
 };
 
-/** The /players status chips: the lib's draft-status filter plus "standin". */
-export type PoolStatusFilter = "all" | "drafted" | "free" | "standin";
+/** The /players status chips: the lib's draft-status filter plus the two
+ *  registration types, "player" (full players only) and "standin". */
+export type PoolStatusFilter = "all" | "drafted" | "free" | "player" | "standin";
 
 /**
  * The /players pool's filter. Standins sit in the same table as full players,
@@ -416,7 +417,8 @@ export type PoolStatusFilter = "all" | "drafted" | "free" | "standin";
  * must never list a standin, so neither PoolPlayer nor PoolFilter learns about
  * it. The type narrowing happens here, then the shared lib does the rest.
  *
- * "drafted" and "free" are about FULL players: a standin is never rostered,
+ * "player" is the complement of "standin": every full player, drafted or not.
+ * "drafted" and "free" are about FULL players too: a standin is never rostered,
  * so the lib alone would count every standin as a free agent, and a free agent
  * is someone a captain can sign (signFreeAgent refuses standins).
  * Never mutates the input.
@@ -435,7 +437,7 @@ export function filterPoolRows<
       : rows.filter((r) => standinIds.has(r.userId) === (status === "standin"));
   return filterAndSortPlayers(typed, {
     ...rest,
-    status: status === "standin" ? "all" : status,
+    status: status === "standin" || status === "player" ? "all" : status,
   });
 }
 

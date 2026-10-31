@@ -153,8 +153,9 @@ export function PlayerPool({
   const [status, setStatus] = useState<PoolStatusFilter>(() => {
     const s = params.get("status");
     // A shared ?status=standin link degrades like ?sort=inhouse when there is
-    // nobody to show, rather than filtering to an empty list with no chip.
-    if (s === "standin") return anyStandin ? "standin" : "all";
+    // nobody to show, rather than filtering to an empty list with no chip;
+    // ?status=player likewise, since without standins its chip is hidden.
+    if (s === "standin" || s === "player") return anyStandin ? s : "all";
     return s === "drafted" || s === "free" ? s : "all";
   });
 
@@ -296,11 +297,28 @@ export function PlayerPool({
         ) : null}
 
         {(showDraftStatus && anyDrafted) || anyStandin ? (
+          // flex-wrap: with standins and a draft both present this group is
+          // four chips, 350px. That fits a 390px phone's 358px row; a 360px
+          // phone's is 328px, so the last chip wraps instead of scrolling the
+          // page. gap-y-2 keeps a wrapped row the toolbar's 8px away.
           <div
-            className="flex items-center gap-1"
+            className="flex flex-wrap items-center gap-x-1 gap-y-2"
             role="group"
             aria-label="Filter by status"
           >
+            {/* Players and Standins split the pool by registration type, so
+                both exist only while there are standins to split off. Players
+                leads: Drafted and Free agents are kinds of player. */}
+            {anyStandin ? (
+              <StatusChip
+                active={status === "player"}
+                onClick={() =>
+                  setStatus((s) => (s === "player" ? "all" : "player"))
+                }
+              >
+                Players
+              </StatusChip>
+            ) : null}
             {showDraftStatus && anyDrafted ? (
               <>
                 <StatusChip
