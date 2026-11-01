@@ -599,6 +599,7 @@ export function TeamCrest({
   logoUrl,
   size = 40,
   imageFit = "contain",
+  fluid = false,
   className,
 }: {
   name: string;
@@ -606,6 +607,12 @@ export function TeamCrest({
   logoUrl?: string | null;
   size?: number;
   imageFit?: "contain" | "cover";
+  /**
+   * Sized by `className` (width, height and the initials' font size)
+   * instead of `size`, so one crest can grow with the screen. `size` still
+   * gives the logo its intrinsic width and height.
+   */
+  fluid?: boolean;
   className?: string;
 }) {
   const src = logoUrl?.trim();
@@ -621,9 +628,9 @@ export function TeamCrest({
         className,
       )}
       style={{
-        width: size,
-        height: size,
-        fontSize: Math.round(size * 0.4),
+        ...(fluid
+          ? {}
+          : { width: size, height: size, fontSize: Math.round(size * 0.4) }),
         color: teamInkVar(seed),
         backgroundImage: `linear-gradient(135deg, hsl(${hue} 62% 46%), hsl(${hue} 62% 28%))`,
       }}
