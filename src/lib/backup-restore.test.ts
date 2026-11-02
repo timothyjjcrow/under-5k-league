@@ -160,6 +160,10 @@ describe("PostgreSQL backup restore rehearsal", () => {
       "psql",
     ]);
     expect(calls[0].database).toBe("postgres");
+    // An autovacuum worker in a leftover scratch database is left to the
+    // plain dropdb, which stops it; terminating one is refused (PG 18).
+    expect(calls[0].args.join(" ")).toContain("backend_type = 'client backend'");
+    expect(calls[1].args).toEqual(["--if-exists", "ld2l_restore_test"]);
     expect(calls[3].database).toBe("ld2l_restore_test");
     expect(calls[3].args).toEqual(
       expect.arrayContaining([

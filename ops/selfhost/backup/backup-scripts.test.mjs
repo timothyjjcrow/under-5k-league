@@ -98,6 +98,9 @@ process.exit(flag("flock-busy") ? 1 : 0);
 `);
   fake(path.join(bin, "dropdb"), `${record}
 record({ tool: "dropdb", args, password: process.env.PGPASSWORD, database: process.env.PGDATABASE, user: process.env.PGUSER });
+// FORCE refused models an autovacuum worker in the scratch database (a role
+// without pg_signal_backend may not end one); plain refused, a session left open.
+process.exit(flag(args.includes("--force") ? "dropdb-force-fail" : "dropdb-plain-fail") ? 1 : 0);
 `);
   fake(path.join(bin, "df"), `${record}
 const percent = flag("df-percent") ? readFileSync(dir + "/df-percent", "utf8").trim() : "40";
@@ -487,7 +490,7 @@ test("the drill restores the newest dump with the rehearsal role, then drops the
 
     const drops = box.calls().filter((call) => call.tool === "dropdb");
     assert.equal(drops.length, 1);
-    assert.deepEqual(drops[0].args, ["--if-exists", "--force", "ld2l_restore_test"]);
+    assert.deepEqual(drops[0].args, ["--if-exists", "ld2l_restore_test"]);
     assert.equal(drops[0].password, REHEARSAL_PASSWORD);
     assert.equal(drops[0].user, "ggd2l_rehearsal");
     assert.equal(drops[0].database, "postgres");
@@ -507,6 +510,54 @@ test("the drill restores the newest dump with the rehearsal role, then drops the
     assert.match(result.stderr, /Restore rehearsal passed/);
     assert.deepEqual(readdirSync(own).filter((f) => f.startsWith(".drill-output")), []);
     assertNoSecretInArgv(box);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("the drill drops the scratch database when FORCE is refused, as with an autovacuum worker in it", () => {
+  const box = sandbox();
+  try {
+    seedDump(box.root, "eu", "b");
+    box.set("dropdb-force-fail");
+    const result = box.drill(["eu"], { HC_PING_DRILL: HC.HC_PING_DRILL });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(box.calls().filter((call) => call.tool === "dropdb").map((call) => call.args), [["--if-exists", "ld2l_restore_test"]]);
+    assert.equal(pings(box).at(-1).url, HC.HC_PING_DRILL);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("the drill forces the drop when its own session still holds the scratch database", () => {
+  const box = sandbox();
+  try {
+    seedDump(box.root, "eu", "b");
+    box.set("dropdb-plain-fail");
+    const result = box.drill(["eu"], { HC_PING_DRILL: HC.HC_PING_DRILL });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(box.calls().filter((call) => call.tool === "dropdb").map((call) => call.args), [
+      ["--if-exists", "ld2l_restore_test"],
+      ["--if-exists", "--force", "ld2l_restore_test"],
+    ]);
+  } finally {
+    box.cleanup();
+  }
+});
+
+test("a drop refused three rounds running fails the drill at cleanup", () => {
+  const box = sandbox();
+  try {
+    seedDump(box.root, "us", "a");
+    box.set("dropdb-plain-fail");
+    box.set("dropdb-force-fail");
+    const result = box.drill(["us"], { HC_PING_DRILL: HC.HC_PING_DRILL });
+    assert.equal(result.status, 1);
+    assert.equal(box.calls().filter((call) => call.tool === "dropdb").length, 6, "three rounds of plain then FORCE, no second try on exit");
+    assert.match(result.stderr, /could not drop ld2l_restore_test after a passing drill/);
+    assert.equal(pings(box).at(-1).url, `${HC.HC_PING_DRILL}/fail`);
+    assert.equal(pings(box).at(-1).body, "drill-us failed: cleanup");
+    assert.equal(existsSync(path.join(box.drillRoot, "us/last-drill.json")), false);
   } finally {
     box.cleanup();
   }
