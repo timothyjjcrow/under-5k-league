@@ -59,6 +59,26 @@ describe("TeamCrest", () => {
     expect(html).not.toContain("object-contain");
   });
 
+  it("leaves a fluid crest's size and initials to its classes", () => {
+    const html = renderToStaticMarkup(
+      createElement(TeamCrest, {
+        name: "Ancient Defenders",
+        seed: "team-1",
+        logoUrl: "https://cdn.example.com/logo.png",
+        size: 192,
+        fluid: true,
+        className: "aspect-square w-full text-7xl",
+      }),
+    );
+
+    expect(html).toContain("aspect-square w-full text-7xl");
+    // No inline width, height or font size to beat the classes.
+    expect(html).not.toMatch(/(width|height|font-size):\s*\d+px/);
+    // The logo still declares its intrinsic size.
+    expect(html).toContain('width="192"');
+    expect(html).toContain('height="192"');
+  });
+
   it("keeps the generated monogram when no usable logo URL exists", () => {
     const html = renderToStaticMarkup(
       createElement(TeamCrest, {
@@ -209,6 +229,19 @@ describe("TeamCrest", () => {
     expect(heroCrest).toContain("size={96}");
     expect(heroCrest).toMatch(/className="hidden [^"]*sm:grid/);
     for (const crest of heroCrests) expect(crest).toContain('imageFit="cover"');
+
+    const scoreboard = readFileSync(
+      join(__dirname, "../app/matches/[id]/scoreboard.tsx"),
+      "utf8",
+    );
+    // The match header's crests were 64px; Tim asked for the logos to be a
+    // big part of the page. Each fills a frame that grows to 13rem from lg
+    // and shrinks with its column on a narrow phone.
+    const sideCrest = crestWithName(scoreboard, "name={name}");
+    expect(sideCrest).toContain("fluid");
+    expect(sideCrest).toContain("aspect-square w-full");
+    expect(sideCrest).toContain('imageFit="cover"');
+    expect(scoreboard).toMatch(/"w-full max-w-32 [^"]*sm:max-w-40 lg:max-w-52/);
   });
 
   it("gets its season hues from a stylesheet every page carries", () => {

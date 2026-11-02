@@ -169,7 +169,6 @@ export async function MatchScoreboard({
         </div>
         <div className="grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-8">
           <TeamSide
-            side="home"
             name={match.homeTeam.name}
             teamId={match.homeTeamId}
             logoUrl={match.homeTeam.logoUrl}
@@ -223,7 +222,6 @@ export async function MatchScoreboard({
             </span>
           </div>
           <TeamSide
-            side="away"
             name={match.awayTeam.name}
             teamId={match.awayTeamId}
             logoUrl={match.awayTeam.logoUrl}
@@ -346,35 +344,26 @@ export async function MatchScoreboard({
 }
 
 /**
- * A team's crest and name. Stacked (crest over name) up to lg; from lg they
- * sit side by side with the crest next to the score, mirrored for the away
- * side, so the scoreboard is one row of name, crest, score, crest, name.
+ * A team's crest over its name. The crest is the header's centrepiece:
+ * about 110px on a phone (it shrinks with its column on a narrower one),
+ * 140px from sm and 190px from lg.
  */
 function TeamSide({
-  side,
   name,
   teamId,
   logoUrl,
   win,
 }: {
-  side: "home" | "away";
   name: string;
   teamId: string;
   logoUrl: string | null;
   win: boolean;
 }) {
   return (
-    <div
-      className={cn(
-        "flex min-w-0 flex-col items-center gap-3 self-stretch text-center lg:gap-4 lg:self-center",
-        side === "home"
-          ? "lg:flex-row-reverse lg:text-right"
-          : "lg:flex-row lg:text-left",
-      )}
-    >
+    <div className="flex min-w-0 flex-col items-center gap-3 self-stretch text-center sm:gap-4">
       <div
         className={cn(
-          "shrink-0 rounded-2xl border p-2 shadow-lg shadow-black/15",
+          "w-full max-w-32 rounded-2xl border p-2 shadow-lg shadow-black/15 sm:max-w-40 lg:max-w-52 lg:rounded-3xl lg:p-2.5",
           win ? "border-accent/40 bg-accent/5" : "border-line/60 bg-surface/60",
         )}
       >
@@ -382,9 +371,10 @@ function TeamSide({
           name={name}
           seed={teamId}
           logoUrl={logoUrl}
-          size={64}
+          size={192}
           imageFit="cover"
-          className="rounded-xl"
+          fluid
+          className="aspect-square w-full rounded-xl text-[2.75rem] sm:text-[3.5rem] lg:rounded-2xl lg:text-7xl"
         />
       </div>
       <Link

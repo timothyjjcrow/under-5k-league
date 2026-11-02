@@ -1095,9 +1095,14 @@ the league is already draftable and many visitors have joined. Write for both.
   Create/Start in Captain tools; other players, booked standins and admins get
   `lobby-panel.tsx` (`seesPlayerLobbyPanel`, `lobby-access.ts`, matching who
   `resolveDotaLobby` lets view it).
-- **The scoreboard is one row from `lg`:** name, crest, score, crest, name
-  (`TeamSide side`, the crest beside the score). Below `lg` each crest sits
-  over its name, as long names need the width.
+- **The scoreboard's crests are the header's centrepiece:** each sits over
+  its team's name at every width, about 110px on a phone, 140px from `sm`
+  and 190px from `lg` (`TeamSide`; they were 64px, and from `lg` the row was
+  name, crest, score, crest, name). Tim asked on 2026-11-01 for the logos to
+  be a big part of the page. The crest is `fluid` (`TeamCrest` sized by its
+  classes) inside a capped `w-full` frame, so on a phone narrower than 390px
+  it shrinks with its column instead of pushing into the score.
+  `team-crest.test.ts` pins it.
 - **Before kickoff everyone gets the ticking clock** under the scoreboard
   (`<KickoffCountdown>` over `kickoffClock` in `countdown.ts`), not only the
   two teams' players: an unplayed fixture of the active season, gone once
