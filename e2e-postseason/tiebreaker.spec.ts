@@ -4,6 +4,7 @@ import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
 import {
   expectNoHorizontalOverflow,
   trackPageErrors,
+  untilHydrated,
 } from "../e2e-mid/helpers";
 
 async function expectFinalTracker(
@@ -12,7 +13,11 @@ async function expectFinalTracker(
   eliminated: string[],
 ) {
   await page.goto("/schedule");
-  await page.locator("summary").filter({ hasText: "Playoff race & possible matchups" }).click();
+  // The playoff race is a tab of the standings card; a click before
+  // hydration is lost.
+  const race = page.getByRole("tab", { name: "Playoff race", exact: true });
+  await untilHydrated(page, race);
+  await race.click();
   for (const [names, status] of [
     [qualified, "Qualified for playoffs"],
     [eliminated, "Eliminated"],
