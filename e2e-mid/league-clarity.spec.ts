@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "./helpers";
 
 test("home and schedule agree on progress and show one standings table with game difference", async ({
   page,
@@ -58,23 +58,19 @@ test("schedule keeps analysis discoverable and labels filtered counts for the se
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 900 });
   await page.goto("/schedule");
-  const race = page
-    .locator("details")
-    .filter({
-      has: page
-        .locator("summary")
-        .filter({ hasText: "Playoff race & possible matchups" }),
-    })
-    .first();
-  await expect(race).not.toHaveAttribute("open", "");
-  await race.locator("summary").first().click();
+  // The playoff race and the head-to-head grid are tabs of the standings
+  // card, under every week on a phone: the jump bar's chips land on a tab
+  // and select it.
+  const race = page.getByRole("tab", { name: "Playoff race", exact: true });
+  await expect(race).toHaveAttribute("aria-selected", "false");
+  const jumps = page.getByRole("navigation", { name: "Schedule sections" });
+  await untilHydrated(page, race);
+  await jumps.getByRole("link", { name: "Playoff race", exact: true }).click();
+  await expect(race).toHaveAttribute("aria-selected", "true");
   await expect(
     page.getByRole("heading", { name: "Playoff picture", exact: true }),
   ).toBeVisible();
-  await page
-    .locator("summary")
-    .filter({ hasText: "Head-to-head results grid" })
-    .click();
+  await jumps.getByRole("link", { name: "Head-to-head", exact: true }).click();
   await expect(
     page.getByRole("table", { name: /^Head-to-head results\./ }),
   ).toBeVisible();

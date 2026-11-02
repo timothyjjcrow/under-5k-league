@@ -35,7 +35,17 @@ import {
   tiebreakerResultLine,
 } from "@/components/tiebreaker-bracket-view";
 import type { ScenarioReport } from "@/lib/scenarios";
-import { SeasonGrid } from "@/components/season-grid";
+import {
+  SeasonGrid,
+  SeasonGridKey,
+  seasonGridWidthRem,
+} from "@/components/season-grid";
+import {
+  ViewTabList,
+  ViewTabPanel,
+  ViewTabs,
+  type ViewTab,
+} from "@/components/view-tabs";
 import {
   MATCH_LIST_ORDER,
   byeTeamsByWeek,
@@ -900,117 +910,140 @@ export default async function SchedulePage() {
       )}
     </>
   );
-  const standingsBlock = (
-    <>
-      {hasFixtures ? (
-        <Card id="standings" className="scroll-mt-24">
-          <CardHeader
-            headingLevel={2}
-            title="Standings"
-            subtitle={standingsCaption({
-              status,
-              postseason: postseasonPhase,
-              bracketSize: playoffField.bracketSize,
-              eligibleTeams: playoffField.eligibleTeamIds.length,
-              groupQualifiers:
-                playoffField.groups?.map((group) => group.qualifiers) ?? null,
-            })}
-          />
-          <CardBody className="p-0">
-            <SeasonStandings
-              groups={tableGroups}
-              standings={standings}
-              teamName={teamName}
-              teamLogoUrl={teamLogoUrl}
-              eligibleTeams={playoffField.eligibleTeamIds.length}
-              withdrawnIds={
-                new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
-              }
-              formByTeam={teamForm}
-              streakByTeam={teamStreaks}
-              playoffCut={
-                season.status === "REGULAR_SEASON"
-                  ? playoffField.bracketSize
-                  : undefined
-              }
-              playoffSeedByTeam={playoffField.seedByTeam}
-              unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
-              clinch={clinchFromReport(stakesReport)}
-              playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
-              viewerTeamId={[...myTeamIds][0]}
-              movement={tableMovement(standingsSections(playoffField), matches)}
-            />
-          </CardBody>
-        </Card>
-      ) : null}
-    </>
-  );
   const showPlayoffRace =
     season.status === "REGULAR_SEASON" &&
     playoffField.eligibleTeamIds.length > 2 &&
     standings.some((s) => s.played > 0);
   const showHeadToHead = hasFixtures && teams.length > 1;
-  const analysisBlock = (
+  const gridSections = standingsSections(playoffField);
+  // The table, the head-to-head grid and the playoff race are three views of
+  // one card, so the grid gets the card's whole width instead of a fold in a
+  // 30rem rail (where a group of six scrolled sideways inside a rail that
+  // scrolled down). The tabs keep the old fold ids, so links and the jump
+  // bar still land on (and select) each view.
+  const standingsTabs: ViewTab[] = [
+    { key: "table", label: "Table" },
+    ...(showHeadToHead
+      ? [{ key: "grid", label: "Head-to-head", anchor: "head-to-head" }]
+      : []),
+    ...(showPlayoffRace
+      ? [{ key: "race", label: "Playoff race", anchor: "playoff-analysis" }]
+      : []),
+  ];
+  const standingsBlock = (
     <>
-      {showPlayoffRace ? (
-        <AnalysisDisclosure
-          id="playoff-analysis"
-          title="Playoff race & possible matchups"
-          description="Projected from today's standings"
-        >
-          <PlayoffPicture
-            standings={playoffField.eligibleStandings}
-            projectedPairings={playoffField.pairings}
-            seedLabelByTeam={playoffField.seedLabelByTeam}
-            teamName={teamName}
-            teamLogoUrl={teamLogoUrl}
-            report={stakesReport}
-            unresolvedTeamIds={shownDeadHeatTeamIds}
-            tiebreakerError={playoffField.tiebreakers.error}
-          />
-        </AnalysisDisclosure>
-      ) : null}
-
-      {showHeadToHead ? (
-        <AnalysisDisclosure
-          id="head-to-head"
-          title="Head-to-head results grid"
-          description="Each row shows that team's results"
-        >
-          {standingsSections(playoffField).map((section) => (
-            <div key={section.key ?? "table"} className="min-w-0">
-              {section.title ? (
-                <h3 className="mb-2 mt-4 text-xs font-semibold uppercase tracking-[0.15em] text-fg first:mt-0">
-                  {section.title}
-                </h3>
+      {hasFixtures ? (
+        <ViewTabs tabs={standingsTabs}>
+          <Card id="standings" className="scroll-mt-24">
+            <CardHeader
+              headingLevel={2}
+              title="Standings"
+              subtitle={standingsCaption({
+                status,
+                postseason: postseasonPhase,
+                bracketSize: playoffField.bracketSize,
+                eligibleTeams: playoffField.eligibleTeamIds.length,
+                groupQualifiers:
+                  playoffField.groups?.map((group) => group.qualifiers) ?? null,
+              })}
+              action={
+                standingsTabs.length > 1 ? (
+                  <ViewTabList label="Standings views" />
+                ) : undefined
+              }
+            />
+            <CardBody className="p-0">
+              <ViewTabPanel tab="table">
+                <SeasonStandings
+                  groups={tableGroups}
+                  sideBySide
+                  standings={standings}
+                  teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
+                  eligibleTeams={playoffField.eligibleTeamIds.length}
+                  withdrawnIds={
+                    new Set(teams.filter((t) => t.withdrawn).map((t) => t.id))
+                  }
+                  formByTeam={teamForm}
+                  streakByTeam={teamStreaks}
+                  playoffCut={
+                    season.status === "REGULAR_SEASON"
+                      ? playoffField.bracketSize
+                      : undefined
+                  }
+                  playoffSeedByTeam={playoffField.seedByTeam}
+                  unresolvedPlayoffTeamIds={shownDeadHeatTeamIds}
+                  clinch={clinchFromReport(stakesReport)}
+                  playoffScenarios={stakesReport?.forecast?.basis === "final" ? stakesReport.teams : undefined}
+                  viewerTeamId={[...myTeamIds][0]}
+                  movement={tableMovement(standingsSections(playoffField), matches)}
+                />
+              </ViewTabPanel>
+              {showHeadToHead ? (
+                <ViewTabPanel tab="grid">
+                  {/* Two groups' grids side by side only when both fit whole
+                      (auto-fit tracks as wide as the larger group's grid). */}
+                  <div
+                    className="grid gap-x-6 gap-y-5 p-3 sm:p-4"
+                    style={{
+                      gridTemplateColumns: `repeat(auto-fit, minmax(min(${seasonGridWidthRem(
+                        Math.max(...gridSections.map((s) => s.standings.length)),
+                      )}rem, 100%), 1fr))`,
+                    }}
+                  >
+                    {gridSections.map((section) => (
+                      <div key={section.key ?? "table"} className="min-w-0">
+                        {section.title ? (
+                          <h3 className="mb-2 text-xs font-semibold uppercase tracking-[0.15em] text-fg">
+                            {section.title}
+                          </h3>
+                        ) : null}
+                        <SeasonGrid
+                          teamIds={section.standings.map((s) => s.teamId)}
+                          {...(section.title ? { groupTitle: section.title } : {})}
+                          teamName={teamName}
+                          teamLogoUrl={teamLogoUrl}
+                          matches={matches}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                  <SeasonGridKey className="border-t border-line-soft px-4 py-3" />
+                </ViewTabPanel>
               ) : null}
-              <SeasonGrid
-                teamIds={section.standings.map((s) => s.teamId)}
-                {...(section.title ? { groupTitle: section.title } : {})}
-                teamName={teamName}
-                teamLogoUrl={teamLogoUrl}
-                matches={matches}
-              />
-            </div>
-          ))}
-        </AnalysisDisclosure>
+              {showPlayoffRace ? (
+                <ViewTabPanel tab="race" className="p-3 sm:p-4">
+                  <PlayoffPicture
+                    standings={playoffField.eligibleStandings}
+                    projectedPairings={playoffField.pairings}
+                    seedLabelByTeam={playoffField.seedLabelByTeam}
+                    teamName={teamName}
+                    teamLogoUrl={teamLogoUrl}
+                    report={stakesReport}
+                    unresolvedTeamIds={shownDeadHeatTeamIds}
+                    tiebreakerError={playoffField.tiebreakers.error}
+                  />
+                </ViewTabPanel>
+              ) : null}
+            </CardBody>
+          </Card>
+        </ViewTabs>
       ) : null}
     </>
   );
-  const standingsRail = season.status === "REGULAR_SEASON" && hasFixtures;
+  // From xl the regular season leads with the standings card at full width
+  // (see the return), so the jump bar is for narrower screens only.
+  const standingsBand = season.status === "REGULAR_SEASON" && hasFixtures;
   // A jump bar to each section, in page order, for the phone and tablet
   // reader: mid-season the standings sat under every week, about 3,000px
-  // down a phone. From xl the regular season's rail already shows them.
+  // down a phone. From xl the regular season shows them first.
   // The bar leaves the URL's hash to the page (the browser's own anchor
   // scroll and each fold's opener), and a chip opens only its own section,
-  // never a card's inner disclosures.
+  // never a card's inner disclosures. The head-to-head and playoff-race
+  // chips land on the standings card's tabs, which select themselves.
   const tiebreakerJump = showTiebreakers
     ? { id: "tiebreakers", label: "Tiebreakers" }
     : null;
-  const analysisJumps = [
-    showPlayoffRace ? { id: "playoff-analysis", label: "Playoff race" } : null,
-    showHeadToHead ? { id: "head-to-head", label: "Head-to-head" } : null,
-  ];
   const jumpItems = [
     postseasonSection ? { id: "playoff-bracket", label: "Bracket" } : null,
     tiebreakersSettled ? null : tiebreakerJump,
@@ -1021,9 +1054,9 @@ export default async function SchedulePage() {
         }
       : null,
     hasFixtures ? { id: "standings", label: "Standings" } : null,
-    ...(standingsRail ? analysisJumps : []),
+    showHeadToHead ? { id: "head-to-head", label: "Head-to-head" } : null,
+    showPlayoffRace ? { id: "playoff-analysis", label: "Playoff race" } : null,
     tiebreakersSettled ? tiebreakerJump : null,
-    ...(standingsRail ? [] : analysisJumps),
   ].filter((item): item is { id: string; label: string } => item !== null);
 
   return (
@@ -1072,7 +1105,7 @@ export default async function SchedulePage() {
       ) : null}
 
       {jumpItems.length >= 3 ? (
-        <div className={standingsRail ? "xl:hidden" : undefined}>
+        <div className={standingsBand ? "xl:hidden" : undefined}>
           <SectionNav
             items={jumpItems}
             label="Schedule sections"
@@ -1199,25 +1232,19 @@ export default async function SchedulePage() {
         </section>
       ) : null}
 
-      {/* The regular season is two columns from xl: the weeks, and a rail
-          with the table and its analysis, so the standings are on the first
-          screen instead of under every week. The other phases keep one
-          column: the playoffs lead with the bracket and fold the finished
-          weeks away, and before the schedule there is nothing to set beside
-          the table. */}
-      {standingsRail ? (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_30rem]">
+      {/* The regular season leads with the standings from xl: one
+          full-width card (two groups side by side, the head-to-head grid
+          and the playoff race as its tabs) above the weeks, whose cards then
+          go three across. It replaces a 30rem sticky rail that scrolled on
+          its own, beside the page, as soon as two groups' tables were taller
+          than the screen. Phones keep the weeks first (this week's fixtures
+          are what they came for) with the jump bar down to the table. The
+          other phases keep one column: the playoffs lead with the bracket
+          and fold the finished weeks away. */}
+      {standingsBand ? (
+        <div className="flex flex-col gap-5">
           <div className="min-w-0">{fixturesBlock}</div>
-          {/* The rail stretches to the weeks' height so the table can stay
-              in view (sticky) while the reader goes down the weeks. An
-              opened analysis fold makes it taller than the screen, so it
-              scrolls on its own then instead of hiding its end. */}
-          <div className="min-w-0">
-            <div className="space-y-5 xl:sticky xl:top-20 xl:max-h-[calc(100dvh-6rem)] xl:overflow-y-auto xl:[scrollbar-width:thin]">
-              {standingsBlock}
-              {analysisBlock}
-            </div>
-          </div>
+          <div className="min-w-0 xl:order-first">{standingsBlock}</div>
         </div>
       ) : (
         <>
@@ -1240,8 +1267,6 @@ export default async function SchedulePage() {
           <div className="space-y-4">{tiebreakerBody}</div>
         </ScheduleFold>
       ) : null}
-
-      {standingsRail ? null : analysisBlock}
     </div>
   );
 }
