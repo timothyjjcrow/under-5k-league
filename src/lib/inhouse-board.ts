@@ -2,6 +2,7 @@ import { LEAGUE_CONFIG } from "./league-config";
 import { INHOUSE, INHOUSE_STATUS } from "./constants";
 import { escapeDiscordText } from "./discord-escape";
 import { inhouseGameLabel, showGameLabel } from "./inhouse";
+import { INHOUSE_BANS_ANCHOR } from "./inhouse-ban";
 
 // The live inhouse queue board: ONE Discord message the site rewrites in place
 // instead of posting a new "6/10 queued" line every time somebody joins.
@@ -83,6 +84,15 @@ export type BoardStats = {
   ladderRating: number | null;
 };
 
+/** One running inhouse ban, as the board lists it (boardBanView). */
+export type BoardBan = {
+  name: string;
+  reason: string;
+  /** Epoch ms the ban ends; null = permanent. Fixed for the ban's life, so
+   *  digest-safe: the list changes only when a ban is made, lifted or ends. */
+  endsAtMs: number | null;
+};
+
 export type BoardSnapshot = {
   /** Present queue entries in join order. While a lobby is up these are the
    *  players waiting for the NEXT game, not the ten who are playing. */
@@ -92,6 +102,9 @@ export type BoardSnapshot = {
   lobbySize: number;
   /** Every live game, in game order (up to INHOUSE.MAX_LIVE_GAMES). */
   lobbies: BoardLobby[];
+  /** The inhouse bans running now, newest first (activeInhouseBans). Listed
+   *  under every state, with their reasons (Tim, 2026-11-02). */
+  bans: BoardBan[];
   /** Only loaded for the empty render; null everywhere else. */
   stats: BoardStats | null;
   /** True when the league has a ping role AND the site can grant it, i.e. the
@@ -267,15 +280,62 @@ function otherGameLine(l: BoardLobby): string {
   return `${label} · live${l.startedAtMs ? `, started ${relative(l.startedAtMs)}` : ""}`;
 }
 
+/** Bans listed on the board before the rest collapse into "+N more". */
+const BANS_SHOWN = 6;
+/** Longest reason the board prints; the site shows it whole. */
+const BAN_REASON_MAX = 90;
+/** Discord's limit for one field's value. */
+const FIELD_VALUE_MAX = 1024;
+
+/**
+ * The "Banned from inhouse" field, or null with no ban running. Each line is
+ * the player, the end in Discord's own time markup (every reader's clock, no
+ * further edits) and the reason, escaped like a name: an admin typed it, but
+ * this message is pinned.
+ */
+function bansField(bans: BoardBan[], siteUrl: string): BoardField | null {
+  if (bans.length === 0) return null;
+  const more = (n: number) =>
+    `-# +${n} more on [the inhouse page](${siteUrl}/inhouse#${INHOUSE_BANS_ANCHOR})`;
+  // Escaping can double a name or a reason, so lines are added while they
+  // fit beside the longest "+N more" line, never cut mid-markup.
+  const budget = FIELD_VALUE_MAX - more(bans.length).length - 1;
+  const lines: string[] = [];
+  let used = 0;
+  for (const b of bans.slice(0, BANS_SHOWN)) {
+    const until =
+      b.endsAtMs === null ? "permanent" : `until <t:${Math.floor(b.endsAtMs / 1000)}:f>`;
+    const line = `**${escapeMarkdown(b.name)}** · ${until} · ${escapeDiscordText(b.reason, BAN_REASON_MAX)}`;
+    const cost = line.length + (lines.length > 0 ? 1 : 0);
+    if (lines.length > 0 && used + cost > budget) break;
+    lines.push(line);
+    used += cost;
+  }
+  const extra = bans.length - lines.length;
+  if (extra > 0) lines.push(more(extra));
+  return {
+    name: `BANNED FROM INHOUSE — ${bans.length}`,
+    value: lines.join("\n"),
+    inline: false,
+  };
+}
+
 export function renderBoard(s: BoardSnapshot): BoardRender {
-  const rendered = renderBoardContent(s);
+  const content = renderBoardContent(s);
+  const banned = bansField(s.bans, s.siteUrl);
+  const rendered: BoardRender = banned
+    ? {
+        digest: content.digest,
+        embed: { ...content.embed, fields: [...(content.embed.fields ?? []), banned] },
+      }
+    : content;
   return {
     ...rendered,
     // Version static copy as well as semantic state: deploying an improved
     // board must repaint an otherwise quiet channel. Canonical links and lobby
     // size are rendered in every phase and must also invalidate an old post.
     digest: JSON.stringify([
-      "board-v3",
+      "board-v4",
       AUTHOR_ICON,
       LEAGUE_CONFIG.name,
       LEAGUE_CONFIG.inhouseLeagueName,
@@ -283,6 +343,7 @@ export function renderBoard(s: BoardSnapshot): BoardRender {
       s.siteUrl,
       s.lobbySize,
       rendered.digest,
+      s.bans.map((b) => [b.name, b.reason, b.endsAtMs]),
     ]),
   };
 }

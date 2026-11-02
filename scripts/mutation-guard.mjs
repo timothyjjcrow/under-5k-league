@@ -371,6 +371,7 @@ const FILES = [
   "src/lib/users.ts",
   "src/lib/player-data-refresh.ts",
   "src/lib/inhouse-rating-service.ts",
+  "src/lib/inhouse-ban-service.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */

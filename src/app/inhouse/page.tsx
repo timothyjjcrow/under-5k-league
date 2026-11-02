@@ -38,6 +38,8 @@ import { inhousePlayedAt } from "@/lib/inhouse-history";
 import { InhouseBoxScore } from "@/components/inhouse-box-score";
 import { InhouseRoom } from "@/components/inhouse-room";
 import { DuelLadderCard } from "./duel-ladder-card";
+import { InhouseBansCard } from "./bans-card";
+import { inhouseBanRefusalFor } from "@/lib/inhouse-ban-service";
 import {
   InhouseNightCard,
   loadCurrentInhouseNight,
@@ -214,7 +216,7 @@ export default async function InhousePage({
   // player over it: the same facts joinQueue reads.
   // The completed-game count decides whether the ladder, results and the
   // section nav have anything to show yet (an indexed count, always fresh).
-  const [viewerRows, completedGames] = await Promise.all([
+  const [viewerRows, completedGames, banRefusal] = await Promise.all([
     user
       ? Promise.all([
           loadInhouseJoinFacts(user.id),
@@ -238,6 +240,8 @@ export default async function InhousePage({
         ])
       : null,
     prisma.inhouseLobby.count({ where: { status: INHOUSE_STATUS.COMPLETED } }),
+    // An admin's inhouse ban: the same read the joins make.
+    user ? inhouseBanRefusalFor(prisma, user.id) : Promise.resolve(null),
   ]);
   const [joinFacts, dbUser, playedLobby] = viewerRows ?? [null, null, null];
   const firstGame = user != null && playedLobby == null;
@@ -250,9 +254,11 @@ export default async function InhousePage({
   // for everyone else.
   const fixedMmr = joinFacts ? inhouseFixedMmr(joinFacts) : null;
   const rankTier = joinFacts?.rankTier ?? null;
-  // A player over the MMR cap gets its reason in place of Join (the room
-  // offers no join the server refuses), and no note on typing an MMR.
-  const joinRefusal = joinFacts ? inhouseJoinRefusalBeforeTyping(joinFacts) : null;
+  // A banned player, or one over the MMR cap, gets the reason in place of
+  // Join (the room offers no join the server refuses), and no note on typing
+  // an MMR. The ban comes first, as in joinQueue.
+  const joinRefusal =
+    banRefusal ?? (joinFacts ? inhouseJoinRefusalBeforeTyping(joinFacts) : null);
   const mmrWindow =
     fixedMmr || joinRefusal ? null : mmrRangeForRankTier(rankTier);
   // The window as far as the cap, which refuses anything typed over it.
@@ -356,6 +362,12 @@ export default async function InhousePage({
             one read, streamed so it never holds up the room. */}
         <Suspense fallback={null}>
           <InhouseNightCard invite={invite} />
+        </Suspense>
+        {/* The inhouse bans running now, with their reasons, as on the
+            Discord board (Tim, 2026-11-02). Under the room and the plans,
+            nothing while nobody is banned. */}
+        <Suspense fallback={null}>
+          <InhouseBansCard />
         </Suspense>
         {hasGames ? (
           // A phone's section bar, under the plans: from md it sits in the

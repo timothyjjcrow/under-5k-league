@@ -21,6 +21,8 @@ const prismaMocks = vi.hoisted(() => ({
   inhouseQueueEntry: { findMany: vi.fn() },
   inhouseDuelQueueEntry: { findMany: vi.fn() },
   inhouseDuel: { findMany: vi.fn() },
+  // No unsettled bans unless a test says so.
+  inhouseBan: { findMany: vi.fn().mockResolvedValue([]) },
   leagueAnnouncement: { findMany: vi.fn() },
   inhouseAnnouncement: { findMany: vi.fn() },
   importCandidate: { findMany: vi.fn() },
@@ -151,6 +153,8 @@ function inputs(
     queue: [],
     duelQueue: [],
     openDuels: [],
+    inhouseBans: [],
+    inhouseBanRoleOn: false,
     repairableInhouseResult: false,
     leagueOutbox: [],
     inhouseOutboxes: [],
@@ -179,7 +183,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 15,
+      version: 16,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -273,7 +277,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 15,
+      version: 16,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -945,6 +949,43 @@ describe("computeAutomationGateSnapshot", () => {
     const waiter = (seenAgoMs: number, expiresInMs = 20 * MIN) => ({
       lastSeenAt: new Date(NOW - seenAgoMs),
       expiresAt: new Date(NOW + expiresInMs),
+    });
+
+    it("wakes at an inhouse ban's end, and at once for a Discord role still to give", () => {
+      const endsAt = new Date(NOW + 3 * 3_600_000);
+      const ban = {
+        endsAt,
+        liftedAt: null,
+        roleAddedAt: new Date(NOW - MIN),
+        roleTriedAt: new Date(NOW - MIN),
+        discordId: "123456789012345678",
+      };
+      expect(
+        computeAutomationGateSnapshot(inputs({ inhouseBans: [ban], inhouseBanRoleOn: true }), NOW),
+      ).toMatchObject({ nextWakeAtMs: endsAt.getTime() + 1, reason: "INHOUSE" });
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({
+            inhouseBans: [{ ...ban, roleAddedAt: null, roleTriedAt: null }],
+            inhouseBanRoleOn: true,
+          }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
+      // No ban role: only the end, when the board drops it.
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ inhouseBans: [{ ...ban, roleAddedAt: null, roleTriedAt: null }] }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: endsAt.getTime() + 1 });
+      // A permanent ban whose role is on never wakes it.
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ inhouseBans: [{ ...ban, endsAt: null }], inhouseBanRoleOn: true }),
+          NOW,
+        ),
+      ).toMatchObject({ reason: null });
     });
 
     it("runs every pass while a duel is live: the bot's reads and the lobby create retry", () => {
@@ -2197,7 +2238,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 15,
+      version: 16,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

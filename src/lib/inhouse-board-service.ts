@@ -14,6 +14,7 @@ import { queuePresence } from "./inhouse";
 import {
   boardStateLabel,
   renderBoard,
+  type BoardBan,
   type BoardSnapshot,
   type BoardStats,
 } from "./inhouse-board";
@@ -35,6 +36,8 @@ import { resolveSiteUrl } from "./site-url";
 import { pingOptInAvailable } from "./discord-roles";
 import { inhouseEndedAt } from "./inhouse-history";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { activeInhouseBans, type InhouseBanView } from "./inhouse-ban";
+import { loadActiveInhouseBanRows } from "./inhouse-ban-service";
 
 // The pinned Discord queue board — one message, rewritten in place forever.
 //
@@ -263,7 +266,7 @@ async function swapState(expected: string, next: BoardState): Promise<boolean> {
 export async function loadBoardSnapshot(
   nowMs: number = Date.now(),
 ): Promise<BoardSnapshotInput> {
-  const [queue, lobbies] = await Promise.all([
+  const [queue, lobbies, bans] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       select: { lastSeenAt: true, user: { select: { name: true } } },
@@ -283,6 +286,9 @@ export async function loadBoardSnapshot(
         },
       },
     }),
+    // The same read and rule as the room's rows (loadInhouseRoomRows), so the
+    // two paths draw the same ban list.
+    loadActiveInhouseBanRows(prisma, nowMs),
   ]);
   const present = queue.filter(
     (q) => queuePresence(q.lastSeenAt.getTime(), nowMs) === "present",
@@ -292,9 +298,15 @@ export async function loadBoardSnapshot(
     awayCount: queue.length - present.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
     lobbies: lobbies.map(lobbyView),
+    bans: activeInhouseBans(bans, nowMs).map(boardBanView),
     siteUrl: resolveSiteUrl(),
     nowMs,
   };
+}
+
+/** One running ban as the board draws it. Shared by both paths' inputs. */
+export function boardBanView(ban: InhouseBanView): BoardBan {
+  return { name: ban.name, reason: ban.reason, endsAtMs: ban.endsAtMs };
 }
 
 /** The board snapshot minus `stats`, which only the empty render needs and

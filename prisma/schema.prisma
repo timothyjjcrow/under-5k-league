@@ -91,6 +91,7 @@ model User {
   inhouseTimeRsvps       InhouseTimeRsvp[]
   inhouseLobbies         InhouseLobbyPlayer[]
   inhouseDuelQueue       InhouseDuelQueueEntry?
+  inhouseBans            InhouseBan[]
   radiantDuels           InhouseDuel[]        @relation("InhouseDuelRadiant")
   direDuels              InhouseDuel[]        @relation("InhouseDuelDire")
   startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
@@ -930,6 +931,38 @@ model InhouseTimeRsvp {
 
   @@id([startsAt, userId])
   @@index([userId])
+}
+
+// An admin's inhouse ban (Tim, 2026-11-02): while it runs the player can't
+// join the 5v5 or the 1v1 queue, /inhouse and the Discord queue board show it
+// with its reason, and the bot gives them the "Inhouse Banned" Discord role.
+// Rows are history: lifting one stamps liftedAt, and banning a banned player
+// lifts the old row and writes a new one. Active = not lifted and (endsAt
+// null, which is permanent, or endsAt in the future): activeInhouseBanWhere.
+model InhouseBan {
+  id           String    @id @default(cuid())
+  userId       String
+  reason       String
+  createdAt    DateTime  @default(now())
+  // Null = permanent.
+  endsAt       DateTime?
+  // Denormalised like AdminAction: a Steam rename must not rewrite history.
+  bannedById   String
+  bannedByName String
+  liftedAt     DateTime?
+  liftedByName String?
+  // The Discord role, as the site last did it (never Discord's own state):
+  // when the bot gave it, the last role call either way (the retry clock),
+  // and when the ban's end was settled (the role taken off, or nothing to
+  // take off). The worker owns the last two (syncInhouseBanRoles).
+  roleAddedAt  DateTime?
+  roleTriedAt  DateTime?
+  settledAt    DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, liftedAt])
+  @@index([settledAt])
 }
 
 // A formed inhouse game + its live captain draft. Server-authoritative, like the

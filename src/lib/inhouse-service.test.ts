@@ -189,6 +189,7 @@ function rows(over: Partial<InhouseRoomRows> = {}): InhouseRoomRows {
     recentResults: [],
     signupRoles: [{ userId: "q3", roles: "4,5" }],
     duel: { queue: [], duels: [] },
+    bans: [],
     ...over,
   };
 }

@@ -2137,6 +2137,16 @@ export async function getInhousePingRoleId(): Promise<string | null> {
 }
 
 /**
+ * The role the bot gives a player for the length of an inhouse ban
+ * ("Inhouse Banned"), or null: bans then leave Discord alone. The role's
+ * channel permissions in Discord are what keep a banned player out of the
+ * inhouse channels; the site only adds and removes it.
+ */
+export async function getInhouseBanRoleId(): Promise<string | null> {
+  return (await getSetting(SETTING_KEYS.INHOUSE_BAN_ROLE_ID)) || null;
+}
+
+/**
  * Where the persistent INHOUSE BOARD goes. Alerts have their own resolver
  * (`getInhouseAlertWebhookUrl`) and fall back here when no alert channel is
  * configured. A Discord webhook is bound to the channel it was created in, so

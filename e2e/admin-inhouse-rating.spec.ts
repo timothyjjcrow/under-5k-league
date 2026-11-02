@@ -69,7 +69,7 @@ test("an admin sets a never-signed-up player's medal and inhouse MMR, and the qu
     await expect(row.getByLabel("Divine 5", { exact: true })).toBeVisible();
     await expect(row.getByText("over the inhouse cap", { exact: true })).toBeVisible();
 
-    await row.locator("summary").click();
+    await row.locator("[data-inhouse-rating-editor] summary").click();
     await row.getByLabel(`Inhouse MMR for ${NAME}`, { exact: true }).fill("4200");
     await row.getByLabel(`Medal source for ${NAME}`, { exact: true }).selectOption("manual");
     await row.getByLabel(`Medal for ${NAME}`, { exact: true }).selectOption("62");
@@ -102,7 +102,7 @@ test("an admin sets a never-signed-up player's medal and inhouse MMR, and the qu
     // The row's own medal; the folded editor previews the same one.
     await expect(queuedRow.getByLabel("Ancient 2", { exact: true }).first()).toBeVisible();
     await expect(queuedRow.getByText("manual medal", { exact: true })).toBeVisible();
-    await queuedRow.locator("summary").click();
+    await queuedRow.locator("[data-inhouse-rating-editor] summary").click();
     await expect(queuedRow.getByLabel(`Inhouse MMR for ${NAME}`, { exact: true })).toHaveValue("4200");
     expect(
       await page.evaluate(
