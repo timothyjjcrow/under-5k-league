@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "./helpers";
 
 const LOGISTICS = {
   homeCaptain: "76561190000991001",
@@ -31,22 +31,20 @@ test("schedule renders weeks, cards, the LIVE chip, and the calendar menu", asyn
   await expect(
     page.getByRole("img", { name: /Live — series at 1–0/ }).first(),
   ).toBeVisible();
-  await page
-    .locator("summary")
-    .filter({ hasText: "Playoff race & possible matchups" })
-    .click();
+  // The playoff race and the head-to-head grid are tabs of the standings.
+  const raceTab = page.getByRole("tab", { name: "Playoff race", exact: true });
+  await untilHydrated(page, raceTab);
+  await raceTab.click();
   await expect(page.getByText("Playoff picture")).toBeVisible();
   // The fixture list already shows each team's remaining games.
   await expect(
     page.getByText("Remaining opponents", { exact: true }),
   ).toHaveCount(0);
-  await page
-    .locator("summary")
-    .filter({ hasText: "Head-to-head results grid" })
-    .click();
+  await page.getByRole("tab", { name: "Head-to-head", exact: true }).click();
   await expect(
     page.getByRole("table", { name: /^Head-to-head results\./ }),
   ).toBeVisible();
+  await expect(page.getByText("Playoff picture")).toBeHidden();
   // One "Add to calendar" control: Apple/Outlook subscribe, Google Calendar
   // and a download, all for the whole league when no team is picked.
   const addToCalendar = page.getByRole("button", {
@@ -108,6 +106,9 @@ test("player check-in and captain reschedule stay synchronized end to end", asyn
 
   const checkIn = page.getByRole("button", { name: "✓ I'm in" });
   await expect(checkIn).toBeVisible();
+  // A click on the server HTML before hydration is lost, and the check
+  // below then waits for a toast that never comes.
+  await untilHydrated(page, checkIn);
   const matchHref = await page
     .getByRole("link", { name: "details →" })
     .first()
@@ -207,6 +208,48 @@ test("player check-in and captain reschedule stay synchronized end to end", asyn
   await expect(
     page.getByRole("img", { name: /1 of 5 confirmed/ }).first(),
   ).toBeVisible();
+  assertNoErrors();
+});
+
+// Desktop leads with the standings at full width; the head-to-head grid is a
+// tab of that card. In the old 30rem rail a group of six scrolled sideways
+// inside a rail that scrolled down, beside the page's own scroll bar.
+test("desktop leads with the standings, and the head-to-head grid fits without scrolling", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/schedule");
+  const standings = page.locator("#standings");
+  const fixtures = page.locator("#fixtures");
+  await expect(standings).toBeVisible();
+  await expect(fixtures).toBeVisible();
+  expect((await standings.boundingBox())!.y).toBeLessThan(
+    (await fixtures.boundingBox())!.y,
+  );
+  // No box in the page scrolls on its own.
+  expect(
+    await page.evaluate(() =>
+      [...document.querySelectorAll("main *")].some((node) => {
+        const style = getComputedStyle(node);
+        return (
+          /auto|scroll/.test(style.overflowY) &&
+          node.scrollHeight > node.clientHeight + 1
+        );
+      }),
+    ),
+  ).toBe(false);
+  const gridTab = page.getByRole("tab", { name: "Head-to-head", exact: true });
+  await untilHydrated(page, gridTab);
+  await gridTab.click();
+  const grid = page.getByRole("table", { name: /^Head-to-head results\./ });
+  await expect(grid).toBeVisible();
+  expect(
+    await grid.evaluate(
+      (table) => table.scrollWidth <= table.parentElement!.clientWidth + 1,
+    ),
+  ).toBe(true);
+  await expectNoHorizontalOverflow(page, "/schedule head-to-head tab");
   assertNoErrors();
 });
 

@@ -65,8 +65,32 @@ describe("SeasonGrid", () => {
   it("keeps row names for screen readers but shows only rank and crest on phones", () => {
     const html = render([match({})]);
     expect(html).toContain(
-      '<span class="sr-only sm:not-sr-only sm:min-w-0 sm:whitespace-normal sm:text-xs sm:[overflow-wrap:anywhere]">Roshan Pit</span>',
+      '<span class="sr-only sm:not-sr-only sm:block sm:max-w-[8.5rem] sm:truncate sm:text-xs">Roshan Pit</span>',
     );
     expect(html).toContain('aria-label="No meeting scheduled"');
+  });
+
+  it("names each column's team for screen readers and on hover, showing crest and rank", () => {
+    const html = render([match({})]);
+    expect(html).toMatch(
+      /<a title="Dire Wolves"[^>]*href="\/teams\/b">.*?<span class="sr-only">Dire Wolves<\/span><span aria-hidden="true"[^>]*>#2<\/span><\/a><\/th>/,
+    );
+  });
+
+  it("marks a series still to play by its week, never a W that reads as a win", () => {
+    const html = render([
+      match({ id: "next", week: 5, status: "SCHEDULED", homeScore: 0, awayScore: 0, winnerTeamId: null }),
+    ]);
+    expect(html).toContain('aria-label="Week 5, not played yet"');
+    expect(html).toContain("<span>wk 5</span>");
+    expect(html).not.toMatch(/>W5</);
+  });
+
+  it("drops the W/L letter on phones but keeps a forfeit's F", () => {
+    const html = render([
+      match({ id: "ff", forfeit: true, homeScore: 0, awayScore: 2, winnerTeamId: "b" }),
+    ]);
+    expect(html).toContain('<span class="hidden font-semibold uppercase sm:inline">L · F</span>');
+    expect(html).toContain('<span class="font-semibold sm:hidden">F</span><span>0–2</span>');
   });
 });

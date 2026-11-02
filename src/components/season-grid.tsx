@@ -7,10 +7,14 @@ import { cn } from "@/lib/utils";
  * The league's one results grid ("who's played who"), used on Schedule and
  * the season page: teams in standings order, each cell that meeting's result
  * from the ROW team's side (running score while live, F on a ruled result),
- * linking to the match. Wide by nature, so the table scrolls inside its own
- * box; on phones the row labels shrink to rank and crest so more opponent
- * columns fit beside them. The caller supplies the frame (a disclosure on
- * Schedule, a card on the season page).
+ * linking to the match. Compact on purpose: the rows carry the names, the
+ * columns only crest and rank (the name stays for screen readers and on
+ * hover), so a group of six fits half of Schedule's desktop width with no
+ * scrolling. A wider table still scrolls inside its own box; on phones the
+ * row labels shrink to rank and crest and a cell drops its W/L letter (the
+ * row team's score comes first, so the score already says it). The caller
+ * supplies the frame (a tab of Schedule's standings, a card on the season
+ * page).
  */
 export function SeasonGrid({
   teamIds,
@@ -49,7 +53,7 @@ export function SeasonGrid({
         className={cn(
           // One line ("W 2–0"), not a letter stacked over the score: the
           // stacked chip made every row 60px.
-          "flex min-h-9 min-w-14 items-center justify-center gap-1 whitespace-nowrap rounded-md border border-transparent px-1.5 py-1 font-mono text-xs tabular-nums transition-colors hover:border-fg/40",
+          "flex h-9 min-w-9 items-center justify-center gap-1 whitespace-nowrap rounded-md border border-transparent px-1 font-mono text-xs tabular-nums transition-colors hover:border-fg/40 sm:h-8 sm:min-w-12 sm:px-1.5",
           cell.result === "W" &&
             "bg-success/15 text-success hover:bg-success/25",
           cell.result === "L" &&
@@ -59,14 +63,19 @@ export function SeasonGrid({
           !cell.played && !cell.live && "text-muted hover:text-info",
         )}
       >
-        <span className="text-xs font-semibold uppercase">
-          {cell.played
-            ? `${cell.result}${cell.forfeit ? " · F" : ""}`
-            : cell.live
-              ? "Live"
-              : `W${cell.week}`}
-        </span>
-        <span>{cell.score ?? "vs"}</span>
+        {cell.played ? (
+          <span className="hidden font-semibold uppercase sm:inline">
+            {`${cell.result}${cell.forfeit ? " · F" : ""}`}
+          </span>
+        ) : cell.live ? (
+          <span className="hidden font-semibold uppercase sm:inline">Live</span>
+        ) : null}
+        {/* A phone keeps the forfeit mark the hidden letter carried. */}
+        {cell.played && cell.forfeit ? (
+          <span className="font-semibold sm:hidden">F</span>
+        ) : null}
+        {/* "wk 5", never "W5": W already means a win in the next cell. */}
+        <span>{cell.score ?? `wk ${cell.week}`}</span>
       </Link>
     );
   };
@@ -87,17 +96,17 @@ export function SeasonGrid({
           </caption>
           <thead>
             <tr>
-              <th className="sticky left-0 z-10 border-b border-line bg-surface px-3 py-2 sm:px-4" />
+              <th className="sticky left-0 z-10 border-b border-line bg-surface px-1.5 py-2 sm:px-3" />
               {teamIds.map((colId) => (
                 <th
                   key={colId}
                   scope="col"
-                  className="border-b border-line px-1.5 py-2 text-center"
+                  className="border-b border-line px-0.5 py-1.5 text-center sm:px-1"
                 >
                   <Link
                     href={`/teams/${colId}`}
                     title={teamName.get(colId) ?? "?"}
-                    className="inline-flex min-h-11 min-w-6 flex-col items-center justify-center gap-1 py-1 -my-1"
+                    className="inline-flex min-h-11 min-w-9 flex-col items-center justify-center gap-0.5 rounded-md hover:bg-surface-2/60"
                   >
                     <TeamCrest
                       name={teamName.get(colId) ?? "?"}
@@ -106,9 +115,7 @@ export function SeasonGrid({
                       size={22}
                       className="rounded"
                     />
-                    <span className="max-w-20 whitespace-normal text-xs font-medium [overflow-wrap:anywhere] sm:max-w-28">
-                      {teamName.get(colId)}
-                    </span>
+                    <span className="sr-only">{teamName.get(colId)}</span>
                     <span
                       aria-hidden
                       className="font-mono text-[10px] tabular-nums text-muted"
@@ -125,12 +132,12 @@ export function SeasonGrid({
               <tr key={rowId}>
                 <th
                   scope="row"
-                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-3 py-1 text-left font-normal sm:px-4"
+                  className="sticky left-0 z-10 border-b border-line/60 bg-surface px-1.5 py-1 text-left font-normal sm:px-3"
                 >
                   <Link
                     href={`/teams/${rowId}`}
                     title={teamName.get(rowId) ?? "?"}
-                    className="flex min-h-9 min-w-0 max-w-[11rem] items-center gap-2 py-1 -my-1 hover:text-info"
+                    className="flex min-h-9 min-w-0 items-center gap-1 py-1 -my-1 hover:text-info sm:gap-2"
                   >
                     <span className="w-4 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted">
                       {rankOf.get(rowId)}
@@ -143,9 +150,10 @@ export function SeasonGrid({
                       className="shrink-0 rounded"
                     />
                     {/* Phones: rank and crest only (the column headers
-                        name every crest); the name stays for screen
-                        readers. */}
-                    <span className="sr-only sm:not-sr-only sm:min-w-0 sm:whitespace-normal sm:text-xs sm:[overflow-wrap:anywhere]">
+                        carry the same crest and rank); the name stays for
+                        screen readers. From sm one line, cut short with
+                        the full name on hover. */}
+                    <span className="sr-only sm:not-sr-only sm:block sm:max-w-[8.5rem] sm:truncate sm:text-xs">
                       {teamName.get(rowId) ?? "?"}
                     </span>
                   </Link>
@@ -158,7 +166,7 @@ export function SeasonGrid({
                       // column mapping aligned with the header row.
                       <td
                         key={colId}
-                        className="border-b border-line/60 bg-surface-2/60 px-1.5 py-1"
+                        className="border-b border-line/60 bg-surface-2/60 px-0.5 py-1 sm:px-1"
                       />
                     );
                   }
@@ -166,7 +174,7 @@ export function SeasonGrid({
                   return (
                     <td
                       key={colId}
-                      className="border-b border-line/60 px-1.5 py-1 text-center align-middle"
+                      className="border-b border-line/60 px-0.5 py-1 text-center align-middle sm:px-1"
                     >
                       {meetings.length === 0 ? (
                         <span
@@ -190,5 +198,27 @@ export function SeasonGrid({
         </table>
       </div>
     </div>
+  );
+}
+
+/**
+ * The narrowest box (rem) that shows a grid of `teams` columns whole on a
+ * desktop: the row label plus one cell per team. Schedule sets two groups'
+ * grids side by side only when both fit (auto-fit tracks of this width).
+ */
+export function seasonGridWidthRem(teams: number): number {
+  return 13.5 + teams * 3.5;
+}
+
+/** One line under the grids, so the colours and "wk 5" read without hovering. */
+export function SeasonGridKey({ className }: { className?: string }) {
+  return (
+    <p className={cn("text-xs leading-relaxed text-muted", className)}>
+      Read across: each row is that team&apos;s results, its score first.{" "}
+      <span className="text-success">Green</span> won,{" "}
+      <span className="text-danger-soft">red</span> lost,{" "}
+      <span className="text-accent">amber</span> drew; F is a forfeit and
+      &ldquo;wk 5&rdquo; a series still to play. Each cell opens its match.
+    </p>
   );
 }

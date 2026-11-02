@@ -405,9 +405,9 @@ image has changed. The rules are in `next.config.ts`, and
   hidden columns get `w-0 @xl:w-*` cols.
 - **The standings table breaks on its OWN width** (an `@container` wrapper),
   not the viewport's: the same table fills a phone, Home's main column and
-  `/schedule`'s 30rem rail. From `@md` (28rem) the movement arrow sits beside
-  the rank, from `@lg` (32rem) the desktop column widths and one-line rows,
-  and Last 5 from `@xl` (36rem), so it hides in the rail as on a phone. A
+  half of `/schedule`'s full-width card. From `@md` (28rem) the movement
+  arrow sits beside the rank, from `@lg` (32rem) the desktop column widths
+  and one-line rows, and Last 5 from `@xl` (36rem), so it hides on a phone. A
   row's status chips wrap beside the name (flex-wrap, so they drop under it
   only when both don't fit).
 - **Every flex level between a container and a `truncate` span needs
@@ -703,13 +703,31 @@ the league is already draftable and many visitors have joined. Write for both.
   playoffs from Sat, Dec 19", opening to every step (`seasonPlan`), dates on
   the viewer's clock. /schedule shows it in DRAFT (with fixtures) and the
   regular season, Home above the standings in the regular season.
-- **The regular season is two columns from `xl`:** the weeks, and a 30rem
-  rail with the standings and the analysis folds. The rail stretches to the
-  weeks' height and its inner block is `xl:sticky xl:top-20` with a
-  viewport-high `max-h` and its own scroll, so the table stays in view down
-  the weeks and an opened fold never hides its end below the screen. The
-  playoffs and COMPLETE keep one column (the bracket leads, the finished
-  weeks fold away).
+- **The standings are one card with three tabs:** Table, Head-to-head and
+  Playoff race (`ViewTabs`, `src/components/view-tabs.tsx`), the last two only
+  when the phase shows them. The server renders every panel and hides the
+  inactive ones, so the table shows before hydration. The Head-to-head and
+  Playoff race tabs carry the old fold ids (`#head-to-head`,
+  `#playoff-analysis`): a link to either selects it, and the jump bar's chips
+  land on them (tabs select on focus, which the bar gives its target).
+- **From `xl` the regular season leads with that card at full width,** above
+  the weeks (`xl:order-first`; phones keep the weeks first, with the jump bar
+  down to the table). Two groups' tables sit side by side once each has
+  30rem (`SeasonStandings sideBySide`), and their grids once each fits whole
+  (auto-fit tracks `seasonGridWidthRem` wide, from the larger group), so a
+  group of six needs no scrolling. It replaced a 30rem sticky rail that
+  scrolled on its own beside the page as soon as two groups' tables were
+  taller than the screen, with the grid scrolling sideways inside it (Tim,
+  2026-11-01: "There's two scroll bars"). Nothing on the page scrolls in its
+  own box at 1280px (`e2e-mid/schedule.spec.ts`). The playoffs and COMPLETE
+  keep one column (the bracket leads, the finished weeks fold away).
+- **The head-to-head grid is compact** (`SeasonGrid`): rows carry the names
+  (cut short on one line), columns only crest and rank with the name for
+  screen readers and on hover, and an unplayed meeting reads "wk 5", never
+  "W5", which read as a win. On phones a cell drops its W/L letter (the row
+  team's score comes first, so the score says it) but keeps a forfeit's F,
+  and a group of six fits a 390px screen. `SeasonGridKey` explains the
+  colours under the grids.
 - **A week's cards go two and three across by the week's own width**
   (`@container`, `@2xl`/`@5xl`), and `GridFillers` paints the empty cells of a
   part-filled last row the surface colour; the grid draws its hairlines as
@@ -723,7 +741,7 @@ the league is already draftable and many visitors have joined. Write for both.
   at once).
 - **The jump bar** (`SectionNav`, in page order) lists what the phase renders
   when there are three or more sections; the regular season hides it from
-  `xl`, where the rail shows the standings.
+  `xl`, where the standings come first.
 - **The jump bar leaves the hash to the page** (`followHash={false}`,
   `openNested="marked"`): the browser scrolls to `#fixtures` or
   `#tiebreakers` and `ScheduleFold` opens itself, as before the bar existed.
