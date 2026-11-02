@@ -170,13 +170,16 @@ export async function rehearseBackupRestore({
     env,
   });
   const restoreEnv = postgresCliEnv(restoreUrl, { env });
+  // Client sessions only: ending an autovacuum worker in a leftover scratch
+  // database is an ERROR for a role without pg_signal_autovacuum_worker
+  // (PostgreSQL 18), and the plain dropdb below stops one itself.
   execFileSync(
     "psql",
     [
       "-X",
       "--set=ON_ERROR_STOP=on",
       "--command",
-      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'ld2l_restore_test' AND pid <> pg_backend_pid()",
+      "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = 'ld2l_restore_test' AND backend_type = 'client backend' AND pid <> pg_backend_pid()",
     ],
     { stdio: "inherit", env: maintenanceEnv },
   );

@@ -133,15 +133,27 @@ hc_ping() { # url suffix body
 }
 
 # dropdb with libpq fields built from PG_RESTORE_TEST_URL in the child's
-# environment, so the password never reaches argv.
+# environment, so the password never reaches argv. A plain DROP goes first:
+# it stops an autovacuum worker itself, and the freshly restored tables draw
+# one within a naptime, while WITH (FORCE) refuses to end a worker for a role
+# without pg_signal_backend (PostgreSQL 18; the 2026-11-01 EU drill failed
+# so). FORCE then ends the rehearsal's own leftover sessions. Three rounds,
+# 2 s apart.
 drop_scratch() {
   GGD2L_PG_CLI_ENV="${TOOLS_DIR}/src/lib/postgres-cli-env.mjs" node --input-type=module -e '
     import { spawnSync } from "node:child_process";
     import { pathToFileURL } from "node:url";
     const { postgresCliEnv } = await import(pathToFileURL(process.env.GGD2L_PG_CLI_ENV).href);
     const env = postgresCliEnv(process.env.PG_RESTORE_TEST_URL, { database: "postgres" });
-    const result = spawnSync("dropdb", ["--if-exists", "--force", "ld2l_restore_test"], { env, stdio: "inherit" });
-    process.exit(result.status ?? 1);
+    const pause = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+    for (let round = 0; round < 3; round += 1) {
+      if (round > 0) pause(2000);
+      for (const force of [[], ["--force"]]) {
+        const result = spawnSync("dropdb", ["--if-exists", ...force, "ld2l_restore_test"], { env, stdio: "inherit" });
+        if (result.status === 0) process.exit(0);
+      }
+    }
+    process.exit(1);
   '
 }
 

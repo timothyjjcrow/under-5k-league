@@ -647,6 +647,18 @@ migrations and attests the full schema. The scratch database is dropped
 afterwards, pass or fail, and so is the drill's copy of the dump. The result
 is in `/var/lib/ggd2l-drill/<lg>/last-drill.json`.
 
+The drop tries a plain `dropdb` before `--force`, three rounds 2 s apart.
+The freshly restored tables draw an autovacuum worker within a naptime, and
+PostgreSQL 18 refuses `DROP DATABASE … WITH (FORCE)` to end one for
+`ggd2l_rehearsal` (no `pg_signal_backend`), while a plain drop stops the
+worker itself. That refusal failed the EU drill on 2026-11-01 at `cleanup`
+after a passing restore. `--force` still ends the rehearsal's own leftover
+sessions. For the same reason the restore's opening sweep terminates only
+client sessions in a leftover `ld2l_restore_test`. If a drill still fails at
+`cleanup`, the restore passed: drop the copy by hand
+(`sudo -u postgres dropdb ld2l_restore_test`), then
+`sudo systemctl reset-failed ggd2l-drill@<lg>`.
+
 **Tim's quarterly decrypt drill** (about 15 min, on the Mac): download one
 `daily/` object with its two `.sha256` files into an empty folder, then:
 
