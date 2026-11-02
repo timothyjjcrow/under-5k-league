@@ -26,8 +26,10 @@ import {
   parseInvitedCount,
   parseLobbyDigits,
   parseLobbyLeagueId,
+  parseBotGameCheck,
   parseLobbyLifecycle,
   type BotBusyElsewhere,
+  type BotGameCheck,
   type DotaLobbyBotPlayer,
   type DotaLobbySpec,
   type LobbyKind,
@@ -222,15 +224,17 @@ export function lobbyBotConnection() {
 
 type LobbyBotConnection = NonNullable<ReturnType<typeof lobbyBotConnection>>;
 
-/** One POST to the bot's /lobby, bounded by the connection's timeout. */
+/**
+ * One POST to the bot's /lobby, bounded by the connection's timeout, or by
+ * `timeoutMs` for the one action that waits on Dota (`check`).
+ */
 function postToBot(
   connection: LobbyBotConnection,
   body: unknown,
   signal?: AbortSignal,
+  timeoutMs = connection.loopback ? LOOPBACK_TIMEOUT_MS : RELAY_TIMEOUT_MS,
 ) {
-  const timeout = AbortSignal.timeout(
-    connection.loopback ? LOOPBACK_TIMEOUT_MS : RELAY_TIMEOUT_MS,
-  );
+  const timeout = AbortSignal.timeout(timeoutMs);
   return fetch(`${connection.origin}/lobby`, {
     method: "POST",
     cache: "no-store",
@@ -1217,16 +1221,38 @@ export async function boundedBotStatus(
   }
 }
 
+// The bot waits up to its CHECK_WAIT_MS (5 s) for Dota's answer; this leaves
+// room for the loopback round trip around it.
+const BOT_CHECK_TIMEOUT_MS = 8_000;
+
 /**
- * The Dota match id of a game the bot actually launched, when it is a real
- * one. Only a "started" job counts: the GC saw that game running, so the id
- * is not left over from a launch that never began. The bot passes Valve's id
- * through as a string; "0" means no game was allocated.
+ * A player's "Game over" asks first (docs/DOTA-LOBBY-BOT.md#game-over-checks-dota-first):
+ * whether Dota shows this in-house game over, asked of the Game Coordinator
+ * now through the bot (action `check`). The bot answers within about five
+ * seconds. Only over loopback: the relay can't wait on Dota and refuses the
+ * action.
+ *
+ * Never throws and never changes the game: no bot, a relay connection, a
+ * misconfigured or unreachable bot, an older bot (it refuses the action), a
+ * spec that can't be built or a reply off the contract are all "unknown",
+ * which never blocks the press.
  */
-export function botReportedMatchId(
-  status: DotaLobbyStatus | null,
-): string | null {
-  if (status?.state !== "started") return null;
-  const id = status.matchId;
-  return id && /^[1-9]\d{5,19}$/.test(id) ? id : null;
+export async function checkInhouseBotGame(
+  lobby: InhouseSpecLobby,
+): Promise<BotGameCheck> {
+  try {
+    const connection = lobbyBotConnection();
+    if (!connection?.loopback) return "unknown";
+    const { status, body } = await readBotReply(
+      await postToBot(
+        connection,
+        { action: "check", spec: { ...inhouseLobbySpec(lobby), withLifecycle: true } },
+        undefined,
+        BOT_CHECK_TIMEOUT_MS,
+      ),
+    );
+    return status === 200 ? parseBotGameCheck(body.check) : "unknown";
+  } catch {
+    return "unknown";
+  }
 }

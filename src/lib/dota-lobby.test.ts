@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   botGameOverRefusal,
   botHoldsUnlaunchedLobby,
+  botReportedMatchId,
+  gameOverAsksDota,
+  gameOverCheckRefusal,
+  parseBotGameCheck,
   createOpen,
   DUEL_BOT_WAITING_NOTE,
   INHOUSE_SEAT_RULE_NOTE,
@@ -340,6 +344,44 @@ describe("botHoldsUnlaunchedLobby", () => {
   it("lets a pending release through, whatever the state", () => {
     for (const state of Object.keys(HOLDS) as DotaLobbyStatus["state"][])
       expect(botHoldsUnlaunchedLobby({ state, releasing: true }), state).toBe(false);
+  });
+});
+
+describe("botReportedMatchId", () => {
+  it("is a started job's real match id, and nothing else", () => {
+    expect(botReportedMatchId({ state: "started", matchId: "9072230724" })).toBe("9072230724");
+    expect(botReportedMatchId({ state: "started", matchId: "0" })).toBeNull();
+    expect(botReportedMatchId({ state: "started" })).toBeNull();
+    expect(botReportedMatchId({ state: "released", matchId: "9072230724" })).toBeNull();
+    expect(botReportedMatchId(null)).toBeNull();
+  });
+});
+
+describe("Game over asks Dota first", () => {
+  it("asks only for a game the bot launched and hasn't seen end", () => {
+    expect(gameOverAsksDota({ state: "started", matchId: "9072230724" })).toBe(true);
+    expect(gameOverAsksDota({ state: "started", matchId: "9072230724", left: true })).toBe(true);
+    // Already over, never launched, no real match id, or no answer: no ask.
+    expect(gameOverAsksDota({ state: "started", matchId: "9072230724", over: true })).toBe(false);
+    for (const state of ["idle", "ready", "released", "blocked"] as const)
+      expect(gameOverAsksDota({ state, matchId: "9072230724" }), state).toBe(false);
+    expect(gameOverAsksDota({ state: "started", matchId: "0" })).toBe(false);
+    expect(gameOverAsksDota(null)).toBe(false);
+  });
+
+  it("reads the bot's check strictly: its four answers, else unknown", () => {
+    for (const check of ["over", "not-scored", "no-result", "none"])
+      expect(parseBotGameCheck(check)).toBe(check);
+    for (const junk of [undefined, null, "", "running", "OVER", 1, true, {}])
+      expect(parseBotGameCheck(junk), String(junk)).toBe("unknown");
+  });
+
+  it("refuses only when Dota has no result yet, naming the game and the button", () => {
+    expect(gameOverCheckRefusal("no-result", "1234")).toBe(
+      "Dota hasn't posted a result for game #1234 yet. Press “Game over — queue again” once it has ended in Dota.",
+    );
+    for (const check of ["over", "not-scored", "none", "unknown"] as const)
+      expect(gameOverCheckRefusal(check, "1234"), check).toBeNull();
   });
 });
 

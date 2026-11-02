@@ -496,7 +496,9 @@ DRAFTING → READY → IN_PROGRESS → (AWAITING_RESULT →) COMPLETED | CANCELL
 with up to `INHOUSE.MAX_LIVE_GAMES` (2) live lobbies at once, one per game
 slot (`InhouseLobby.slot`). "Game over" (`finishGame`) moves a game being
 played to AWAITING_RESULT, which is not live: its slot and its ten are free
-while the result scan keeps looking for it. Pure rules in `src/lib/inhouse.ts`, the engine in
+while the result scan keeps looking for it. A player's press on a game the
+lobby bot launched asks Dota first (the bot's `check`), and the room asks
+again while Dota has no result yet. Pure rules in `src/lib/inhouse.ts`, the engine in
 `src/lib/inhouse-service.ts` (queue, all phases, results, admin recovery,
 the room's shared reads `loadInhouseRoomRows`, the pure viewer payload builder
 `buildInhouseState`, and `getInhouseState`, which runs the maintenance chain

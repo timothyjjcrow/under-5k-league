@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CHECK_WAIT_MS,
   DETAILS_AFTER_MS,
   DETAILS_EVERY_MS,
   DETAILS_FOR_MS,
@@ -2760,6 +2761,153 @@ test("match-details asks stop after three hours, skip while offline, keep one in
   assert.equal(asks().length, before);
   assert.equal(logs.filter((line) => / match-details key=duel:clx1duel:1 result=gave-up/.test(line)).length, 1);
   assert.deepEqual(c.status(duel.key, { ...duel, withLifecycle: true }), { state: "started", lobbyId: LOBBY, matchId: MATCH, left: true });
+});
+
+test("a site's check asks Dota at once and answers over, recording the end a scheduled ask would", async (t) => {
+  const { controller: c, calls, logs } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  const asks = () => calls.filter((call) => call.startsWith("details:"));
+  // Minutes before the first scheduled ask: the check doesn't wait for it.
+  const pending = c.check({ ...duel, withLifecycle: true });
+  assert.deepEqual(asks(), [`details:${MATCH}`]);
+  assert.ok(logs.some((line) => / match-check key=duel:clx1duel:1 result=asked matchId=8123456789$/.test(line)));
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 2 } });
+  assert.deepEqual(await pending, {
+    state: "started",
+    lobbyId: LOBBY,
+    matchId: MATCH,
+    over: true,
+    left: true,
+    check: "over",
+  });
+  // Recorded exactly as the scheduled ask records it.
+  assert.equal(c.data.jobs[duel.key].postgameOutcome, 2);
+  assert.equal(c.data.jobs[duel.key].endBy, "match-details");
+  assert.ok(logs.some((line) => / request action=check key=duel:clx1duel:1 result=started check=over over=true ms=0$/.test(line)));
+  // Once over, a check answers from the record without asking again.
+  assert.equal((await c.check(duel)).check, "over");
+  assert.equal(asks().length, 1);
+});
+
+test("a check Dota answers without a result says no-result and records nothing, the match named or not", async (t) => {
+  for (const answer of [
+    { result: 1, match: { matchId: MATCH, matchOutcome: 0 } },
+    // An answer without the match id answers the one request out.
+    { result: 2 },
+  ]) {
+    const { controller: c } = setup(t, early());
+    duelRunning(c);
+    c.departed("destroy");
+    const pending = c.check({ ...duel, withLifecycle: true });
+    c.matchDetails(answer);
+    assert.deepEqual(await pending, {
+      state: "started",
+      lobbyId: LOBBY,
+      matchId: MATCH,
+      left: true,
+      check: "no-result",
+    }, JSON.stringify(answer));
+    assert.equal(c.data.jobs[duel.key].postgameOutcome, undefined);
+    assert.equal(c.detailsInFlight, null);
+    assert.equal(c.checks.size, 0);
+  }
+});
+
+test("a check Dota ends as not scored is a failed launch, released as the scheduled ask releases it", async (t) => {
+  const { controller: c } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  const pending = c.check({ ...duel, withLifecycle: true });
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 66 } });
+  assert.deepEqual(await pending, { state: "released", lobbyId: LOBBY, matchId: undefined, check: "not-scored" });
+  assert.equal(c.data.jobs[duel.key].failedMatchId, MATCH);
+});
+
+test("a check with no answer in time says unknown, and a late answer still counts", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  const { controller: c, calls } = setup(t, early());
+  duelRunning(c);
+  c.departed("destroy");
+  const pending = c.check(duel);
+  t.mock.timers.tick(CHECK_WAIT_MS - 1);
+  let settled = false;
+  pending.then(() => { settled = true; });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.equal((await pending).check, "unknown");
+  assert.equal(c.checks.size, 0);
+  // The request is still out: the next check of the same match waits on it.
+  const again = c.check(duel);
+  assert.equal(calls.filter((call) => call.startsWith("details:")).length, 1);
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 3 } });
+  assert.equal((await again).check, "over");
+});
+
+test("checks share the one request out: the same match waits on its ask, another waits its turn", async (t) => {
+  const { controller: c, calls } = setup(t, early(["duel", "season"]));
+  const time = clock(c);
+  // Two games left early.
+  duelRunning(c);
+  c.departed("destroy");
+  running(c, { gameState: 5, matchId: "8123456790" });
+  c.departed("destroy");
+  const asks = () => calls.filter((call) => call.startsWith("details:"));
+  // Two checks of one match: one ask.
+  const first = c.check(duel);
+  const second = c.check(duel);
+  assert.deepEqual(asks(), [`details:${MATCH}`]);
+  // A check of the other match waits for that answer, then goes out.
+  const other = c.check(spec);
+  assert.equal(asks().length, 1);
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 0 } });
+  assert.equal((await first).check, "no-result");
+  assert.equal((await second).check, "no-result");
+  assert.deepEqual(asks(), [`details:${MATCH}`, "details:8123456790"]);
+  c.matchDetails({ result: 1, match: { matchId: "8123456790", matchOutcome: 2 } });
+  assert.equal((await other).check, "over");
+  assert.equal(c.data.jobs[spec.key].postgameOutcome, 2);
+  // A scheduled ask out for a match: a check of that match waits on it.
+  time.at += DETAILS_AFTER_MS;
+  c.tick();
+  assert.equal(asks().at(-1), `details:${MATCH}`);
+  const count = asks().length;
+  const piggyback = c.check(duel);
+  assert.equal(asks().length, count);
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 3 } });
+  assert.equal((await piggyback).check, "over");
+});
+
+test("a check with nothing launched answers none and asks nothing; offline, a bad spec and the relay's path refuse", async (t) => {
+  const { controller: c, calls } = setup(t, early());
+  // No job.
+  assert.deepEqual(await c.check(duel), { state: "idle", check: "none" });
+  // A lobby not started yet.
+  c.request("create", duel);
+  c.snapshot(duelSnapshot());
+  assert.equal((await c.check(duel)).check, "none");
+  assert.ok(!calls.some((call) => call.startsWith("details:")));
+  await assert.rejects(c.check({ ...duel, gameMode: 2 }), /INVALID/);
+  assert.throws(() => c.request("check", duel), /INVALID/);
+  c.online = false;
+  await assert.rejects(c.check(duel), /OFFLINE/);
+});
+
+test("a check of a game the bot is still in asks Dota too, but only the bot's own lobby records its end", async (t) => {
+  // Early leave off: the bot stays in the running game's lobby.
+  const { controller: c, calls } = setup(t);
+  running(c, { gameState: 5 });
+  const pending = c.check({ ...spec, withLifecycle: true });
+  assert.deepEqual(calls.filter((call) => call.startsWith("details:")), [`details:${MATCH}`]);
+  c.matchDetails({ result: 1, match: { matchId: MATCH, matchOutcome: 2 } });
+  const body = await pending;
+  assert.equal(body.check, "over");
+  assert.equal(body.over, undefined);
+  assert.equal(c.data.jobs[spec.key].postgameOutcome, undefined);
+  // Its postgame then records it as always.
+  c.snapshot(snapshot({ state: 3, matchId: MATCH, matchOutcome: 2 }));
+  assert.equal((await c.check(spec)).check, "over");
 });
 
 test("early leave unset is today's behaviour exactly: the bot stays to the postgame and asks nothing", (t) => {

@@ -23,6 +23,7 @@ import {
   removeFromQueue,
   setInhouseRoles,
   startGame,
+  type InhouseActionResult,
 } from "@/lib/inhouse-service";
 import {
   acceptDuel,
@@ -231,7 +232,7 @@ export async function POST(req: NextRequest) {
   // Starts true: the action itself may commit and then throw.
   let unpublished = true;
   try {
-    let res: { ok: true } | { ok: false; error: string };
+    let res: InhouseActionResult;
     switch (action) {
       case "join":
         // `roles` only when the room's picker sent them; absent, the stored
@@ -339,7 +340,15 @@ export async function POST(req: NextRequest) {
     await publishInhouseRoomChange();
     unpublished = false;
     if (!res.ok) {
-      return NextResponse.json({ error: res.error }, { status: 400 });
+      // A "Game over" Dota has no result for yet says so, and the room asks
+      // again while it waits instead of toasting the error.
+      return NextResponse.json(
+        {
+          error: res.error,
+          ...(res.waitingForDota ? { waitingForDota: true } : {}),
+        },
+        { status: 400 },
+      );
     }
     // The follow-up read heartbeats, so publish once more in the finally.
     unpublished = true;

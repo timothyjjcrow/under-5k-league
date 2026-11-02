@@ -33,6 +33,7 @@ import {
   settleInhouseBotReleases,
 } from "@/lib/lobby-bot-releases";
 import { POST } from "@/app/api/dota-lobby/route";
+import { POST as inhousePost } from "@/app/api/inhouse/route";
 import { voidInhouseResult } from "@/app/actions/inhouse-admin";
 import { ON_POSTGRES, makeUser, raceAll, sessionFor } from "./factories";
 
@@ -493,6 +494,171 @@ describe("endInhouseGameFromBot raced against its rivals", () => {
         data: { status: INHOUSE_STATUS.COMPLETED },
       });
     }
+  });
+});
+
+// Tim's call, 2026-11-01: from 10-30 to 11-01, 6 of 24 US games were marked
+// over 11 to 59 minutes before they ended, freeing their ten mid-game. A
+// player's press on a game the bot launched now asks Dota first (the bot's
+// `check`). The bot stub answers `check` with `check`, everything else with
+// the plain status.
+describe("Game over asks Dota first on a game the bot launched", () => {
+  const MATCH = "9072230724";
+  const launched = { state: "started", matchId: MATCH, left: true };
+  function stubCheck(check: unknown, status: Record<string, unknown> = launched) {
+    stubBot((request) =>
+      request.action === "check" ? { ...status, check } : status,
+    );
+  }
+  const actions = () => botCalls.map((c) => c.action);
+
+  it("Dota names a winner: the press goes ahead, the presser queues, the bot is released", async () => {
+    stubCheck("over");
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-check-over-");
+    const lobby = await playedLobby(players);
+
+    expect(await finishGame(players[3].session, lobby.id, { requeue: true })).toEqual({ ok: true });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(await queuedIds()).toEqual(new Set([players[3].user.id]));
+    expect(await sent()).toEqual([
+      ["status", keyOf(lobby.id)],
+      ["check", keyOf(lobby.id)],
+      ["release", keyOf(lobby.id)],
+    ]);
+    // The check carries the game's own spec, like every other bot request.
+    expect(botCalls[1].spec).toMatchObject({ key: keyOf(lobby.id), withLifecycle: true });
+  });
+
+  it("no result yet: refused with waitingForDota, nothing changes, and a later press lands once Dota posts it", async () => {
+    stubCheck("no-result");
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-check-wait-");
+    const lobby = await playedLobby(players);
+
+    expect(await finishGame(players[3].session, lobby.id, { requeue: true })).toEqual({
+      ok: false,
+      error: `Dota hasn't posted a result for game #${inhouseLobbyCode(lobby.id)} yet. Press “Game over — queue again” once it has ended in Dota.`,
+      waitingForDota: true,
+    });
+    const row = await lobbyRow(lobby.id);
+    expect(row).toMatchObject({ status: INHOUSE_STATUS.IN_PROGRESS, finishedAt: null });
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    expect(await readInhouseRoomVersion()).toBeNull();
+    expect(await sent()).toEqual([
+      ["status", keyOf(lobby.id)],
+      ["check", keyOf(lobby.id)],
+    ]);
+
+    // The room's next ask, once Dota has posted the result.
+    stubCheck("over");
+    expect(await finishGame(players[3].session, lobby.id, { requeue: true })).toEqual({ ok: true });
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(await queuedIds()).toEqual(new Set([players[3].user.id]));
+  });
+
+  it("a wait the bot's own end overtakes still queues the presser on the room's next ask", async () => {
+    stubCheck("no-result");
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-check-overtaken-");
+    const lobby = await playedLobby(players);
+    expect(await finishGame(players[6].session, lobby.id, { requeue: true })).toMatchObject({
+      ok: false,
+      waitingForDota: true,
+    });
+    // The bot sees the end first: the game is over, nobody queued.
+    expect(await endInhouseGameFromBot(lobby.id)).toBe(true);
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
+    botCalls.length = 0;
+
+    // The room's next ask names the game, finds it over and queues the presser.
+    expect(await finishGame(players[6].session, lobby.id, { requeue: true })).toEqual({ ok: true });
+    expect(await queuedIds()).toEqual(new Set([players[6].user.id]));
+    expect(actions()).not.toContain("check");
+  });
+
+  it("the API says waitingForDota beside the error, so the room asks again instead of toasting", async () => {
+    stubCheck("no-result");
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-check-api-");
+    const lobby = await playedLobby(players);
+    mockSession.mockResolvedValue(players[0].session);
+
+    const res = await inhousePost(
+      new NextRequest("http://localhost:3000/api/inhouse", {
+        method: "POST",
+        headers: { "content-type": "application/json", origin: "http://localhost:3000" },
+        body: JSON.stringify({ action: "finish", lobbyId: lobby.id, requeue: true }),
+      }),
+    );
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({
+      error: `Dota hasn't posted a result for game #${inhouseLobbyCode(lobby.id)} yet. Press “Game over — queue again” once it has ended in Dota.`,
+      waitingForDota: true,
+    });
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.IN_PROGRESS);
+  });
+
+  it.each<[string, () => void]>([
+    ["a not-scored end (a failed launch's way out)", () => stubCheck("not-scored")],
+    ["nothing launched to check", () => stubCheck("none")],
+    ["no answer in time", () => stubCheck("unknown")],
+    ["a reply without a check (an older bot)", () => stubCheck(undefined)],
+    ["a reply off the contract", () => stubCheck("running")],
+    [
+      "an older bot's refusal of the action",
+      () =>
+        stubBot((request) =>
+          request.action === "check"
+            ? Response.json({ code: "INVALID" }, { status: 400 })
+            : launched,
+        ),
+    ],
+    [
+      "an unreachable bot",
+      () =>
+        stubBot((request) => {
+          if (request.action === "check") throw new TypeError("fetch failed");
+          return launched;
+        }),
+    ],
+  ])("%s never blocks the press", async (_case, stub) => {
+    stub();
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, `BO-check-pass-${_case.length}-`);
+    const lobby = await playedLobby(players);
+
+    expect(await finishGame(players[3].session, lobby.id, { requeue: true })).toEqual({ ok: true });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(actions()).toContain("check");
+  });
+
+  it.each<[string, Record<string, unknown> | null]>([
+    ["a game the bot never launched (hosted by hand)", { state: "idle" }],
+    ["a launch that failed and was released", { state: "released" }],
+    ["a started job with no real match id", { state: "started", matchId: "0" }],
+    ["a game the bot already saw end", { ...launched, over: true }],
+    ["no bot configured", null],
+  ])("doesn't ask Dota for %s", async (_case, status) => {
+    if (status) stubCheck("no-result", status);
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, `BO-check-skip-${_case.length}-`);
+    const lobby = await playedLobby(players);
+
+    expect(await finishGame(players[3].session, lobby.id, { requeue: true })).toEqual({ ok: true });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(actions()).not.toContain("check");
+  });
+
+  it("an admin outside the game marks it over without asking Dota", async () => {
+    stubCheck("no-result");
+    const players = await makePlayers(INHOUSE.LOBBY_SIZE, "BO-check-admin-");
+    const lobby = await playedLobby(players);
+    const admin = await makeAdmin("Check admin");
+
+    expect(await finishGame(admin, lobby.id)).toEqual({ ok: true });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.AWAITING_RESULT);
+    expect(actions()).not.toContain("check");
+    expect(await prisma.inhouseQueueEntry.count()).toBe(0);
   });
 });
 

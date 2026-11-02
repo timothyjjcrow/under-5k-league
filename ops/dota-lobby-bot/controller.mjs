@@ -168,6 +168,10 @@ export const DETAILS_AFTER_MS = 8 * 60_000;
 export const DETAILS_EVERY_MS = 60_000;
 export const DETAILS_TIMEOUT_MS = 30_000;
 export const DETAILS_FOR_MS = 3 * 60 * 60_000;
+// The site's "Game over" press asks first (action `check`, loopback only): the
+// match's details, asked at once through the same one request in flight, and
+// the reply waits this long for the answer before it says "unknown".
+export const CHECK_WAIT_MS = 5_000;
 
 /** Named invite targets must be on the request's own roster. */
 export function validInviteTargets(spec) {
@@ -204,6 +208,14 @@ export function rosterMatches(lobby, spec) {
 // (poor network, a leaver, a server crash, never started, cancelled).
 const won = (outcome) => outcome >= 2 && outcome <= 13;
 const notScored = (outcome) => outcome >= 64 && outcome <= 69;
+/** What a match-details answer tells the site's check: "over" (a winner),
+ * "not-scored", or "no-result" for anything else (the game still runs, Dota
+ * hasn't posted its result yet, or the request failed). */
+function checkAnswer(result, match) {
+  if (result === 1 && won(match?.matchOutcome)) return "over";
+  if (result === 1 && notScored(match?.matchOutcome)) return "not-scored";
+  return "no-result";
+}
 // DOTA_GameState's DOTA_GAMERULES_STATE_POST_GAME.
 const POST_GAME = 6;
 
@@ -370,8 +382,12 @@ export class LobbyController {
     if (!Array.isArray(earlyLeaveKinds) || earlyLeaveKinds.some((kind) => !["season", "inhouse", "duel"].includes(kind)))
       throw new Error("Unsupported early leave kinds");
     this.earlyLeaveKinds = Object.freeze([...earlyLeaveKinds]);
-    // The one match-details request out for a game the bot left early.
+    // The one match-details request out: a game the bot left early, or a
+    // site's check. Dota may answer without the match id, so never two.
     this.detailsInFlight = null;
+    // The site's checks waiting on a match's details: match id -> waiters,
+    // in the order they came. In memory only: each waits CHECK_WAIT_MS.
+    this.checks = new Map();
     this.file = file;
     this.transport = transport;
     this.now = now;
@@ -843,6 +859,10 @@ export class LobbyController {
   request(action, spec) {
     if (!validSpec(spec, this.serverRegions)) throw new BotError("INVALID");
     if (action === "status") return this.status(spec.key, spec);
+    // `check` waits on the Game Coordinator, so it is check() over the
+    // loopback HTTP only (server.mjs), never this synchronous path the relay
+    // also takes.
+    if (action === "check") throw new BotError("INVALID");
     if (!this.online) throw new BotError("OFFLINE");
     let job = this.data.jobs[spec.key];
     if (action === "create") {
@@ -1233,6 +1253,8 @@ export class LobbyController {
     if (this.detailsInFlight && now - this.detailsInFlight.at < DETAILS_TIMEOUT_MS) return false;
     this.detailsInFlight = null;
     if (!this.online) return false;
+    // A site's check waiting on the slot goes first: someone is waiting on it.
+    if (this.pumpChecks()) return true;
     let pick;
     for (const job of Object.values(this.data.jobs)) {
       if (job.left !== true || job.state !== "started" || !job.matchId || won(job.postgameOutcome)) continue;
@@ -1270,7 +1292,18 @@ export class LobbyController {
    * it recorded an end. */
   matchDetails({ result, match } = {}) {
     const matchId = match?.matchId !== undefined && match?.matchId !== null ? String(match.matchId) : null;
+    // An answer without the match id answers the one request out.
+    const answered = matchId ?? this.detailsInFlight?.matchId ?? null;
     if (this.detailsInFlight && (!matchId || this.detailsInFlight.matchId === matchId)) this.detailsInFlight = null;
+    try {
+      return this.recordMatchDetails(matchId, result, match);
+    } finally {
+      // After the record, so a check's reply reads the end it brought.
+      if (answered) this.answerChecks(answered, checkAnswer(result, match));
+      this.pumpChecks();
+    }
+  }
+  recordMatchDetails(matchId, result, match) {
     if (!matchId || result !== 1) return false;
     const job = Object.values(this.data.jobs).find(
       (j) => j.left === true && j.state === "started" && j.matchId === matchId,
@@ -1301,6 +1334,84 @@ export class LobbyController {
       return true;
     }
     return false;
+  }
+  /** The site's "Game over" press asks whether Dota shows this game over
+   * (action `check`, over the loopback HTTP only: server.mjs). For a launched
+   * game with a match id and no end seen yet, the Game Coordinator is asked
+   * for the match's details now, and the reply waits up to CHECK_WAIT_MS for
+   * the answer. The reply is status() plus `check`: "over" (a winner),
+   * "not-scored", "no-result" (Dota answered with neither: the game still
+   * runs, or its result isn't posted yet), "unknown" (no answer in time, or
+   * the ask couldn't go out) or "none" (nothing launched to check). The
+   * answer records only what a scheduled ask's would (matchDetails), so a
+   * check can bring a game's end sooner but never makes one up. One log line
+   * per check. */
+  async check(spec) {
+    const at = this.now();
+    const key = typeof spec?.key === "string" && KEY_PATTERN.test(spec.key) ? spec.key : null;
+    try {
+      const body = await this.checkMatch(spec);
+      this.logAnswer("check", key, { result: body.state, check: body.check, over: body.over }, at);
+      return body;
+    } catch (error) {
+      this.logAnswer("check", key, { code: error instanceof BotError ? error.code : "INVALID" }, at);
+      throw error;
+    }
+  }
+  checkMatch(spec) {
+    if (!validSpec(spec, this.serverRegions)) throw new BotError("INVALID");
+    if (!this.online) throw new BotError("OFFLINE");
+    const job = this.data.jobs[spec.key];
+    // Built when it answers, so it carries the end the answer recorded.
+    const reply = (check) => ({ ...this.status(spec.key, spec), check });
+    if (job && gameOver(job)) return Promise.resolve(reply("over"));
+    if (job?.state !== "started" || !job.matchId) return Promise.resolve(reply("none"));
+    const { matchId } = job;
+    return new Promise((resolve) => {
+      const waiter = { key: spec.key, resolve: (check) => resolve(reply(check)) };
+      waiter.timer = setTimeout(() => {
+        const waiting = this.checks.get(matchId) ?? [];
+        const at = waiting.indexOf(waiter);
+        if (at >= 0) waiting.splice(at, 1);
+        if (!waiting.length) this.checks.delete(matchId);
+        waiter.resolve("unknown");
+      }, CHECK_WAIT_MS);
+      if (!this.checks.has(matchId)) this.checks.set(matchId, []);
+      this.checks.get(matchId).push(waiter);
+      this.pumpChecks();
+    });
+  }
+  /** Send the oldest waiting check's ask once the one request slot is free.
+   * A check of the match already asked about waits for that answer instead.
+   * True when it sent one. */
+  pumpChecks() {
+    if (!this.checks.size) return false;
+    const out = this.detailsInFlight;
+    if (out && this.now() - out.at < DETAILS_TIMEOUT_MS) return false;
+    if (!this.online) return false;
+    const [matchId, waiting] = this.checks.entries().next().value;
+    const { key } = waiting[0];
+    this.detailsInFlight = { key, matchId, at: this.now() };
+    try {
+      this.transport.matchDetails(matchId);
+    } catch {
+      this.detailsInFlight = null;
+      this.log("match-check", { key, result: "send-failed", matchId });
+      this.answerChecks(matchId, "unknown");
+      return false;
+    }
+    this.log("match-check", { key, result: "asked", matchId });
+    return true;
+  }
+  /** Answer every check waiting on this match. */
+  answerChecks(matchId, answer) {
+    const waiting = this.checks.get(matchId);
+    if (!waiting) return;
+    this.checks.delete(matchId);
+    for (const waiter of waiting) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(answer);
+    }
   }
   /** Release a launch that is over without a game. Its claim holds until Dota
    * confirms the departure, which then reads released: Create works again for

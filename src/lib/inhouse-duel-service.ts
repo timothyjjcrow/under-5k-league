@@ -60,8 +60,8 @@ import {
   retryDuelBotCreate,
 } from "./inhouse-duel-bot";
 import { runAfterResponse } from "./after-response";
-import type { DotaLobbyStatus } from "./dota-lobby";
-import { botReportedMatchId, inhouseLobbyBotConfigured } from "./dota-lobby-service";
+import { botReportedMatchId, type DotaLobbyStatus } from "./dota-lobby";
+import { inhouseLobbyBotConfigured } from "./dota-lobby-service";
 import {
   canStartOpenDotaFetch,
   fetchOpenDotaMatch,

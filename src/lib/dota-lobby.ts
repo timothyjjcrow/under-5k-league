@@ -839,3 +839,65 @@ export function botGameOverRefusal(status: DotaLobbyStatus | null): string | nul
     ? "The lobby bot is still holding this game's Dota lobby. A captain can press “Start game with bot” or “Release bot…” in the bot panel, then mark the game over."
     : "The lobby bot is still setting up or starting this game's Dota lobby. Try again in a minute.";
 }
+
+/**
+ * The Dota match id of a game the bot actually launched, when it is a real
+ * one. Only a "started" job counts: the GC saw that game running, so the id
+ * is not left over from a launch that never began. The bot passes Valve's id
+ * through as a string; "0" means no game was allocated.
+ */
+export function botReportedMatchId(
+  status: DotaLobbyStatus | null,
+): string | null {
+  if (status?.state !== "started") return null;
+  const id = status.matchId;
+  return id && /^[1-9]\d{5,19}$/.test(id) ? id : null;
+}
+
+/**
+ * Whether a player's "Game over" asks Dota first (Tim's call, 2026-11-01): the
+ * bot launched this game, so it knows the match id, and hasn't seen its end
+ * yet. A game the bot didn't launch (hosted by hand, a failed launch), an
+ * unreachable bot (null) and a game the bot already saw end never wait on
+ * Dota: unknown never blocks.
+ */
+export function gameOverAsksDota(status: DotaLobbyStatus | null): boolean {
+  return botReportedMatchId(status) !== null && status?.over !== true;
+}
+
+/**
+ * What the bot's `check` said about a game's end
+ * (docs/DOTA-LOBBY-BOT.md#game-over-checks-dota-first): "over" (Dota names a
+ * winner), "not-scored", "no-result" (Dota answered with neither: the game
+ * still runs, or its result isn't posted yet) or "none" (nothing launched to
+ * check). Anything else, an older bot's refusal or a lost reply included, is
+ * "unknown".
+ */
+export type BotGameCheck = "over" | "not-scored" | "no-result" | "none" | "unknown";
+
+/** The bot's `check` value, read strictly: one of its four answers, else unknown. */
+export function parseBotGameCheck(value: unknown): BotGameCheck {
+  return value === "over" ||
+    value === "not-scored" ||
+    value === "no-result" ||
+    value === "none"
+    ? value
+    : "unknown";
+}
+
+/**
+ * "Game over"'s refusal when Dota has no result for the game yet, or null.
+ * Only "no-result" refuses: a winner or a not-scored end is over (a failed
+ * launch's way out is this press), and "none" or "unknown" never block. The
+ * room asks again on its own while it waits (gameOverWaitStep in inhouse.ts),
+ * so a player who pressed as the game ended is queued once Dota posts the
+ * result; this text is what an older page, or a wait that ran out, shows.
+ */
+export function gameOverCheckRefusal(
+  check: BotGameCheck,
+  lobbyCode: string,
+): string | null {
+  return check === "no-result"
+    ? `Dota hasn't posted a result for game #${lobbyCode} yet. Press “Game over — queue again” once it has ended in Dota.`
+    : null;
+}

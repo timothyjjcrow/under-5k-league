@@ -18,6 +18,16 @@ export type RoomMe = InhouseState["me"] & {
   canPick: boolean;
 };
 
+/**
+ * One game's "Game over" press, from the room: the press itself (it names the
+ * game) and whether the room is waiting on Dota for that game's result after
+ * a press Dota couldn't confirm yet (GameOverWait in src/lib/inhouse.ts).
+ */
+export type RoomGameOver = {
+  waiting: boolean;
+  press: (requeue: boolean) => void;
+};
+
 export function scrollToRoomTop() {
   window.scrollTo({
     top: 0,
