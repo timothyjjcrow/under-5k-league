@@ -42,9 +42,10 @@ export function InhouseAdminTools({
           Admin
         </p>
         {/* Any player's inhouse MMR and medal, queued or not and signed up
-            for the league or not, are set on their own admin page. */}
+            for the league or not, are set on their own admin page, and
+            inhouse bans are made and lifted there. */}
         <Link href="/admin/inhouse-players" className={textLink("text-xs")}>
-          Players&apos; medal &amp; MMR <LinkArrow />
+          Players&apos; medal, MMR &amp; bans <LinkArrow />
         </Link>
       </div>
       <div className="divide-y divide-line">

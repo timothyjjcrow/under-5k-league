@@ -83,6 +83,7 @@ import {
   SETTING_KEYS,
 } from "./settings";
 import {
+  boardBanView,
   lobbyView,
   syncInhouseBoard,
   type BoardSnapshotInput,
@@ -110,6 +111,12 @@ import {
 import { waitBeforeSerializableRetry } from "./serializable-retry";
 import type { SessionUser } from "./auth";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
+import {
+  bannedUserIds,
+  inhouseBanRefusalFor,
+  loadActiveInhouseBanRows,
+} from "./inhouse-ban-service";
+import { activeInhouseBans } from "./inhouse-ban";
 
 export type InhouseActionResult =
   | { ok: true }
@@ -465,9 +472,18 @@ async function failReadyCheck(
       },
     },
   });
+  // A player an admin banned meanwhile goes nowhere. Read after the claim:
+  // banInhousePlayer writes this lobby's row, so a ban committing alongside
+  // this one either lands before the claim (and this read sees it) or
+  // aborts on the claimed row and retries against the requeued queue.
+  const banned = await bannedUserIds(
+    tx,
+    lobby.players.map((p) => p.userId),
+  );
   const requeue = lobby.players
     .filter((p) => {
       if (p.userId === opts.dropUserId) return false;
+      if (banned.has(p.userId)) return false;
       return p.acceptedAt != null || opts.pendingBackdated;
     })
     .sort(
@@ -1326,6 +1342,10 @@ export async function joinQueue(
    */
   roles?: unknown,
 ): Promise<InhouseActionResult> {
+  // An admin's inhouse ban comes first: refused before anything is written,
+  // the positions too. The transaction below judges it again, at the write.
+  const banned = await inhouseBanRefusalFor(prisma, viewer.id);
+  if (banned) return { ok: false, error: banned };
   const { adminMmr, signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
   // A fixed MMR is used as it stands (inhouseFixedMmr): an admin's inhouse
   // MMR for the player (their call, the escape hatch for a smurf or a stale
@@ -1381,10 +1401,18 @@ export async function joinQueue(
   // makes the two conflict, and the loser aborts with P2034.
   await raceHook("inhouse.joinQueue.beforeWrite");
   let joined: boolean | null = null;
+  // Set when the transaction found a ban the read above missed.
+  let bannedAtWrite = null as string | null;
   for (let attempt = 0; attempt < QUEUE_WRITE_RETRY_ATTEMPTS; attempt += 1) {
     try {
       joined = await prisma.$transaction(
         async (tx) => {
+          // A ban made since the read above. banInhousePlayer runs
+          // Serializable and reads this queue, so a ban and a join that
+          // cross abort one, and the retry reads the other's commit.
+          // Nothing is written yet, so the refusal may return.
+          bannedAtWrite = await inhouseBanRefusalFor(tx, viewer.id);
+          if (bannedAtWrite) return false;
           // An admin's inhouse MMR as it stands now, so one saved since the
           // read above still lands (saveInhouseRating). That save also
           // rewrites a queued row's MMR, but finds no row for a first join
@@ -1470,6 +1498,7 @@ export async function joinQueue(
     }
     joined = true;
   }
+  if (!joined && bannedAtWrite) return { ok: false, error: bannedAtWrite };
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
   }
@@ -1562,6 +1591,30 @@ export async function leaveQueue(
 }
 
 /**
+ * Take one player's row out of the 5v5 queue inside the caller's
+ * transaction, as a leave does: the shared locks and idle deadline first,
+ * then `deleteMany` and its count, so a rival that took the row first (their
+ * own leave, a formation) makes this a quiet false, never a crash. The
+ * admin's removal and an inhouse ban (banInhousePlayer) both use it.
+ */
+export async function dropFromQueue(tx: Tx, userId: string): Promise<boolean> {
+  const now = Date.now();
+  const expired = await expireStaticQueue(tx, now);
+  const queued = await tx.inhouseQueueEntry.findUnique({
+    where: { userId },
+    select: { id: true },
+  });
+  if (expired.count > 0 || queued) {
+    // A composition change, like any leave: the shared rows first. Should
+    // a rival take the row before the delete, the deadline it refreshed is
+    // the one that rival's own change sets anyway.
+    await refreshQueueIdleDeadline(tx, now);
+  }
+  const deleted = await tx.inhouseQueueEntry.deleteMany({ where: { userId } });
+  return deleted.count > 0;
+}
+
+/**
  * Admin: take one player out of the queue (Tim, 2026-10-12): someone over
  * the MMR cap who queued before it, a no-show holding a spot, a smurf with no
  * medal. It is the leave the player could make, made for them: the same
@@ -1577,20 +1630,13 @@ export async function removeFromQueue(
   if (viewer.role !== "ADMIN") return { ok: false, error: "Admins only" };
   if (!userId) return { ok: false, error: "Choose a player to remove" };
   const removed = await prisma.$transaction(async (tx) => {
-    const now = Date.now();
-    const expired = await expireStaticQueue(tx, now);
     const queued = await tx.inhouseQueueEntry.findUnique({
       where: { userId },
       select: { user: { select: { name: true } } },
     });
-    if (expired.count > 0 || queued) {
-      // A composition change, like any leave: the shared rows first. Should
-      // a rival take the row before the delete, the deadline it refreshed is
-      // the one that rival's own change sets anyway.
-      await refreshQueueIdleDeadline(tx, now);
-    }
-    const deleted = await tx.inhouseQueueEntry.deleteMany({ where: { userId } });
-    return deleted.count > 0 ? (queued?.user.name ?? "A player") : null;
+    return (await dropFromQueue(tx, userId))
+      ? (queued?.user.name ?? "A player")
+      : null;
   });
   if (removed === null) {
     return {
@@ -3066,13 +3112,20 @@ export async function cancelLobby(
     // players. The heartbeat is backdated: players still on the page
     // re-confirm on their next poll, while the ghosts that likely caused the
     // cancel never do — so the same lobby can't instantly re-form around them.
+    // Everyone but a player an admin banned, read after the claim (see
+    // failReadyCheck: the ban writes this lobby's row).
+    const banned = await bannedUserIds(
+      tx,
+      requeuePlayers.map((p) => p.userId),
+    );
+    const requeueing = requeuePlayers.filter((p) => !banned.has(p.userId));
     const now = Date.now();
     const expired = await expireStaticQueue(tx, now);
     const idleExpiresAt = queueIdleDeadline(now);
-    if (expired.count > 0 || requeuePlayers.length > 0) {
+    if (expired.count > 0 || requeueing.length > 0) {
       await refreshQueueIdleDeadline(tx, now);
     }
-    for (const [i, p] of requeuePlayers.entries()) {
+    for (const [i, p] of requeueing.entries()) {
       await tx.inhouseQueueEntry.upsert({
         where: { userId: p.userId },
         create: {
@@ -3273,7 +3326,7 @@ type ReadyCheckBlock = {
  * its own clock, so pass a time no later than the build's.
  */
 export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
-  const [queue, lobbies, pending, recentResults] = await Promise.all([
+  const [queue, lobbies, pending, recentResults, bans] = await Promise.all([
     prisma.inhouseQueueEntry.findMany({
       orderBy: [{ joinedAt: "asc" }, { userId: "asc" }],
       select: {
@@ -3382,6 +3435,9 @@ export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
         players: { select: { userId: true, team: true } },
       },
     }),
+    // The inhouse bans running now, for the Discord board (boardInputFrom),
+    // judged again at each build's own clock so one that ends meanwhile goes.
+    loadActiveInhouseBanRows(prisma, nowMs),
   ]);
 
   // Positions, read live. A player who never chose inhouse roles shows their
@@ -3421,7 +3477,7 @@ export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
   // the reply's additive `duel` block (buildDuelState) is built from them.
   const duel = await loadDuelRoomRows(nowMs);
 
-  return { queue, lobbies, pending, recentResults, signupRoles, duel };
+  return { queue, lobbies, pending, recentResults, signupRoles, duel, bans };
 }
 
 export type InhouseRoomRows = Awaited<ReturnType<typeof loadInhouseRoomRows>>;
@@ -3503,6 +3559,7 @@ export function boardInputFrom(
     awayCount: rows.queue.length - presentEntries.length,
     lobbySize: INHOUSE.LOBBY_SIZE,
     lobbies: rows.lobbies.map(lobbyView),
+    bans: activeInhouseBans(rows.bans, nowMs).map(boardBanView),
     siteUrl: resolveSiteUrl(),
     nowMs,
   };

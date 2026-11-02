@@ -38,6 +38,7 @@ function snap(
     awayCount: 0,
     lobbySize: 10,
     lobbies: one ? [one] : [],
+    bans: [],
     stats: null,
     pingOptIn: false,
     siteUrl: "https://ggd2l.test",
@@ -623,5 +624,69 @@ describe("two live games", () => {
     ).toBe("game 1 drafting, game 2 ready check, 2 waiting");
     // A lone game 2 is still called by its number.
     expect(boardStateLabel(snap({ lobby: checking }))).toBe("game 2 ready check");
+  });
+});
+
+describe("inhouse bans — listed under every state (Tim, 2026-11-02)", () => {
+  const ban = (name: string, endsAtMs: number | null, reason = "Griefing") => ({
+    name,
+    reason,
+    endsAtMs,
+  });
+  const bansField = (r: ReturnType<typeof renderBoard>) =>
+    r.embed.fields?.find((f) => f.name.startsWith("BANNED FROM INHOUSE"));
+
+  it("adds no field while nobody is banned", () => {
+    expect(bansField(renderBoard(snap()))).toBeUndefined();
+    expect(bansField(renderBoard(snap({ presentNames: ["a", "b"] })))).toBeUndefined();
+  });
+
+  it("names each player, the end in Discord's own time and the reason", () => {
+    const ends = T0 + 7 * 86_400_000;
+    const field = bansField(
+      renderBoard(snap({ bans: [ban("Pudge", ends), ban("Techies", null, "Leaving games")] })),
+    );
+    expect(field?.name).toBe("BANNED FROM INHOUSE — 2");
+    expect(field?.value).toBe(
+      [
+        `**Pudge** · until <t:${Math.floor(ends / 1000)}:f> · Griefing`,
+        "**Techies** · permanent · Leaving games",
+      ].join("\n"),
+    );
+  });
+
+  it("shows under a live game too", () => {
+    const field = bansField(
+      renderBoard(snap({ lobby: lobby(), bans: [ban("Pudge", null)] })),
+    );
+    expect(field?.value).toContain("**Pudge**");
+  });
+
+  it("escapes a reason like a name: the board is pinned", () => {
+    const field = bansField(
+      renderBoard(snap({ bans: [ban("x", null, "**bold** [link](https://evil.test) @everyone")] })),
+    );
+    expect(field?.value).not.toContain("**bold**");
+    expect(field?.value).not.toContain("[link](");
+    expect(field?.value).toContain("\\@everyone");
+  });
+
+  it("collapses a long list into a link to the site, inside Discord's field limit", () => {
+    const many = Array.from({ length: 9 }, (_, i) =>
+      ban(`player${i}`.padEnd(32, "_"), null, "r".repeat(200)),
+    );
+    const field = bansField(renderBoard(snap({ bans: many })));
+    expect(field?.value.length).toBeLessThanOrEqual(1024);
+    expect(field?.value).toMatch(/-# \+\d+ more on \[the inhouse page\]\(https:\/\/ggd2l\.test\/inhouse#inhouse-bans\)$/);
+    const shown = field!.value.split("\n").length - 1;
+    expect(field?.value).toContain(`+${9 - shown} more`);
+  });
+
+  it("repaints when a ban is made, lifted or ends, and only then", () => {
+    const none = renderBoard(snap()).digest;
+    const one = renderBoard(snap({ bans: [ban("Pudge", T0 + 1000)] })).digest;
+    expect(one).not.toBe(none);
+    expect(renderBoard(snap({ bans: [ban("Pudge", T0 + 1000)], nowMs: T0 + 500 })).digest).toBe(one);
+    expect(renderBoard(snap({ bans: [ban("Pudge", T0 + 1000, "Other")] })).digest).not.toBe(one);
   });
 });

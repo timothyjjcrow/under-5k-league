@@ -56,6 +56,11 @@ long-poll, rule P, the worker) is [inhouse](inhouse.md); the bot's protocol is
   `inhouseJoinRefusalBeforeTyping`; a 1v1 takes no typed MMR). Refused while
   in a live 5v5 lobby (`INHOUSE_ACTIVE_STATUSES`) or a live 1v1. A 5v5 join
   does not refuse a player in a 1v1 (open question; the 5v5 is unchanged).
+- **An inhouse ban covers the 1v1 queue** ([inhouse](inhouse.md#bans)):
+  `joinDuelQueue` refuses a banned player inside its Serializable
+  transaction, a ban takes them out of the 1v1 queue, and `requeueAtFront`
+  skips them (the ban writes their live duel's row, as a lock against the
+  decline and the accept clock).
 - **No cap on how many 1v1s exist.** The one bot hosts one lobby at a time,
   so 1v1s wait their turn for it.
 - **Statuses** (`INHOUSE_DUEL_STATUS`): ACCEPTING (paired) → READY (both

@@ -519,7 +519,9 @@ completion, and the real no-active-season offseason.
    by the player's own polls); stale entries dim to "away" and are pruned.
    Outsiders may queue for the next game while a lobby is active; nobody in
    a live lobby can queue (a game marked over is not live). An admin can
-   take one player out (`removeFromQueue`). A queue crossing
+   take one player out (`removeFromQueue`), or ban them from both inhouse
+   queues for a length or for good (`banInhousePlayer`,
+   `inhouse-ban-service.ts`). A queue crossing
    7 present players fires a throttled Discord ping. Positions (1 to 5) are
    `User.inhouseRoles`, read with the room's rows, with the latest signup's
    `Registration.roles` standing in until a player picks.
@@ -985,6 +987,10 @@ enums, so every status column is a string whose allowed values live in
 
 - `InhouseQueueEntry` — userId-unique rolling queue with `lastSeenAt`
   presence heartbeat.
+- `InhouseBan` — an admin's inhouse ban: reason, `endsAt` (null is
+  permanent), who banned and lifted, and the site's record of the Discord
+  role (`roleAddedAt`, `roleTriedAt`, `settledAt`). Rows are history; a new
+  ban for a banned player lifts the old one ([inhouse](features/inhouse.md#bans)).
 - `InhouseNightRsvp` — a player's "I'm in" for the planned inhouse night
   (which needs a linked Discord account), keyed by (`nightId`, `userId`). `nightId` is the night's id inside its
   Setting row, not a foreign key; rows cascade from their player, only the

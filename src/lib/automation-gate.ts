@@ -18,6 +18,9 @@ import { draftReminderOpensAt, draftSetupOpen } from "./draft-setup";
 import { detectIntervalSeconds, inhouseDetectWindow } from "./inhouse";
 import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { duelWorkerWakeAtMs } from "./inhouse-duel";
+import { inhouseBanWakeAtMs, type InhouseBanRoleRow } from "./inhouse-ban";
+import { loadUnsettledInhouseBans } from "./inhouse-ban-service";
+import { getGuildConfig } from "./discord-roles";
 import { prisma } from "./prisma";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
 import { singleEliminationPlan } from "./single-elimination";
@@ -202,6 +205,15 @@ export type AutomationGateInputs = {
     startedAt: Date | null;
     checkedAt: Date | null;
   }>;
+  /**
+   * Every inhouse ban not yet settled (docs/features/inhouse.md#bans): a
+   * ban's end drops it from the board and takes its Discord role off, and a
+   * role still to give or take off is retried. Their wake is
+   * inhouseBanWakeAtMs, with `inhouseBanRoleOn` saying whether a ban role is
+   * set and the bot may write here.
+   */
+  inhouseBans: InhouseBanRoleRow[];
+  inhouseBanRoleOn: boolean;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
     id: string;
@@ -852,6 +864,19 @@ export function computeAutomationGateSnapshot(
   );
   if (duelWakeAt !== null) addCandidate(candidates, nowMs, duelWakeAt, "INHOUSE");
 
+  for (const [index, ban] of inputs.inhouseBans.entries()) {
+    optionalDateMs(ban.endsAt, `inhouseBans[${index}].endsAt`);
+    optionalDateMs(ban.liftedAt, `inhouseBans[${index}].liftedAt`);
+    optionalDateMs(ban.roleAddedAt, `inhouseBans[${index}].roleAddedAt`);
+    optionalDateMs(ban.roleTriedAt, `inhouseBans[${index}].roleTriedAt`);
+  }
+  const banWakeAt = inhouseBanWakeAtMs(
+    inputs.inhouseBans,
+    nowMs,
+    inputs.inhouseBanRoleOn,
+  );
+  if (banWakeAt !== null) addCandidate(candidates, nowMs, banWakeAt, "INHOUSE");
+
   if (inputs.leagueDeliveryAvailable && inputs.leagueOutbox.length > 0) {
     for (const row of inputs.leagueOutbox) {
       outboxWakeAt(
@@ -1331,6 +1356,7 @@ export async function loadAutomationGateSnapshot(
     repairableInhouseResult,
     leagueOutbox,
     inhouseOutboxes,
+    inhouseBans,
   ] = await Promise.all([
     prisma.setting.findMany({
       where: {
@@ -1345,6 +1371,7 @@ export async function loadAutomationGateSnapshot(
                 SETTING_KEYS.ANNOUNCE_RETRY_AT,
                 SETTING_KEYS.INHOUSE_BOARD,
                 SETTING_KEYS.INHOUSE_BOARD_AT,
+                SETTING_KEYS.INHOUSE_BAN_ROLE_ID,
                 ...markerKeys,
               ],
             },
@@ -1466,6 +1493,8 @@ export async function loadAutomationGateSnapshot(
         createdAt: true,
       },
     }),
+    // Bans are rare; only the unsettled ones can wake the worker.
+    loadUnsettledInhouseBans(),
   ]);
 
   const settings = Object.fromEntries(
@@ -1521,6 +1550,12 @@ export async function loadAutomationGateSnapshot(
       queue,
       duelQueue,
       openDuels,
+      inhouseBans,
+      // getInhouseBanRoleConfig's three pieces, from the settings read here.
+      inhouseBanRoleOn:
+        discordMutationsAllowed() &&
+        getGuildConfig() !== null &&
+        !!settings[SETTING_KEYS.INHOUSE_BAN_ROLE_ID],
       repairableInhouseResult: repairableInhouseResult !== null,
       leagueOutbox,
       inhouseOutboxes,

@@ -120,7 +120,8 @@ additive `duel` block after every 5v5 field.
     auto-detect claims and their deadline rollback. `applyResult` and
     `voidLastResult` before delivery (the admin `voidInhouseResult` too;
     `voidLastResult` after its result-cursor stamp, so a board check that
-    sees the new version reads the post-void stats). The
+    sees the new version reads the post-void stats). A ban and its lift
+    (`banInhousePlayer`, `liftInhouseBan`), before the Discord role. The
     bot's IN_PROGRESS write when it lands. The outbox reconcile when it
     committed (its `eloDeltas` show in `lastResult`). `/api/test/cache`. The
     login upsert, the Steam refresh and the signup save. An admin's inhouse
@@ -659,6 +660,8 @@ Every transition is a guarded claim; keep it that way (general rules:
   "not in the queue any more" instead of a crash (raced tests in
   `inhouse.itest.ts`). An `AdminAction` is written only when it removed
   someone. Not a ban: they can join again, and the MMR cap still judges them.
+  A ban is its own tool (see "Bans" below), and shares the removal's
+  `dropFromQueue`.
   The room shows admins one picker in its admin panel, in every stage
   (`AdminQueueRemoval` in `InhouseAdminTools`, below), since a slot's button would miss the players no slot
   shows (away, "Also queued") and the whole queue while the admin is in a
@@ -818,6 +821,105 @@ Every transition is a guarded claim; keep it that way (general rules:
     players' avatars in the ten slots, "Game live", and the time it was
     drawn), in place of /inhouse's own (the night's). Rules for the picture:
     [pages-and-ui](pages-and-ui.md#link-previews-discord-x-slack).
+
+## Bans
+
+An admin bans a player from inhouse games for a length or for good, with a
+reason players see (Tim, 2026-11-02). Rules and words: `src/lib/inhouse-ban.ts`;
+writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
+`banFromInhouse`, `liftBanFromInhouse` and `saveInhouseBanRole` in
+`src/app/actions/inhouse-admin.ts`; page: `/admin/inhouse-players`.
+
+- **A ban is an `InhouseBan` row:** reason, `endsAt` (null is permanent),
+  who banned (denormalised, like `AdminAction`), `liftedAt` and who lifted.
+  Running = not lifted and permanent or ending later (`inhouseBanActive`,
+  `activeInhouseBanWhere`). Rows are history; nothing deletes one. The
+  lengths are `INHOUSE_BAN_LENGTHS` (1 day, 3 days, 1 week, 2 weeks, 30 days,
+  permanent; the form starts on a week). A reason is one line of at most
+  `INHOUSE_BAN_REASON_MAX`, required: players read it.
+- **It keeps them out of both queues, the 5v5 and the 1v1.** `joinQueue`
+  refuses a banned player before anything is written (the positions too),
+  then again inside its Serializable transaction; `joinDuelQueue` refuses
+  inside its own. The refusal names the end on the league's clock and the
+  reason (`inhouseBanRefusal`). The join's seam
+  `inhouse.joinQueue.beforeWrite` pins the in-transaction check.
+- **`banInhousePlayer` is one Serializable transaction (retried):** lift any
+  ban of theirs still running (a new ban replaces it, so changing a length
+  is one step, and the old row is settled at once: the new one owns the
+  Discord role), write the ban, take them out of the 5v5 queue with the
+  leave's own locks (`dropFromQueue`) and out of the 1v1 queue. It reads both
+  queues and the joins read the bans, so a ban and a join that cross abort
+  one (raced on Postgres in `inhouse-ban.itest.ts`).
+- **A live game is left alone and named in the toast** ("They're still in
+  inhouse #1234: cancel it from the room if they shouldn't play it"). Refuse
+  or report: a ban never tears down nine other players' game.
+- **The requeues skip a banned player:** a failed ready check
+  (`failReadyCheck`), an admin cancel (`cancelLobby`) and the 1v1's
+  `requeueAtFront` read the bans after their claim. Those transactions are
+  not Serializable, so the ban writes the live game's own row (lobby or
+  duel, `updatedAt` only) as a lock: a requeue that claims that row first
+  makes the ban abort and retry against the requeued queue, and one that
+  claims it after waits for the ban's commit and then reads it. Never drop
+  that write as a no-op, and never add a requeue path without the skip.
+- **Lifting is a claim on `liftedAt: null`,** so a second admin's lift gets
+  "already lifted" (the mutation ratchet's `liftInhouseBan::liftedAt#1`).
+  An ended ban can't be lifted ("already ended").
+- **Players see the bans in two places, never a ping:** a "Banned from
+  inhouse" card on /inhouse (`src/app/inhouse/bans-card.tsx`, under the room,
+  the plans and the night, nothing while nobody is banned; anchor
+  `INHOUSE_BANS_ANCHOR`; times in the viewer's zone) and a "BANNED FROM
+  INHOUSE" field under every state of the Discord queue board (below). A
+  banned viewer gets the refusal where Join would be: the page's
+  `joinRefusal`, the ban first, then the MMR cap. It is a page read, so a ban
+  made while their tab is open shows at their next load; a click on Join
+  meanwhile toasts the server's refusal.
+- **The board lists the running bans from both paths' inputs** (`bans` on
+  `BoardSnapshotInput`): the room's snapshot rows (`loadInhouseRoomRows`
+  loads `loadActiveInhouseBanRows`) and the worker's `loadBoardSnapshot`, both
+  judged again at their own clock by `activeInhouseBans`, so a ban that ends
+  meanwhile goes from both at once and the two paths never repaint each
+  other. The digest carries each ban's name, reason and end (fixed for its
+  life), so the board edits when a ban is made, lifted or ends, never per
+  tick. Up to `BANS_SHOWN` lines (fewer when escaping makes them long), then
+  "+N more" linking to the card; reasons are escaped like names.
+- **The Discord role (Tim's pick, 2026-11-02, over a Discord timeout or a
+  server ban):** the bot gives a banned player the role in
+  `inhouseBanRoleId` (set on `/admin/inhouse-players`; blank leaves Discord
+  alone) and takes it off when the ban ends or is lifted. The role's own
+  channel permissions in Discord are what keep them out of the inhouse
+  channels; the site only adds and removes it, through
+  `setInhouseBanRole` (the ping role's one idempotent call). The grant goes
+  after the ban's commit (`giveInhouseBanRole`), best-effort, and its toast
+  says what happened (given, no linked Discord, not in the server, the bot's
+  role too low, Discord down).
+  - **Discord has no timed roles, so the end is the worker's.**
+    `syncInhouseBanRoles` (worker-only, after the 5v5 and 1v1 passes in
+    `syncInhouse`) walks every unsettled ban: it gives a missing role (every
+    `INHOUSE_BAN_ROLE_GRANT_RETRY_MS`, so a player who links or joins later
+    gets it), takes the role off a ban that ended or was lifted (a refusal
+    retried every `INHOUSE_BAN_ROLE_REMOVE_RETRY_MS`), and marks the ban
+    settled. It never takes off a role a newer running ban owns, and a
+    removal that crosses a new ban marks the new one's role ungiven so the
+    next pass gives it again. Decisions are the pure `inhouseBanRoleStep`.
+  - **The automation gate wakes the worker from the same rules**
+    (`inhouseBanWakeAtMs`, gate v16): a running ban's end (the board drops it,
+    the role comes off) and any role still to give or take off. Keep its
+    deadlines and `inhouseBanRoleStep`'s "wait" answers in step.
+  - **The columns are the site's own record of what it did** (`roleAddedAt`,
+    `roleTriedAt`, `settledAt`), never Discord's state: an admin who removes
+    the role by hand in Discord isn't overruled until the next ban.
+- **Tests:** `src/lib/inhouse-ban.test.ts` (lengths, the form, running,
+  one ban per player, the words, the role step and the wake),
+  `src/lib/inhouse-board.test.ts` (the field, escaping, the limit, the
+  digest), `src/lib/automation-gate.test.ts` (the wake) and
+  `test/integration/inhouse-ban.itest.ts` (both queues, the join's seam, a
+  replaced ban, a double lift, a live game, the three requeues, the board's
+  two inputs, the role's life with the worker, the Postgres races of a ban
+  against a join and against an admin cancel, and the Postgres seam
+  `inhouseBan.banInhousePlayer.beforeWrite`, where a cancel or a 1v1 decline
+  requeues inside the ban's open transaction and the ban's retry takes the
+  player out again). Each guard there was sabotage-verified, the game-row
+  locks on Postgres.
 
 ## Ready check and captain vote
 

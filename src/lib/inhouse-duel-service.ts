@@ -72,6 +72,7 @@ import {
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
 import { loadInhouseJoinFacts } from "./inhouse-service";
+import { bannedUserIds, inhouseBanRefusalFor } from "./inhouse-ban-service";
 import { inhouseJoinRefusalBeforeTyping } from "./inhouse-mmr-cap";
 import { claimProviderCooldown } from "./settings";
 import { logAdminAction } from "./admin-log";
@@ -236,6 +237,12 @@ export async function joinDuelQueue(viewer: SessionUser): Promise<DuelActionResu
       outcome = await prisma.$transaction(
         async (tx): Promise<JoinOutcome> => {
           const nowMs = Date.now();
+          // An inhouse ban covers the 1v1 queue too, judged here at the
+          // write: banInhousePlayer runs Serializable and reads this queue,
+          // so a ban and a join that cross abort one. Nothing is written
+          // yet, so the refusal may return.
+          const bannedNow = await inhouseBanRefusalFor(tx, viewer.id, nowMs);
+          if (bannedNow) return { kind: "refused", error: bannedNow };
           const in5v5 = await tx.inhouseLobbyPlayer.findFirst({
             where: {
               userId: viewer.id,
@@ -426,7 +433,17 @@ async function requeueAtFront(
   nowMs: number,
 ): Promise<void> {
   const expiresAt = duelQueueExpiresAt(nowMs);
-  for (const p of duelRequeueAfterAccept(duel, declinedBy)) {
+  const back = duelRequeueAfterAccept(duel, declinedBy);
+  // Nobody an admin banned meanwhile. Read after the caller's claim on the
+  // duel's row, which banInhousePlayer also writes: a ban committing
+  // alongside is either seen here or retried against this requeue.
+  const banned = await bannedUserIds(
+    tx,
+    back.map((p) => p.userId),
+    nowMs,
+  );
+  for (const p of back) {
+    if (banned.has(p.userId)) continue;
     await tx.inhouseDuelQueueEntry.upsert({
       where: { userId: p.userId },
       create: {

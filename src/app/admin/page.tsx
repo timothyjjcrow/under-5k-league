@@ -799,13 +799,14 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
       <AdminSection
         id="adm-inhouse-players"
         title="Inhouse players"
-        subtitle="Set any player's inhouse MMR and medal, signed up for the league or not."
+        subtitle="Set any player's inhouse MMR and medal, signed up for the league or not, and ban players from inhouse games."
       >
         <CardBody className="space-y-3">
           <p className="text-sm text-muted">
             Every inhouse join uses an MMR set there, over the player&apos;s
             league signup&apos;s and anything they type. The medal is the one
-            shown across the site.
+            shown across the site. Inhouse bans are made and lifted there
+            too, with the Discord role a banned player gets.
           </p>
           <Link
             href="/admin/inhouse-players"

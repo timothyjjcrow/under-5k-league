@@ -2,6 +2,11 @@ import Link from "@/components/app-link";
 import { notFound, redirect } from "next/navigation";
 import { AdminInhouseRatingEditor } from "@/components/admin-inhouse-rating-editor";
 import {
+  AdminInhouseBanEditor,
+  AdminInhouseBansCard,
+  InhouseBanBadge,
+} from "@/components/admin-inhouse-ban";
+import {
   Avatar,
   Badge,
   Card,
@@ -20,8 +25,14 @@ import {
 } from "@/lib/inhouse-rating-service";
 import { rankMedalTier } from "@/lib/rank";
 import { singleSearchParam } from "@/lib/search-params";
+import { loadInhouseBanAdminRows } from "@/lib/inhouse-ban-service";
+import { getInhouseBanRoleId } from "@/lib/discord";
+import { getGuildConfig } from "@/lib/discord-roles";
 
 export const metadata = { title: "Inhouse players" };
+
+/** A player's running ban, as their row shows it. */
+type RowBan = { endsAt: Date | null; reason: string };
 
 /** A fixed locale, so the server and every reader print "4,350". */
 const MMR_FORMAT = new Intl.NumberFormat("en-US");
@@ -31,7 +42,8 @@ const MMR_FORMAT = new Intl.NumberFormat("en-US");
  * or not (Tim, 2026-10-17). Every inhouse join uses the MMR set here, over a
  * league signup's and anything typed; the medal is the site-wide one. Find a
  * player by name, Steam ID or profile link, or pick one from the queue or
- * the latest games.
+ * the latest games. Inhouse bans live here too (Tim, 2026-11-02): the bans
+ * card, and a ban form on every row.
  */
 export default async function InhousePlayersPage({
   searchParams,
@@ -44,7 +56,19 @@ export default async function InhousePlayersPage({
   const raw = singleSearchParam((await searchParams).q);
   if (raw === null) notFound();
   const search = raw ? raw.slice(0, 100) : null;
-  const page = await loadInhouseRatingPage(search);
+  const [page, banRows, banRoleId] = await Promise.all([
+    loadInhouseRatingPage(search),
+    loadInhouseBanAdminRows(),
+    getInhouseBanRoleId(),
+  ]);
+  const bans = new Map<string, RowBan>();
+  for (const ban of banRows) {
+    if (ban.active && !bans.has(ban.userId)) {
+      bans.set(ban.userId, { endsAt: ban.endsAt, reason: ban.reason });
+    }
+  }
+  const roleOn = banRoleId !== null && getGuildConfig() !== null;
+  const lists = { bans, roleOn };
   const input =
     "min-h-11 w-full rounded-lg border border-line bg-surface-2 px-3 text-sm";
 
@@ -52,7 +76,7 @@ export default async function InhousePlayersPage({
     <div className="space-y-6">
       <PageTitle
         title="Inhouse players"
-        subtitle="Set any player's inhouse MMR and medal, signed up for the league or not. Every inhouse join uses the MMR set here, over their league signup's and anything they type."
+        subtitle="Set any player's inhouse MMR and medal, signed up for the league or not, or ban them from inhouse games. Every inhouse join uses the MMR set here, over their league signup's and anything they type."
         action={
           <>
             <Link href="/inhouse" className={buttonClasses("secondary", "sm")}>
@@ -89,11 +113,17 @@ export default async function InhousePlayersPage({
           </form>
         </CardBody>
       </Card>
+      <AdminInhouseBansCard
+        rows={banRows}
+        roleId={banRoleId}
+        botConfigured={getGuildConfig() !== null}
+      />
       {page.results !== null ? (
         <PlayerList
           title="Search results"
           subtitle={`Players matching “${search}”.`}
           rows={page.results}
+          {...lists}
           empty="Nobody matches. Try part of their name, their Steam ID, or a Steam, OpenDota or Dotabuff link."
         />
       ) : (
@@ -102,18 +132,21 @@ export default async function InhousePlayersPage({
             title="In the queue"
             subtitle="In queue order. A saved MMR goes onto their queue spot at once."
             rows={page.queued}
+            {...lists}
             empty="Nobody is queued."
           />
           <PlayerList
             title="Recent inhouse players"
             subtitle="Everyone from the latest games, newest first."
             rows={page.recent}
+            {...lists}
             empty="No inhouse games yet."
           />
           {page.adminSet.length > 0 ? (
             <PlayerList
               title="Other players with an admin's MMR or medal"
               rows={page.adminSet}
+              {...lists}
               empty=""
             />
           ) : null}
@@ -128,11 +161,16 @@ function PlayerList({
   subtitle,
   rows,
   empty,
+  bans,
+  roleOn,
 }: {
   title: string;
   subtitle?: string;
   rows: InhouseRatingRow[];
   empty: string;
+  /** Running bans by player. */
+  bans: Map<string, RowBan>;
+  roleOn: boolean;
 }) {
   return (
     <Card>
@@ -143,7 +181,12 @@ function PlayerList({
         ) : (
           <ul className="divide-y divide-line">
             {rows.map((row) => (
-              <PlayerRow key={row.id} row={row} />
+              <PlayerRow
+                key={row.id}
+                row={row}
+                ban={bans.get(row.id) ?? null}
+                roleOn={roleOn}
+              />
             ))}
           </ul>
         )}
@@ -152,7 +195,15 @@ function PlayerList({
   );
 }
 
-function PlayerRow({ row }: { row: InhouseRatingRow }) {
+function PlayerRow({
+  row,
+  ban,
+  roleOn,
+}: {
+  row: InhouseRatingRow;
+  ban: RowBan | null;
+  roleOn: boolean;
+}) {
   const standing = inhouseMmrStanding(row);
   return (
     <li className="min-w-0 py-3 first:pt-0 last:pb-0" data-inhouse-player={row.id}>
@@ -172,6 +223,7 @@ function PlayerRow({ row }: { row: InhouseRatingRow }) {
             {overInhouseCap({ mmr: standing.mmr, rankTier: row.rankTier }) ? (
               <Badge tone="danger">over the inhouse cap</Badge>
             ) : null}
+            {ban ? <InhouseBanBadge endsAt={ban.endsAt} /> : null}
           </div>
           <p className="mt-0.5 text-xs text-muted">
             {standing.mmr !== null ? (
@@ -197,6 +249,13 @@ function PlayerRow({ row }: { row: InhouseRatingRow }) {
             adminMmr={row.adminMmr}
             rankTier={row.rankTier}
             rankTierManual={row.rankTierManual}
+          />
+          <AdminInhouseBanEditor
+            key={`ban:${row.id}:${ban?.endsAt?.getTime() ?? ""}:${ban?.reason ?? ""}`}
+            userId={row.id}
+            name={row.name}
+            banned={ban}
+            roleOn={roleOn}
           />
         </div>
       </div>

@@ -100,6 +100,12 @@ export const SETTING_KEYS = {
   // a ping people can't opt out of gets the whole channel muted, which is
   // permanently worse than silence.
   INHOUSE_PING_ROLE_ID: "inhousePingRoleId",
+  // Discord role id the bot gives a player for the length of an inhouse ban
+  // and takes off when it ends ("Inhouse Banned", set on
+  // /admin/inhouse-players). The role itself is what keeps them out of the
+  // inhouse channels: Discord's own channel permissions for it. Unset = bans
+  // leave Discord alone.
+  INHOUSE_BAN_ROLE_ID: "inhouseBanRoleId",
   // ISO timestamp claimed by the automation worker's hourly player data
   // refresh (medals, scouting stats, Steam names, report-card backfill). A
   // failed OpenDota call writes a FUTURE timestamp here, which is the

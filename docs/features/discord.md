@@ -261,7 +261,8 @@ actions: `src/app/actions/admin-discord.ts`.
 ## The ping role and the bot
 
 - **Keep the bot tiny.** `discord-roles.ts` is the only bot-token user: REST
-  only, no gateway, process or slash commands. Besides the role it creates,
+  only, no gateway, process or slash commands. Besides the ping role and the
+  inhouse ban role (below) it creates,
   edits and deletes the inhouse night's server event (`createGuildEvent`,
   `updateGuildEvent`, `deleteGuildEvent`; `forbidden` means the bot lacks
   Create Events, `gone` that someone deleted the event) and reads who marked
@@ -278,6 +279,17 @@ actions: `src/app/actions/admin-discord.ts`.
   per-player `claimThrottle` (`INHOUSE_PING_TOGGLE_THROTTLE_SECONDS`, 10s):
   a script can't spend the guild's role rate limit, which every player's
   opt-in and unlink share.
+- **The inhouse ban role ("Inhouse Banned", Tim, 2026-11-02)** is the
+  `inhouseBanRoleId` Setting, set on `/admin/inhouse-players` (a raw id or a
+  pasted `<@&id>`; blank turns it off). `getInhouseBanRoleConfig` needs it,
+  the token and guild, and Discord writes allowed here (so a preview or
+  staging never claims a role was given); `setInhouseBanRole` is the ping
+  role's own PUT/DELETE on it. The bot gives it after a ban commits and the
+  worker takes it off when the ban ends ([inhouse](inhouse.md#bans)). The
+  role does nothing by itself: in each server it must sit below the bot's
+  role and be denied the inhouse channels (🎯 INHOUSES) by its own channel
+  permissions, and no other role of the player's may explicitly allow them
+  there, since a role's allow beats another role's deny.
 - **`hasPingRole` returns `boolean | null`;** null is unknown (an unticked box
   for an opted-in player invites a click that changes nothing). **`forbidden`
   (403) is its own outcome:** the bot's role sits below the ping role, retrying
@@ -461,7 +473,8 @@ actions: `src/app/actions/admin-discord.ts`.
 ## The inhouse queue board
 
 One pinned message shows the live queue, rewritten in place; keep it (Tim's
-call). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
+call). Under every state it lists the running inhouse bans with their
+reasons (Tim, 2026-11-02; [inhouse](inhouse.md#bans)). Render: `inhouse-board.ts` (pure). Service: `inhouse-board-service.ts`
 (`inhouse-board.itest.ts`). Transport: `postWebhookMessage`,
 `patchWebhookMessage`, `deleteWebhookMessage`
 (`discord-webhook-transport.itest.ts`). It rides the board webhook; no bot.

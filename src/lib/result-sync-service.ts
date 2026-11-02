@@ -69,6 +69,7 @@ import {
 import { maybeNudgeMissingResults } from "./result-nudge-service";
 import { announceInhouseNightStart } from "./inhouse-night-service";
 import { duelWorkPending, runDuelWorkerSteps } from "./inhouse-duel-service";
+import { syncInhouseBanRoles } from "./inhouse-ban-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recordLeagueFeedWait } from "./league-feed-wait-service";
@@ -499,6 +500,7 @@ async function syncInhouse(
     gamesError = error;
   }
   const duels = await syncInhouseDuels(options);
+  await syncInhouseBans(options);
   if (games === null) throw gamesError;
   return {
     ...games,
@@ -508,6 +510,22 @@ async function syncInhouse(
       ? { deadlineReached: true }
       : {}),
   };
+}
+
+/**
+ * The inhouse bans' Discord role (syncInhouseBanRoles): given when it is
+ * missing, taken off when a ban ends or is lifted. Worker-only, like the
+ * duels, and after both game passes and whatever they did; a failure never
+ * reaches their result. A ban's end is also when the board drops it, which
+ * the board sync in syncInhouseLobbies draws on this same pass.
+ */
+async function syncInhouseBans(options: RunResultSyncOptions): Promise<void> {
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) return;
+  try {
+    await syncInhouseBanRoles();
+  } catch (error) {
+    logStepFailure("inhouse-bans", error);
+  }
 }
 
 /**

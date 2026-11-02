@@ -1,6 +1,6 @@
 import { prisma } from "./prisma";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
-import { getInhousePingRoleId } from "./discord";
+import { getInhouseBanRoleId, getInhousePingRoleId } from "./discord";
 import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { discordLinkingConfigured } from "./discord-oauth";
@@ -65,6 +65,20 @@ export async function getRoleConfig(): Promise<RoleConfig | null> {
   const guild = getGuildConfig();
   if (!guild) return null;
   const roleId = await getInhousePingRoleId();
+  if (!roleId) return null;
+  return { ...guild, roleId };
+}
+
+/**
+ * Token, guild and the inhouse ban role, or null. Null also where Discord
+ * writes are off (a preview, staging), so a ban there never pretends it
+ * reached Discord.
+ */
+export async function getInhouseBanRoleConfig(): Promise<RoleConfig | null> {
+  if (!discordMutationsAllowed()) return null;
+  const guild = getGuildConfig();
+  if (!guild) return null;
+  const roleId = await getInhouseBanRoleId();
   if (!roleId) return null;
   return { ...guild, roleId };
 }
@@ -481,6 +495,27 @@ export function inhousePingToggleKey(userId: string): string {
  * player's click.
  */
 export async function setPingRole(
+  discordId: string,
+  on: boolean,
+  cfg: RoleConfig,
+): Promise<RoleChange> {
+  return setMemberRole(discordId, on, cfg);
+}
+
+/**
+ * Add or remove the inhouse ban role (getInhouseBanRoleConfig): the same one
+ * idempotent call as the ping role, on another role. `forbidden` means the
+ * bot's role sits below it.
+ */
+export async function setInhouseBanRole(
+  discordId: string,
+  on: boolean,
+  cfg: RoleConfig,
+): Promise<RoleChange> {
+  return setMemberRole(discordId, on, cfg);
+}
+
+async function setMemberRole(
   discordId: string,
   on: boolean,
   cfg: RoleConfig,
