@@ -8,7 +8,7 @@ import { GameOverControl } from "@/components/inhouse/game-over-control";
 import { GameSetupCard } from "@/components/inhouse/game-setup-card";
 import { MatchupGrid } from "@/components/inhouse/matchup-grid";
 import { ResultControls } from "@/components/inhouse/result-controls";
-import type { RoomLobby } from "@/components/inhouse/shared";
+import type { RoomGameOver, RoomLobby } from "@/components/inhouse/shared";
 
 export function ReadyView({
   lobby,
@@ -16,6 +16,7 @@ export function ReadyView({
   serverNow,
   pending,
   act,
+  gameOver,
 }: {
   lobby: RoomLobby;
   me: InhouseState["me"];
@@ -23,6 +24,7 @@ export function ReadyView({
   serverNow: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
+  gameOver: RoomGameOver;
 }) {
   const inPlay = inhouseReadyInPlay(lobby.status, lobby.scanOpensAt, serverNow);
   const setup = me.inLobby || me.isAdmin;
@@ -55,7 +57,7 @@ export function ReadyView({
               me={me}
               serverNow={serverNow}
               pending={pending}
-              act={act}
+              gameOver={gameOver}
             />
           ) : null}
         </div>

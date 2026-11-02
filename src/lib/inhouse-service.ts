@@ -51,11 +51,16 @@ import {
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
 import {
-  botReportedMatchId,
+  checkInhouseBotGame,
   inhouseBotGameStatus,
   releaseInhouseBotAfterClose,
 } from "./dota-lobby-service";
-import { botGameOverRefusal } from "./dota-lobby";
+import {
+  botGameOverRefusal,
+  botReportedMatchId,
+  gameOverAsksDota,
+  gameOverCheckRefusal,
+} from "./dota-lobby";
 import { effectiveInhouseRoles, parseRoleKeys } from "./roles";
 import { classifyGame } from "./match-import";
 import {
@@ -106,7 +111,17 @@ import { waitBeforeSerializableRetry } from "./serializable-retry";
 import type { SessionUser } from "./auth";
 import { invalidateAutomationGateBestEffort } from "./automation-gate-invalidation";
 
-export type InhouseActionResult = { ok: true } | { ok: false; error: string };
+export type InhouseActionResult =
+  | { ok: true }
+  | {
+      ok: false;
+      error: string;
+      /**
+       * "Game over" Dota has no result for yet: the room asks again while it
+       * waits (gameOverWaitStep in inhouse.ts) instead of toasting `error`.
+       */
+      waitingForDota?: true;
+    };
 
 // The transaction-scoped Prisma client type (also satisfied by `prisma` itself).
 type Tx = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
@@ -1744,8 +1759,22 @@ export async function finishGame(
         : NO_GAME_TO_FINISH,
     };
   }
-  const botRefusal = botGameOverRefusal(await inhouseBotGameStatus(lobby));
+  const botStatus = await inhouseBotGameStatus(lobby);
+  const botRefusal = botGameOverRefusal(botStatus);
   if (botRefusal) return { ok: false, error: botRefusal };
+  // A player's press on a game the bot launched asks Dota first (Tim's call,
+  // 2026-11-01): presses made mid-game freed the ten while they still played.
+  // A winner or a not-scored end goes ahead; no result yet refuses, and the
+  // room asks again while it waits (gameOverWaitStep), so a press made as the
+  // game ended lands once Dota posts the result. An admin outside the game
+  // marks it over as before, and an unknown answer never blocks.
+  if (isMember && gameOverAsksDota(botStatus)) {
+    const refusal = gameOverCheckRefusal(
+      await checkInhouseBotGame(lobby),
+      inhouseLobbyCode(lobby.id),
+    );
+    if (refusal) return { ok: false, error: refusal, waitingForDota: true };
+  }
   // Seam: a result, an admin cancel or the abandon sweep landing between the
   // read above and the claim — the claim must lose to each of them.
   await raceHook("inhouse.finishGame.beforeClaim");

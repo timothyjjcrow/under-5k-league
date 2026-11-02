@@ -10,7 +10,7 @@ import {
   ResultControls,
   scanStatusText,
 } from "@/components/inhouse/result-controls";
-import type { RoomLobby } from "@/components/inhouse/shared";
+import type { RoomGameOver, RoomLobby } from "@/components/inhouse/shared";
 
 export function InProgressView({
   lobby,
@@ -19,6 +19,7 @@ export function InProgressView({
   serverNow,
   pending,
   act,
+  gameOver,
 }: {
   lobby: RoomLobby;
   me: InhouseState["me"];
@@ -27,6 +28,7 @@ export function InProgressView({
   serverNow: number;
   pending: boolean;
   act: (body: Record<string, unknown>) => void;
+  gameOver: RoomGameOver;
 }) {
   // Poll-driven (not ticking): it flips once, minutes in, and only gates the
   // scan note and the "Check now" button. The visible timer ticks in
@@ -70,7 +72,7 @@ export function InProgressView({
             me={me}
             serverNow={serverNow}
             pending={pending}
-            act={act}
+            gameOver={gameOver}
           />
         </div>
         {me.canRecord ? (

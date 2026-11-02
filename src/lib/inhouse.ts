@@ -935,6 +935,47 @@ export function inhouseGameOverOpen(
 }
 
 /**
+ * A player's "Game over" Dota couldn't confirm yet (finishGame refused it
+ * with `waitingForDota`: no result posted for the game). The room asks again
+ * every INHOUSE.GAME_OVER_RECHECK_SECONDS, so a press made as the game ended
+ * lands, and queues the presser, once Dota posts the result; a press made
+ * mid-game gives up INHOUSE.GAME_OVER_WAIT_SECONDS after the first one.
+ */
+export type GameOverWait = {
+  lobbyId: string;
+  requeue: boolean;
+  /** The first press, on this browser's clock: the wait runs from it. */
+  sinceMs: number;
+  /** The server's refusal, shown once the wait runs out. */
+  message: string;
+};
+
+/**
+ * The wait after a refusal: the same game's carries on, keeping its start
+ * (an answer to a re-ask never extends it); a press on another game starts
+ * a new one.
+ */
+export function startGameOverWait(
+  prev: GameOverWait | null,
+  next: Omit<GameOverWait, "sinceMs">,
+  nowMs: number,
+): GameOverWait {
+  return prev?.lobbyId === next.lobbyId
+    ? { ...prev, requeue: next.requeue, message: next.message }
+    : { ...next, sinceMs: nowMs };
+}
+
+/** On each recheck: ask again, or give up once the wait has run out. */
+export function gameOverWaitStep(
+  wait: GameOverWait,
+  nowMs: number,
+): "ask" | "give-up" {
+  return nowMs - wait.sinceMs >= INHOUSE.GAME_OVER_WAIT_SECONDS * 1000
+    ? "give-up"
+    : "ask";
+}
+
+/**
  * The lobbies that keep the site on its fast `watch` cadence: every live game,
  * plus a game marked over in its first AWAITING_RESULT_WATCH_MINUTES (after
  * that its scan carries on at its own decaying rate, but the whole site need

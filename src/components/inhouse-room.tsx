@@ -23,6 +23,7 @@ import {
   autoJoinAlreadyInToast,
   autoJoinDecision,
   gameMarkedOverToast,
+  gameOverWaitStep,
   inhouseAlerts,
   inhouseGameLabel,
   inhouseLobbyCode,
@@ -34,7 +35,9 @@ import {
   resultLandedToast,
   shouldFocusStage,
   showGameLabel,
+  startGameOverWait,
   wasInReadyCheck,
+  type GameOverWait,
   type InhouseAlertSnapshot,
   type InhouseFocusSnapshot,
 } from "@/lib/inhouse";
@@ -56,6 +59,7 @@ import {
   issueSequence,
 } from "@/lib/room-sequence";
 import {
+  INHOUSE,
   INHOUSE_SCAN_ACTIONS,
   INHOUSE_SCAN_ACTION_TIMEOUT_MS,
   ROOM_ACTION_TIMEOUT_MS,
@@ -163,6 +167,8 @@ export function InhouseRoom({
   const pending =
     reqPending || actionReconciling || disconnected || connectionUnavailable;
   const [selected, setSelected] = useState<string | null>(null);
+  // A "Game over" Dota couldn't confirm yet: asked again on a clock below.
+  const [gameOverWait, setGameOverWait] = useState<GameOverWait | null>(null);
   const [mmr, setMmr] = useState<number>(fixedMmr?.mmr ?? 0);
   // An unsaved positions pick, held here (like the typed MMR) because the
   // queue's controls move between cards as games form and end.
@@ -832,7 +838,16 @@ export function InhouseRoom({
   }, [state]);
 
   const act = useCallback(
-    async (body: Record<string, unknown>): Promise<boolean> => {
+    async (
+      body: Record<string, unknown>,
+      options: {
+        /**
+         * Sees a refusal first; true when it handled it, so no error toast
+         * ("Game over" waiting on Dota).
+         */
+        onRefused?: (data: { error?: string; waitingForDota?: boolean } | null) => boolean;
+      } = {},
+    ): Promise<boolean> => {
       if (connectionUnavailable) {
         pushToast(
           "info",
@@ -873,7 +888,7 @@ export function InhouseRoom({
           ),
         });
         const data = (await res.json().catch(() => null)) as
-          | (InhouseState & { error?: string })
+          | (InhouseState & { error?: string; waitingForDota?: boolean })
           | null;
         // Toast, not an inline banner — same reasoning as the draft room:
         // pick-race rejections land while the captain is scrolled into the
@@ -885,6 +900,7 @@ export function InhouseRoom({
             );
             return false;
           }
+          if (options.onRefused?.(data)) return false;
           pushToast(
             "error",
             data && typeof data.error === "string"
@@ -930,6 +946,51 @@ export function InhouseRoom({
     },
     [apply, connectionUnavailable, connectivity, router],
   );
+
+  // "Game over": a player's press on a game the bot launched asks Dota
+  // first. While Dota has no result for it (finishGame's waitingForDota) the
+  // room keeps the press and asks again below, so a press made as the game
+  // ended lands, queueing the presser, once Dota posts the result. Success or
+  // any other refusal ends the wait; an unknown outcome (a timeout, a lost
+  // reply) keeps it, and the next ask settles it.
+  const pressGameOver = useCallback(
+    async (lobbyId: string, requeue: boolean) => {
+      let refused = false;
+      const done = await act(
+        { action: "finish", lobbyId, requeue },
+        {
+          onRefused: (data) => {
+            if (data?.waitingForDota !== true) {
+              refused = true;
+              return false;
+            }
+            const message = typeof data.error === "string" ? data.error : "";
+            setGameOverWait((prev) =>
+              startGameOverWait(prev, { lobbyId, requeue, message }, Date.now()),
+            );
+            return true;
+          },
+        },
+      );
+      if (done || refused) setGameOverWait(null);
+      return done;
+    },
+    [act],
+  );
+  useEffect(() => {
+    if (!gameOverWait) return;
+    const timer = setInterval(() => {
+      // One request at a time, and none while the room can't act.
+      if (actionsInFlightRef.current > 0 || connectionUnavailable) return;
+      if (gameOverWaitStep(gameOverWait, Date.now()) === "give-up") {
+        setGameOverWait(null);
+        if (gameOverWait.message) pushToast("error", gameOverWait.message);
+        return;
+      }
+      void pressGameOver(gameOverWait.lobbyId, gameOverWait.requeue);
+    }, INHOUSE.GAME_OVER_RECHECK_SECONDS * 1000);
+    return () => clearInterval(timer);
+  }, [gameOverWait, pressGameOver, connectionUnavailable]);
 
   // ?join=1 — the one-tap join a Discord ping links to. Waits for the first
   // state so it can refuse the cases where an auto-join would be wrong, then
@@ -1073,6 +1134,10 @@ export function InhouseRoom({
   const stageView = (l: RoomLobby, viewer: RoomMe, clockBar: boolean) => {
     const actOn = (body: Record<string, unknown>) =>
       act({ ...body, lobbyId: l.id });
+    const gameOver = {
+      waiting: gameOverWait?.lobbyId === l.id,
+      press: (requeue: boolean) => void pressGameOver(l.id, requeue),
+    };
     return l.status === "READY_CHECK" ? (
       <ReadyCheckView
         key={l.id}
@@ -1114,6 +1179,7 @@ export function InhouseRoom({
         serverNow={state.now}
         pending={pending}
         act={actOn}
+        gameOver={gameOver}
       />
     ) : (
       <InProgressView
@@ -1124,6 +1190,7 @@ export function InhouseRoom({
         serverNow={state.now}
         pending={pending}
         act={actOn}
+        gameOver={gameOver}
       />
     );
   };

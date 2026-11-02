@@ -255,6 +255,16 @@ Run on the first real game of each kind after `DOTA_BOT_EARLY_LEAVE` is set in `
 4. **If unconfirmed twice:** the bot stays and leaves at the postgame exactly as before (`leave-sent reason=postgame`), with no `resync` line after the leave.
 5. Any surprise (a player dropped, a game ended, the lobby gone for everyone): unset `DOTA_BOT_EARLY_LEAVE`, restart the bot while it holds no lobby, and report it.
 
+## Game over checks Dota first
+
+Tim's call on 2026-11-01 ([inhouse: Game over](features/inhouse.md#game-over-result-pending)): a player's **Game over — queue again** on a game the bot launched is only accepted once Dota shows the game over, so nobody frees their ten mid-game. The site asks the bot with the action **`check`** (a usual spec), over the loopback HTTP only: the answer waits on the Game Coordinator, so the relay's synchronous path refuses it (`INVALID`), and the site treats that as unknown.
+
+- **What it asks.** For a job that is `started` with a match id and whose end the bot hasn't seen, the bot asks the Game Coordinator for the match's details (7095) at once, through the same one request in flight as the scheduled asks of [early leave](#early-leave) (Dota may answer without the match id, which then answers the request out). A check of a match already asked about waits on that answer; a check of another match takes the slot when it frees. The reply waits up to `CHECK_WAIT_MS` (5 seconds).
+- **The reply** is the usual status plus `check`: `over` (a winner, 2 to 13), `not-scored` (64 to 69), `no-result` (Dota answered with neither: the game still runs, Dota hasn't posted its result yet, or the request failed), `unknown` (no answer in time, or the ask couldn't go out) or `none` (nothing launched to check: no job, a lobby not started, a released launch). A game the bot already saw end answers `over` without asking.
+- **It records only what a scheduled ask would.** For a game the bot left early, the answer goes through `matchDetails` as always: a winner reads `over`, a not-scored end is a failed launch. So a check can bring a game's end sooner, never make one up. For a game the bot is still in, only its own lobby records the end; the check just answers.
+- **The site** (`checkInhouseBotGame`) asks only when its status read shows the game launched and not over, and only a `no-result` refuses the press; everything else, a relay connection and an older bot included, never blocks it. A press Dota can't confirm yet keeps asking from the room every 10 seconds for up to 3 minutes, since Dota can post a result a minute or so after the game ends.
+- **Deploy order:** bot first, then the site. Either order is safe (an older bot refuses the action, which the site treats as unknown, so the press works as before), but only the new bot makes the check work.
+
 ## Logs
 
 Every line the bot writes starts with an ISO timestamp: `2026-10-18T02:10:43.277Z [dota-bot] <event> key=value ...` (`event-log.mjs`). The fixed operator messages ("Game Coordinator connected", "Website relay connected", the restart warnings) carry the same prefix. On the Mac they are in `state/logs/`; on the box, `journalctl -u ggd2l-bot`.
@@ -267,6 +277,7 @@ Every line the bot writes starts with an ISO timestamp: `2026-10-18T02:10:43.277
 | `leave-sent` | `reason` (`postgame`, `release`, `failed-launch`, `back-on-lobby-screen`, `idle`, `orphan`, or `early` with `n`, the try), `lobbyState` |
 | `early-leave` | `result` (`confirmed`, `left` (a departure after an unconfirmed try), `unconfirmed`, `send-failed`), `n` (the job's tries) ([Early leave](#early-leave)) |
 | `match-details` | A game left early: `result` (`asked` with `matchId` and `n`, `over` or `not-scored` with `outcome`, `send-failed`, `gave-up`) |
+| `match-check` | A site's [check](#game-over-checks-dota-first) asking Dota: `result` (`asked` or `send-failed`), `matchId`; its answer is the `request` line (`action=check`, `check`) |
 | `departed` | `source` (`destroy`, `removed`, `unsubscribed`, `welcome`, `release-no-lobby`, `gone`, `never-came`, or `unknown`) |
 | `claim-freed` | The bot is free: `key`, `reason` |
 | `welcome` | `complete`, `lobby` (one was replayed), `key` |
@@ -274,7 +285,7 @@ Every line the bot writes starts with an ISO timestamp: `2026-10-18T02:10:43.277
 | `resync-failed` | `key`, `reason`: the session cycle threw; the no-welcome deadline still restarts the worker |
 | `leave-not-confirmed` | The job's three resyncs are spent |
 | `release-pending`, `launch-undone`, `claim-back`, `invites-sent` | A release waiting on a running game; a failed launch Dota then showed played; a finished job's lobby reclaimed; invite counts (never who) |
-| `request` | Each answer: `action`, `key`, `result` or `code`, `releasing`, `over`, `players` (a count), `invited`, `ms`. A `BUSY` adds the claim holding the bot: `activeKey`, `activeState`, `releasing`, `lobbyState`. Reads (`status`, `health`, `active`) are logged when their answer changes, so a poll doesn't flood the log |
+| `request` | Each answer: `action`, `key`, `result` or `code`, `check` (a [check](#game-over-checks-dota-first)'s answer), `releasing`, `over`, `players` (a count), `invited`, `ms`. A `BUSY` adds the claim holding the bot: `activeKey`, `activeState`, `releasing`, `lobbyState`. Reads (`status`, `health`, `active`) are logged when their answer changes, so a poll doesn't flood the log |
 | `seat-kick` | A round of seat moves ([Seat help](#seat-help)): `reason` (`side`, `stranger`), `count` (sent), `n` (sends that threw). Never who |
 | `seat-flip` | A swap of the sides: `result` (`sent`, `failed`, `confirmed`), `n` (this game's swaps) |
 | `seat-unknown` | `count`: members whose team Dota left out of the update (never moved), logged when it changes |
@@ -318,6 +329,7 @@ The full request and reply shapes are in the [relay README](../ops/dota-lobby-re
   - `over`: this job's game was played and Dota showed its end with a winner (2 to 13): its postgame, or a RUN snapshot with a winner. Never for a failed launch, a not-scored end, or an end whose outcome Dota hasn't named yet (the post-game game state alone makes the bot leave, nothing more). It stays `true` after the bot has left, even when the end arrived after a welcome had freed the claim, so the site can end the game late.
 - **`left`** (with `withLifecycle: true`, only ever `true`, since 2026-10-27): this job's game is `started` and the bot [left it early](#early-leave) while it ran. The bot is free (the claim is gone) and the game goes on; `matchId` is the game's. It may come with `over` once the match details name a winner. Never sent while early leave is off.
 - **Keys** may also be `duel:<duelId>:1` and `eu:duel:<duelId>:1`, with `gameMode` 21 and one player a side ([1v1 mid duels](#1v1-mid-duels)).
+- **`check`** (since 2026-11-01) is the one action the relay never carries: the bot answers it on its loopback `POST /lobby` only, after waiting up to 5 seconds on Dota, with the usual status plus `check` ([Game over checks Dota first](#game-over-checks-dota-first)). Through the relay it is `INVALID`.
 - **`names`**, or **`radiantNames`** and **`direNames`**, on an in-house `create` spec: the players' display names for the bot's lobby chat ([Seat help](#seat-help)). `names` maps a roster Steam64 ID to a name; the two lists hold one name per ID of that side, in the side's order, and a list of another length is ignored. Both are optional, a bot without seat help ignores them, and they change no reply. The bot keeps them with the job's spec in `lobbies.json` only until the job's claim is freed.
 - **The site** asks for `withPlayers` on every browser read and action, and `withLifecycle` on every request, and reads the list strictly: anything malformed, or a list that doesn't match the roster ID for ID, is unknown and shows no list. The scheduled worker's status read never asks for `players`. A bot without these features ignores the keys (its spec check reads only the keys it knows) and sends neither field.
 

@@ -521,11 +521,16 @@ describe("inhouse Game over — marking a game over", () => {
         INHOUSE_STATUS.AWAITING_RESULT,
       );
       // The status read, then (after the press answered) one release of
-      // THIS game's bot job, so a bot still attached lets go.
+      // THIS game's bot job, so a bot still attached lets go. A game the bot
+      // launched asks Dota first (its `check`); this stub's reply carries no
+      // answer, like an older bot's, and that never blocks the press.
       await settleInhouseBotReleases();
+      const key = `${keyPrefix}inhouse:${lobby.id}:1`;
+      const launched = !(reply instanceof Error) && reply.state === "started";
       expect(botCalls.map((c) => [c.action, c.spec.key])).toEqual([
-        ["status", `${keyPrefix}inhouse:${lobby.id}:1`],
-        ["release", `${keyPrefix}inhouse:${lobby.id}:1`],
+        ["status", key],
+        ...(launched ? [["check", key]] : []),
+        ["release", key],
       ]);
     },
   );

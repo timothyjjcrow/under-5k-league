@@ -170,6 +170,16 @@ function control(request) {
     return { status: error instanceof BotError ? 409 : 400, body: { code: error instanceof BotError ? error.code : "INVALID" } };
   }
 }
+// The site's "Game over" check waits on the Game Coordinator (up to
+// CHECK_WAIT_MS), so it is answered here, over the loopback HTTP only; the
+// relay's synchronous path refuses it (controller.request).
+async function checkControl({ spec } = {}) {
+  try {
+    return { status: 200, body: await controller.check(spec) };
+  } catch (error) {
+    return { status: error instanceof BotError ? 409 : 400, body: { code: error instanceof BotError ? error.code : "INVALID" } };
+  }
+}
 const relay = new RelayClient({
   connection: relayConnection(process.env.DOTA_LOBBY_RELAY_URL, process.env.DOTA_RELAY_WORKER_SECRET, process.env.NODE_ENV !== "production"),
   handle: control,
@@ -404,7 +414,9 @@ const server = createServer(async (req, res) => {
       if (size > 8192) return reply(413, { code: "INVALID" });
       chunks.push(chunk);
     }
-    const result = control(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+    const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    const result =
+      request?.action === "check" ? await checkControl(request) : control(request);
     reply(result.status, result.body);
   } catch (error) {
     log("request", { code: "INVALID", reason: "unreadable-body" });

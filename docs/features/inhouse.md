@@ -402,6 +402,36 @@ itself when the bot sees Dota's postgame (below).
   holds the press back, and the captains can instead press "Create Dota
   lobby" to try again
   ([DOTA-LOBBY-BOT: Failed launches](../DOTA-LOBBY-BOT.md#failed-launches)).
+- **A player's press on a game the bot launched asks Dota first** (Tim's
+  call, 2026-11-01). From 10-30 to 11-01, 6 of 24 US games were marked over
+  11 to 59 minutes before they ended (one player pressed three times at
+  minute 8 or 9, the moment the button appears), which frees the ten while
+  they still play, and with 15 or more people waiting the next game would
+  form around them. So when the status read says the bot launched the game
+  and hasn't seen its end (`gameOverAsksDota`: `started`, a real match id,
+  not `over`), `finishGame` asks the bot's `check`
+  (`checkInhouseBotGame`), which asks Dota's Game Coordinator for the
+  match's details at once and answers within about five seconds
+  ([DOTA-LOBBY-BOT: Game over checks Dota first](../DOTA-LOBBY-BOT.md#game-over-checks-dota-first)).
+  A winner, or a not-scored end (a failed launch's way out is this press),
+  goes ahead. No result yet refuses (`gameOverCheckRefusal`) with
+  `waitingForDota`, before the claim, so nothing changes. Everything else
+  never blocks: a game the bot didn't launch (hosted by hand), an
+  unreachable or older bot, no answer in time. An admin outside the game
+  marks it over without asking, as the override.
+- **The room keeps a press Dota can't confirm yet.** Dota can post a result
+  a little after the game ends (the bot's once-a-minute ask first found it 2
+  to 96 seconds after players' own presses), so an honest press made as the
+  throne falls must not bounce. A `waitingForDota` refusal starts a wait
+  (`startGameOverWait`), the button gives way to "Checking with Dota…", and
+  the room presses again every `GAME_OVER_RECHECK_SECONDS` (10), one request
+  at a time, until it lands (the presser queued as ever), another refusal
+  ends it, or `GAME_OVER_WAIT_SECONDS` (180) from the first press have
+  passed (`gameOverWaitStep`), when it toasts the refusal. The wait lives in
+  the room, not the button, so a game the bot ends meanwhile still queues
+  the presser: the next press finds it over and queues them (the "second
+  press" rule below). A timeout or a lost reply keeps the wait. A mid-game
+  press just waits out its three minutes and frees nobody.
 - **The claim:** `updateMany({ id, status in PLAYING })` behind the seam
   `inhouse.finishGame.beforeClaim`; it loses to a result, a cancel or the
   abandon sweep. Lost to a result or another press, the presser still

@@ -453,6 +453,24 @@ describe("live rooms delegate their poll policy", () => {
     );
   });
 
+  it("inhouse-room waits on Dota for a Game over only through startGameOverWait and gameOverWaitStep", () => {
+    const src = roomText(INHOUSE_ROOM);
+    // The refusal that says Dota has no result yet starts (or carries on) the
+    // wait instead of toasting, and act() lets it before any error toast.
+    expect(src).toMatch(/if \(options\.onRefused\?\.\(data\)\) return false;\s*pushToast\(/);
+    expect(src).toMatch(/data\?\.waitingForDota !== true/);
+    expect(src).toContain("startGameOverWait(prev, { lobbyId, requeue, message }, Date.now())");
+    // Each recheck asks again or gives up through the tested rule, on the
+    // tested clock, one request at a time.
+    expect(src).toContain("gameOverWaitStep(gameOverWait, Date.now()) === \"give-up\"");
+    expect(src).toContain("INHOUSE.GAME_OVER_RECHECK_SECONDS * 1000");
+    expect(src).toContain("if (actionsInFlightRef.current > 0 || connectionUnavailable) return;");
+    // The button presses through the room, and says so while it waits.
+    expect(src).toContain("onConfirm={() => gameOver.press(player)}");
+    expect(src).toMatch(/if \(gameOver\.waiting\) \{\s*return \(\s*<p role="status"/);
+    expect(src).not.toMatch(/action: "finish", requeue: player/);
+  });
+
   it("draft-room polls at a clock's zero only through draftPollsAtClockZero", () => {
     // Every signed-in tab polling at zero was ~63 simultaneous polls per sale
     // in a full US room on the one-vCPU box; only captains and admins have

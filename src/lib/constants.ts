@@ -550,6 +550,13 @@ export const INHOUSE = {
   // off the shared OpenDota budget). Most results land well inside it; the
   // scan itself keeps going until the give-up floor either way.
   AWAITING_RESULT_WATCH_MINUTES: 60,
+  // A player's "Game over" on a game the bot launched asks Dota first, and
+  // Dota can post the result a little after the game ends: from 2026-10-30 to
+  // 11-01 the bot's once-a-minute check first found it 2 to 96 seconds after
+  // the players' own presses. So a press Dota can't confirm yet keeps asking
+  // (the room, gameOverWaitStep) this often, for this long from the first press.
+  GAME_OVER_RECHECK_SECONDS: 10,
+  GAME_OVER_WAIT_SECONDS: 180,
   // The room's post-game banner: a viewer sees the result of the newest game
   // they played that completed within this long (from completedAt).
   LAST_RESULT_WINDOW_MS: 10 * 60_000,

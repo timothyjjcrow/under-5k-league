@@ -41,6 +41,9 @@ import {
   wasInReadyCheck,
   type CaptainCandidate,
   type InhouseAlertSnapshot,
+  gameOverWaitStep,
+  startGameOverWait,
+  type GameOverWait,
 } from "./inhouse";
 import {
   INHOUSE,
@@ -1910,5 +1913,39 @@ describe("autoJoinAlreadyInToast", () => {
     expect(autoJoinAlreadyInToast({ inQueue: true, inLobby: false })).toBe(
       "You're already in the queue",
     );
+  });
+});
+
+describe("a Game over Dota couldn't confirm yet", () => {
+  const wait: GameOverWait = {
+    lobbyId: "game-a",
+    requeue: true,
+    sinceMs: 1_000,
+    message: "Dota hasn't posted a result for game #A yet.",
+  };
+
+  it("asks again until GAME_OVER_WAIT_SECONDS after the first press, then gives up", () => {
+    const end = wait.sinceMs + INHOUSE.GAME_OVER_WAIT_SECONDS * 1000;
+    expect(gameOverWaitStep(wait, wait.sinceMs)).toBe("ask");
+    expect(gameOverWaitStep(wait, end - 1)).toBe("ask");
+    expect(gameOverWaitStep(wait, end)).toBe("give-up");
+    // Long enough for the slowest result seen (96 s after a press).
+    expect(INHOUSE.GAME_OVER_WAIT_SECONDS).toBeGreaterThan(96);
+    expect(INHOUSE.GAME_OVER_RECHECK_SECONDS).toBeLessThan(INHOUSE.GAME_OVER_WAIT_SECONDS);
+  });
+
+  it("a re-ask's refusal keeps the wait's start; a press on another game starts afresh", () => {
+    const again = startGameOverWait(
+      wait,
+      { lobbyId: "game-a", requeue: true, message: "newer" },
+      wait.sinceMs + 60_000,
+    );
+    expect(again).toEqual({ ...wait, message: "newer" });
+    expect(
+      startGameOverWait(wait, { lobbyId: "game-b", requeue: false, message: "b" }, 99_000),
+    ).toEqual({ lobbyId: "game-b", requeue: false, sinceMs: 99_000, message: "b" });
+    expect(
+      startGameOverWait(null, { lobbyId: "game-a", requeue: true, message: "m" }, 5_000),
+    ).toEqual({ lobbyId: "game-a", requeue: true, sinceMs: 5_000, message: "m" });
   });
 });

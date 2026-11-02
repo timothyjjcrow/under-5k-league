@@ -10,6 +10,7 @@ const FIELDS = new Set([
   "action",
   "activeKey",
   "activeState",
+  "check",
   "code",
   "complete",
   "count",
