@@ -946,7 +946,21 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
 - **Captain methods:** `VOTE` (elect), `MMR` (top two), `RECORD` (players with
   at least one inhouse win by record, everyone else after in MMR order, so a
   0-3 player never outranks newcomers). `tallyMethod` ties go `VOTE > RECORD >
-  MMR`; every method falls back to MMR then earliest queued. Index 0 is team 1.
+  MMR`; every method falls back to MMR then earliest queued. The method
+  decides WHO captains (the top two), never which team each takes.
+- **A coin toss seats the two captains** (Tim's call, 2026-11-07:
+  `tossCaptainSeats` in `resolveCaptainVote`). Either one lands on team 1
+  (Radiant at formation, picks second) or team 2 (Dire, picks first), so one
+  toss decides both side and first pick. Seating the ranking's top captain on
+  team 1 gave the same two captains the same side and pick order every game.
+  The toss runs inside the transaction that wins the `CAPTAIN_VOTE →
+  DRAFTING` claim, so a losing resolver's toss is never written. The vote's
+  banner names the pair with "sides and first pick by coin toss"
+  (`voteProjectionText`), never a side, and the "picked the captains" toast
+  matches the projected pair in either order (`captainsChosenToast`).
+  `inhouse.itest.ts` runs the real vote until the top captain has landed on
+  both teams (sabotage-verified), and `zz4-inhouse.spec.ts` plays whichever
+  seating it gets.
 - **A ballot re-asserts `CAPTAIN_VOTE` and `voteEndsAt > now` at the write.**
   The vote resolves when all ten vote or `VOTE_SECONDS` runs out.
 - **The vote previews use `orderCaptains`, the function that installs
@@ -960,7 +974,8 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   marked over and waiting on OpenDota then, so its result may land after the
   snapshot: one game behind, display only.
 - **Snake draft:** `nextPickTeam` gives `F O O F F O O F` so summed pick
-  positions match; team 2 picks first (`FIRST_PICK_TEAM`). An expired
+  positions match; team 2 picks first (`FIRST_PICK_TEAM`), its captain
+  chosen by the coin toss above. An expired
   `PICK_SECONDS` clock auto-picks; pool and auto-pick sort MMR desc, then
   `[queuedAt, userId]`. The room draws the order from the same function
   (`inhousePickOrder` walks it from an empty draft), never a copy of the

@@ -84,8 +84,9 @@ export function tallyMethod(votes: CaptainMethod[]): CaptainMethod {
 
 /**
  * Rank candidates for captaincy by the winning method. The top two become
- * captains (index 0 = team 1 / Radiant, index 1 = team 2 / Dire). Every method
- * falls back to MMR then earliest-queued so the order is always total.
+ * captains; `tossCaptainSeats` then decides which of them takes which team.
+ * Every method falls back to MMR then earliest-queued so the order is always
+ * total.
  *
  * RECORD ranks ONLY players with at least one inhouse win by their record;
  * everyone else follows in plain MMR order. Ranking the whole lobby by record
@@ -123,6 +124,23 @@ export function orderCaptains<T extends CaptainCandidate>(
     );
   }
   return seedOrder(arr); // MMR
+}
+
+/**
+ * The coin toss that seats the two captains `orderCaptains` chose (Tim's
+ * call, 2026-11-07). Either one may land on team 1 (Radiant at formation,
+ * picks second) or team 2 (Dire, picks first: `FIRST_PICK_TEAM`), so one toss
+ * decides both first pick and side. Seating the ranking's top captain on team
+ * 1 gave the same two captains the same side and pick order every game.
+ * Returns `[team 1's captain, team 2's captain]`. `random` is Math.random's
+ * contract, [0, 1), injectable for tests: below 0.5 keeps the ranking's order.
+ */
+export function tossCaptainSeats<T>(
+  first: T,
+  second: T,
+  random: () => number = Math.random,
+): [T, T] {
+  return random() < 0.5 ? [first, second] : [second, first];
 }
 
 /**

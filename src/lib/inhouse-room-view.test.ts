@@ -101,18 +101,26 @@ describe("voteProjectionText", () => {
     { name: "Ana" },
     { name: "Ceb" },
   ];
-  it("says the leader, its votes and the pair with their sides", () => {
+  // A coin toss seats the captains once the vote resolves, so the banner
+  // names the pair and never promises either one a side.
+  it("says the leader, its votes and the pair, sides left to the coin toss", () => {
     expect(
       voteProjectionText({ method: "MMR", votes: 3, byDefault: false, captains }),
-    ).toBe("Highest MMR leads with 3 votes: Ana (Radiant) vs Ceb (Dire).");
+    ).toBe(
+      "Highest MMR leads with 3 votes: Ana vs Ceb, sides and first pick by coin toss.",
+    );
     expect(
       voteProjectionText({ method: "VOTE", votes: 1, byDefault: false, captains }),
-    ).toBe("Elect captains leads with 1 vote: Ana (Radiant) vs Ceb (Dire).");
+    ).toBe(
+      "Elect captains leads with 1 vote: Ana vs Ceb, sides and first pick by coin toss.",
+    );
   });
   it("says a default is a default", () => {
     expect(
       voteProjectionText({ method: "MMR", votes: 0, byDefault: true, captains }),
-    ).toBe("No votes yet, so Highest MMR decides: Ana (Radiant) vs Ceb (Dire).");
+    ).toBe(
+      "No votes yet, so Highest MMR decides: Ana vs Ceb, sides and first pick by coin toss.",
+    );
     expect(
       voteProjectionText({ method: "MMR", votes: 0, byDefault: true, captains: null }),
     ).toBe("No votes yet, so Highest MMR decides.");
@@ -286,6 +294,20 @@ describe("captainsChosenToast", () => {
   it("names the method when the last vote seen projects these captains", () => {
     expect(captainsChosenToast(prev, { inLobby: true }, lobby)).toBe(
       "Highest MMR picked the captains: CAP1 (Radiant) and CAP2 (Dire).",
+    );
+  });
+
+  it("names the method whichever team the coin toss gave each captain", () => {
+    // The projection ranks cap1 first; the toss seated cap2 on team 1.
+    const tossed = {
+      ...lobby,
+      teams: [
+        { ...teams[0], captain: player("cap2", null) },
+        { ...teams[1], captain: player("cap1", null) },
+      ],
+    };
+    expect(captainsChosenToast(prev, { inLobby: true }, tossed)).toBe(
+      "Highest MMR picked the captains: CAP2 (Radiant) and CAP1 (Dire).",
     );
   });
 

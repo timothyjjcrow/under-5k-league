@@ -70,9 +70,9 @@ test("positions in the draft, then Game over frees the ten before the result lan
   const errors = trackPageErrors(page);
   // "Game over" and the admin give-up both ask in place (no browser dialog).
 
-  // Nine API players with known positions. The two highest MMRs captain:
-  // team 1 plays Pos 4/5 only, and team 2 (which picks first) plays Pos 1
-  // only, so team 2's missing positions are 2, 3, 4 and 5.
+  // Nine API players with known positions. The two highest MMRs captain
+  // (a coin toss seats them): one plays Pos 4/5 only and the other Pos 1
+  // only, so whichever picks first has gaps the pool can fill.
   const roles = [
     ["4", "5"],
     ["1"],

@@ -11,7 +11,8 @@ import path from "node:path";
 
 // The inhouse's full browser lifecycle: queue → ready check (accept) →
 // captain vote → live draft → ready → in progress — one real page (the
-// "observer", who captains team 1) plus nine API-driven players. Runs
+// "observer", who captains one team; a coin toss picks which) plus nine
+// API-driven players. Runs
 // zz-last: it forms and cancels a lobby, which must not race the earlier
 // phase-sensitive league specs.
 //
@@ -184,8 +185,8 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   page.on("dialog", (d) => d.accept());
 
   // Nine API players queue up (MMRs below the observer's, so the observer
-  // captains team 1 when the vote lands on Highest MMR; everyone under the
-  // inhouse MMR cap, 5,000).
+  // captains when the vote lands on Highest MMR; everyone under the inhouse
+  // MMR cap, 5,000).
   const players: APIRequestContext[] = [];
   for (let i = 0; i < 9; i++) {
     const ctx = await apiPlayer(`IH Player ${i}`, `7656119000000210${i}`);
@@ -243,20 +244,37 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     expect(voted.ok).toBe(true);
   }
 
-  // Draft view: observer captains Radiant; Dire (lower seed) picks first.
-  await expect(page.getByText(/On the clock/)).toBeVisible();
+  // Draft view: the observer and the 4900-MMR API player captain, and a coin
+  // toss decided which of them is Radiant and which is Dire (Dire picks
+  // first), so the run takes whichever seating it was given: "On the clock"
+  // while the other captain picks, "You’re on the clock" on the observer's turn.
+  await expect(page.getByText(/on the clock/i).first()).toBeVisible();
   await expect(page.getByText(/Draft pool/)).toBeVisible();
 
-  // Dire's captain (the 4900-MMR API player) makes the first pick.
   const state = await act(players[0], { action: "state" });
+  const rival = state.json.me as {
+    isCaptain: boolean;
+    isOnClock: boolean;
+    myTeam: number | null;
+  };
   const lobby = state.json.lobby as {
     pool: { userId: string; name: string }[];
+    teams: { team: number; isRadiant: boolean }[];
   };
-  const firstPick = await act(players[0], {
-    action: "pick",
-    userId: lobby.pool[0].userId,
-  });
-  expect(firstPick.ok).toBe(true);
+  expect(rival.isCaptain).toBe(true);
+  const observerSide = lobby.teams.find((t) => t.team !== rival.myTeam)!
+    .isRadiant
+    ? "Radiant"
+    : "Dire";
+
+  // When the toss gave the API captain first pick, it makes that pick.
+  if (rival.isOnClock) {
+    const firstPick = await act(players[0], {
+      action: "pick",
+      userId: lobby.pool[0].userId,
+    });
+    expect(firstPick.ok).toBe(true);
+  }
 
   // Now it's the observer's turn — pick through the real UI.
   await expect(page.getByText("Your pick").first()).toBeVisible();
@@ -319,10 +337,11 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     page.getByRole("heading", { name: "Get into the Dota lobby" }),
   ).toBeVisible();
   // The player's own side, straight under the card's heading. No bot here,
-  // so no seat report: just the side to sit on (the observer captains
-  // Radiant). An admin watching the game plays on neither side and gets none.
+  // so no seat report: just the side to sit on (the one the coin toss gave
+  // the observer). An admin watching the game plays on neither side and gets
+  // none.
   await expect(page.getByRole("status", { name: "Your side" })).toContainText(
-    "You're Radiant — take any Radiant slot.",
+    `You're ${observerSide} — take any ${observerSide} slot.`,
   );
   // ...and on a phone's first screen: on a fresh load at 390x664 (an iPhone
   // with Safari's toolbars showing) the whole line sits above the fixed tab
@@ -334,7 +353,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
   await phone.setViewportSize({ width: 390, height: 664 });
   await phone.goto("/inhouse");
   const phoneSide = phone.getByRole("status", { name: "Your side" });
-  await expect(phoneSide).toContainText("You're Radiant");
+  await expect(phoneSide).toContainText(`You're ${observerSide}`);
   const dock = phone.getByRole("navigation", { name: "Quick navigation" });
   await expect(dock).toBeVisible();
   await expect
@@ -393,7 +412,7 @@ test("full lobby lifecycle: accept → vote → draft → ready → in progress"
     page.getByText("Played already and no result yet? Record it"),
   ).toBeVisible();
 
-  // The observer (team 1 captain) starts the game clock from the UI.
+  // The observer (a captain) starts the game clock from the UI.
   await page.getByRole("button", { name: "Start the game clock" }).click();
 
   // Live view: pulsing banner, elapsed clock, result note, rosters. A game

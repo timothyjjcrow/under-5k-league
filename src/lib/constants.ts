@@ -476,8 +476,9 @@ export const INHOUSE = {
   VOTE_SECONDS: 25,
   // Seconds a captain has to pick before the draft auto-picks the top player.
   PICK_SECONDS: 60,
-  // The lower-seeded captain (team 2) drafts first, a small nod to the fact
-  // that team 1's captain is the higher-seeded player. A SNAKE draft follows
+  // Team 2 (Dire at formation) drafts first. A coin toss decides which of the
+  // two captains sits on team 2 (tossCaptainSeats), so neither the vote's
+  // ranking nor a repeat pairing fixes who picks first. A SNAKE draft follows
   // (single, then pairs, closing on a single) so first pick isn't a standing
   // advantage — see nextPickTeam.
   FIRST_PICK_TEAM: 2,

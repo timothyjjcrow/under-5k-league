@@ -64,9 +64,10 @@ type VoteLike<C extends CaptainCandidate> = {
 /**
  * What the captain vote would decide if its clock ran out now: the method
  * `tallyMethod` would pick from these tallies (no votes = MMR, its default)
- * and the two players `orderCaptains` would install with it, index 0 on team
- * 1 (Radiant at formation). The same two functions resolveCaptainVote runs,
- * so the line never names captains the vote wouldn't.
+ * and the two players `orderCaptains` would install with it. The same two
+ * functions resolveCaptainVote runs, so the line never names captains the
+ * vote wouldn't. Which team each takes is a coin toss at install
+ * (`tossCaptainSeats`), so the projection's order says nothing about sides.
  */
 export function projectedCaptains<C extends CaptainCandidate>(
   vote: VoteLike<C>,
@@ -89,7 +90,10 @@ export function projectedCaptains<C extends CaptainCandidate>(
   };
 }
 
-/** The projection as one sentence, for the vote's banner. */
+/**
+ * The projection as one sentence, for the vote's banner. It names no sides:
+ * a coin toss seats the two captains once the vote resolves.
+ */
 export function voteProjectionText(p: {
   method: CaptainMethod;
   votes: number;
@@ -100,7 +104,7 @@ export function voteProjectionText(p: {
     ? `No votes yet, so ${CAPTAIN_METHOD_LABEL[p.method]} decides`
     : `${CAPTAIN_METHOD_LABEL[p.method]} leads with ${p.votes} ${p.votes === 1 ? "vote" : "votes"}`;
   if (!p.captains) return `${lead}.`;
-  return `${lead}: ${p.captains[0].name} (Radiant) vs ${p.captains[1].name} (Dire).`;
+  return `${lead}: ${p.captains[0].name} vs ${p.captains[1].name}, sides and first pick by coin toss.`;
 }
 
 /**
@@ -242,7 +246,8 @@ export function draftedToast<P extends DraftedPlayer>(
  * The vote's result, for its ten: the poll after it resolves shows the draft,
  * so without this the captains appear with no word on how. It names the
  * method only when the last vote the viewer saw projects exactly these two
- * captains; a ballot cast after that poll could have changed it.
+ * captains, in either order (the coin toss seats them after the vote); a
+ * ballot cast after that poll could have changed it.
  */
 export function captainsChosenToast<
   C extends CaptainCandidate,
@@ -264,10 +269,12 @@ export function captainsChosenToast<
   if (!a?.captain || !b?.captain) return null;
   const pair = `${a.captain.name} (${a.isRadiant ? "Radiant" : "Dire"}) and ${b.captain.name} (${b.isRadiant ? "Radiant" : "Dire"})`;
   const projected = prev.vote ? projectedCaptains(prev.vote) : null;
+  const projectedIds = new Set(projected?.captains?.map((c) => c.userId));
   const matches =
     projected?.captains != null &&
-    projected.captains[0].userId === a.captain.userId &&
-    projected.captains[1].userId === b.captain.userId;
+    projectedIds.has(a.captain.userId) &&
+    projectedIds.has(b.captain.userId) &&
+    a.captain.userId !== b.captain.userId;
   return matches
     ? `${CAPTAIN_METHOD_LABEL[projected.method]} picked the captains: ${pair}.`
     : `Captains: ${pair}.`;

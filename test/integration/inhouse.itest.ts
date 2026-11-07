@@ -557,11 +557,13 @@ describe("inhouse — captain vote", () => {
     const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
     const captains = lobby.players.filter((p) => p.isCaptain);
     expect(captains).toHaveLength(2);
-    const cap1 = lobby.players.find((p) => p.team === 1 && p.isCaptain)!;
-    const cap2 = lobby.players.find((p) => p.team === 2 && p.isCaptain)!;
-    expect(cap1.userId).toBe(players[0].user.id); // 5000 MMR → team 1
-    expect(cap2.userId).toBe(players[1].user.id); // 4900 MMR → team 2
-    // Lower seed (team 2) is on the clock first, with a running pick timer.
+    // The 5000 and 4900 MMR players captain, one on each team; which team
+    // each takes is the coin toss (see "a coin toss seats the captains").
+    expect(new Set(captains.map((p) => p.userId))).toEqual(
+      new Set([players[0].user.id, players[1].user.id]),
+    );
+    expect(captains.map((p) => p.team).sort()).toEqual([1, 2]);
+    // Team 2 is on the clock first, with a running pick timer.
     expect(lobby.pickTeam).toBe(INHOUSE.FIRST_PICK_TEAM);
     expect(lobby.pickEndsAt).not.toBeNull();
     expect(lobby.voteEndsAt).toBeNull();
@@ -605,11 +607,8 @@ describe("inhouse — captain vote", () => {
     expect(await resolveCaptainVote()).toBe(true);
     const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
     expect(
-      drafting.players
-        .filter((p) => p.isCaptain)
-        .sort((a, b) => (a.team ?? 0) - (b.team ?? 0))
-        .map((p) => p.userId),
-    ).toEqual([players[0].user.id, players[1].user.id]);
+      new Set(drafting.players.filter((p) => p.isCaptain).map((p) => p.userId)),
+    ).toEqual(new Set([players[0].user.id, players[1].user.id]));
   });
 
   it("VOTE: the two most-nominated players become captains", async () => {
@@ -641,8 +640,35 @@ describe("inhouse — captain vote", () => {
     await getInhouseState(players[0].session);
 
     const drafting = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
-    const cap1 = drafting.players.find((p) => p.team === 1 && p.isCaptain)!;
-    expect(cap1.userId).toBe(players[0].user.id); // highest MMR by default
+    // The two highest MMRs by default, seated by the coin toss.
+    expect(
+      new Set(drafting.players.filter((p) => p.isCaptain).map((p) => p.userId)),
+    ).toEqual(new Set([players[0].user.id, players[1].user.id]));
+  });
+
+  it("a coin toss seats the captains: the top captain lands on either team", async () => {
+    // The bug: the ranking's top captain always took team 1 (Radiant, second
+    // pick), so the same two captains got the same sides and pick order every
+    // game. Run the real vote until the 5000-MMR captain has landed on both
+    // teams; 30 tosses all one way is a 2^-29 chance.
+    const seen = new Set<number>();
+    for (let game = 0; game < 30 && seen.size < 2; game++) {
+      // One lobby at a time: clear the last game's rows (fresh users each run).
+      await prisma.inhouseLobby.deleteMany();
+      await prisma.inhouseQueueEntry.deleteMany();
+      const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
+      await voteAll(players, "MMR");
+      const lobby = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+      const top = lobby.players.find((p) => p.userId === players[0].user.id)!;
+      const next = lobby.players.find((p) => p.userId === players[1].user.id)!;
+      expect(top.isCaptain && next.isCaptain).toBe(true);
+      expect(top.team).not.toBe(next.team);
+      // Team 1 is Radiant and team 2 picks first, whoever the toss put there.
+      expect(lobby.radiantTeam).toBe(1);
+      expect(lobby.pickTeam).toBe(INHOUSE.FIRST_PICK_TEAM);
+      seen.add(top.team!);
+    }
+    expect([...seen].sort()).toEqual([1, 2]);
   });
 
   it("rejects votes from outsiders and invalid methods", async () => {
@@ -680,8 +706,14 @@ describe("inhouse — drafting", () => {
   it("enforces turn order, ownership, and rejects re-picking a taken player", async () => {
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
     await voteAll(players, "MMR");
-    const cap1 = players[0]; // team 1
-    const cap2 = players[1]; // team 2, picks first (FIRST_PICK_TEAM = 2)
+    // players[0] and players[1] captain; the coin toss decided which is which.
+    const seated = await lobbyByStatus(INHOUSE_STATUS.DRAFTING);
+    const captainOf = (team: number) => {
+      const id = seated.players.find((p) => p.isCaptain && p.team === team)!.userId;
+      return players.find((p) => p.user.id === id)!;
+    };
+    const cap1 = captainOf(1); // team 1
+    const cap2 = captainOf(2); // team 2, picks first (FIRST_PICK_TEAM = 2)
     const pool = players.slice(2);
 
     // Team 1's captain can't pick out of turn.
@@ -702,7 +734,7 @@ describe("inhouse — drafting", () => {
   it("drafts in SNAKE order (2,1,1,2,2,1,1,2) so neither captain is favoured", async () => {
     const admin = sessionFor(await makeUser("Admin", "ADMIN"));
     const players = await enqueue(INHOUSE.LOBBY_SIZE, (i) => 5000 - i * 100);
-    await voteAll(players, "MMR"); // captains: players[0] (T1), players[1] (T2)
+    await voteAll(players, "MMR"); // captains: players[0] and players[1], seats by coin toss
     await driveDraftToReady(admin);
 
     // Reconstruct the true draft order from the stored pickIndex (the final
@@ -713,7 +745,7 @@ describe("inhouse — drafting", () => {
       .filter((p) => !p.isCaptain)
       .sort((a, b) => (a.pickIndex ?? 0) - (b.pickIndex ?? 0))
       .map((p) => p.team);
-    // Team 2 (lower seed) opens, then the snake pairs up and closes on team 2.
+    // Team 2 opens, then the snake pairs up and closes on team 2.
     expect(order).toEqual([2, 1, 1, 2, 2, 1, 1, 2]);
     expect(order.filter((t) => t === 1)).toHaveLength(4);
     expect(order.filter((t) => t === 2)).toHaveLength(4);
