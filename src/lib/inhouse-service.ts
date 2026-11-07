@@ -24,6 +24,7 @@ import {
   requeueLastSeenAt,
   showGameLabel,
   tallyMethod,
+  tossCaptainSeats,
   type CaptainCandidate,
   type CaptainMethod,
 } from "./inhouse";
@@ -866,9 +867,13 @@ export async function resolveCaptainVote(): Promise<boolean> {
         games: p.games,
       }));
 
+      // The vote decides WHO captains; a coin toss decides which of the two
+      // takes team 1 (Radiant, second pick) and team 2 (Dire, first pick).
       const ordered = orderCaptains(method, candidates);
-      const team1 = ordered[0]?.userId;
-      const team2 = ordered[1]?.userId;
+      const [team1, team2] = tossCaptainSeats(
+        ordered[0]?.userId,
+        ordered[1]?.userId,
+      );
 
       // Claim the transition FIRST: two concurrent resolvers both passing the
       // checks above must install captains (and start the pick clock) once.

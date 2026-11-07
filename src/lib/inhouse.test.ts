@@ -38,6 +38,7 @@ import {
   shouldFocusStage,
   showGameLabel,
   tallyMethod,
+  tossCaptainSeats,
   wasInReadyCheck,
   type CaptainCandidate,
   type InhouseAlertSnapshot,
@@ -109,6 +110,25 @@ describe("tallyMethod", () => {
   it("breaks ties toward the more variable method (VOTE > RECORD > MMR)", () => {
     expect(tallyMethod(["MMR", "VOTE"])).toBe("VOTE");
     expect(tallyMethod(["MMR", "RECORD"])).toBe("RECORD");
+  });
+});
+
+describe("tossCaptainSeats", () => {
+  it("keeps the ranking's order below 0.5 and swaps from 0.5 up", () => {
+    expect(tossCaptainSeats("top", "next", () => 0)).toEqual(["top", "next"]);
+    expect(tossCaptainSeats("top", "next", () => 0.49)).toEqual(["top", "next"]);
+    expect(tossCaptainSeats("top", "next", () => 0.5)).toEqual(["next", "top"]);
+    expect(tossCaptainSeats("top", "next", () => 0.99)).toEqual(["next", "top"]);
+  });
+
+  it("is a real coin: the same two captains land both ways round", () => {
+    // The bug: the ranking's top captain always took team 1 (Radiant, second
+    // pick), so the same pair got the same sides every game. 400 tosses all
+    // landing one way is a 2^-399 chance.
+    const seats = new Set(
+      Array.from({ length: 400 }, () => tossCaptainSeats("a", "b").join()),
+    );
+    expect(seats).toEqual(new Set(["a,b", "b,a"]));
   });
 });
 
