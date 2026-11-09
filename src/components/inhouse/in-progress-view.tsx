@@ -1,6 +1,9 @@
 "use client";
 
-import { inhouseScanStatus } from "@/lib/inhouse";
+import { useState } from "react";
+import { CopyChip } from "@/components/copy-chip";
+import { inhouseGameOverOpen, inhouseScanStatus } from "@/lib/inhouse";
+import { gameOverComingText } from "@/lib/inhouse-room-view";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { ElapsedClock } from "@/components/inhouse/clocks";
 import { GameOverControl } from "@/components/inhouse/game-over-control";
@@ -34,6 +37,15 @@ export function InProgressView({
   // scan note and the "Check now" button. The visible timer ticks in
   // <ElapsedClock>.
   const scan = inhouseScanStatus(lobby.scanOpensAt, serverNow);
+  // The Dota match id, once the bot that launched the game reports one (the
+  // setup card below keeps reading the bot while folded).
+  const [matchId, setMatchId] = useState<string | null>(null);
+  // Until the button is there, say when it will be.
+  const gameOverComing = gameOverComingText({
+    canFinish: me.canFinish,
+    open: inhouseGameOverOpen(lobby.status, lobby.scanOpensAt, serverNow),
+    scan,
+  });
 
   return (
     <div className="space-y-3">
@@ -66,6 +78,15 @@ export function InProgressView({
               The result records automatically after the game.{" "}
               <span className="text-xs">{scanStatusText(scan)}</span>
             </p>
+            {gameOverComing ? (
+              <p className="mt-1 text-xs text-muted">{gameOverComing}</p>
+            ) : null}
+            {matchId ? (
+              <p className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                Dota match
+                <CopyChip value={matchId} label="Dota match ID" />
+              </p>
+            ) : null}
           </div>
           <GameOverControl
             lobby={lobby}
@@ -87,9 +108,14 @@ export function InProgressView({
 
       {/* Mid-game the rosters matter more than the lobby's details, which
           fold under one line (the bot panel inside keeps reporting). */}
-      <MatchupGrid lobby={lobby} myTeam={me.myTeam} />
+      <MatchupGrid lobby={lobby} myTeam={me.myTeam} needs={false} />
       {me.inLobby || me.isAdmin ? (
-        <GameSetupCard lobby={lobby} me={me} collapsed />
+        <GameSetupCard
+          lobby={lobby}
+          me={me}
+          collapsed
+          onMatchId={setMatchId}
+        />
       ) : null}
     </div>
   );

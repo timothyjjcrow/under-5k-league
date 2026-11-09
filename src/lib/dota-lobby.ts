@@ -188,6 +188,18 @@ export function lobbyListVisible(state: DotaLobbyStatus["state"] | undefined) {
   return state === "ready" || state === "starting";
 }
 
+/**
+ * The bot lobby's name and password show once the bot has been asked for a
+ * lobby, never while its job is still `idle`: a name on the card with no
+ * lobby behind it sent players searching Dota for a lobby that didn't exist,
+ * beside the by-hand steps and their own lobby name.
+ */
+export function lobbyDetailsVisible(
+  state: DotaLobbyStatus["state"] | undefined,
+): boolean {
+  return state !== undefined && state !== "idle";
+}
+
 /** The panel's status line for each bot state. */
 const LOBBY_STATE_LABELS = {
   idle: "No bot lobby yet",
@@ -606,22 +618,61 @@ export const DOTA_SIDE = { radiant: "Radiant", dire: "Dire" } as const satisfies
  */
 export function lobbyPlayerRow(
   player: Pick<DotaLobbyPlayerView, "side" | "seat" | "invite" | "self">,
-): { text: string; settled: boolean } {
+): { text: string; settled: boolean; tone: LobbySeatTone } {
   const own = DOTA_SIDE[player.side];
   switch (player.seat) {
     case "radiant":
     case "dire":
       return player.seat === player.side
-        ? { text: `On ${own}`, settled: true }
+        ? { text: `On ${own}`, settled: true, tone: "seated" }
         : {
             text: `On ${DOTA_SIDE[player.seat]}: belongs on ${own}`,
             settled: false,
+            tone: "move",
           };
     case "unassigned":
-      return { text: `In the lobby: needs a ${own} slot`, settled: false };
+      return {
+        text: `In the lobby: needs a ${own} slot`,
+        settled: false,
+        tone: "move",
+      };
     case "absent":
-      return { text: ABSENT_ROW[player.invite](player.self), settled: false };
+      return {
+        text: ABSENT_ROW[player.invite](player.self),
+        settled: false,
+        tone: player.invite === "failed" ? "failed" : "waiting",
+      };
   }
+}
+
+/**
+ * How a seat-board row reads at a glance: `seated` (on their own side, the
+ * only row that needs nothing), `move` (in the lobby but not on their side:
+ * the row someone has to act on, so it stands out), `waiting` (not in the
+ * lobby yet, an invite out or on its way) and `failed` (the invite didn't
+ * send: a captain re-invites).
+ */
+export type LobbySeatTone = "seated" | "move" | "waiting" | "failed";
+
+/**
+ * The seat board's two columns: the bot's list split by the side each player
+ * belongs on (never the seat they happen to be in), in roster order, with how
+ * many of each sit on it. One column per side even when a side is empty, so
+ * the board keeps its shape.
+ */
+export function lobbySeatColumns<
+  P extends Pick<DotaLobbyPlayerView, "side" | "seat">,
+>(
+  players: readonly P[],
+): { side: LobbySide; players: P[]; seated: number }[] {
+  return (["radiant", "dire"] as const).map((side) => {
+    const own = players.filter((p) => p.side === side);
+    return {
+      side,
+      players: own,
+      seated: own.filter((p) => p.seat === p.side).length,
+    };
+  });
 }
 
 /**
@@ -673,7 +724,7 @@ export function lobbySeatSummary(input: {
     | null
     | undefined;
   canStart: boolean;
-}): { allSeated: boolean; start: boolean; text: string } | null {
+}): LobbySeatSummary | null {
   const { kind, playable, status, players, canStart } = input;
   if (
     kind === "season" ||
@@ -685,11 +736,14 @@ export function lobbySeatSummary(input: {
     return null;
   const total = players.length;
   const seated = players.filter((p) => p.seat === p.side).length;
-  if (kind === "duel") return duelSeatSummary(players, canStart);
+  if (kind === "duel")
+    return { ...duelSeatSummary(players, canStart), seated, total };
   if (seated === total)
     return {
       allSeated: true,
       start: canStart,
+      seated,
+      total,
       text: canStart
         ? `All ${seatCount(total)} seated — press “Start game with bot”.`
         : `All ${seatCount(total)} seated — waiting for a captain to start the game.`,
@@ -697,10 +751,39 @@ export function lobbySeatSummary(input: {
   return {
     allSeated: false,
     start: false,
+    seated,
+    total,
     text: canStart
       ? `${seated} of ${total} on their side. Start works once all ${seatCount(total)} are.`
       : `${seated} of ${total} on their side.`,
   };
+}
+
+/**
+ * `lobbySeatSummary`'s answer: the line, whether every player sits on their
+ * own side, whether this viewer's Start is the next press, and the count
+ * behind the line (the board's progress bar: one segment per player).
+ */
+export type LobbySeatSummary = {
+  allSeated: boolean;
+  start: boolean;
+  seated: number;
+  total: number;
+  text: string;
+};
+
+/**
+ * How "Start game with bot" looks: the loud primary button once every player
+ * sits on their own side, or when the bot reports no seats at all (an older
+ * bot, a reply that didn't parse: nothing says it can't start); quiet while
+ * the seat list says someone is still missing, when the bot would refuse the
+ * press anyway. It stays pressable either way: the list can be a few seconds
+ * old, and a refused press says who is missing.
+ */
+export function startButtonVariant(
+  summary: Pick<LobbySeatSummary, "allSeated"> | null,
+): "primary" | "secondary" {
+  return summary && !summary.allSeated ? "secondary" : "primary";
 }
 
 /**

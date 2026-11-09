@@ -17,6 +17,7 @@ import {
   mmrBalance,
 } from "@/lib/inhouse";
 import {
+  captainsReveal,
   draftTurn,
   draftTurnText,
   inhousePickOrder,
@@ -87,6 +88,13 @@ export function DraftView({
     }),
   );
   const last = lastDraftPick(lobby.teams);
+  // The draft's opening card: the captains, their sides and who picks
+  // first, until the first pick lands.
+  const reveal = captainsReveal({
+    teams: lobby.teams,
+    pickTeam: lobby.pickTeam,
+    picksMade,
+  });
   const teamByNumber = (n: number) => lobby.teams.find((t) => t.team === n);
 
   // Live balance-of-power line: how the two sides' average MMR compares as
@@ -197,6 +205,58 @@ export function DraftView({
             label={(s) => `${s} seconds left on the pick clock`}
           />
         </div>
+
+        {/* How the vote and the coin toss came out, until the first pick:
+            the room used to jump from the vote straight into the draft with
+            only a toast, and nobody saw the toss. */}
+        {reveal ? (
+          <div
+            role="group"
+            aria-label="Captains"
+            className="mt-3 rounded-xl border border-line bg-surface-2/40 px-3 py-2.5"
+          >
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-accent">
+              Captains · sides and first pick by coin toss
+            </p>
+            <div className="mt-2 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 sm:gap-4">
+              {reveal.map((tile, i) => {
+                const meta = sideMeta(tile.isRadiant);
+                return (
+                  <div
+                    key={tile.team}
+                    className={cn(
+                      "flex min-w-0 items-center gap-2.5",
+                      i === 0 ? "col-start-1" : "col-start-3",
+                    )}
+                  >
+                    <Avatar
+                      name={tile.captain.name}
+                      src={tile.captain.avatar}
+                      size={36}
+                    />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold">
+                        {tile.captain.name}
+                      </p>
+                      <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs text-muted">
+                        <Badge tone={meta.badge}>{meta.name}</Badge>
+                        <span className={tile.firstPick ? "text-fg" : undefined}>
+                          {tile.firstPick ? "picks first" : "picks second"}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+              <span
+                aria-hidden
+                className="col-start-2 row-start-1 font-display text-sm font-semibold text-muted"
+              >
+                VS
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         {/* The snake, one segment per pick in its side's colour: made picks
             solid, the one on the clock pulsing, the rest faint, so a captain

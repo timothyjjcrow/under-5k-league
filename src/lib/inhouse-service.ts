@@ -54,6 +54,7 @@ import { effectiveDotaAccountId } from "./dota-account";
 import {
   checkInhouseBotGame,
   inhouseBotGameStatus,
+  createInhouseBotLobby,
   releaseInhouseBotAfterClose,
 } from "./dota-lobby-service";
 import {
@@ -102,6 +103,11 @@ import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { buildDuelState } from "./inhouse-duel";
 import { loadDuelRoomRows } from "./inhouse-duel-room";
 import { runAfterResponse } from "./after-response";
+import {
+  resultCardMvp,
+  resultCardTeams,
+  type ResultCardTeam,
+} from "./inhouse-result-card";
 import { raceHook } from "./race-hook";
 import {
   inhouseAllAccepted,
@@ -1000,7 +1006,7 @@ async function applyPick(
    * auto-pick saw THAT clock run out, so it may take that turn and no other.
    */
   expectEndsAt?: Date,
-): Promise<InhouseActionResult> {
+): Promise<ApplyPickResult> {
   const lobby = await tx.inhouseLobby.findUnique({
     where: { id: lobbyId },
     include: { players: true },
@@ -1139,7 +1145,27 @@ async function applyPick(
     // Also past the turn claim — throw, don't return (see PickRaceError).
     throw new PickRaceError("That lobby is no longer drafting");
   }
-  return { ok: true };
+  return { ok: true, locked: next === null };
+}
+
+/**
+ * applyPick's answer: a pick that landed also says whether it was the draft's
+ * last (`locked`: the lobby is READY once the transaction commits), so its
+ * caller can ask the lobby bot for the game's lobby after the commit.
+ */
+type ApplyPickResult =
+  | { ok: true; locked: boolean }
+  | { ok: false; error: string };
+
+/**
+ * A draft just locked its teams (the commit is in): ask the lobby bot for the
+ * game's Dota lobby, after the response, so nobody waits on a captain's
+ * "Create Dota lobby" (createInhouseBotLobby says what it will and won't do).
+ * Best-effort: the button is still on the card. A no-op with no bot
+ * configured, before any read.
+ */
+async function requestBotLobbyAfterLock(lobbyId: string): Promise<void> {
+  await runAfterResponse(() => createInhouseBotLobby(lobbyId));
 }
 
 /**
@@ -1181,7 +1207,12 @@ async function restoreLostPickTurn(): Promise<boolean> {
             { status: INHOUSE_STATUS.READY, pickEndsAt: null }
           : { pickTeam: next, pickEndsAt: pickDeadline() },
     });
-    if (claim.count > 0) restored = true;
+    if (claim.count > 0) {
+      restored = true;
+      // The recovery finished the draft: the same lock applyPick's advance
+      // writes, so the same request for the game's lobby.
+      if (next === null) await requestBotLobbyAfterLock(lobby.id);
+    }
   }
   return restored;
 }
@@ -1237,9 +1268,14 @@ export async function resolveStalledPick(): Promise<boolean> {
           lobby.pickTeam,
           lobby.pickEndsAt,
         );
-        return r.ok;
+        return r.ok ? r : false;
       });
-      if (ok) picked = true;
+      if (ok) {
+        picked = true;
+        // The auto-pick was the draft's last: after its commit, ask the bot
+        // for the game's lobby.
+        if (ok.locked) await requestBotLobbyAfterLock(lobbyId);
+      }
     } catch (e) {
       // The catch MUST be outside the transaction callback so the throw
       // actually rolls the turn claim back. Losing the race is the normal
@@ -1259,7 +1295,9 @@ export async function makePick(
 ): Promise<InhouseActionResult> {
   await resolveStalledPick();
   try {
-    return await prisma.$transaction(async (tx) => {
+    // The game whose teams this pick locked, if it was the draft's last.
+    let lockedLobbyId: string | null = null;
+    const result = await prisma.$transaction(async (tx) => {
       const choice = await chooseActionLobby(
         tx,
         viewer,
@@ -1288,8 +1326,20 @@ export async function makePick(
       }
       // Pass the team we just authorized against: applyPick re-reads the lobby
       // and must refuse if the turn moved on underneath us.
-      return applyPick(tx, lobby.id, targetUserId, lobby.pickTeam);
+      const picked = await applyPick(
+        tx,
+        lobby.id,
+        targetUserId,
+        lobby.pickTeam,
+      );
+      if (!picked.ok) return picked;
+      if (picked.locked) lockedLobbyId = lobby.id;
+      return { ok: true as const };
     });
+    // After the commit, never inside it: the teams are locked, so the bot
+    // is asked for the game's lobby once the response is on its way.
+    if (lockedLobbyId) await requestBotLobbyAfterLock(lockedLobbyId);
+    return result;
   } catch (e) {
     // Outside the callback on purpose (see resolveStalledPick).
     if (e instanceof PickRaceError) {
@@ -3437,7 +3487,18 @@ export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
         radiantScore: true,
         direScore: true,
         eloDeltas: true,
-        players: { select: { userId: true, team: true } },
+        // The result card: both sides by name, and the MVP from the box
+        // score. A handful of rows, only inside the banner window.
+        boxScore: true,
+        players: {
+          orderBy: [{ pickIndex: "asc" }, { id: "asc" }],
+          select: {
+            userId: true,
+            team: true,
+            isCaptain: true,
+            user: { select: { name: true } },
+          },
+        },
       },
     }),
     // The inhouse bans running now, for the Discord board (boardInputFrom),
@@ -3792,6 +3853,10 @@ export function buildInhouseState(
     direScore: number;
     myTeamWon: boolean;
     eloDelta: number;
+    /** Both sides, Radiant first, with each player's Elo change. */
+    teams: [ResultCardTeam, ResultCardTeam];
+    /** The game's MVP from its box score, or null (never a guess). */
+    mvp: { userId: string; name: string; hero: string | null } | null;
   } = null;
   if (viewer) {
     // The newest game in the window that the viewer played. A newest game
@@ -3821,6 +3886,21 @@ export function buildInhouseState(
         direScore: recent.direScore ?? 0,
         myTeamWon: myPlayer?.team === recent.winnerTeam,
         eloDelta,
+        teams: resultCardTeams({
+          players: recent.players.map((pl) => ({
+            userId: pl.userId,
+            team: pl.team,
+            isCaptain: pl.isCaptain,
+            name: pl.user.name,
+          })),
+          radiantTeam: recent.radiantTeam,
+          winnerTeam: recent.winnerTeam,
+          eloDeltas: recent.eloDeltas,
+        }),
+        mvp: resultCardMvp({
+          boxScore: recent.boxScore,
+          radiantWin: recent.winnerTeam === recent.radiantTeam,
+        }),
       };
     }
   }

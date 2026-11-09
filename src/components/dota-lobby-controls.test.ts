@@ -83,11 +83,16 @@ describe("DotaLobbyControls invite controls (source)", () => {
     );
     expect(code).toMatch(/\{players \? \(/);
     // The invite copy is for a ready lobby with no release pending (it names
-    // the invite buttons, which a pending release hides); Dota starting the
-    // game has its own line.
+    // the invite buttons, which a pending release hides), folded under "How
+    // to join" so it never pushes the board and the buttons down; Dota
+    // starting the game has its own line.
     expect(code).toMatch(
-      /\{state === "ready" && releasing \? null : state === "ready" \? \(\s*<p className="text-xs text-muted">\s*The bot invites everyone/,
+      /state === "ready" && releasing \? null : state === "ready" \? \([^]*?<details[^]*?How to join[^]*?The bot invites everyone/,
     );
+    // The board: two columns by the side each player belongs on, each row
+    // worded and toned by the tested helper.
+    expect(code).toMatch(/lobbySeatColumns\(players\)\.map\(/);
+    expect(code).toMatch(/SEAT_TONE\[row\.tone\]/);
   });
 
   // 2026-10-18 review: on a two-game night the bot hosts game 1 for its whole
@@ -98,8 +103,11 @@ describe("DotaLobbyControls invite controls (source)", () => {
     expect(code).toMatch(/\? busy\s*\? lobbyBusyLabel\(busy\)\s*: lobbyStatusLabel\(view\.status\)/);
     // A 1v1 waits for the bot instead of going by hand (lobbyBusyNote's kind).
     expect(code).toMatch(/lobbyBusyNote\(busy, view\.canControl, kind\)/);
-    // No bot lobby will exist, so its name and password stay off the card.
-    expect(code).toMatch(/\{busyLive \? null : \(\s*<dl/);
+    // No bot lobby will exist, so its name and password stay off the card;
+    // nor while the bot's job is still idle (lobbyDetailsVisible).
+    expect(code).toMatch(
+      /\{busyLive \|\| !lobbyDetailsVisible\(state\) \? null : \(\s*<dl/,
+    );
     expect(code).toMatch(
       /\{!recoveryOnly && createOpen\(view\) \? \(\s*<button(?:(?!<\/button>)[^])*>\s*Create Dota lobby\s*<\/button>/,
     );
@@ -256,6 +264,13 @@ describe("DotaLobbyControls seats (source)", () => {
     expect(summaryAt).toBeGreaterThan(-1);
     expect(buttonsAt).toBeGreaterThan(summaryAt);
     expect(code.slice(summaryAt, buttonsAt)).not.toMatch(/<button/);
+    // The controls lead the panel: above the seat board, the lobby's name
+    // and its help. A captain on a phone had to scroll two screens to Start.
+    expect(buttonsAt).toBeLessThan(code.indexOf("Who&apos;s in the lobby"));
+    expect(buttonsAt).toBeLessThan(code.indexOf("<dl"));
+    // Start is quiet while the seat list says someone is missing, and never
+    // disabled by it (the guard on `disabled` below).
+    expect(code).toMatch(/startButtonVariant\(seatSummary\),/);
   });
 
   it("reports the viewer's own seat from the seat list it shows", () => {

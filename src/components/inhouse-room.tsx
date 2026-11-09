@@ -15,7 +15,7 @@ import {
   type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
-import { Badge, buttonClasses, textLink } from "@/components/ui";
+import { Badge, buttonClasses } from "@/components/ui";
 import { pushToast } from "@/components/toaster";
 import { cn } from "@/lib/utils";
 import { usePersistedFlag, usePollHealth } from "@/components/room-clock";
@@ -51,6 +51,7 @@ import {
 } from "@/lib/room-poll";
 import { INHOUSE_ROOM_STATUS_COPY, roomStatus } from "@/lib/room-status";
 import { RoomStatusLine } from "@/components/room-status-line";
+import { ResultCard } from "@/components/inhouse/result-card";
 import { nextClockOffset } from "@/lib/countdown";
 import {
   ROOM_SEQUENCE_START,
@@ -1375,81 +1376,28 @@ export function InhouseRoom({
       {state.lastResult &&
       !lobby &&
       !dismissedResults.has(state.lastResult.lobbyId) ? (
-        // The scoreline on its own line on a phone, the buttons under it;
-        // one row from sm.
-        <div
-          role="status"
-          aria-live="polite"
-          className={cn(
-            "flex flex-col gap-2 rounded-[var(--radius)] border px-4 py-3 sm:flex-row sm:items-center sm:gap-3",
-            state.lastResult.myTeamWon
-              ? "border-success/50 bg-success/10"
-              : "border-danger/40 bg-danger/10",
-          )}
-        >
-          <p className="flex min-w-0 flex-1 items-start gap-2.5 text-sm">
-            <span className="text-lg leading-5" aria-hidden>
-              {state.lastResult.myTeamWon ? "🏆" : "💀"}
-            </span>
-            <span className="min-w-0">
-              <strong>
-                {state.lastResult.winnerSide} win{" "}
-                {state.lastResult.radiantScore}–{state.lastResult.direScore}
-              </strong>
-              {" · "}
-              {state.lastResult.myTeamWon ? "Victory" : "Defeat"} for you,{" "}
-              <strong
-                className={
-                  state.lastResult.eloDelta >= 0
-                    ? "text-success"
-                    : "text-danger-soft"
-                }
-              >
-                {state.lastResult.eloDelta >= 0 ? "+" : ""}
-                {state.lastResult.eloDelta} Elo
-              </strong>
-              {" · "}
-              <a
-                href={`#result-${state.lastResult.lobbyId}`}
-                className={textLink("whitespace-nowrap")}
-              >
-                Box score ↓
-              </a>
-            </span>
-          </p>
-          <span className="flex shrink-0 items-center gap-2">
-            {me.canJoin && !joinRefusal ? (
-              // The retention moment: everyone's still here, the game just
-              // ended — one tap puts you back in line for the next one.
-              <button
-                type="button"
-                disabled={pending}
-                onClick={() => act({ action: "join", mmr })}
-                className={buttonClasses("accent", "sm")}
-              >
-                Run it back →
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                const id = state.lastResult!.lobbyId;
-                setDismissedResults((s) => new Set(s).add(id));
-                // The banner only ever shows the newest result, so one id is
-                // all the persistence a reload needs.
-                try {
-                  localStorage.setItem("inhouseDismissedResult", id);
-                } catch {
-                  // The in-memory dismissal still holds for this page visit.
-                }
-              }}
-              aria-label="Dismiss result banner"
-              className={buttonClasses("secondary", "sm")}
-            >
-              Dismiss
-            </button>
-          </span>
-        </div>
+        <ResultCard
+          result={state.lastResult}
+          viewerId={me.userId}
+          queuedUserIds={state.queue.map((q) => q.userId)}
+          // Only where a join would be accepted: a refused player (the MMR
+          // cap, a ban) gets no one-tap requeue.
+          runItBack={
+            me.canJoin && !joinRefusal ? () => act({ action: "join", mmr }) : null
+          }
+          pending={pending}
+          onDismiss={() => {
+            const id = state.lastResult!.lobbyId;
+            setDismissedResults((s) => new Set(s).add(id));
+            // The card only ever shows the newest result, so one id is
+            // all the persistence a reload needs.
+            try {
+              localStorage.setItem("inhouseDismissedResult", id);
+            } catch {
+              // The in-memory dismissal still holds for this page visit.
+            }
+          }}
+        />
       ) : null}
 
       {/* Games marked over, results on the way: between games and out of the
@@ -1500,8 +1448,10 @@ export function InhouseRoom({
         )
       ) : null}
 
-      {/* scroll-mt clears the 64px sticky header (see shouldFocusStage). */}
-      <div ref={stageRef} className="scroll-mt-24">
+      {/* scroll-mt clears the 64px sticky header and the room's own header
+          row above the stage (see shouldFocusStage): at 96px that row stopped
+          half under the header on every stage change. */}
+      <div ref={stageRef} className="scroll-mt-32">
         {lobby ? (
           stageView(lobby, me, true)
         ) : otherLobbies.length === 0 ? (

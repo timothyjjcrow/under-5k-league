@@ -23,10 +23,12 @@ import {
   lobbyBusyLabel,
   lobbyBusyNote,
   lobbyChatName,
+  lobbyDetailsVisible,
   lobbyInviteScope,
   lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
+  lobbySeatColumns,
   lobbySeatSummary,
   lobbyStatusLabel,
   noPopupHelp,
@@ -38,6 +40,7 @@ import {
   reinviteMissingOpen,
   releaseOpen,
   selfInviteOpen,
+  startButtonVariant,
   startOpen,
   viewerLobbySeat,
   type DotaLobbyPlayerView,
@@ -627,6 +630,16 @@ describe("lobbyPlayerRow", () => {
         expect(result, `${seat}/${invite}`).toEqual({
           text,
           settled: seat === "radiant",
+          // The board's colour: seated, someone in the lobby who has to
+          // move, an invite still out, or one that didn't send.
+          tone:
+            seat === "radiant"
+              ? "seated"
+              : seat === "absent"
+                ? invite === "failed"
+                  ? "failed"
+                  : "waiting"
+                : "move",
         });
       }
   });
@@ -634,10 +647,15 @@ describe("lobbyPlayerRow", () => {
   it("names the other side for a Dire player", () => {
     const dire = (seat: LobbySeat) =>
       lobbyPlayerRow({ side: "dire", seat, invite: "none", self: false });
-    expect(dire("dire")).toEqual({ text: "On Dire", settled: true });
+    expect(dire("dire")).toEqual({
+      text: "On Dire",
+      settled: true,
+      tone: "seated",
+    });
     expect(dire("radiant")).toEqual({
       text: "On Radiant: belongs on Dire",
       settled: false,
+      tone: "move",
     });
     expect(dire("unassigned").text).toBe("In the lobby: needs a Dire slot");
   });
@@ -797,6 +815,8 @@ describe("lobbySeatSummary", () => {
     expect(summary(ten(), true)).toEqual({
       allSeated: true,
       start: true,
+      seated: 10,
+      total: 10,
       text: "All ten seated — press “Start game with bot”.",
     });
   });
@@ -805,6 +825,8 @@ describe("lobbySeatSummary", () => {
     expect(summary(ten(), false)).toEqual({
       allSeated: true,
       start: false,
+      seated: 10,
+      total: 10,
       text: "All ten seated — waiting for a captain to start the game.",
     });
   });
@@ -814,11 +836,15 @@ describe("lobbySeatSummary", () => {
     expect(summary(partial, true)).toEqual({
       allSeated: false,
       start: false,
+      seated: 6,
+      total: 10,
       text: "6 of 10 on their side. Start works once all ten are.",
     });
     expect(summary(partial, false)).toEqual({
       allSeated: false,
       start: false,
+      seated: 6,
+      total: 10,
       text: "6 of 10 on their side.",
     });
     // One player on the wrong side is enough to hold the state back.
@@ -981,6 +1007,8 @@ describe("a 1v1's panel (kind duel)", () => {
     expect(summary(seated)).toEqual({
       allSeated: true,
       start: true,
+      seated: 2,
+      total: 2,
       text: "Both seated — press “Start game with bot”.",
     });
     expect(summary(seated, false)).toMatchObject({
@@ -996,7 +1024,13 @@ describe("a 1v1's panel (kind duel)", () => {
         { name: "Mid A", side: "radiant", seat: "radiant" },
         { name: "Mid B", side: "dire", seat: "absent" },
       ]),
-    ).toEqual({ allSeated: false, start: false, text: "Waiting for Mid B to sit on their side." });
+    ).toEqual({
+      allSeated: false,
+      start: false,
+      seated: 1,
+      total: 2,
+      text: "Waiting for Mid B to sit on their side.",
+    });
     expect(
       summary([
         { name: "Mid A", side: "radiant", seat: "dire" },
@@ -1013,5 +1047,41 @@ describe("a 1v1's panel (kind duel)", () => {
     expect(
       lobbySeatSummary({ kind: "duel", playable: true, status: { state: "starting" }, players, canStart: true }),
     ).toBeNull();
+  });
+});
+
+describe("the seat board", () => {
+  const p = (side: "radiant" | "dire", seat: LobbySeat) => ({ side, seat });
+
+  it("splits the list by the side each player belongs on, in roster order", () => {
+    const columns = lobbySeatColumns([
+      { ...p("radiant", "radiant"), name: "A" },
+      { ...p("dire", "radiant"), name: "X" },
+      { ...p("radiant", "absent"), name: "B" },
+      { ...p("dire", "dire"), name: "Y" },
+    ]);
+    expect(columns.map((c) => c.side)).toEqual(["radiant", "dire"]);
+    // A Dire player sitting on Radiant is still listed under Dire, unseated.
+    expect(columns[0].players.map((x) => x.name)).toEqual(["A", "B"]);
+    expect(columns[1].players.map((x) => x.name)).toEqual(["X", "Y"]);
+    expect(columns.map((c) => c.seated)).toEqual([1, 1]);
+  });
+
+  it("keeps both columns when a side is empty", () => {
+    expect(lobbySeatColumns([p("radiant", "radiant")]).map((c) => c.players.length)).toEqual([1, 0]);
+  });
+
+  it("shows the lobby's name and password only once the bot was asked for one", () => {
+    expect(lobbyDetailsVisible("idle")).toBe(false);
+    expect(lobbyDetailsVisible(undefined)).toBe(false);
+    for (const state of ["creating", "ready", "starting", "started", "blocked", "released"] as const)
+      expect(lobbyDetailsVisible(state), state).toBe(true);
+  });
+
+  it("keeps Start quiet while the seat list says someone is missing", () => {
+    expect(startButtonVariant({ allSeated: false })).toBe("secondary");
+    expect(startButtonVariant({ allSeated: true })).toBe("primary");
+    // No seat list (an older bot, an unparsed reply): nothing says it can't.
+    expect(startButtonVariant(null)).toBe("primary");
   });
 });

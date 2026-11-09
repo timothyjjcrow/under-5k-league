@@ -43,6 +43,11 @@ export function ReadyCheckView({
   });
   // One line under the controls, only where it adds something: the heading
   // and the accepted chip already say it once the viewer has accepted.
+  // The viewer's own answer is the one thing the page is waiting for: the
+  // card takes the page (the rest dims behind it) until they accept or
+  // decline. Looks only: the dim layer takes no clicks, so nothing under it
+  // is blocked.
+  const spotlight = me.canAccept && !me.hasAccepted;
   const note = me.canAccept
     ? me.hasAccepted
       ? null
@@ -80,12 +85,27 @@ export function ReadyCheckView({
         </button>
       ) : null}
 
+      {/* Under the site header (z-30), the pinned clock bar (z-20) and the
+          phone dock, over everything else on the page. */}
+      {spotlight ? (
+        <div
+          aria-hidden
+          data-ready-spotlight
+          className="pointer-events-none fixed inset-0 z-10 bg-bg/75"
+        />
+      ) : null}
+
       {/* One card: the question, its clock and the answer on the left; who
           has accepted on the right from lg (under it on a phone). */}
       <section
         ref={bannerRef}
         aria-label="Ready check"
-        className="grid gap-4 rounded-2xl border border-accent/40 bg-gradient-to-br from-accent/15 via-surface to-surface p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:gap-6"
+        className={cn(
+          "grid gap-4 rounded-2xl border bg-gradient-to-br from-accent/15 via-surface to-surface p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)] lg:gap-6",
+          spotlight
+            ? "relative z-[11] border-accent/70 shadow-2xl shadow-accent/20 ring-2 ring-accent/50"
+            : "border-accent/40",
+        )}
       >
         <div className="min-w-0">
           {/* The clock stays beside the heading at every width, so the

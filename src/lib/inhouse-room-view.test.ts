@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import { INHOUSE_STATUS } from "./constants";
 import { orderCaptains, tallyMethod } from "./inhouse";
 import {
+  captainsReveal,
+  gameOverComingText,
   captainsChosenToast,
   draftTurn,
   draftTurnText,
@@ -358,5 +360,57 @@ describe("inhouseSetupPath", () => {
     for (const bot of ["checking", "on", "off", "unavailable", "busy"] as const) {
       expect(inhouseSetupPath({ bot, handHosted: true })).toBe("hand");
     }
+  });
+});
+
+describe("captainsReveal", () => {
+  const cap = (userId: string) => ({ userId, name: userId, pickIndex: null });
+  const teams = (radiantTeam: 1 | 2) => [
+    { team: 1, isRadiant: radiantTeam === 1, captain: cap("one"), players: [] },
+    { team: 2, isRadiant: radiantTeam === 2, captain: cap("two"), players: [] },
+  ];
+
+  it("names Radiant first, then Dire, and the one captain who picks first", () => {
+    const reveal = captainsReveal({ teams: teams(2), pickTeam: 1, picksMade: 0 });
+    expect(
+      reveal?.map((t) => [t.captain.name, t.isRadiant, t.firstPick]),
+    ).toEqual([
+      ["two", true, false],
+      ["one", false, true],
+    ]);
+  });
+
+  it("follows the side on the clock, whichever side that is", () => {
+    const reveal = captainsReveal({ teams: teams(1), pickTeam: 1, picksMade: 0 });
+    expect(reveal?.map((t) => t.firstPick)).toEqual([true, false]);
+  });
+
+  it("is gone once the first pick lands", () => {
+    expect(captainsReveal({ teams: teams(1), pickTeam: 1, picksMade: 1 })).toBeNull();
+  });
+
+  it("never guesses: no turn, a missing captain or two captains on one side show nothing", () => {
+    expect(captainsReveal({ teams: teams(1), pickTeam: null, picksMade: 0 })).toBeNull();
+    expect(captainsReveal({ teams: teams(1), pickTeam: 3, picksMade: 0 })).toBeNull();
+    const noCaptain = [{ ...teams(1)[0], captain: null }, teams(1)[1]];
+    expect(captainsReveal({ teams: noCaptain, pickTeam: 1, picksMade: 0 })).toBeNull();
+    const sameSide = teams(1).map((t) => ({ ...t, isRadiant: true }));
+    expect(captainsReveal({ teams: sameSide, pickTeam: 1, picksMade: 0 })).toBeNull();
+  });
+});
+
+describe("gameOverComingText", () => {
+  const soon = { live: false, minutesLeft: 8 };
+  it("tells a player when the button will appear", () => {
+    expect(gameOverComingText({ canFinish: true, open: false, scan: soon })).toBe(
+      "“Game over — queue again” shows here in 8 min, for when the game ends before its result is in.",
+    );
+  });
+  it("says nothing once the button is there, or to someone who can't press it", () => {
+    expect(gameOverComingText({ canFinish: true, open: true, scan: soon })).toBeNull();
+    expect(gameOverComingText({ canFinish: false, open: false, scan: soon })).toBeNull();
+    expect(
+      gameOverComingText({ canFinish: true, open: false, scan: { live: true, minutesLeft: 0 } }),
+    ).toBeNull();
   });
 });

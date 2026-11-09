@@ -184,6 +184,22 @@ export function draftTurnText(turn: DraftTurn): string | null {
     : `You pick again in ${turn.wait} picks — ${picks}`;
 }
 
+/**
+ * The Play card's line for a player whose "Game over — queue again" isn't
+ * there yet: the button only appears once the result scan's window opens
+ * (inhouseGameOverOpen), and until then nothing said it would. Null once it
+ * is open, for a viewer who can't mark the game over, or with no window to
+ * count down to.
+ */
+export function gameOverComingText(o: {
+  canFinish: boolean;
+  open: boolean;
+  scan: { live: boolean; minutesLeft: number };
+}): string | null {
+  if (!o.canFinish || o.open || o.scan.live) return null;
+  return `“Game over — queue again” shows here in ${o.scan.minutesLeft} min, for when the game ends before its result is in.`;
+}
+
 type DraftedPlayer = { userId: string; name: string; pickIndex: number | null };
 type DraftedTeam<P extends DraftedPlayer> = {
   team: number;
@@ -206,6 +222,52 @@ export function lastDraftPick<P extends DraftedPlayer, T extends DraftedTeam<P>>
     }
   }
   return best;
+}
+
+/** One captain as the draft opens: their side and who picks first. */
+export type CaptainReveal<P extends DraftedPlayer> = {
+  captain: P;
+  team: number;
+  isRadiant: boolean;
+  /** This captain makes the draft's first pick. */
+  firstPick: boolean;
+};
+
+/**
+ * The draft's opening card: the two captains, the side each drew and who
+ * picks first, which one coin toss decided (resolveCaptainVote). Radiant
+ * first, then Dire. It stands until the first pick lands (`picksMade` 0), so
+ * everyone who watched the vote sees how it came out, and a viewer arriving
+ * mid-draft reads the columns instead. Null once a pick is in, without two
+ * captains, or with no side on the clock (a lost turn being restored): it
+ * never guesses who picks first.
+ */
+export function captainsReveal<T extends DraftedTeam<DraftedPlayer>>(o: {
+  teams: readonly T[];
+  pickTeam: number | null;
+  picksMade: number;
+}): [
+  CaptainReveal<NonNullable<T["captain"]>>,
+  CaptainReveal<NonNullable<T["captain"]>>,
+] | null {
+  if (o.picksMade !== 0 || o.pickTeam == null || o.teams.length !== 2) return null;
+  const tiles = o.teams.flatMap((t) =>
+    t.captain
+      ? [
+          {
+            captain: t.captain as NonNullable<T["captain"]>,
+            team: t.team,
+            isRadiant: t.isRadiant,
+            firstPick: t.team === o.pickTeam,
+          },
+        ]
+      : [],
+  );
+  if (tiles.length !== 2 || tiles[0].isRadiant === tiles[1].isRadiant) return null;
+  if (tiles.filter((t) => t.firstPick).length !== 1) return null;
+  const radiant = tiles.find((t) => t.isRadiant)!;
+  const dire = tiles.find((t) => !t.isRadiant)!;
+  return [radiant, dire];
 }
 
 type ToastLobby<P extends DraftedPlayer> = {

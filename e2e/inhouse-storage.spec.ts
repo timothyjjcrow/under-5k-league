@@ -58,6 +58,9 @@ for (const mode of ["unavailable", "write-blocked"] as const) {
             canJoin: false,
             canCancel: false,
           },
+          // The shape an old slot serves during a release (no `teams`, no
+          // `mvp`): the result card must show its headline and its Dismiss
+          // without them.
           lastResult: {
             lobbyId: "storage-fault-result",
             winnerSide: "Radiant",

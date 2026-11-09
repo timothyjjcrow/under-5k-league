@@ -246,8 +246,25 @@ describe("inhouse room rows: the per-viewer reads they replaced", () => {
         detectResults: false,
       });
       expect(state.now).toBe(NOW);
-      expect(state.lastResult, viewer?.name ?? "signed out").toEqual(expected);
-      if (expected) shown++;
+      const label = viewer?.name ?? "signed out";
+      if (!expected) {
+        expect(state.lastResult, label).toBeNull();
+        continue;
+      }
+      // The six fields the per-viewer read gave, unchanged.
+      expect(state.lastResult, label).toMatchObject(expected);
+      // The result card's own fields (2026-11-09) ride the same row: both
+      // sides of the game, the viewer on the side myTeamWon says, and no MVP
+      // from a row with no box score.
+      const teams = state.lastResult!.teams;
+      expect(teams.map((t) => t.players.length), label).toEqual([5, 5]);
+      expect(teams.map((t) => t.isRadiant), label).toEqual([true, false]);
+      const mine = teams.find((t) =>
+        t.players.some((p) => p.userId === viewer!.id),
+      );
+      expect(mine?.won, label).toBe(expected.myTeamWon);
+      expect(state.lastResult!.mvp, label).toBeNull();
+      shown++;
     }
     // The fixture exercised real banners, not a table of nulls: a's back
     // five, b's back five, all of edge and all of tie.
