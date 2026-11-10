@@ -1163,6 +1163,99 @@ export function releaseInhouseBotAfterClose(lobbyId: string): void {
   );
 }
 
+/**
+ * What createInhouseBotLobby did: asked the bot (`created`: it accepted the
+ * create, or already held this game's lobby), found it hosting another game
+ * it couldn't be freed from in time (`busy`: this game's card shows the
+ * by-hand steps, exactly as before), nothing to do (`skipped`: no bot, no
+ * ticket, a game whose teams aren't locked or whose game already started),
+ * a game whose spec can't be built (`unbuildable`: a player with no usable
+ * Dota account), or a create that failed otherwise (`failed`).
+ */
+export type InhouseCreateOutcome =
+  | "created"
+  | "busy"
+  | "skipped"
+  | "unbuildable"
+  | "failed";
+
+/**
+ * After Create's self-heal freed the bot from a closed game's lobby, how long
+ * the one automatic retry waits for the bot to be out of it. The button's
+ * own answer asks a captain to "press again in a few seconds".
+ */
+const CREATE_AFTER_FREE_MS = 3_000;
+
+/**
+ * Ask the bot for this in-house game's lobby as its teams lock, so the ten
+ * are invited without waiting for a captain to press "Create Dota lobby"
+ * (2026-11-09; a 1v1 has asked by itself since 2026-10-28). The same create
+ * the button sends, for the same job key, so a captain's press at the same
+ * moment is the bot's no-op (a job that exists answers its status).
+ *
+ * Once per lock, never retried later: a bot hosting another game answers
+ * BUSY and this game's card shows the by-hand steps, which must not get a
+ * bot lobby (a second lobby name) midway; and a lobby a captain released
+ * stays released. The one exception is Create's own self-heal: a bot still
+ * holding a game the site has closed, or a 1v1 lobby that hasn't started,
+ * is freed (the 5v5 comes first) and asked once more.
+ *
+ * Only for a READY game with no started game. If the game closed while the
+ * create was on its way, its lobby is released again. Called after the
+ * commit that locked the teams, never inside a transaction; never throws.
+ */
+export async function createInhouseBotLobby(
+  lobbyId: string,
+): Promise<InhouseCreateOutcome> {
+  try {
+    if (
+      !lobbyBotKindEnabled("inhouse") ||
+      !lobbyBotConnection() ||
+      inhouseLobbyTicketId() === null
+    )
+      return "skipped";
+    const lobby = await prisma.inhouseLobby.findUnique({
+      where: { id: lobbyId },
+      select: { ...INHOUSE_SPEC_SELECT, startedAt: true },
+    });
+    if (lobby?.status !== INHOUSE_STATUS.READY || lobby.startedAt)
+      return "skipped";
+    let spec: DotaLobbySpec;
+    try {
+      spec = inhouseLobbySpec(lobby);
+    } catch {
+      return "unbuildable";
+    }
+    try {
+      await callLobbyBot(spec, "create");
+    } catch (error) {
+      if (!(error instanceof LobbyBotBusyError)) return "failed";
+      const freed = await freeBotFromClosedInhouseGame("inhouse");
+      if (!freed?.leavingNow) return "busy";
+      await new Promise((resolve) => setTimeout(resolve, CREATE_AFTER_FREE_MS));
+      try {
+        await callLobbyBot(spec, "create");
+      } catch {
+        return "busy";
+      }
+    }
+    // A cancel landing meanwhile already sent its release, possibly before
+    // this lobby existed: let it go again.
+    const after = await prisma.inhouseLobby.findUnique({
+      where: { id: lobbyId },
+      select: { status: true },
+    });
+    if (
+      !after ||
+      !(INHOUSE_PLAYING_STATUSES as readonly string[]).includes(after.status)
+    )
+      releaseInhouseBotAfterClose(lobbyId);
+    return "created";
+  } catch {
+    return "failed";
+  }
+}
+
 // The worker's bot read is a garnish on a result scan that has its own
 // OpenDota budget: never let an offline relay eat that budget.
 const BOT_STATUS_TIMEOUT_MS = 3_000;

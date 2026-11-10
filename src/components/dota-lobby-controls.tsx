@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   createOpen,
+  DOTA_SIDE,
   INHOUSE_SEAT_RULE_NOTE,
   inviteResultToast,
   inviteUnknownToast,
@@ -12,15 +13,18 @@ import {
   lobbyBusyElsewhere,
   lobbyBusyLabel,
   lobbyBusyNote,
+  lobbyDetailsVisible,
   lobbyListVisible,
   lobbyPanelPollMs,
   lobbyPlayerRow,
+  lobbySeatColumns,
   lobbySeatSummary,
   lobbyStatusLabel,
   noPopupHelp,
   reinviteMissingOpen,
   releaseOpen,
   selfInviteOpen,
+  startButtonVariant,
   startOpen,
   viewerLobbySeat,
   type DotaLobbyView,
@@ -28,6 +32,7 @@ import {
   type LobbyInviteScope,
   type LobbyKind,
   type LobbySeat,
+  type LobbySeatTone,
 } from "@/lib/dota-lobby";
 import { DUEL_GAME_MODE, LEAGUE_GAME_MODE } from "@/lib/constants";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
@@ -40,6 +45,24 @@ import { buttonClasses } from "./ui";
 const UNREACHABLE = "Could not reach the lobby bot.";
 /** A request the panel sends gives up after this long. */
 const REQUEST_TIMEOUT_MS = 20_000;
+
+/**
+ * A seat-board row's mark and colours by its tone (lobbyPlayerRow): the mark
+ * is decoration, the row's words carry the meaning.
+ */
+const SEAT_TONE: Record<
+  LobbySeatTone,
+  { glyph: string; glyphClass: string; textClass: string }
+> = {
+  seated: { glyph: "✓", glyphClass: "text-success", textClass: "text-success" },
+  move: { glyph: "!", glyphClass: "text-accent", textClass: "text-fg" },
+  waiting: { glyph: "…", glyphClass: "text-muted", textClass: "text-muted" },
+  failed: {
+    glyph: "×",
+    glyphClass: "text-danger-soft",
+    textClass: "text-danger-soft",
+  },
+};
 
 /** What /api/dota-lobby answers: a view, or an error and its unknown flag. */
 type RouteBody =
@@ -95,6 +118,7 @@ export function DotaLobbyControls({
   recoveryOnly = false,
   onAvailability,
   onViewerSeat,
+  onMatchId,
   audience = "host",
 }: {
   kind: LobbyKind;
@@ -110,6 +134,12 @@ export function DotaLobbyControls({
    * shows none: the setup card's "your side" line.
    */
   onViewerSeat?: (seat: LobbySeat | null) => void;
+  /**
+   * Called whenever the Dota match id the bot reports for this game changes
+   * (null until the game launches, and from a bot that reports none): the
+   * Play card shows it.
+   */
+  onMatchId?: (matchId: string | null) => void;
 }) {
   const [view, setView] = useState<DotaLobbyView | null>(null);
   const [error, setError] = useState("");
@@ -311,6 +341,11 @@ export function DotaLobbyControls({
     onViewerSeat?.(mySeat);
   }, [mySeat, onViewerSeat]);
 
+  const matchId = view?.status?.matchId ?? null;
+  useEffect(() => {
+    onMatchId?.(matchId);
+  }, [matchId, onMatchId]);
+
   if (!lobbyPanelVisible(audience, availability)) return null;
   // Joiners can't create, start or release the lobby, so their copy says who
   // does. An admin on the players' panel can, and gets the hosts' copy.
@@ -333,6 +368,9 @@ export function DotaLobbyControls({
         })
       : null;
   const startHighlighted = seatSummary?.start === true;
+  // The count's bar, until everyone is seated (the summary's own box says
+  // "All ten seated" then).
+  const seatBar = seatSummary && !seatSummary.allSeated ? seatSummary : null;
 
   return (
     <section
@@ -372,38 +410,12 @@ export function DotaLobbyControls({
               {lobbyBusyNote(busy, view.canControl, kind)}
             </p>
           ) : null}
-          {/* No bot lobby will exist for a game the bot can't host now, so
-              its name and password stay off the card (the by-hand steps
-              carry the lobby to join). */}
-          {busyLive ? null : (
-            <dl className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-              <div className="min-w-0">
-                <dt className="mb-1 text-xs text-muted">Lobby name</dt>
-                <dd>
-                  <CopyChip value={view.name} label="lobby name" />
-                </dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="mb-1 text-xs text-muted">Password</dt>
-                <dd>
-                  <CopyChip value={view.password} label="password" />
-                </dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="text-xs text-muted">Radiant</dt>
-                <dd className="break-words">{view.radiantName}</dd>
-              </div>
-              <div className="min-w-0">
-                <dt className="text-xs text-muted">Dire</dt>
-                <dd className="break-words">{view.direName}</dd>
-              </div>
-            </dl>
-          )}
           {/* Anyone who can't press Create (a player, not a captain) waits
               for a captain's lobby; the hosts get the Create button. */}
           {!duel && !view.canControl && !busy && ["idle", "released"].includes(state) ? (
             <p className="text-xs text-muted">
-              Once a captain creates it, join with this name and password.
+              Once a captain creates the lobby, its name and password show
+              here.
             </p>
           ) : null}
           {releasing ? (
@@ -413,82 +425,6 @@ export function DotaLobbyControls({
           ) : left ? (
             <p className="text-xs text-muted">{LOBBY_LEFT_NOTE}</p>
           ) : null}
-          {players ? (
-            <>
-              {state === "ready" && releasing ? null : state === "ready" ? (
-                <p className="text-xs text-muted">
-                  The bot invites everyone in Dota once the lobby is ready:
-                  accept the invite (no password needed), then take a slot on
-                  your side. Anyone whose Dota is closed gets the invite when
-                  they open it. {noPopupHelp(view.inviteScope)}
-                </p>
-              ) : (
-                <p className="text-xs text-muted">
-                  Dota is starting the game with the players below. Anyone
-                  still missing can join with this name and password.
-                </p>
-              )}
-              {/* In-house games and 1v1s: the bot keeps its sides right
-                  while the lobby fills (it moves nobody in a season lobby). */}
-              {kind !== "season" && state === "ready" && !releasing ? (
-                <p className="text-xs text-muted">{INHOUSE_SEAT_RULE_NOTE}</p>
-              ) : null}
-              <p className="text-xs text-muted">
-                Ticket {view.leagueId}. The bot checks the ticket, mode,
-                region, and rosters before starting.
-              </p>
-              <div className="min-w-0">
-                <h4 id={listHeading} className="mb-1.5 text-xs font-semibold">
-                  Who&apos;s in the lobby
-                </h4>
-                <ul
-                  aria-labelledby={listHeading}
-                  className="divide-y divide-line-soft overflow-hidden rounded-lg border border-line"
-                >
-                  {players.map((player, i) => {
-                    const row = lobbyPlayerRow(player);
-                    return (
-                      <li
-                        key={i}
-                        className="flex min-w-0 flex-col gap-0.5 px-3 py-2 sm:flex-row sm:items-baseline sm:justify-between sm:gap-3"
-                      >
-                        <span className="flex min-w-0 items-baseline gap-1.5">
-                          <span className="min-w-0 truncate text-sm font-medium">
-                            {player.name}
-                          </span>
-                          {player.self ? (
-                            <span className="shrink-0 text-xs text-muted">
-                              (you)
-                            </span>
-                          ) : null}
-                        </span>
-                        <span
-                          className={cn(
-                            "min-w-0 text-xs sm:text-right",
-                            row.settled ? "text-success" : "text-muted",
-                          )}
-                        >
-                          {row.text}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              </div>
-            </>
-          ) : over || busyLive ? null : (
-            <p className="text-xs text-muted">
-              Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
-              The bot checks the ticket, mode, region, and rosters before
-              starting.
-            </p>
-          )}
-          {view.status.lobbyId ? (
-            <p className="break-words text-xs text-muted">
-              Dota lobby {view.status.lobbyId}
-              {view.status.matchId ? ` · Match ${view.status.matchId}` : ""}
-            </p>
-          ) : null}
           {state === "blocked" ? (
             <p className="text-sm text-muted">
               {joiner
@@ -496,25 +432,20 @@ export function DotaLobbyControls({
                 : "Check that the bot is online and has permission to use this ticket. Refresh before retrying. Release the bot only after checking the existing lobby in Dota."}
             </p>
           ) : null}
-          {state === "started" && kind === "season" ? (
-            <p className="text-xs text-muted">
-              After this result is imported, this page offers the next game in
-              the series.
-            </p>
-          ) : null}
-          {state === "started" && duel && !recoveryOnly && !over ? (
-            <p className="text-xs text-muted">
-              The result records itself from OpenDota after the game, and the
-              1v1 is marked over here as soon as Dota shows its end.
-            </p>
-          ) : null}
-          {state === "started" && kind === "inhouse" && !recoveryOnly && !over ? (
-            <p className="text-xs text-muted">
-              The result records itself from OpenDota after the game, and the
-              game is marked over here as soon as Dota shows its end. If it
-              isn&apos;t, press “Game over — queue again” once the game ends
-              to play the next one straight away.
-            </p>
+          {/* The count as a bar, one segment per player, like the ready
+              check's: how close the lobby is to starting, at a glance. */}
+          {seatBar ? (
+            <div aria-hidden className="flex gap-1">
+              {Array.from({ length: seatBar.total }, (_, i) => (
+                <span
+                  key={i}
+                  className={cn(
+                    "h-1.5 flex-1 rounded-full transition-colors",
+                    i < seatBar.seated ? "bg-success" : "bg-line",
+                  )}
+                />
+              ))}
+            </div>
           ) : null}
           {/* Right above Start: how many sit on their side, then the "All
               ten seated" state (lobbySeatSummary). A status, so a screen
@@ -537,6 +468,9 @@ export function DotaLobbyControls({
               {seatSummary.text}
             </p>
           ) : null}
+          {/* The controls lead the panel, straight under the status and the
+              count: a captain on a phone had to scroll past the whole seat
+              list and its help to reach Create and Start. */}
           <div className="flex flex-wrap gap-2">
             {!recoveryOnly && createOpen(view) ? (
               <button
@@ -553,7 +487,7 @@ export function DotaLobbyControls({
                 type="button"
                 disabled={pending}
                 className={buttonClasses(
-                  "primary",
+                  startButtonVariant(seatSummary),
                   "md",
                   startHighlighted
                     ? "ring-2 ring-success ring-offset-2 ring-offset-surface"
@@ -621,6 +555,197 @@ export function DotaLobbyControls({
                 Keep hosting
               </button>
             </div>
+          ) : null}
+          {/* The seat board: who is where, in two columns by the side each
+              player belongs on, so a captain reads "who is missing" and "who
+              sits on the wrong side" without comparing it to the rosters. */}
+          {players ? (
+            <div className="min-w-0">
+              <h4 id={listHeading} className="mb-1.5 text-xs font-semibold">
+                Who&apos;s in the lobby
+              </h4>
+              <div
+                role="group"
+                aria-labelledby={listHeading}
+                className="grid grid-cols-2 gap-2"
+              >
+                {lobbySeatColumns(players).map((column) => {
+                  const radiant = column.side === "radiant";
+                  return (
+                    <div
+                      key={column.side}
+                      className={cn(
+                        "min-w-0 overflow-hidden rounded-lg border",
+                        radiant ? "border-success/40" : "border-danger/40",
+                      )}
+                    >
+                      <p className="flex min-w-0 items-baseline justify-between gap-2 border-b border-line-soft px-2.5 py-1.5 text-xs">
+                        <span
+                          className={cn(
+                            "min-w-0 truncate font-semibold",
+                            radiant ? "text-success" : "text-danger-soft",
+                          )}
+                        >
+                          {DOTA_SIDE[column.side]}
+                        </span>
+                        <span className="shrink-0 tabular-nums text-muted">
+                          {column.seated}/{column.players.length}
+                        </span>
+                      </p>
+                      <ul
+                        aria-label={`${DOTA_SIDE[column.side]}: ${radiant ? view.radiantName : view.direName}`}
+                        className="divide-y divide-line-soft"
+                      >
+                        {column.players.map((player, i) => {
+                          const row = lobbyPlayerRow(player);
+                          return (
+                            <li
+                              key={i}
+                              className={cn(
+                                "flex min-w-0 items-start gap-2 px-2.5 py-1.5",
+                                row.tone === "move" && "bg-accent/10",
+                              )}
+                            >
+                              <span
+                                aria-hidden
+                                className={cn(
+                                  "mt-0.5 w-3 shrink-0 text-center text-xs font-bold",
+                                  SEAT_TONE[row.tone].glyphClass,
+                                )}
+                              >
+                                {SEAT_TONE[row.tone].glyph}
+                              </span>
+                              <span className="min-w-0 flex-1">
+                                <span className="flex min-w-0 items-baseline gap-1">
+                                  <span className="min-w-0 truncate text-sm font-medium">
+                                    {player.name}
+                                  </span>
+                                  {player.self ? (
+                                    <span className="shrink-0 text-[11px] text-muted">
+                                      (you)
+                                    </span>
+                                  ) : null}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "block break-words text-[11px] leading-snug",
+                                    SEAT_TONE[row.tone].textClass,
+                                  )}
+                                >
+                                  {row.text}
+                                </span>
+                              </span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          {/* No bot lobby will exist for a game the bot can't host now, so
+              its name and password stay off the card (the by-hand steps
+              carry the lobby to join); nor before the bot was asked for one
+              (lobbyDetailsVisible). */}
+          {busyLive || !lobbyDetailsVisible(state) ? null : (
+            <dl className="grid grid-cols-2 gap-2 text-sm">
+              <div className="min-w-0">
+                <dt className="mb-1 text-xs text-muted">Lobby name</dt>
+                <dd>
+                  <CopyChip value={view.name} label="lobby name" />
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="mb-1 text-xs text-muted">Password</dt>
+                <dd>
+                  <CopyChip value={view.password} label="password" />
+                </dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Radiant</dt>
+                <dd className="break-words">{view.radiantName}</dd>
+              </div>
+              <div className="min-w-0">
+                <dt className="text-xs text-muted">Dire</dt>
+                <dd className="break-words">{view.direName}</dd>
+              </div>
+            </dl>
+          )}
+          {players ? (
+            state === "ready" && releasing ? null : state === "ready" ? (
+              // The how-to folds away: it is read once, and it used to push
+              // the seat list and the buttons a screen down a phone.
+              <details className="group rounded-lg border border-line">
+                <summary className="flex min-h-11 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
+                  <span>
+                    <span className="font-medium text-fg">How to join</span>
+                    {" · no invite popup?"}
+                  </span>
+                  <span
+                    aria-hidden
+                    className="transition-transform group-open:rotate-180"
+                  >
+                    ⌄
+                  </span>
+                </summary>
+                <div className="space-y-2 border-t border-line px-3 py-2.5">
+                  <p className="text-xs text-muted">
+                    The bot invites everyone in Dota once the lobby is ready:
+                    accept the invite (no password needed), then take a slot on
+                    your side. Anyone whose Dota is closed gets the invite when
+                    they open it. {noPopupHelp(view.inviteScope)}
+                  </p>
+                  {/* In-house games and 1v1s: the bot keeps its sides right
+                      while the lobby fills (it moves nobody in a season lobby). */}
+                  {kind !== "season" && state === "ready" && !releasing ? (
+                    <p className="text-xs text-muted">{INHOUSE_SEAT_RULE_NOTE}</p>
+                  ) : null}
+                  <p className="text-xs text-muted">
+                    Ticket {view.leagueId}. The bot checks the ticket, mode,
+                    region, and rosters before starting.
+                  </p>
+                </div>
+              </details>
+            ) : (
+              <p className="text-xs text-muted">
+                Dota is starting the game with the players above. Anyone
+                still missing can join with this name and password.
+              </p>
+            )
+          ) : over || busyLive || !lobbyDetailsVisible(state) ? null : (
+            <p className="text-xs text-muted">
+              Ticket {view.leagueId}. Join through Dota → Play → Custom Lobbies.
+              The bot checks the ticket, mode, region, and rosters before
+              starting.
+            </p>
+          )}
+          {view.status.lobbyId ? (
+            <p className="break-words text-xs text-muted">
+              Dota lobby {view.status.lobbyId}
+              {view.status.matchId ? ` · Match ${view.status.matchId}` : ""}
+            </p>
+          ) : null}
+          {state === "started" && kind === "season" ? (
+            <p className="text-xs text-muted">
+              After this result is imported, this page offers the next game in
+              the series.
+            </p>
+          ) : null}
+          {state === "started" && duel && !recoveryOnly && !over ? (
+            <p className="text-xs text-muted">
+              The result records itself from OpenDota after the game, and the
+              1v1 is marked over here as soon as Dota shows its end.
+            </p>
+          ) : null}
+          {state === "started" && kind === "inhouse" && !recoveryOnly && !over ? (
+            <p className="text-xs text-muted">
+              The result records itself from OpenDota after the game, and the
+              game is marked over here as soon as Dota shows its end. If it
+              isn&apos;t, press “Game over — queue again” once the game ends
+              to play the next one straight away.
+            </p>
           ) : null}
         </>
       ) : null}

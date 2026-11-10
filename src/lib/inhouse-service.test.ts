@@ -153,7 +153,13 @@ const recentGame = (
   eloDeltas: JSON.stringify(
     Object.fromEntries(ids.map((u, i) => [u, i < 5 ? 25 : -25])),
   ),
-  players: ids.map((userId, i) => ({ userId, team: i < 5 ? 1 : 2 })),
+  boxScore: "[]",
+  players: ids.map((userId, i) => ({
+    userId,
+    team: i < 5 ? 1 : 2,
+    isCaptain: i === 0 || i === 5,
+    user: { name: userId },
+  })),
   ...over,
 });
 
@@ -491,15 +497,33 @@ describe("buildInhouseState: lastResult", () => {
         recentGame("older-mine", ten, 120_000),
       ],
     });
-    expect(build(session("done0"), r).lastResult).toEqual({
+    const mine = build(session("done0"), r).lastResult;
+    expect(mine).toMatchObject({
       lobbyId: "mine",
       winnerSide: "Dire",
       radiantScore: 30,
       direScore: 12,
       myTeamWon: false,
       eloDelta: 25,
+      // No box score on the row: no MVP, never a guess.
+      mvp: null,
     });
     expect(build(session("done7"), r).lastResult?.myTeamWon).toBe(true);
+    // The card's two sides: Radiant first, captain first, each player's
+    // stored Elo change, and which side won.
+    expect(mine?.teams.map((t) => [t.isRadiant, t.won])).toEqual([
+      [true, false],
+      [false, true],
+    ]);
+    expect(mine?.teams[0].players[0]).toEqual({
+      userId: "done0",
+      name: "done0",
+      isCaptain: true,
+      eloDelta: 25,
+    });
+    expect(mine?.teams[1].players.map((p) => p.eloDelta)).toEqual([
+      -25, -25, -25, -25, -25,
+    ]);
   });
 
   it("includes a game completed exactly at the window's edge, not 1ms before", () => {
@@ -537,11 +561,16 @@ describe("buildInhouseState: lastResult", () => {
         }),
       ],
     });
-    expect(build(session("done0"), r).lastResult).toMatchObject({
+    const bad = build(session("done0"), r).lastResult;
+    expect(bad).toMatchObject({
       eloDelta: 0,
       radiantScore: 0,
       direScore: 0,
     });
+    // The card's per-player changes are unknown, not zero.
+    expect(bad?.teams.flatMap((t) => t.players.map((p) => p.eloDelta))).toEqual(
+      Array(10).fill(null),
+    );
   });
 
   it("is null signed out", () => {

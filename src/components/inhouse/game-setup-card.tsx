@@ -44,6 +44,7 @@ export function GameSetupCard({
   me,
   manualStart = null,
   collapsed = false,
+  onMatchId,
 }: {
   lobby: RoomLobby;
   me: InhouseState["me"];
@@ -55,6 +56,8 @@ export function GameSetupCard({
    * still reports seats), and the bot panel stays mounted, reporting.
    */
   collapsed?: boolean;
+  /** The Dota match id the bot reports for this game (the Play card's). */
+  onMatchId?: (matchId: string | null) => void;
 }) {
   const [bot, setBot] = useState<LobbyBotAvailability>("checking");
   // The bot was hosting another game when this card looked (one bot, one
@@ -287,6 +290,7 @@ export function GameSetupCard({
             id={lobby.id}
             onAvailability={onAvailability}
             onViewerSeat={setViewerSeat}
+            onMatchId={onMatchId}
           />
         </div>
         {path === "checking" ? (

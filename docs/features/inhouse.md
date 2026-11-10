@@ -983,6 +983,28 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
 
 ## Game setup
 
+- **The teams locking asks the bot for the game's lobby** (2026-11-09;
+  `createInhouseBotLobby` in `dota-lobby-service.ts`, DECISIONS). The ten
+  used to wait on a captain's "Create Dota lobby"; a 1v1 has asked by itself
+  since 2026-10-28. Each of the three writers of DRAFTING → READY asks after
+  its commit, through `runAfterResponse` (`requestBotLobbyAfterLock`):
+  `makePick`'s last pick (`applyPick` returns `locked`), the clock's own
+  last pick (`resolveStalledPick`) and `restoreLostPickTurn`'s finish.
+  - **It is the button's own create,** for the same job key, so a captain's
+    press at the same moment is the bot's no-op (a job that exists answers
+    its status). The button stays on the card as the fallback.
+  - **Once per lock, never retried later.** A bot hosting another live game
+    answers BUSY and the card shows the by-hand steps, which must never get
+    a bot lobby (a second lobby name) midway; a lobby a captain released
+    stays released. The one exception is Create's own self-heal: a bot
+    still on a game the site closed, or on a 1v1 lobby that hasn't started
+    (the 5v5 comes first), is freed and asked once more 3s later.
+  - **Only a READY game with no started game,** and a no-op before any read
+    with no bot, no ticket id or the bot off for in-house games. A game that
+    closed while the create was on its way has its lobby released again.
+  - `inhouse-bot-lifecycle.itest.ts` ("teams locking asks the bot…"),
+    sabotage-verified: without the hooks the last-pick and auto-pick tests
+    fail.
 - **`GameSetupCard` shows ONE path once teams lock.** If the lobby bot answers
   (`DotaLobbyControls` `onAvailability` is "on"), its panel is the path and
   the by-hand steps plus the optional "Start the game clock" fold under "Bot
@@ -1018,8 +1040,8 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   so they take their own slot: Dota lets nobody seat another player. Since
   2026-10-18 the bot corrects the sides instead (see "Getting the ten on
   their sides" below). While the
-  lobby is ready the panel lists "Who's in the lobby" (each player's seat and
-  invite, no Steam IDs) and offers "Re-invite missing players" to the captains
+  lobby is ready the panel shows "Who's in the lobby" as a seat board (below;
+  each player's seat and invite, no Steam IDs) and offers "Re-invite missing players" to the captains
   and admins and "Send me an invite" to the other players, each only while
   someone (or the viewer) is missing: `reinviteMissingOpen` and
   `selfInviteOpen` over `lobbyInviteScope`, which `/api/dota-lobby` accepts an
@@ -1065,6 +1087,27 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
     gets a Start prompt. No seat list (an older bot, a reply that didn't
     parse) shows no count, never "0 of 10". Start still shows without one,
     and the bot still refuses it (`ROSTER`) until the sides are right.
+  - **The seat board and the panel's order** (2026-11-09). On a phone a
+    captain scrolled two screens to reach Start (1,786px down, under the
+    flat seat list and three paragraphs of help), and a player on the wrong
+    side read in the same grey as "Invite sent". The panel now runs: status,
+    the count as a ten-segment bar and its line, the buttons, then the
+    board, the lobby's name and password, and the help folded under "How to
+    join" (source-guarded: the buttons sit above the board and the `<dl>`).
+    - The board is two columns by the side each player BELONGS on
+      (`lobbySeatColumns`), each headed with its count ("4/5"); a row's mark
+      and colour come from `lobbyPlayerRow`'s `tone`: seated (green ✓), in
+      the lobby but not on their side (`move`: tinted, the row someone must
+      act on), invite out (`waiting`) and invite failed.
+    - "Start game with bot" is the quiet button while the list says someone
+      is missing and the loud one once all are seated or when the bot
+      reports no seats (`startButtonVariant`). It is never disabled by the
+      list, which can be a few seconds old: a refused press says who is
+      missing, and only the action lock disables a control.
+    - The lobby's name and password show only once the bot was asked for a
+      lobby (`lobbyDetailsVisible`: never while its job is `idle`). A name
+      with no lobby behind it sent players searching Dota, beside the
+      by-hand steps' own lobby name.
   - **The panel's copy** says the bot moves anyone on the wrong side, and
     anyone not in this game, back to unassigned, and may post in lobby chat
     who goes where (`INHOUSE_SEAT_RULE_NOTE`, in a ready in-house lobby
@@ -1491,7 +1534,21 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   obvious what to do). The words and turn math are pure and tested in
   `src/lib/inhouse-room-view.ts`:
   - The ready check's heading asks only until the viewer accepts, then says
-    whom it waits on (`readyCheckHeading`); their own tile says "you".
+    whom it waits on (`readyCheckHeading`); their own tile says "you". Until
+    the viewer answers, the card takes the page: a fixed layer dims
+    everything else under the header and the card is lifted over it
+    (2026-11-09). Looks only: the layer takes no clicks.
+  - The draft opens on its captains: until the first pick, the banner shows
+    both captains, the side each drew and who picks first, "sides and first
+    pick by coin toss" (`captainsReveal`; 2026-11-09, DECISIONS' "captains
+    want the toss to be visible"). The room used to jump from the vote into
+    the draft with only a toast. It never guesses: no turn or a missing
+    captain shows nothing.
+  - Play says when "Game over — queue again" will appear
+    (`gameOverComingText`: the button only shows once the scan window
+    opens), and shows the Dota match id once the bot reports one (the folded
+    setup card's panel hands it up, `onMatchId`). The rosters drop their
+    "Needs Pos" line once the game is under way (`MatchupGrid needs`).
   - The vote's banner says what it decides if its clock runs out now
     (`projectedCaptains`, `voteProjectionText`: `tallyMethod` and
     `orderCaptains`, the two functions `resolveCaptainVote` runs, so it never
@@ -1512,11 +1569,22 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
     tap swaps the control for its question and two answers; Escape or the
     cancel answer puts it back with focus on it. `window.confirm` froze the
     room, its clocks and its polls, while open and covered a phone's room.
+- **The result card** (2026-11-09; `ResultCard`, built from
+  `lastResult.teams` and `lastResult.mvp`, pure in
+  `src/lib/inhouse-result-card.ts`). For the ten minutes after a viewer's
+  game lands: Victory or Defeat with their Elo change, the score, the MVP
+  (`gameMvp`, the Discord post's rule), both sides with every player's Elo
+  change as stored with the result, and how many of the ten are back in the
+  queue beside "Run it back →". It was one line. A change the row doesn't
+  carry is unknown and shows nothing, never zero; no box score, no MVP. The
+  room's recent-results read carries `boxScore` and the players' names for
+  it: a handful of rows, only inside the window.
 - **Other surfaces:** a compact fixed clock bar in the ready check, vote and
   draft (`useBannerOffscreen`, `top-16`); "Run it back →" with its dismissal in
   localStorage (`e2e/inhouse-storage.spec.ts` covers blocked storage);
   `router.refresh()` when a lobby ends or after a void; `shouldFocusStage`
-  scrolls a member's stage into view once per stage. `/inhouse/history` shows
+  scrolls a member's stage into view once per stage, to 128px (`scroll-mt-32`:
+  the header plus the room's own header row, which 96px left half hidden). `/inhouse/history` shows
   `INHOUSE_HISTORY_PAGE_SIZE` games a page. `/inhouse` page order is in
   `docs/features/pages-and-ui.md`.
 

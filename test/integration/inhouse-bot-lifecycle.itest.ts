@@ -11,6 +11,7 @@ import { abandonedReason, adminCancelReason } from "@/lib/inhouse-end-reason";
 import { getSessionUser, requireAdmin, type SessionUser } from "@/lib/auth";
 import {
   callLobbyBot,
+  createInhouseBotLobby,
   inhouseBotGameStatus,
   lobbyBotConnection,
   recoverableInhouseBotLobby,
@@ -22,9 +23,11 @@ import {
   finishGame,
   giveUpOnResult,
   joinQueue,
+  makePick,
   maybeAutoDetectResult,
   recordMatch,
   resolveAbandonedLobby,
+  resolveStalledPick,
   voidLastResult,
 } from "@/lib/inhouse-service";
 import { readInhouseRoomVersion } from "@/lib/inhouse-room-version";
@@ -1131,5 +1134,167 @@ describe("one bot read serves every panel of a game", () => {
     });
     await inhouseBotGameStatus({ id: lobby.id, radiantTeam: 1, players: rows });
     expect(botCalls.map((c) => c.action)).toEqual(["status", "create", "status"]);
+  });
+});
+
+// 2026-11-09: the teams locking asks the bot for the game's lobby, so the
+// ten are invited without waiting on a captain's "Create Dota lobby" (a 1v1
+// has asked by itself since 2026-10-28). Once per lock, after the commit.
+describe("teams locking asks the bot for the game's lobby", () => {
+  /**
+   * A draft with `pool` players still to pick and team `pickTeam` on the
+   * clock: players[0] captains team 1 (Radiant), players[5] team 2.
+   */
+  async function draftingLobby(
+    players: Player[],
+    opts: { pool: number; pickTeam: 1 | 2; clockRanOut?: boolean },
+  ) {
+    const now = Date.now();
+    // Team 1 fills first, then team 2; the last `pool` players stay unpicked.
+    const drafted = players.length - opts.pool;
+    return prisma.inhouseLobby.create({
+      data: {
+        status: INHOUSE_STATUS.DRAFTING,
+        slot: 1,
+        radiantTeam: 1,
+        pickTeam: opts.pickTeam,
+        pickEndsAt: new Date(now + (opts.clockRanOut ? -5_000 : 60_000)),
+        players: {
+          create: players.map((p, i) => {
+            const captain = i === 0 || i === INHOUSE.TEAM_SIZE;
+            // Seats in draft order: both captains, then team 1's picks, then
+            // team 2's, so the unpicked tail is always team 2's last seats.
+            const order = [0, 5, 1, 2, 3, 4, 6, 7, 8, 9].indexOf(i);
+            const seated = order < drafted;
+            return {
+              userId: p.user.id,
+              team: seated ? (i < INHOUSE.TEAM_SIZE ? 1 : 2) : null,
+              isCaptain: captain,
+              pickIndex: seated && !captain ? order - 2 : null,
+              mmr: 3000 + i,
+              queuedAt: new Date(now - 10 * MIN + i),
+              acceptedAt: new Date(now - 5 * MIN),
+            };
+          }),
+        },
+      },
+    });
+  }
+  const creates = () => botCalls.filter((c) => c.action === "create");
+
+  it("the pick that locks the teams sends one create for that game", async () => {
+    const players = await makePlayers(10, "Lock");
+    const lobby = await draftingLobby(players, { pool: 1, pickTeam: 2 });
+    stubBot((request) =>
+      request.action === "create" ? { state: "creating" } : { state: "idle" },
+    );
+
+    const picked = await makePick(players[5].session, players[9].user.id);
+
+    expect(picked).toEqual({ ok: true });
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.READY);
+    expect(creates().map((c) => c.spec?.key)).toEqual([keyOf(lobby.id)]);
+  });
+
+  it("a pick that leaves the draft running asks the bot nothing", async () => {
+    const players = await makePlayers(10, "Mid");
+    // Three unpicked: this pick leaves two, so nothing is auto-assigned.
+    const lobby = await draftingLobby(players, { pool: 3, pickTeam: 2 });
+    stubBot();
+
+    expect(await makePick(players[5].session, players[7].user.id)).toEqual({
+      ok: true,
+    });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.DRAFTING);
+    expect(botCalls).toEqual([]);
+  });
+
+  it("the clock's own last pick asks too", async () => {
+    const players = await makePlayers(10, "Auto");
+    const lobby = await draftingLobby(players, {
+      pool: 1,
+      pickTeam: 2,
+      clockRanOut: true,
+    });
+    stubBot((request) =>
+      request.action === "create" ? { state: "creating" } : { state: "idle" },
+    );
+
+    expect(await resolveStalledPick()).toBe(true);
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.READY);
+    expect(creates().map((c) => c.spec?.key)).toEqual([keyOf(lobby.id)]);
+  });
+
+  it("asks nothing, and reads nothing, with no bot configured", async () => {
+    const players = await makePlayers(10, "NoBot");
+    const lobby = await draftingLobby(players, { pool: 1, pickTeam: 2 });
+    const fetched = vi.fn(async () => {
+      throw new Error("no bot is configured: nothing may be fetched");
+    });
+    vi.stubGlobal("fetch", fetched);
+
+    expect(await makePick(players[5].session, players[9].user.id)).toEqual({
+      ok: true,
+    });
+
+    expect((await lobbyRow(lobby.id)).status).toBe(INHOUSE_STATUS.READY);
+    expect(fetched).not.toHaveBeenCalled();
+    expect(await createInhouseBotLobby(lobby.id)).toBe("skipped");
+  });
+
+  it("a bot hosting another live game is asked once: the card goes by hand", async () => {
+    const players = await makePlayers(10, "Busy");
+    const lobby = await playedLobby(players, { status: INHOUSE_STATUS.READY });
+    // Another league's game holds the bot: nothing of ours to free it from.
+    stubBot((request) =>
+      request.action === "create"
+        ? Response.json({ code: "BUSY" }, { status: 409 })
+        : request.action === "health"
+          ? { online: true, steamId: null, activeKey: "elsewhere:inhouse:x:1" }
+          : { state: "idle" },
+    );
+
+    expect(await createInhouseBotLobby(lobby.id)).toBe("busy");
+
+    expect(creates()).toHaveLength(1);
+    expect(botCalls.some((c) => c.action === "release")).toBe(false);
+  });
+
+  it("never asks for a game that isn't waiting to start", async () => {
+    const players = await makePlayers(10, "Late");
+    stubBot();
+    const running = await playedLobby(players, { slot: 1 });
+    const cancelled = await playedLobby(await makePlayers(10, "Gone"), {
+      status: INHOUSE_STATUS.CANCELLED,
+      slot: 2,
+    });
+
+    expect(await createInhouseBotLobby(running.id)).toBe("skipped");
+    expect(await createInhouseBotLobby(cancelled.id)).toBe("skipped");
+    expect(await createInhouseBotLobby("no-such-game")).toBe("skipped");
+    expect(botCalls).toEqual([]);
+  });
+
+  it("lets the lobby go again when the game closed while the create was on its way", async () => {
+    const players = await makePlayers(10, "Race");
+    const lobby = await playedLobby(players, { status: INHOUSE_STATUS.READY });
+    stubBot(async (request) => {
+      if (request.action === "create") {
+        // An admin cancel lands while the bot is answering.
+        await prisma.inhouseLobby.update({
+          where: { id: lobby.id },
+          data: { status: INHOUSE_STATUS.CANCELLED },
+        });
+        return { state: "creating" };
+      }
+      return { state: "released" };
+    });
+
+    expect(await createInhouseBotLobby(lobby.id)).toBe("created");
+    await settleInhouseBotReleases();
+
+    expect(botCalls.map((c) => c.action)).toEqual(["create", "release"]);
   });
 });

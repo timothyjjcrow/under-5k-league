@@ -20,9 +20,16 @@ export function MatchupGrid({
   lobby,
   rail = false,
   myTeam = null,
+  needs = true,
 }: {
   lobby: RoomLobby;
   rail?: boolean;
+  /**
+   * Each side's open positions ("Needs Pos 5"). On while the game is being
+   * set up (who flexes is still to settle); off once it is under way, where
+   * the hint is only a leftover from the draft.
+   */
+  needs?: boolean;
   /** The viewer's own side, tagged "Your team" (null for a spectator). */
   myTeam?: number | null;
 }) {
@@ -63,7 +70,7 @@ export function MatchupGrid({
             </div>
             {/* Teams are locked, but a side with nobody on Pos 5 still wants
                 to know who flexes before the game. */}
-            <TeamRoleNeeds members={roster} />
+            {needs ? <TeamRoleNeeds members={roster} /> : null}
             <div className="space-y-1.5 px-3 py-2.5">
               {roster.map((p, i) => (
                 <div key={p.userId} className="flex items-center gap-2 text-sm">

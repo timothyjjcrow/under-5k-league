@@ -1004,8 +1004,12 @@ the league is already draftable and many visitors have joined. Write for both.
   pair). The draft: the turn, its clock, the snake and the last pick in one
   banner, the pool first in the DOM, the teams beside it from lg. Set up: a
   short "Teams are set!" card, then the setup card beside the rosters from
-  xl (its steps by its own width). Play: one banner with "Game over" at its
+  xl (its steps by its own width); the bot's panel leads with its status,
+  the seat count and the buttons, then the seat board ([inhouse](inhouse.md#game-setup)).
+  Play: one banner with "Game over" at its
   end and the result checks in one row, the rosters, then the lobby folded.
+  Between games the viewer's last result is a card over the queue for ten
+  minutes (both sides, Elo changes, the MVP).
   The player's own side's roster says "Your team".
 - **A game marked over gets its own card** ([inhouse](inhouse.md#game-over-result-pending)):
   "Result on the way" above the queue between games, a slim strip (the
