@@ -37,6 +37,11 @@ describe("KickoffCountdown", () => {
       /match\.season\.isActive &&\s*!hasSeriesScore &&\s*!resultPending/,
     );
     const home = sourceFile("src/components/home/this-week.tsx").text;
-    expect(home).toMatch(/solo && m\.status !== "LIVE" && m\.scheduledAt \?\s*\(\s*<KickoffCountdown/);
+    // The clock belongs to the lone-series card: the branch after the list
+    // of rows a slate of two or more returns from.
+    const lone = home.slice(home.indexOf("const m = focus[0];"));
+    expect(lone.length).toBeGreaterThan(0);
+    expect(lone).toMatch(/m\.status !== "LIVE" && m\.scheduledAt \?\s*\(\s*<KickoffCountdown/);
+    expect(home.match(/<KickoffCountdown/g)).toHaveLength(1);
   });
 });

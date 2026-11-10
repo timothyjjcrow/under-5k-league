@@ -1,3 +1,4 @@
+import { playoffVerdict } from "@/lib/home-slate";
 import type { ScenarioOutlook, TeamScenario } from "@/lib/scenarios";
 import { cn } from "@/lib/utils";
 
@@ -21,6 +22,9 @@ export function outlookSummary(outlook: ScenarioOutlook): string {
   return `${outcomes.join("; ")}.`;
 }
 
+/** The status of a team nothing has been decided for yet. */
+const STILL_OPEN = "Playoff spot still open";
+
 export function playoffStatusLine(scenario: TeamScenario): string {
   const outlook = scenario.outlook;
   if (outlook) {
@@ -41,7 +45,7 @@ export function playoffStatusLine(scenario: TeamScenario): string {
   if (scenario.winAndIn) return "Win to qualify";
   if (scenario.loseAndOut)
     return every(scenario.paths?.draw, "eliminated") ? "Must win" : "Must avoid a loss";
-  return "Playoff spot still open";
+  return STILL_OPEN;
 }
 
 /** Every counted combination for this result ends the same way. */
@@ -180,13 +184,34 @@ export function settledPlayoffStatus(
     : scenario.status === "CLINCHED" || scenario.status === "ELIMINATED";
   if (!isSettled) return null;
   const text = playoffStatusLine(scenario);
-  const qualified = outlook
-    ? outlook.qualified === outlook.total
-    : scenario.status === "CLINCHED";
-  const out = outlook
-    ? outlook.eliminated === outlook.total
-    : scenario.status === "ELIMINATED";
-  return { text, tone: qualified ? "success" : out ? "neutral" : "accent" };
+  const verdict = playoffVerdict(scenario);
+  return {
+    text,
+    tone: verdict === "in" ? "success" : verdict === "out" ? "neutral" : "accent",
+  };
+}
+
+/**
+ * A team's stake in ONE series as a single line, for a compact fixture row
+ * (Home's This week): "Qualified for playoffs", "Eliminated", "Win to
+ * qualify". Null when the line would be the default "Playoff spot still
+ * open", which early in a season is every team on the slate and tells nobody
+ * anything, and for a scenario about a different match. The full
+ * Win/Draw/Loss paths stay on the match page, /schedule and the viewer's own
+ * standing.
+ */
+export function slateStakeLine(
+  scenario: TeamScenario | undefined,
+  matchId: string,
+): { text: string; tone: "success" | "accent" | "neutral" } | null {
+  if (!scenario || scenario.nextMatchId !== matchId) return null;
+  const text = playoffStatusLine(scenario);
+  if (text === STILL_OPEN) return null;
+  const verdict = playoffVerdict(scenario);
+  return {
+    text,
+    tone: verdict === "in" ? "success" : verdict === "out" ? "neutral" : "accent",
+  };
 }
 
 export function PlayoffOutlook({

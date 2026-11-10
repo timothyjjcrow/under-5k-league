@@ -16,7 +16,24 @@ export type PickemSide = { id: string; name: string; logoUrl: string | null };
  * grid and in the wide match preview, and side by side in anything narrower
  * cut the team names to "Roshan's …", the one thing a picker has to read.
  */
-function SidePair({ home, away }: { home: ReactNode; away: ReactNode }) {
+function SidePair({
+  home,
+  away,
+  inline = false,
+}: {
+  home: ReactNode;
+  away: ReactNode;
+  /** Always side by side, for a compact fixture row. */
+  inline?: boolean;
+}) {
+  if (inline) {
+    return (
+      <div className="flex min-w-0 items-stretch gap-1.5">
+        <div className="min-w-0 flex-1">{home}</div>
+        <div className="min-w-0 flex-1">{away}</div>
+      </div>
+    );
+  }
   return (
     <div className="@container/pick min-w-0">
       <div className="flex flex-col gap-1 @min-[26rem]/pick:flex-row @min-[26rem]/pick:items-stretch @min-[26rem]/pick:gap-2">
@@ -49,6 +66,12 @@ function SidePair({ home, away }: { home: ReactNode; away: ReactNode }) {
  *
  * `compact` drops the crests for fixture cards that already show them large
  * right above the buttons.
+ *
+ * `inline` is one line for a compact fixture row (Home's This week): the two
+ * buttons side by side at every width, each a small crest and the name in
+ * smaller type. A name too long for its half wraps onto a second line (and
+ * both buttons grow to match) rather than being cut: the name is the one
+ * thing a picker has to read.
  */
 export function PickemPickForm({
   matchId,
@@ -59,6 +82,7 @@ export function PickemPickForm({
   signInHref,
   locksAt,
   compact = false,
+  inline = false,
 }: {
   matchId: string;
   /** The fixture's name, from matchRoundLabel: "Week 3", "Semifinal". */
@@ -71,14 +95,15 @@ export function PickemPickForm({
   /** Epoch milliseconds; null means time TBD and status controls the lock. */
   locksAt: number | null;
   compact?: boolean;
+  inline?: boolean;
 }) {
   const crest = (team: PickemSide) =>
-    compact ? null : (
+    compact && !inline ? null : (
       <TeamCrest
         name={team.name}
         seed={team.id}
         logoUrl={team.logoUrl}
-        size={20}
+        size={inline ? 16 : 20}
         className="shrink-0 rounded"
       />
     );
@@ -114,8 +139,15 @@ export function PickemPickForm({
         locksAt={locksAt}
         name="pickedTeamId"
         value={team.id}
+        // One line holds both sides: less padding leaves the name the room.
+        className={inline ? "min-w-0 px-2 text-[13px]" : undefined}
       >
-        <span className="flex min-w-0 items-center gap-2">
+        <span
+          className={cn(
+            "flex min-w-0 items-center",
+            inline ? "gap-1.5" : "gap-2",
+          )}
+        >
           {crest(team)}
           <span className="min-w-0 leading-tight [overflow-wrap:anywhere]">
             {team.name}
@@ -140,7 +172,7 @@ export function PickemPickForm({
         <legend className="sr-only">
           Pick the winner — {roundLabel}: {home.name} versus {away.name}
         </legend>
-        <SidePair home={side(home)} away={side(away)} />
+        <SidePair home={side(home)} away={side(away)} inline={inline} />
       </fieldset>
     </ActionForm>
   );
@@ -167,6 +199,7 @@ export function PickemTray({
   away,
   locksAt,
   called,
+  layout = "stacked",
   className,
 }: {
   control: PickemControl;
@@ -178,6 +211,12 @@ export function PickemTray({
   locksAt: number | null;
   /** A decided match: how many of its pickers named the winner. */
   called?: { called: number; total: number } | null;
+  /**
+   * "inline" is the open control on one line (a short "Pick" label, then the
+   * two sides), for a compact fixture row. The locked line is one line in
+   * both.
+   */
+  layout?: "stacked" | "inline";
   className?: string;
 }) {
   if (control.kind === "locked") {
@@ -211,6 +250,36 @@ export function PickemTray({
           ? ` (${called.called} of ${called.total} called it)`
           : null}
       </p>
+    );
+  }
+  if (layout === "inline") {
+    return (
+      <div className={cn("flex min-w-0 items-center gap-2", className)}>
+        <span
+          className="shrink-0 text-[11px] font-medium uppercase tracking-wider text-muted"
+          title={
+            control.pickedTeamId
+              ? "Pick'em: you can change it until kickoff"
+              : "Pick'em: call the winner before kickoff"
+          }
+        >
+          <span aria-hidden>🔮</span>
+          {/* The word is for a screen wide enough to spare it; on a phone
+              the two names need the line. */}
+          <span className="max-sm:sr-only"> Pick</span>
+        </span>
+        <div className="min-w-0 flex-1">
+          <PickemPickForm
+            matchId={matchId}
+            roundLabel={roundLabel}
+            home={home}
+            away={away}
+            pickedTeamId={control.pickedTeamId}
+            locksAt={locksAt}
+            inline
+          />
+        </div>
+      </div>
     );
   }
   return (

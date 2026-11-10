@@ -85,26 +85,58 @@ describe("the next season's countdown", () => {
 });
 
 /**
- * The viewer's "Your team" card prints the Win/Draw/Loss block for their next
- * series. When that series is on the This-week slate, the slate's own team
- * row already prints the identical block, so the card must stand down; and
- * the card is far shorter than the standings, so it must not sit beside the
- * table (that left a hole under it at desktop widths).
+ * Where the viewer's team stands is said ONCE on Home, in the hero: its place
+ * and record in words, then the Win/Draw/Loss paths of its next series
+ * (`MyStanding`, under the next-match panel). This week's rows carry one
+ * stake line per side, and the regular season has no "Your team" card: that
+ * card showed only on a bye week, and printed the same block the slate did
+ * on every other. The rules are pure and unit-tested (home-slate.test.ts,
+ * playoff-outlook.test.ts); this pins the page to them.
  */
-describe("dashboard Your team card", () => {
+describe("dashboard: where the viewer stands", () => {
   const page = stripLineComments(homePageSource());
-  const card = page.slice(page.indexOf("const myStakeCard ="));
+  const hero = page.slice(
+    page.indexOf("export function seasonHero("),
+    page.indexOf("export function SeasonViewSkeleton("),
+  );
 
-  it("stands down when This week already shows its series", () => {
-    expect(page).toMatch(/myStakesOnSlate\s*=\s*\n?\s*!!myScenario\?\.nextMatchId && slateIds\.has\(myScenario\.nextMatchId\)/);
-    expect(card.slice(0, card.indexOf("?"))).toContain("!myStakesOnSlate");
+  it("reads the place, the record and the race from the tested rules", () => {
+    expect(hero.length).toBeGreaterThan(0);
+    expect(hero).toContain("tablePlace(myTable, myTeam.id)");
+    expect(hero).toContain("standingSummary({");
+    expect(hero).toContain("playoffRace(report, field.bracketSize)");
+    expect(hero).toMatch(/<MyStanding\s/);
+    // The stakes wait for the first final series, as the slate's do.
+    expect(hero).toMatch(
+      /playoffOutlookShown\(matches\)\s*\?\s*report\?\.teams\.get\(myTeam\.id\)/,
+    );
   });
 
-  it("joins the auto-fit band instead of sitting beside the standings", () => {
-    expect(page).not.toMatch(/myStakeCard \? "lg:col-span-2"/);
-    const band = page.slice(page.indexOf("{myPlayoffCard || myStakeCard"));
-    expect(band.slice(0, 400)).toContain("repeat(auto-fit,");
-    expect(band.slice(0, 600)).toContain("{myStakeCard ?");
+  it("prints the viewer's Win/Draw/Loss paths in the hero and nowhere else", () => {
+    // One call on Home, inside MyStanding.
+    expect(page.match(/playoffPathLines\(/g)).toHaveLength(1);
+    const standing = page.slice(page.indexOf("function MyStanding("));
+    expect(standing.slice(0, standing.indexOf("\nexport ")))
+      .toContain("playoffPathLines(scenario, scenario.nextMatchId ?? undefined)");
+    // The rail keeps a team card for the playoffs only.
+    expect(page).not.toContain("myStakeCard");
+    expect(page.match(/title="Your team"/g)).toHaveLength(1);
+    expect(page).toContain("function PlayoffTeamCard(");
+  });
+
+  it("gives a full slate one stake line a side, the viewer's series first", () => {
+    expect(page).toContain("viewerTeamId={myTeam?.id}");
+    expect(page).toContain("const focus = orderSlate(slate, viewerTeamId);");
+    expect(page).toContain("const kickoff = sharedKickoff(focus);");
+    const rows = page.slice(
+      page.indexOf("if (focus.length > 1) {"),
+      page.indexOf("const m = focus[0];"),
+    );
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows).toContain("slateStakeLine(");
+    // The full outlook block is the lone-series card's, never a row's.
+    expect(rows).not.toContain("<PlayoffOutlook");
+    expect(rows).toContain('layout="inline"');
   });
 });
 

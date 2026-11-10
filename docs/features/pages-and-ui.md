@@ -529,8 +529,27 @@ image has changed. The rules are in `next.config.ts`, and
   the regular season the aside takes the right half and the progress (meta)
   rides under the title; with no aside, meta takes the right half.
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
-  check-in, `<CheckinBanner variant="panel">`), or for someone with no team and
-  no signup, the late standin signup plus the inhouse queue. COMPLETE: "Relive
+  check-in, `<CheckinBanner variant="panel">`) with "Where you stand" under
+  it in the regular season, or for someone with no team and no signup, the
+  late standin signup plus the inhouse queue.
+- **"Where you stand" is said once, in the hero** (`MyStanding`, built in
+  `seasonHero`): the team's place and record in words (`tablePlace`,
+  `standingSummary`: "5th in Group A · 1 win, 3 losses · 3 pts", "Tied 4th"
+  for rows only the team id could split, "No series played yet" before its
+  first), then the status line and the Win/Draw/Loss paths of its next
+  series, naming the opponent. The stakes wait for the first final series
+  (`playoffOutlookShown`). It is Home's only copy of the viewer's paths:
+  This week's rows carry one stake line a side, and the regular season has
+  no "Your team" card (it showed on a bye week only, and repeated the slate
+  on every other). `dashboard-guards.test.ts` pins it.
+- **The regular-season hero says the state of the league** under the week
+  bars (`PlayoffRaceLine`): "Playoff race 4 teams in · 8 chasing 4 places ·
+  2 out" (`playoffRace`, `playoffRaceParts`; a team is in or out only when
+  nothing left can change it, `playoffVerdict`), then the places rule and
+  the playoffs' first date. Until a team is in or out it prints only the
+  rule ("Top 4 of each group make the playoffs", `playoffPlacesPhrase`).
+  The progress block lists only Live, Time TBC and Overdue counts: "6
+  Scheduled" was the fixture list's ordinary state. COMPLETE: "Relive
   the season" and, under it, where the next season is announced (the league
   Discord, or League news without an invite); the champion banner below is the
   page's one champion block, so the hero names no team.
@@ -559,7 +578,7 @@ image has changed. The rules are in `next.config.ts`, and
   nothing can show and the read never runs.
 - **The regular season is two columns from `xl`:** This week and the
   standings, then the honors line and the news under them; the rail holds the
-  Your team / Coming up / Recent results band and the side games. The
+  Coming up / Recent results band and the side games. The
   playoffs stay one column, because the two-sided bracket needs the full
   width. Below `xl` everything is one column in that order, rail before the
   honors and news.
@@ -605,22 +624,29 @@ image has changed. The rules are in `next.config.ts`, and
 - **Show a fixture once per job.** `focusSlate` (`schedule.ts`) is This week's
   slate; "Coming up" is the open matches minus that slate, so no match is in
   both.
-- **This week** shows kickoffs, standin-aware check-in counts (shared
-  `matchNightRoster`, as on `/schedule`) and a compact `PlayoffOutlook` for a
-  side whose `nextMatchId` is that fixture.
+- **This week is a list of compact rows** once the slate has two or more
+  series (`this-week.tsx`): both sides, each with its standin-aware check-in
+  count ("3/5 in", shared `matchNightRoster`, as on `/schedule`) and one
+  stake line (`slateStakeLine`: "Win to qualify", "Eliminated"; nothing for
+  the default "Playoff spot still open"), then the pick on one line
+  (`PickemTray layout="inline"`). The viewer's own series is first and
+  marked "Your match", a live one next (`orderSlate`), and a kickoff the
+  whole slate shares prints once in the card's header (`sharedKickoff`); a
+  moved series prints its own. A playoff or tiebreaker row names its round.
+  Six full cards with a stacked pick tray each ran about 1,800px on a
+  desktop and 3,300px on a phone, with the standings below them (the
+  2026-11-09 audit). The rules are pure, in `src/lib/home-slate.ts`.
 - **This week faces a lone fixture's sides off** (home left, away right,
-  "vs" or the live score between) instead of stretching one card built for a
-  third of the width across all of it.
+  "vs" or the live score between), with the full `PlayoffOutlook` under each
+  side, instead of stretching a row built for a third of the width across
+  all of it.
 - **A lone series on This week gets the big kickoff clock**
   (`<KickoffCountdown>`) in place of the header chip; when it is the grand
   final the card is titled "The grand final" and the clock wears gold.
 - **A playoff or final card on This week carries the league stream** as a
   strip under the card's link (see the match page's watch link below).
-- **The Your team card** shows only the stakes of the next series (the table
-  already highlights rank and record), aligned to the engine's `nextMatchId`
-  and naming the opponent. It sits in the auto-fit band (the rail from `xl`)
-  and stands down when This week already prints that series.
-  `dashboard-guards.test.ts` pins both.
+- **The Your team card is the playoffs' only** (`PlayoffTeamCard`: the seed
+  and where the team stands in the bracket), in the auto-fit band.
 - **`WeeklyHonorsLine`** renders only official honors (the readiness rows
   Discord and `/leaders` use; `honorBestGame` picks the game), else nothing;
   the in-progress caveats live on `/leaders`.

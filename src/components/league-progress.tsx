@@ -17,9 +17,11 @@ export function RegularSeasonProgress({ progress }: { progress: Progress }) {
       : complete
         ? "Regular-season results are complete"
         : "Waiting for remaining results";
+  // Only the states somebody should notice. "6 Scheduled" is the fixture
+  // list's ordinary state and said nothing about the league; the playoff
+  // race line under this block is what the season's state is now.
   const states = [
     { count: progress.live, label: "Live", text: "text-danger" },
-    { count: progress.scheduled, label: "Scheduled", text: "text-fg" },
     { count: progress.untimed, label: "Time TBC", text: "text-violet-300" },
     { count: progress.awaiting.length, label: "Overdue", text: "text-accent" },
   ].filter((state) => state.count > 0);

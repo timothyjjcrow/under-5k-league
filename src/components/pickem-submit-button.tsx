@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { SubmitButton } from "@/components/action-form";
+import { cn } from "@/lib/utils";
 
 /**
  * Pick'em's server remains authoritative, but a page can stay open across the
@@ -15,6 +16,7 @@ export function PickemSubmitButton({
   locksAt,
   name,
   value,
+  className,
 }: {
   children: ReactNode;
   selected: boolean;
@@ -22,6 +24,8 @@ export function PickemSubmitButton({
   locksAt: number | null;
   name: string;
   value: string;
+  /** Extra classes for a denser placement (the one-line pick). */
+  className?: string;
 }) {
   const [passedAt, setPassedAt] = useState<number | null>(null);
   const deadlinePassed = locksAt != null && passedAt === locksAt;
@@ -42,7 +46,10 @@ export function PickemSubmitButton({
       size="sm"
       // A long team name wraps and the button grows with it (min-h keeps the
       // usual size); h-full lets side-by-side buttons match heights.
-      className="h-full min-h-10 w-full py-1.5 sm:h-full sm:min-h-8"
+      className={cn(
+        "h-full min-h-10 w-full py-1.5 sm:h-full sm:min-h-8",
+        className,
+      )}
       disabled={deadlinePassed}
       aria-pressed={selected}
       name={name}
