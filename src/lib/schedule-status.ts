@@ -105,6 +105,28 @@ export function overdueResultsMessage(
 }
 
 /**
+ * How many teams make the playoffs, in the words the standings use: "Top 4 of
+ * each group make the playoffs", "The group winners make the playoffs", "8
+ * playoff places". Null with no bracket.
+ */
+export function playoffPlacesPhrase(
+  bracketSize: number,
+  /** Places each group sends, in a group-stage season. */
+  groupQualifiers: number[] | null = null,
+): string | null {
+  if (bracketSize <= 0) return null;
+  const evenShare =
+    groupQualifiers && groupQualifiers.every((count) => count === groupQualifiers[0])
+      ? groupQualifiers[0]
+      : null;
+  if (groupQualifiers && evenShare)
+    return evenShare === 1
+      ? "The group winners make the playoffs"
+      : `Top ${evenShare} of each group make the playoffs`;
+  return `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`;
+}
+
+/**
  * The Standings card's one-line caption, decided by what has been PLAYED
  * rather than by the phase name: a table of zeros is never "final", and the
  * table stops being a race once every regular result is in (or the playoffs
@@ -124,18 +146,7 @@ export function standingsCaption({
   /** Places each group sends, in a group-stage season. */
   groupQualifiers?: number[] | null;
 }): string {
-  const evenShare =
-    groupQualifiers && groupQualifiers.every((count) => count === groupQualifiers[0])
-      ? groupQualifiers[0]
-      : null;
-  const places =
-    bracketSize <= 0
-      ? null
-      : groupQualifiers && evenShare
-        ? evenShare === 1
-          ? "The group winners make the playoffs"
-          : `Top ${evenShare} of each group make the playoffs`
-        : `${bracketSize} playoff place${bracketSize === 1 ? "" : "s"}`;
+  const places = playoffPlacesPhrase(bracketSize, groupQualifiers);
   if (status.completed === 0)
     return ["No results yet", places].filter(Boolean).join(" · ");
   if (status.allComplete || postseason)

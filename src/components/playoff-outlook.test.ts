@@ -7,6 +7,7 @@ import {
   outlookSummary,
   settledPlayoffStatus,
   shortOutlook,
+  slateStakeLine,
   playoffStatusLine,
   playoffPathLines,
 } from "./playoff-outlook";
@@ -291,5 +292,39 @@ describe("playoff outlook presentation", () => {
       expect(settledPlayoffStatus(team({ status: "CLINCHED",
         outlook: result({ total: 3, qualified: 1, qualificationTiebreaker: 2 }) }))).toBeNull();
     });
+  });
+});
+
+// One line a side on Home's This-week rows: the status, coloured by whether
+// it is settled, and nothing at all for the default "still open".
+describe("slateStakeLine", () => {
+  it("is silent for a team nothing has been decided for", () => {
+    expect(slateStakeLine(team({ nextMatchId: "m1" }), "m1")).toBeNull();
+    expect(slateStakeLine(undefined, "m1")).toBeNull();
+  });
+
+  it("is silent on a series the scenario is not about", () => {
+    const scenario = team({ nextMatchId: "m2", winAndIn: true });
+    expect(slateStakeLine(scenario, "m1")).toBeNull();
+    expect(slateStakeLine(scenario, "m2")).toEqual({ text: "Win to qualify", tone: "accent" });
+    // A team with no series left is on no row.
+    expect(slateStakeLine(team({ status: "CLINCHED" }), "m1")).toBeNull();
+  });
+
+  it.each([
+    [team({ nextMatchId: "m1", status: "CLINCHED" }), "Qualified for playoffs", "success"],
+    [team({ nextMatchId: "m1", outlook: result({ total: 3, qualified: 3 }) }), "Qualified for playoffs", "success"],
+    [team({ nextMatchId: "m1", status: "ELIMINATED" }), "Eliminated", "neutral"],
+    [team({ nextMatchId: "m1", outlook: result({ total: 2, qualificationTiebreaker: 2 }) }), "Playoff spot decided by tiebreaker", "accent"],
+    [team({ nextMatchId: "m1", loseAndOut: true }), "Must avoid a loss", "accent"],
+  ] as const)("says what the series decides", (scenario, text, tone) => {
+    expect(slateStakeLine(scenario, "m1")).toEqual({ text, tone });
+  });
+
+  it("agrees with the status line everywhere else", () => {
+    const scenario = team({ nextMatchId: "m1", winAndIn: true });
+    expect(slateStakeLine(scenario, "m1")?.text).toBe(playoffStatusLine(scenario));
+    // The one line it drops is the status line's default.
+    expect(playoffStatusLine(team({ nextMatchId: "m1" }))).toBe("Playoff spot still open");
   });
 });

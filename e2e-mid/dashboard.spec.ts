@@ -1,5 +1,17 @@
 import { test, expect } from "@playwright/test";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { PrismaClient } from "@prisma/client";
+import { MID_DB_URL } from "../playwright.midseason.config";
+import {
+  expectNoHorizontalOverflow,
+  trackPageErrors,
+  untilHydrated,
+} from "./helpers";
+
+// This suite writes only to the explicitly configured disposable fixture.
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
 
 // The mid-season dashboard: standings, the This-week strip (with the staged
 // LIVE match), and the standings table's phone layout.
@@ -164,3 +176,96 @@ test("standings columns line up on a phone, with points at the right edge", asyn
 
   assertNoErrors();
 });
+
+// A rostered player's Home: the hero says where the league and their team
+// stand, and This week is a list of compact rows with their own series first
+// and a one-line pick that saves on one tap.
+test("a rostered player sees where they stand, their series first and a one-tap pick", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  // A series on this week's slate that hasn't started, so its pick is open.
+  const match = await db.match.findFirstOrThrow({
+    where: { phase: "REGULAR", status: "SCHEDULED" },
+    orderBy: [{ week: "asc" }, { id: "asc" }],
+    include: { homeTeam: true, awayTeam: true },
+  });
+  const member = await db.teamMember.findFirstOrThrow({
+    where: { teamId: match.homeTeamId, isCaptain: false },
+    orderBy: { id: "asc" },
+    include: { user: true },
+  });
+  const params = new URLSearchParams({
+    steamId: member.user.steamId,
+    name: member.user.name,
+    redirect: "/",
+  });
+  await page.goto(`/api/auth/dev?${params}`);
+  await expect(page).toHaveURL(/\/$/);
+  const main = page.locator("#main");
+
+  // The hero: the league's race, then the viewer's own standing.
+  await expect(
+    main.getByRole("link", { name: "Playoff race", exact: true }),
+  ).toHaveAttribute("href", "/schedule#playoff-analysis");
+  const standing = main
+    .locator("div")
+    .filter({ has: page.getByText("Where you stand", { exact: true }) })
+    .last();
+  await expect(
+    standing.getByRole("link", { name: match.homeTeam.name, exact: true }),
+  ).toHaveAttribute("href", `/teams/${match.homeTeamId}`);
+  await expect(standing).toContainText(
+    /\d+ wins?, (\d+ draws?, )?\d+ loss(es)?/,
+  );
+  // The regular season has no "Your team" card to repeat it.
+  await expect(
+    main.getByRole("heading", { name: "Your team", exact: true }),
+  ).toHaveCount(0);
+
+  // This week: one row a series, the viewer's first and marked.
+  await expect(
+    main.getByRole("heading", { name: /^This week · Week \d+$/ }),
+  ).toBeVisible();
+  const week = main
+    .getByRole("list")
+    .filter({ has: page.getByText("Your match", { exact: true }) });
+  const rows = week.getByRole("listitem");
+  expect(await rows.count()).toBeGreaterThan(1);
+  const mine = rows.first();
+  await expect(mine).toContainText("Your match");
+  await expect(week.getByText("Your match", { exact: true })).toHaveCount(1);
+  await expect(mine).toContainText(match.homeTeam.name);
+  await expect(mine).toContainText(match.awayTeam.name);
+  await expect(
+    mine.getByRole("link", { name: /Match details and check-in$/ }),
+  ).toHaveAttribute("href", `/matches/${match.id}`);
+  // Each side's check-ins, named in full for a screen reader.
+  await expect(mine.getByRole("img", { name: /checked in/ })).toHaveCount(2);
+
+  // The pick is one line under the row and saves on one tap.
+  await expect(mine.getByRole("button")).toHaveCount(2);
+  const pick = mine.getByRole("button", {
+    name: new RegExp(escapeRegExp(match.awayTeam.name)),
+  });
+  await expect(pick).toHaveAttribute("aria-pressed", "false");
+  await untilHydrated(page, pick);
+  try {
+    await pick.click();
+    await expect(pick).toHaveAttribute("aria-pressed", "true");
+  } finally {
+    // Other specs read the fixture's pick'em board: leave it as it was.
+    await db.prediction.deleteMany({
+      where: { userId: member.userId, matchId: match.id },
+    });
+  }
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(mine).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/ as a rostered player");
+  assertNoErrors();
+});
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

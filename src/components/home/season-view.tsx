@@ -1,12 +1,13 @@
 import type { Match } from "@prisma/client";
 import Link from "@/components/app-link";
-import { Suspense, type ReactNode } from "react";
+import { Fragment, Suspense, type ReactNode } from "react";
 import { Bracket } from "@/components/bracket";
 import { RegularSeasonProgress } from "@/components/league-progress";
 import { LocalTime } from "@/components/local-time";
 import {
-  PlayoffOutlook,
+  playoffPathLines,
   playoffStatusLine,
+  settledPlayoffStatus,
 } from "@/components/playoff-outlook";
 import { PlayoffStatusLine } from "@/components/playoff-status-line";
 import { SeasonStandings } from "@/components/season-standings";
@@ -43,6 +44,12 @@ import {
 import { buildBracketRounds, seedsFromFirstRound } from "@/lib/bracket-view";
 import { REGISTRATION_TYPE } from "@/lib/constants";
 import { heroById } from "@/lib/heroes";
+import {
+  playoffRace,
+  playoffRaceParts,
+  standingSummary,
+  tablePlace,
+} from "@/lib/home-slate";
 import { honorBestGame, weeklyHonors } from "@/lib/honors";
 import { HONOR_WEEK_STATE } from "@/lib/honors-readiness";
 import { getSeasonHonorReadiness } from "@/lib/honors-readiness-service";
@@ -68,7 +75,12 @@ import {
   roundName,
   slotRound,
 } from "@/lib/schedule";
-import { regularSeasonStatus } from "@/lib/schedule-status";
+import {
+  playoffPlacesPhrase,
+  regularSeasonStatus,
+} from "@/lib/schedule-status";
+import { formatLeagueMatchTime } from "@/lib/match-time";
+import type { TeamScenario } from "@/lib/scenarios";
 import { fantasyListed } from "@/lib/site-nav";
 import {
   clinchFromReport,
@@ -154,12 +166,74 @@ export function seasonHero(
   }
 
   let meta: ReactNode = null;
+  // The viewer's own standing, under their next-match panel.
+  let standing: ReactNode = null;
   if (season.status === "REGULAR_SEASON") {
     // One time snapshot for the progress labels.
     const progressNow = Date.now();
-    meta = (
-      <RegularSeasonProgress progress={leagueProgress(matches, progressNow)} />
+    // The same field and report SeasonView reads below the hero (the report
+    // is memoised on its inputs, so this is its one computation).
+    const field = projectPlayoffField(snapshot.teams, matches, season);
+    const report = seasonScenarioReport(
+      field.eligibleStandings,
+      matches,
+      field.eligibleTeamIds.length,
+      field,
     );
+    const plan = regularSeasonPlan(snapshot, matches, field.bracketSize);
+    meta = (
+      <>
+        <RegularSeasonProgress progress={leagueProgress(matches, progressNow)} />
+        <PlayoffRaceLine
+          race={playoffRace(report, field.bracketSize)}
+          places={playoffPlacesPhrase(
+            field.bracketSize,
+            field.groups?.map((group) => group.qualifiers) ?? null,
+          )}
+          playoffsFrom={
+            plan?.plan.find((step) => step.kind === "PLAYOFF")?.from ?? null
+          }
+        />
+      </>
+    );
+    const myTeam = user
+      ? snapshot.teams.find((t) => t.members.some((m) => m.userId === user.id))
+      : undefined;
+    const myGroup = myTeam
+      ? field.groups?.find((group) =>
+          group.standings.some((row) => row.teamId === myTeam.id),
+        )
+      : undefined;
+    const myTable = myGroup?.standings ?? field.standings;
+    const myPlace = myTeam ? tablePlace(myTable, myTeam.id) : null;
+    if (myTeam && myPlace && !myTeam.withdrawn) {
+      const scenario =
+        playoffOutlookShown(matches) ? report?.teams.get(myTeam.id) : undefined;
+      const next = scenario?.nextMatchId
+        ? matches.find((m) => m.id === scenario.nextMatchId)
+        : undefined;
+      const opponentId = next
+        ? next.homeTeamId === myTeam.id
+          ? next.awayTeamId
+          : next.homeTeamId
+        : null;
+      standing = (
+        <MyStanding
+          team={myTeam}
+          summary={standingSummary({
+            ...myPlace,
+            groupKey: myGroup?.key ?? null,
+            tableSize: myTable.length,
+          })}
+          scenario={scenario ?? null}
+          opponentName={
+            opponentId
+              ? (snapshot.teams.find((t) => t.id === opponentId)?.name ?? null)
+              : null
+          }
+        />
+      );
+    }
   } else if (season.status === "PLAYOFFS") {
     const playoff = matches.filter(
       (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -194,7 +268,7 @@ export function seasonHero(
   // The hero's control slot. A signed-in viewer gets their next-match
   // check-in (it used to be the lowest-contrast strip on the page, below the
   // hero), unless the late standin signup above has taken the slot.
-  const aside =
+  const nextMatch =
     user && !action ? (
       <Suspense
         fallback={<Skeleton className="h-32 w-full rounded-[var(--radius)]" />}
@@ -215,8 +289,188 @@ export function seasonHero(
         />
       </Suspense>
     ) : null;
+  const aside =
+    nextMatch && standing ? (
+      <div className="space-y-2">
+        {nextMatch}
+        {standing}
+      </div>
+    ) : (
+      nextMatch
+    );
 
   return { action, meta, aside };
+}
+
+/**
+ * The season's calendar while the regular season runs (season-format.ts), or
+ * null before fixtures exist. Withdrawals can shrink the bracket below the
+ * format's, so it prints the rounds Start playoffs will build.
+ */
+function regularSeasonPlan(
+  snapshot: SeasonSnapshot,
+  matches: Match[],
+  bracketSize: number,
+) {
+  const { season, teams } = snapshot;
+  const lastRegularWeek = matches
+    .filter((m) => m.phase === "REGULAR")
+    .reduce((max, m) => Math.max(max, m.week), 0);
+  const resolvedFormat = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
+  const planFormat = resolvedFormat && withBracket(resolvedFormat, bracketSize);
+  return planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
+    ? {
+        format: planFormat,
+        plan: seasonPlan(planFormat, season.firstMatchNight, lastRegularWeek),
+      }
+    : null;
+}
+
+/**
+ * The state of the league in one line under the season's progress: who is
+ * in, how many are still chasing the places left, who is out, and when the
+ * playoffs start. Until a team is in or out it says how many places there
+ * are. The hero used to say "6 Scheduled" here, which is the fixture list's
+ * state, not the league's.
+ */
+function PlayoffRaceLine({
+  race,
+  places,
+  playoffsFrom,
+}: {
+  race: ReturnType<typeof playoffRace>;
+  /** `playoffPlacesPhrase`, for a race nothing has decided yet. */
+  places: string | null;
+  playoffsFrom: Date | null;
+}) {
+  if (!race && !places && !playoffsFrom) return null;
+  const parts = race ? playoffRaceParts(race) : [];
+  return (
+    <div className="mt-3 text-sm leading-relaxed">
+      <p>
+        <Link
+          href="/schedule#playoff-analysis"
+          className={cn(TAP_SAFE, "font-semibold text-fg hover:text-info")}
+        >
+          Playoff race
+        </Link>
+        {/* Plain inline text with dot separators, so a phone wraps it like a
+            sentence instead of stacking one part per line. */}
+        {parts.map((part, index) => (
+          <Fragment key={part.key}>
+            <span className="text-muted">{index === 0 ? " " : " · "}</span>
+            <span
+              className={cn(
+                "whitespace-nowrap",
+                part.key === "in"
+                  ? "text-success"
+                  : part.key === "open"
+                    ? "text-accent"
+                    : "text-muted",
+              )}
+            >
+              {part.text}
+            </span>
+          </Fragment>
+        ))}
+      </p>
+      {places || playoffsFrom ? (
+        <p className="text-xs text-muted">
+          {places}
+          {places && playoffsFrom ? " · " : null}
+          {playoffsFrom ? (
+            <span className="whitespace-nowrap">
+              {places ? "playoffs" : "Playoffs"} from{" "}
+              <LocalTime
+                ts={playoffsFrom.getTime()}
+                variant="date"
+                initial={formatLeagueMatchTime(playoffsFrom, "date")}
+              />
+            </span>
+          ) : null}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Where the viewer's team stands, under their next-match panel: its place
+ * and record in words, then what its next series decides. It is the one
+ * place Home prints the viewer's Win/Draw/Loss paths; This week's rows carry
+ * a single stake line per side, and a "Your team" card used to repeat this
+ * in the rail on a bye week only.
+ */
+function MyStanding({
+  team,
+  summary,
+  scenario,
+  opponentName,
+}: {
+  team: { id: string; name: string };
+  /** `standingSummary`. */
+  summary: string;
+  /** Null until a regular-season series is final (`playoffOutlookShown`). */
+  scenario: TeamScenario | null;
+  /** The opponent in the series the paths are about. */
+  opponentName: string | null;
+}) {
+  const lines = scenario
+    ? playoffPathLines(scenario, scenario.nextMatchId ?? undefined)
+    : [];
+  // "Any result: Qualify" under "Qualified for playoffs" repeats the status.
+  const paths =
+    scenario &&
+    lines.length === 1 &&
+    lines[0].key === "any" &&
+    settledPlayoffStatus(scenario)
+      ? []
+      : lines;
+  return (
+    <div className="rounded-[var(--radius)] border border-line bg-surface/80 px-4 py-3 text-sm">
+      <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-muted">
+          Where you stand
+        </span>
+        <Link
+          href={`/teams/${team.id}`}
+          className={cn(
+            TAP_SAFE,
+            "min-w-0 font-semibold hover:text-info [overflow-wrap:anywhere]",
+          )}
+        >
+          {team.name}
+        </Link>
+      </p>
+      <p className="mt-0.5 text-muted">{summary}</p>
+      {scenario ? (
+        <div
+          data-testid="my-standing-stakes"
+          className="mt-1.5 text-xs leading-relaxed [overflow-wrap:anywhere]"
+        >
+          <p className="font-medium text-fg">
+            {playoffStatusLine(scenario)}
+            {paths.length > 0 && opponentName ? (
+              <span className="font-normal text-muted">
+                {" "}
+                · next series vs {opponentName}
+              </span>
+            ) : null}
+          </p>
+          {paths.length > 0 ? (
+            <dl className="mt-0.5 flex flex-wrap gap-x-4 gap-y-0.5">
+              {paths.map((path) => (
+                <div key={path.key} className="flex gap-1.5">
+                  <dt className="font-semibold text-accent">{path.label}</dt>
+                  <dd className="text-muted">{path.description}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 // Fallback for the mid-season dashboard. It MUST mirror the real bands, or
@@ -315,21 +569,11 @@ export async function SeasonView({
 }) {
   const { season, teams } = snapshot;
   const playoffField = projectPlayoffField(teams, matches, season);
-  // The season's calendar while the regular season runs (season-format.ts).
-  const lastRegularWeek = matches
-    .filter((m) => m.phase === "REGULAR")
-    .reduce((max, m) => Math.max(max, m.week), 0);
-  // Withdrawals can shrink the bracket below the format's: print the rounds
-  // Start playoffs will build.
-  const resolvedFormat = resolveSeasonFormat(season, teams, lastRegularWeek > 0);
-  const planFormat = resolvedFormat && withBracket(resolvedFormat, playoffField.bracketSize);
-  const seasonPlanView =
-    planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
-      ? {
-          format: planFormat,
-          plan: seasonPlan(planFormat, season.firstMatchNight, lastRegularWeek),
-        }
-      : null;
+  const seasonPlanView = regularSeasonPlan(
+    snapshot,
+    matches,
+    playoffField.bracketSize,
+  );
   const standings = playoffField.standings;
   const teamName = new Map(teams.map((t) => [t.id, t.name]));
   const teamLogoUrl = new Map(teams.map((t) => [t.id, t.logoUrl]));
@@ -366,30 +610,11 @@ export async function SeasonView({
   const myTeam = userId
     ? teams.find((t) => t.members.some((m) => m.userId === userId))
     : undefined;
-  const myScenario = myTeam ? (report?.teams.get(myTeam.id) ?? null) : null;
   // Each team's playoff outlook waits for the first final regular-season
   // series; before it every team would read "Playoff spot still open".
   const outlookShown = playoffOutlookShown(matches);
-  const myStakeLine =
-    myScenario && outlookShown ? playoffStatusLine(myScenario) : null;
-  // The stake card's "Next series" must be the SAME match its stakes are
-  // about (the engine orders by kickoff when times exist), falling back to
-  // chronological order like the hero's check-in panel. It keeps the hero's
-  // freshness policy too: stale unreported fixtures are results debt, not the
-  // team's next opponent.
   // eslint-disable-next-line react-hooks/purity
   const seasonViewNow = Date.now();
-  const myOpen = myTeam
-    ? matches.filter(
-        (m) =>
-          isRelevantOpenMatch(m, seasonViewNow) &&
-          (m.homeTeamId === myTeam.id || m.awayTeamId === myTeam.id),
-      )
-    : [];
-  const myNextMatch =
-    (myScenario?.nextMatchId
-      ? myOpen.find((m) => m.id === myScenario.nextMatchId)
-      : undefined) ?? [...myOpen].sort(byKickoff)[0];
 
   const playoffMatches = matches.filter(
     (m) => m.phase === "PLAYOFF" || m.phase === "FINAL",
@@ -529,61 +754,10 @@ export async function SeasonView({
     </div>
   ) : null;
 
-  // The viewer's own team card. Mid-season it carries only what the table
-  // can't: the playoff stakes of the next series (their row is already
-  // highlighted there with rank, points and W/D/L). No stakes yet (before the
-  // first final series) means no card. Nor when that series is on the
-  // This-week slate: its team rows already print this exact Win/Draw/Loss
-  // block, and a fixture is shown once per job. What's left is a bye week or
-  // a team that has finished playing, so the card joins the auto-fit band
-  // below the table (like the playoffs' team card) instead of standing beside
-  // a table twice its height. In the playoffs the table is gone and the card
-  // says where the team stands in the bracket instead.
-  const myStakesOnSlate =
-    !!myScenario?.nextMatchId && slateIds.has(myScenario.nextMatchId);
-  const myStakeCard =
-    myTeam && myScenario && myStakeLine && !myStakesOnSlate ? (
-      <Card tone="feature">
-        <CardHeader headingLevel={2} title="Your team" subtitle={myTeam.name} />
-        <CardBody className="space-y-3">
-          {/* The stakes are about ONE match, the scenario engine's
-              nextMatchId, so the block names that opponent and links it. The
-              hero's check-in panel already shows its kickoff. */}
-          {myNextMatch ? (
-            <Link
-              href={`/matches/${myNextMatch.id}`}
-              className="block rounded-lg border border-accent/30 bg-accent/5 p-3 text-sm transition-colors hover:border-accent/50"
-            >
-              <p className="mb-2 text-xs text-muted [overflow-wrap:anywhere]">
-                Next series: vs{" "}
-                {teamName.get(
-                  myNextMatch.homeTeamId === myTeam.id
-                    ? myNextMatch.awayTeamId
-                    : myNextMatch.homeTeamId,
-                ) ?? "?"}
-              </p>
-              <PlayoffOutlook
-                scenario={myScenario}
-                teamNames={teamName}
-                matchId={myNextMatch.id}
-                compact
-              />
-            </Link>
-          ) : (
-            // Done playing, but the table can still decide something.
-            <div className="rounded-lg border border-accent/30 bg-accent/5 px-3 py-2 text-sm">
-              <PlayoffOutlook scenario={myScenario} teamNames={teamName} />
-            </div>
-          )}
-          <Link
-            href={`/teams/${myTeam.id}`}
-            className={textLink("inline-block text-sm font-medium")}
-          >
-            Team page <LinkArrow />
-          </Link>
-        </CardBody>
-      </Card>
-    ) : null;
+  // The viewer's own team card, in the playoffs only: where the team stands
+  // in the bracket. Mid-season there is none: the hero's "Where you stand"
+  // (seasonHero) carries the team's place, record and the stakes of its next
+  // series, every week, so the rail has nothing to repeat.
   // Shared with /teams and the team page. No status (no bracket yet, or a
   // title still under review) means no card: the hero's panel covers those.
   const myPlayoffStatus =
@@ -651,6 +825,7 @@ export async function SeasonView({
             season.isActive &&
             postAuctionWorkOpen(season.status, snapshot.draftStatus)
           }
+          viewerTeamId={myTeam?.id}
         />
       </Suspense>
 
@@ -762,9 +937,9 @@ export async function SeasonView({
     </>
   );
 
-  // The second column: the viewer's team card (in the playoffs, where it
-  // stands in the bracket; mid-season, the stakes of a next series This week
-  // doesn't show); then what comes after this slate and what just finished:
+  // The second column: in the playoffs the viewer's team card (where it
+  // stands in the bracket; mid-season the hero says where they stand); then
+  // what comes after this slate and what just finished:
   // short plain lists with a link to the rest; then the side games. From xl
   // it is a rail beside the table, where the auto-fit band below stacks into
   // one column; narrower, it follows the table and the band spreads its
@@ -775,10 +950,9 @@ export async function SeasonView({
   // say it, and Schedule keeps the full grid.
   const railColumn = (
     <>
-      {myPlayoffCard || myStakeCard || upcoming.length > 0 || recentResults.length > 0 ? (
+      {myPlayoffCard || upcoming.length > 0 || recentResults.length > 0 ? (
         <div className="grid items-start gap-5 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
           {myPlayoffCard}
-          {myStakeCard ? <div className="min-w-0">{myStakeCard}</div> : null}
           {upcoming.length > 0 ? (
             <Card className="@container min-w-0 overflow-hidden">
               <CardHeader

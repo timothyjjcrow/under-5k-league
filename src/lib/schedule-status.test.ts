@@ -8,6 +8,7 @@ import {
   pendingResultsMessage,
   weekList,
   resultOverdue,
+  playoffPlacesPhrase,
   standingsCaption,
 } from "./schedule-status";
 
@@ -326,5 +327,21 @@ describe("regularResultsDue — only fixtures past kickoff", () => {
       ),
     ).toEqual({ week: 2, at: at(24 * 7) });
     expect(nextRegularKickoff([fx(1, "SCHEDULED", -2)], now)).toBeNull();
+  });
+});
+
+describe("playoffPlacesPhrase", () => {
+  it("names the places a table or each group sends", () => {
+    expect(playoffPlacesPhrase(8)).toBe("8 playoff places");
+    expect(playoffPlacesPhrase(1)).toBe("1 playoff place");
+    expect(playoffPlacesPhrase(8, [4, 4])).toBe("Top 4 of each group make the playoffs");
+    expect(playoffPlacesPhrase(2, [1, 1])).toBe("The group winners make the playoffs");
+    // Uneven shares can't be said per group.
+    expect(playoffPlacesPhrase(8, [3, 5])).toBe("8 playoff places");
+  });
+
+  it("is null without a bracket", () => {
+    expect(playoffPlacesPhrase(0)).toBeNull();
+    expect(playoffPlacesPhrase(0, [0, 0])).toBeNull();
   });
 });
