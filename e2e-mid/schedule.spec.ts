@@ -1,5 +1,13 @@
 import { test, expect } from "@playwright/test";
+import { PrismaClient } from "@prisma/client";
+import { MID_DB_URL } from "../playwright.midseason.config";
 import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "./helpers";
+
+// Reads only: the disposable mid-season fixture.
+const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
+test.afterAll(async () => {
+  await db.$disconnect();
+});
 
 const LOGISTICS = {
   homeCaptain: "76561190000991001",
@@ -322,5 +330,81 @@ test("the team filter narrows the week rows and the All teams option restores th
   await team.selectOption({ label: "All teams" });
   await expect.poll(seriesShown).toBe(allSeries);
 
+  assertNoErrors();
+});
+
+test("a rostered player lands on the whole league with their series first, and My team narrows it", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  // A scheduled series in the earliest unfinished week, and a player on it.
+  const match = await db.match.findFirstOrThrow({
+    where: { phase: "REGULAR", status: "SCHEDULED" },
+    orderBy: [{ week: "asc" }, { id: "asc" }],
+    include: { homeTeam: true },
+  });
+  const member = await db.teamMember.findFirstOrThrow({
+    where: { teamId: match.homeTeamId, isCaptain: false },
+    orderBy: { id: "asc" },
+    include: { user: true },
+  });
+  await login(page, member.user.name, member.user.steamId);
+  const fixtures = page.locator("#fixtures");
+  await expect(page.getByText("Week 1").first()).toBeVisible();
+
+  // The filter starts on the league, with the player's team named first.
+  const team = page.getByRole("combobox", { name: "Show matches for" });
+  await expect(team).toHaveValue("all");
+  await expect(team.locator("option").nth(1)).toHaveText(
+    `My team · ${match.homeTeam.name}`,
+  );
+  const seriesShown = () =>
+    fixtures
+      .locator('a[href^="/matches/"]')
+      .evaluateAll(
+        (links) => new Set(links.map((link) => link.getAttribute("href"))).size,
+      );
+  const allSeries = await seriesShown();
+  expect(allSeries).toBeGreaterThan(5);
+
+  // Their series leads its week's cards and is the only one marked.
+  const week = fixtures
+    .locator("div")
+    .filter({
+      has: page.getByRole("button", { name: `Week ${match.week}`, exact: true }),
+    })
+    .last();
+  const cards = week.getByRole("article");
+  await expect(cards.first()).toContainText("Your match");
+  await expect(
+    cards.first().getByRole("link", { name: /^Match page ?: / }),
+  ).toHaveAttribute("href", `/matches/${match.id}`);
+  await expect(cards.filter({ hasText: "Your match" })).toHaveCount(1);
+  // An ordinary upcoming card has no status label or "Match page" text.
+  const upcoming = fixtures.getByRole("article", { name: / · Upcoming$/ });
+  await expect(upcoming.first()).toBeVisible();
+  await expect(upcoming.first()).not.toContainText(/upcoming/i);
+
+  // "My team" narrows the list to one series a week; "All teams" restores it.
+  await untilHydrated(page, team);
+  await team.selectOption({ label: `My team · ${match.homeTeam.name}` });
+  await expect(page).toHaveURL(new RegExp(`team=${match.homeTeamId}`));
+  await expect.poll(seriesShown).toBe(5);
+  await team.selectOption({ label: "All teams" });
+  await expect.poll(seriesShown).toBe(allSeries);
+
+  // The race tab sorts the teams into its lists, the player's own marked.
+  await page.getByRole("tab", { name: "Playoff race", exact: true }).click();
+  const race = page.getByTestId("playoff-race-groups");
+  await expect(race).toBeVisible();
+  await expect(
+    race.getByRole("listitem").filter({ hasText: "Your team" }),
+  ).toHaveCount(1);
+  await expect(
+    race.getByRole("listitem").filter({ hasText: "Your team" }),
+  ).toContainText(match.homeTeam.name);
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page, "/schedule signed-in player");
   assertNoErrors();
 });

@@ -4,6 +4,8 @@ import { describe, expect, it } from "vitest";
 import {
   PlayoffOutlook,
   PlayoffOutlookFootnote,
+  fixtureStake,
+  outlookStillOpen,
   outlookSummary,
   settledPlayoffStatus,
   shortOutlook,
@@ -326,5 +328,72 @@ describe("slateStakeLine", () => {
     expect(slateStakeLine(scenario, "m1")?.text).toBe(playoffStatusLine(scenario));
     // The one line it drops is the status line's default.
     expect(playoffStatusLine(team({ nextMatchId: "m1" }))).toBe("Playoff spot still open");
+  });
+});
+
+describe("fixtureStake", () => {
+  const open = team({
+    nextMatchId: "m1",
+    paths: {
+      win: result({ qualified: 1 }),
+      draw: null,
+      loss: result({ eliminated: 1 }),
+    },
+  });
+
+  it("gives an open team its Win/Draw/Loss paths", () => {
+    const stake = fixtureStake(open, "m1");
+    expect(stake.settled).toBeNull();
+    expect(stake.paths.map((path) => `${path.label} ${path.description}`)).toEqual([
+      "Win Qualify",
+      "Loss Out",
+    ]);
+  });
+
+  it("says a settled team in Home's words, with no 'Any result' line", () => {
+    const through = team({
+      nextMatchId: "m1",
+      outlook: result({ total: 2, qualified: 2 }),
+      paths: {
+        win: result({ qualified: 1 }),
+        draw: null,
+        loss: result({ qualified: 1 }),
+      },
+    });
+    expect(fixtureStake(through, "m1")).toEqual({
+      settled: { text: "Qualified for playoffs", tone: "success" },
+      paths: [],
+    });
+    expect(
+      fixtureStake(team({ nextMatchId: "m1", status: "ELIMINATED" }), "m1"),
+    ).toEqual({ settled: { text: "Eliminated", tone: "neutral" }, paths: [] });
+  });
+
+  it("is empty on any fixture but the team's next", () => {
+    expect(fixtureStake(open, "m2")).toEqual({ settled: null, paths: [] });
+    expect(
+      fixtureStake(team({ nextMatchId: "m1", status: "CLINCHED" }), "m2"),
+    ).toEqual({ settled: null, paths: [] });
+    expect(fixtureStake(undefined, "m1")).toEqual({ settled: null, paths: [] });
+  });
+});
+
+describe("outlookStillOpen", () => {
+  it("is true only for the default line with no paths under it", () => {
+    expect(outlookStillOpen(team({ nextMatchId: "m1" }))).toBe(true);
+    expect(outlookStillOpen(team({ nextMatchId: "m1", winAndIn: true }))).toBe(false);
+    expect(outlookStillOpen(team({ status: "CLINCHED" }))).toBe(false);
+    expect(
+      outlookStillOpen(
+        team({
+          nextMatchId: "m1",
+          paths: {
+            win: result({ total: 2, qualified: 1, eliminated: 1 }),
+            draw: null,
+            loss: result({ total: 2, qualified: 1, eliminated: 1 }),
+          },
+        }),
+      ),
+    ).toBe(false);
   });
 });

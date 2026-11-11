@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   orderSlate,
   playoffRace,
+  playoffRaceGroups,
   playoffRaceParts,
   playoffVerdict,
   sharedKickoff,
@@ -250,5 +251,40 @@ describe("tablePlace and standingSummary", () => {
     expect(line(21)).toMatch(/^21st of 30/);
     expect(line(22)).toMatch(/^22nd of 30/);
     expect(line(23)).toMatch(/^23rd of 30/);
+  });
+});
+
+describe("playoffRaceGroups", () => {
+  const table = ["a", "b", "c", "d", "e", "f"];
+  const season = report(
+    scenario("a", { status: "CLINCHED" }),
+    scenario("b"),
+    scenario("c", { status: "CLINCHED" }),
+    scenario("d"),
+    scenario("e", { status: "ELIMINATED" }),
+    scenario("f"),
+  );
+
+  it("lists in, in the hunt and out, each in table order", () => {
+    expect(playoffRaceGroups(table, season)).toEqual([
+      { key: "in", teamIds: ["a", "c"] },
+      { key: "open", teamIds: ["b", "d", "f"] },
+      { key: "out", teamIds: ["e"] },
+    ]);
+  });
+
+  it("puts the viewer's team first in its own list only", () => {
+    expect(playoffRaceGroups(table, season, "f")).toEqual([
+      { key: "in", teamIds: ["a", "c"] },
+      { key: "open", teamIds: ["f", "b", "d"] },
+      { key: "out", teamIds: ["e"] },
+    ]);
+  });
+
+  it("drops an empty list and a team the report does not know", () => {
+    expect(playoffRaceGroups(["a", "zz", "b"], report(scenario("a"), scenario("b")))).toEqual([
+      { key: "open", teamIds: ["a", "b"] },
+    ]);
+    expect(playoffRaceGroups(table, null)).toEqual([]);
   });
 });
