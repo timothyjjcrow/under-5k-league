@@ -6,6 +6,9 @@ import {
   orderScheduleWeeks,
   teamByeWeek,
   weekStartsCollapsed,
+  viewerSeriesFirst,
+  sharedKickoffTs,
+  checkinCountsShown,
   seedOrder,
   playoffFirstRound,
   pickBracketSize,
@@ -649,6 +652,74 @@ describe("weekStartsCollapsed", () => {
 
   it("never closes a week with nothing in it (a filtered bye week)", () => {
     expect(weekStartsCollapsed({ week: 2, completed: 0, total: 0 }, 3)).toBe(false);
+  });
+});
+
+describe("weekStartsCollapsed with a focus week", () => {
+  it("starts every week after the focus week closed", () => {
+    expect(weekStartsCollapsed({ week: 4, completed: 0, total: 6 }, 3, 3)).toBe(true);
+    expect(weekStartsCollapsed({ week: 5, completed: 0, total: 1 }, 3, 3)).toBe(true);
+  });
+
+  it("keeps the focus week open, and earlier weeks by the old rule", () => {
+    expect(weekStartsCollapsed({ week: 3, completed: 0, total: 6 }, 3, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 2, completed: 5, total: 6 }, 3, 3)).toBe(false);
+    expect(weekStartsCollapsed({ week: 2, completed: 6, total: 6 }, 3, 3)).toBe(true);
+  });
+
+  it("closes nothing ahead without one, and never an empty bye week", () => {
+    expect(weekStartsCollapsed({ week: 4, completed: 0, total: 6 }, 3, null)).toBe(false);
+    expect(weekStartsCollapsed({ week: 4, completed: 0, total: 0 }, 3, 3)).toBe(false);
+  });
+});
+
+describe("viewerSeriesFirst", () => {
+  const week = [
+    { id: "m1", homeTeamId: "a", awayTeamId: "b" },
+    { id: "m2", homeTeamId: "c", awayTeamId: "d" },
+    { id: "m3", homeTeamId: "e", awayTeamId: "f" },
+  ];
+  it("moves the viewer's series to the front and keeps the rest in order", () => {
+    expect(viewerSeriesFirst(week, "f").map((m) => m.id)).toEqual(["m3", "m1", "m2"]);
+    expect(viewerSeriesFirst(week, "c").map((m) => m.id)).toEqual(["m2", "m1", "m3"]);
+  });
+  it("leaves the order alone for a viewer with no series, and copies", () => {
+    expect(viewerSeriesFirst(week, null).map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(viewerSeriesFirst(week, "zz").map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+    expect(viewerSeriesFirst(week, "f")).not.toBe(week);
+    expect(week.map((m) => m.id)).toEqual(["m1", "m2", "m3"]);
+  });
+});
+
+describe("sharedKickoffTs", () => {
+  it("is the kickoff every series shares", () => {
+    expect(sharedKickoffTs([{ whenTs: 5 }, { whenTs: 5 }, { whenTs: 5 }])).toBe(5);
+  });
+  it("is null for one series, an unset kickoff or a moved series", () => {
+    expect(sharedKickoffTs([{ whenTs: 5 }])).toBeNull();
+    expect(sharedKickoffTs([])).toBeNull();
+    expect(sharedKickoffTs([{ whenTs: 5 }, { whenTs: null }])).toBeNull();
+    expect(sharedKickoffTs([{ whenTs: null }, { whenTs: 5 }])).toBeNull();
+    expect(sharedKickoffTs([{ whenTs: 5 }, { whenTs: 6 }])).toBeNull();
+  });
+});
+
+describe("checkinCountsShown", () => {
+  const now = Date.parse("2026-11-10T00:00:00Z");
+  const inDays = (days: number) => new Date(now + days * 86_400_000);
+  it("shows the counts in the week before kickoff", () => {
+    expect(checkinCountsShown({ scheduledAt: inDays(4), now, answered: 0 })).toBe(true);
+    expect(checkinCountsShown({ scheduledAt: inDays(8), now, answered: 0 })).toBe(true);
+    // A kickoff already past is still this week's.
+    expect(checkinCountsShown({ scheduledAt: inDays(-1), now, answered: 0 })).toBe(true);
+  });
+  it("hides them on a fixture weeks away that nobody has answered", () => {
+    expect(checkinCountsShown({ scheduledAt: inDays(11), now, answered: 0 })).toBe(false);
+    expect(checkinCountsShown({ scheduledAt: null, now, answered: 0 })).toBe(false);
+  });
+  it("shows them as soon as anyone has answered", () => {
+    expect(checkinCountsShown({ scheduledAt: inDays(30), now, answered: 1 })).toBe(true);
+    expect(checkinCountsShown({ scheduledAt: null, now, answered: 2 })).toBe(true);
   });
 });
 

@@ -22,8 +22,16 @@ import { WatchLink } from "@/components/watch-link";
 import type { LeagueStream, WatchWindow } from "@/lib/broadcast";
 import { cn } from "@/lib/utils";
 import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
-import { scheduleFilterTeamId, weekStartsCollapsed } from "@/lib/schedule";
+import {
+  scheduleFilterTeamId,
+  sharedKickoffTs,
+  viewerSeriesFirst,
+  weekStartsCollapsed,
+} from "@/lib/schedule";
 import type { PlayoffPathLine } from "@/components/playoff-outlook";
+
+/** A settled team's playoff status on its next fixture (fixtureStake). */
+type SettledStake = { text: string; tone: "success" | "accent" | "neutral" };
 
 export type RsvpSide = {
   confirmed: number;
@@ -45,6 +53,11 @@ export type MatchView = {
   playoffPaths?: {
     home: PlayoffPathLine[];
     away: PlayoffPathLine[];
+  };
+  /** In place of the paths once nothing can change a side's playoff fate. */
+  playoffSettled?: {
+    home: SettledStake | null;
+    away: SettledStake | null;
   };
   done: boolean;
   /** Ruled/defaulted result — the score was never played; badge it. */
@@ -108,10 +121,17 @@ export function ScheduleWeeks({
   weeks,
   teams,
   initialTeamId,
+  viewerTeamId,
+  openThrough,
   heading,
 }: {
   weeks: WeekView[];
+  /** A team the filter starts on when the URL names none. */
   initialTeamId?: string;
+  /** The reader's own team: its series lead each week and are marked. */
+  viewerTeamId?: string;
+  /** The last week that opens as full cards (see weekStartsCollapsed). */
+  openThrough?: number | null;
   teams: { id: string; name: string; logoUrl?: string | null }[];
   /** The section's title, set on one line with the team filter. */
   heading?: ReactNode;
@@ -175,7 +195,11 @@ export function ScheduleWeeks({
   const currentWeek = weeks.find((w) => w.isCurrent)?.week;
 
   const visibleWeeks = useMemo(() => {
-    if (!filterTeam) return weeks;
+    if (!filterTeam)
+      return weeks.map((w) => ({
+        ...w,
+        matches: viewerSeriesFirst(w.matches, viewerTeamId),
+      }));
     return (
       weeks
         .map((w) => ({
@@ -190,7 +214,9 @@ export function ScheduleWeeks({
             w.matches.length > 0 || w.byes.some((b) => b.id === filterTeam),
         )
     );
-  }, [weeks, filterTeam]);
+  }, [weeks, filterTeam, viewerTeamId]);
+  // The reader's team leads the list, named as theirs.
+  const viewerTeam = teams.find((team) => team.id === viewerTeamId);
 
   return (
     <div className="space-y-4">
@@ -214,11 +240,18 @@ export function ScheduleWeeks({
                 className="block min-h-11 w-full min-w-0 rounded-lg border border-line bg-surface-2 px-3 text-sm font-medium text-fg sm:w-56 lg:min-h-10"
               >
                 <option value="all">All teams</option>
-                {teams.map((team) => (
-                  <option key={team.id} value={team.id}>
-                    {team.name}
+                {viewerTeam ? (
+                  <option value={viewerTeam.id}>
+                    My team · {viewerTeam.name}
                   </option>
-                ))}
+                ) : null}
+                {teams
+                  .filter((team) => team.id !== viewerTeam?.id)
+                  .map((team) => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
               </select>
             </label>
           ) : null}
@@ -236,7 +269,14 @@ export function ScheduleWeeks({
           // own season never buries the standings below it.
           const collapsed =
             collapsedOverride[w.week] ??
-            weekStartsCollapsed({ week: w.week, completed, total }, currentWeek);
+            weekStartsCollapsed(
+              { week: w.week, completed, total },
+              currentWeek,
+              openThrough,
+            );
+          // One kickoff for the whole week is printed once, here; a card
+          // then shows a time only when its own differs.
+          const sharedTs = sharedKickoffTs(w.matches);
           // Only a heading when something current or upcoming sits above it;
           // a list that is ALL earlier weeks needs no divider.
           const earlierHeading =
@@ -329,7 +369,14 @@ export function ScheduleWeeks({
                         </Link>
                       ) : null}
                     </span>
-                    {!filterTeam && w.nightTs != null && w.nightInitial ? (
+                    {sharedTs != null && w.matches[0].whenFull ? (
+                      <LocalTime
+                        ts={sharedTs}
+                        variant="full"
+                        initial={w.matches[0].whenFull}
+                        className="block text-xs font-normal text-muted"
+                      />
+                    ) : !filterTeam && w.nightTs != null && w.nightInitial ? (
                       <LocalTime
                         ts={w.nightTs}
                         variant="date"
@@ -373,13 +420,25 @@ export function ScheduleWeeks({
                       {w.matches.length > 0 ? (
                         <ul
                           aria-label={`${w.label ?? `Week ${w.week}`} results`}
-                          className="divide-y divide-line-soft"
+                          // Lines go two and three across with the week's
+                          // width, like its cards: six one-line results in
+                          // a 1,200px column were mostly empty row.
+                          className={cn(
+                            "grid grid-cols-1 gap-px bg-line-soft",
+                            w.matches.length > 1 && "@2xl:grid-cols-2",
+                            w.matches.length > 2 && "@5xl:grid-cols-3",
+                          )}
                         >
                           {w.matches.map((m) => (
-                            <li key={m.id}>
-                              <ResultLine match={m} />
+                            <li key={m.id} className="min-w-0 bg-surface">
+                              <ResultLine
+                                match={m}
+                                mine={isViewerSeries(m, viewerTeamId)}
+                                showWhen={sharedTs == null}
+                              />
                             </li>
                           ))}
+                          <GridFillers count={w.matches.length} as="li" />
                         </ul>
                       ) : null}
                       {byeRow}
@@ -395,7 +454,12 @@ export function ScheduleWeeks({
                       )}
                     >
                       {w.matches.map((m) => (
-                        <MatchRow key={m.id} match={m} />
+                        <MatchRow
+                          key={m.id}
+                          match={m}
+                          mine={isViewerSeries(m, viewerTeamId)}
+                          showWhen={sharedTs == null}
+                        />
                       ))}
                       <GridFillers count={w.matches.length} />
                     </div>
@@ -417,11 +481,17 @@ export function ScheduleWeeks({
  * bg-line-soft), so an empty cell showed as a grey block beside an odd
  * card. Two across from @2xl, three from @5xl, as in the grid above.
  */
-function GridFillers({ count }: { count: number }) {
+function GridFillers({
+  count,
+  as: Tag = "div",
+}: {
+  count: number;
+  as?: "div" | "li";
+}) {
   const two = count > 1 ? count % 2 : 0;
   const three = count > 2 ? (3 - (count % 3)) % 3 : 0;
   return Array.from({ length: Math.max(two, three) }, (_, i) => (
-    <div
+    <Tag
       key={i}
       aria-hidden
       className={cn(
@@ -488,7 +558,8 @@ export function ScheduleFold({
       open={initiallyOpen}
       onToggle={(event) => {
         const url = new URL(window.location.href);
-        if (event.currentTarget.open) url.searchParams.set(rememberParam, "open");
+        if (event.currentTarget.open)
+          url.searchParams.set(rememberParam, "open");
         else url.searchParams.delete(rememberParam);
         window.history.replaceState(
           null,
@@ -587,8 +658,27 @@ function WeekProgress({
   );
 }
 
-/** One series on one line: a closed week's results at a glance. */
-function ResultLine({ match: m }: { match: MatchView }) {
+function isViewerSeries(m: MatchView, viewerTeamId: string | undefined) {
+  return (
+    !!viewerTeamId &&
+    (m.homeTeamId === viewerTeamId || m.awayTeamId === viewerTeamId)
+  );
+}
+
+/**
+ * One series on one line: a closed week at a glance. A finished week shows
+ * who won; a week still to come shows who plays whom (and a kickoff of its
+ * own, when the week's header can't state one for everybody).
+ */
+function ResultLine({
+  match: m,
+  mine,
+  showWhen,
+}: {
+  match: MatchView;
+  mine: boolean;
+  showWhen: boolean;
+}) {
   const scored = m.done || m.live;
   const name = (winner: boolean) =>
     m.done ? (winner ? "font-semibold text-fg" : "text-muted") : "text-fg";
@@ -596,14 +686,20 @@ function ResultLine({ match: m }: { match: MatchView }) {
     <Link
       href={`/matches/${m.id}`}
       prefetch={false}
-      className="grid min-h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 px-4 py-2 text-sm transition-colors hover:bg-surface-2/60 sm:px-5"
+      className={cn(
+        "grid min-h-11 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-x-3 px-4 py-2 text-sm transition-colors hover:bg-surface-2/60 sm:px-5",
+        mine && "bg-accent/[0.05] shadow-[inset_2px_0_0_var(--color-accent)]",
+      )}
     >
-      <span className={cn("text-right [overflow-wrap:anywhere]", name(m.homeWin))}>
+      <span
+        className={cn("text-right [overflow-wrap:anywhere]", name(m.homeWin))}
+      >
+        {mine ? <span className="sr-only">Your match: </span> : null}
         {m.homeName}
       </span>{" "}
       <span
         className={cn(
-          "whitespace-nowrap font-mono tabular-nums",
+          "whitespace-nowrap text-center font-mono tabular-nums",
           m.live ? "text-danger" : m.done ? "text-fg" : "text-muted",
         )}
       >
@@ -617,6 +713,14 @@ function ResultLine({ match: m }: { match: MatchView }) {
           >
             F
           </span>
+        ) : null}
+        {!scored && showWhen && m.whenTs != null && m.whenFull ? (
+          <LocalTime
+            ts={m.whenTs}
+            variant="short"
+            initial={m.whenShort ?? m.whenFull}
+            className="block font-sans text-[11px] text-muted"
+          />
         ) : null}
       </span>{" "}
       <span className={cn("[overflow-wrap:anywhere]", name(m.awayWin))}>
@@ -661,7 +765,17 @@ function RsvpBadge({ side }: { side: RsvpSide }) {
   );
 }
 
-function MatchRow({ match: m }: { match: MatchView }) {
+function MatchRow({
+  match: m,
+  mine,
+  showWhen,
+}: {
+  match: MatchView;
+  /** The reader's own series: marked, and listed first by the caller. */
+  mine: boolean;
+  /** False when the week's header already states this kickoff. */
+  showWhen: boolean;
+}) {
   const fullTime = useLocalTimeText(m.whenTs ?? 0, "full", m.whenFull ?? "");
   const status = m.done
     ? m.forfeit
@@ -673,9 +787,9 @@ function MatchRow({ match: m }: { match: MatchView }) {
         ? "Result needed"
         : m.awaitingResult
           ? "Awaiting result"
-        : m.whenTs != null
-          ? "Upcoming"
-          : "Time TBD";
+          : m.whenTs != null
+            ? "Upcoming"
+            : "Time TBD";
   // Live is danger-soft, the token for danger TEXT on a danger tint
   // (globals.css): plain danger at this 12px size sits at the AA line on
   // the live card's tint and under it once the card is hovered.
@@ -695,6 +809,7 @@ function MatchRow({ match: m }: { match: MatchView }) {
       winner: m.homeWin,
       rsvp: m.rsvp?.home,
       paths: m.playoffPaths?.home,
+      settled: m.playoffSettled?.home,
     },
     {
       id: m.awayTeamId,
@@ -704,14 +819,34 @@ function MatchRow({ match: m }: { match: MatchView }) {
       winner: m.awayWin,
       rsvp: m.rsvp?.away,
       paths: m.playoffPaths?.away,
+      settled: m.playoffSettled?.away,
     },
   ];
+  // An ordinary upcoming fixture needs no status line: "UPCOMING" on every
+  // card of every week was the list's default state said thirty times. The
+  // label shows for anything a reader should notice (live, final, awaited,
+  // no time yet) and always stays in the card's accessible name.
+  const showStatus = status !== "Upcoming";
+  const showTop =
+    showStatus || mine || m.isFinalPhase || !!m.groupLabel || m.forfeit;
+  // The kickoff is the card's own only when the week's header can't state
+  // one for everybody (a moved series, a single filtered fixture).
+  const ownWhen = showWhen && m.whenFull != null && m.whenTs != null;
+  const kickoffUnset = !m.done && m.whenTs == null;
+  const showFoot =
+    ownWhen ||
+    kickoffUnset ||
+    !!m.reschedulePending ||
+    !!m.reportResult ||
+    !!m.watch;
   // The whole card opens the match page: its one link stretches an overlay
   // (::after) across the card, so every tap on the card lands there, and
   // screen readers hear one short, match-specific link per card instead of
   // two team links and an anonymous "details" (team pages stay a tap away
-  // from the standings and the match page). A control with its own label,
-  // like the reschedule chip, sits above the overlay (relative z-10).
+  // from the standings and the match page). The link shows as an arrow
+  // beside the teams; "Match page" is its spoken name. A control with its
+  // own label, like the reschedule chip, sits above the overlay (relative
+  // z-10).
   return (
     <article
       aria-label={`${m.homeName} vs ${m.awayName} · ${status}`}
@@ -720,170 +855,196 @@ function MatchRow({ match: m }: { match: MatchView }) {
         // The live tint is a background IMAGE over bg-surface. As a second
         // background colour, cn (tailwind-merge) dropped bg-surface and the
         // card showed the grid's gap colour through the translucent tint.
-        m.live &&
-          "bg-linear-to-b from-danger/[0.04] to-danger/[0.04]",
+        m.live && "bg-linear-to-b from-danger/[0.04] to-danger/[0.04]",
+        mine && !m.live && "bg-linear-to-b from-accent/[0.05] to-accent/[0.05]",
+        mine && "shadow-[inset_2px_0_0_var(--color-accent)]",
       )}
     >
-      <div className="flex min-h-11 flex-wrap items-center gap-2 px-4 pt-2 sm:px-5">
-        <span
-          role={m.live ? "img" : undefined}
-          aria-label={
-            m.live
-              ? `Live — series at ${m.homeScore}–${m.awayScore}`
-              : undefined
-          }
-          title={
-            m.forfeit ? "Forfeit — this score was ruled, not played" : undefined
-          }
-          className={cn(
-            "inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em]",
-            statusColor,
-          )}
-        >
-          <span
-            aria-hidden
-            className={cn(
-              "h-1.5 w-1.5 rounded-full bg-current",
-              m.live && "animate-pulse motion-reduce:animate-none",
-            )}
-          />
-          {status}
-        </span>
-        {m.isFinalPhase ? (
-          <Badge tone="accent" className="ml-auto">
-            Grand final
-          </Badge>
-        ) : null}
-        {m.groupLabel ? (
-          <span className="ml-auto text-xs text-muted">{m.groupLabel}</span>
-        ) : null}
-        {m.forfeit ? (
-          <span className={cn("text-xs text-muted", !m.groupLabel && "ml-auto")}>
-            Ruled result
-          </span>
-        ) : null}
-      </div>
-      <div className="space-y-1 px-3 pb-3 pt-1 sm:px-4">
-        {sides.map((side) => (
-          <div
-            key={side.id}
-            className={cn(
-              "flex min-w-0 items-start gap-2.5 rounded-lg border border-transparent px-1.5 py-1",
-              m.done && side.winner && "border-success/10 bg-success/[0.05]",
-            )}
-          >
-            <TeamCrest
-              name={side.name}
-              seed={side.id}
-              logoUrl={side.logoUrl}
-              size={28}
-              className="rounded-lg"
-            />
-            <div className="min-w-0 flex-1">
-              <span
-                className={cn(
-                  "flex min-h-9 min-w-0 items-center py-1 text-sm [overflow-wrap:anywhere]",
-                  m.done
-                    ? side.winner
-                      ? "font-semibold text-fg"
-                      : "text-muted"
-                    : "font-medium text-fg",
-                )}
-              >
-                {side.name}
-              </span>
-              {side.paths && side.paths.length > 0 ? (
-                // The outcomes flow as one wrapping line of pairs instead
-                // of a row each: three rows per side made a two-team card
-                // about 350px tall on a phone.
-                <dl className="flex flex-wrap gap-x-3 gap-y-0.5 pb-2 text-[11px] leading-relaxed">
-                  {side.paths.map((path) => (
-                    <div key={path.key} className="flex min-w-0 gap-1">
-                      <dt className="shrink-0 font-medium text-accent">
-                        {path.label}
-                      </dt>
-                      <dd className="min-w-0 text-muted [overflow-wrap:anywhere]">
-                        {path.description}
-                      </dd>
-                    </div>
-                  ))}
-                </dl>
-              ) : null}
-            </div>
-            {side.rsvp ? <RsvpBadge side={side.rsvp} /> : null}
+      {showTop ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 pt-2.5 sm:px-5">
+          {mine ? (
+            <span className="text-xs font-semibold uppercase tracking-[0.12em] text-accent">
+              Your match
+            </span>
+          ) : null}
+          {showStatus ? (
             <span
-              className={cn(
-                "ml-1 w-7 shrink-0 text-center font-display text-2xl tabular-nums",
+              role={m.live ? "img" : undefined}
+              aria-label={
                 m.live
-                  ? "text-danger"
-                  : m.done && side.winner
-                    ? "text-fg"
-                    : "text-muted",
+                  ? `Live — series at ${m.homeScore}–${m.awayScore}`
+                  : undefined
+              }
+              title={
+                m.forfeit
+                  ? "Forfeit — this score was ruled, not played"
+                  : undefined
+              }
+              className={cn(
+                "inline-flex items-center gap-1.5 text-xs font-semibold uppercase tracking-[0.12em]",
+                statusColor,
               )}
             >
-              {m.done || m.live ? (
-                side.score
-              ) : (
-                <span className="text-base text-line">—</span>
+              <span
+                aria-hidden
+                className={cn(
+                  "h-1.5 w-1.5 rounded-full bg-current",
+                  m.live && "animate-pulse motion-reduce:animate-none",
+                )}
+              />
+              {status}
+            </span>
+          ) : null}
+          {m.isFinalPhase ? (
+            <Badge tone="accent" className="ml-auto">
+              Grand final
+            </Badge>
+          ) : null}
+          {m.groupLabel ? (
+            <span className="ml-auto text-xs text-muted">{m.groupLabel}</span>
+          ) : null}
+          {m.forfeit ? (
+            <span
+              className={cn("text-xs text-muted", !m.groupLabel && "ml-auto")}
+            >
+              Ruled result
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      <div className="flex min-w-0 flex-1 items-center">
+        <div className="min-w-0 flex-1 space-y-1 py-2 pl-3 sm:pl-4">
+          {sides.map((side) => (
+            <div
+              key={side.id}
+              className={cn(
+                "flex min-w-0 items-start gap-2.5 rounded-lg border border-transparent px-1.5 py-1",
+                m.done && side.winner && "border-success/10 bg-success/[0.05]",
               )}
-            </span>
-          </div>
-        ))}
-      </div>
-      <div className="mt-auto flex flex-wrap items-center gap-x-2 border-t border-line-soft px-4 sm:px-5">
-        <span
-          className="mr-auto text-[11px] text-muted"
-          title={m.whenTs != null ? fullTime : undefined}
-        >
-          {m.whenFull && m.whenTs != null ? (
-            <LocalTime
-              ts={m.whenTs}
-              variant="short"
-              initial={m.whenShort ?? m.whenFull}
-            />
-          ) : m.done ? (
-            "Series complete"
-          ) : (
-            <span className="text-accent">Kickoff not set</span>
-          )}
-        </span>
-        {m.reschedulePending ? (
-          <RescheduleChip matchId={m.id} pending={m.reschedulePending} />
-        ) : null}
-        {m.reportResult ? (
-          <Link
-            href={matchAnchorPath(m.id, MATCH_ANCHOR.report)}
-            className="relative z-10 inline-flex min-h-11 shrink-0 items-center rounded px-1 text-xs font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
-          >
-            Report result
-            <span className="sr-only">
-              : {m.homeName} vs {m.awayName}
-            </span>
-            <span aria-hidden>&nbsp;→</span>
-          </Link>
-        ) : null}
-        {m.watch ? (
-          // Above the card's stretched link (relative z-10), like Report
-          // result.
-          <WatchLink
-            stream={m.watch.stream}
-            watch={m.watch.window}
-            variant="row"
-            matchLabel={`${m.homeName} vs ${m.awayName}`}
-          />
-        ) : null}
+            >
+              <TeamCrest
+                name={side.name}
+                seed={side.id}
+                logoUrl={side.logoUrl}
+                size={28}
+                className="rounded-lg"
+              />
+              <div className="min-w-0 flex-1">
+                <span
+                  className={cn(
+                    "flex min-h-9 min-w-0 items-center py-1 text-sm [overflow-wrap:anywhere]",
+                    m.done
+                      ? side.winner
+                        ? "font-semibold text-fg"
+                        : "text-muted"
+                      : "font-medium text-fg",
+                  )}
+                >
+                  {side.name}
+                </span>
+                {side.settled ? (
+                  <p
+                    className={cn(
+                      "pb-2 text-[11px] font-medium leading-relaxed",
+                      side.settled.tone === "success"
+                        ? "text-success"
+                        : side.settled.tone === "accent"
+                          ? "text-accent"
+                          : "text-muted",
+                    )}
+                  >
+                    {side.settled.text}
+                  </p>
+                ) : side.paths && side.paths.length > 0 ? (
+                  // The outcomes flow as one wrapping line of pairs instead
+                  // of a row each: three rows per side made a two-team card
+                  // about 350px tall on a phone.
+                  <dl className="flex flex-wrap gap-x-3 gap-y-0.5 pb-2 text-[11px] leading-relaxed">
+                    {side.paths.map((path) => (
+                      <div key={path.key} className="flex min-w-0 gap-1">
+                        <dt className="shrink-0 font-medium text-accent">
+                          {path.label}
+                        </dt>
+                        <dd className="min-w-0 text-muted [overflow-wrap:anywhere]">
+                          {path.description}
+                        </dd>
+                      </div>
+                    ))}
+                  </dl>
+                ) : null}
+              </div>
+              {side.rsvp ? <RsvpBadge side={side.rsvp} /> : null}
+              {m.done || m.live ? (
+                <span
+                  className={cn(
+                    "ml-1 w-7 shrink-0 text-center font-display text-2xl tabular-nums",
+                    m.live
+                      ? "text-danger"
+                      : m.done && side.winner
+                        ? "text-fg"
+                        : "text-muted",
+                  )}
+                >
+                  {side.score}
+                </span>
+              ) : null}
+            </div>
+          ))}
+        </div>
         <Link
           href={`/matches/${m.id}`}
           prefetch={false}
-          className="inline-flex min-h-11 shrink-0 items-center justify-end pl-2 text-xs font-semibold text-info hover:underline focus-visible:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-info/60"
+          className="flex w-10 shrink-0 items-center justify-center self-stretch text-sm text-muted focus-visible:outline-none after:absolute after:inset-0 focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-info/60"
         >
-          Match page
           <span className="sr-only">
-            : {m.homeName} vs {m.awayName}
+            Match page: {m.homeName} vs {m.awayName}
           </span>
-          <span aria-hidden>&nbsp;→</span>
+          <span aria-hidden>→</span>
         </Link>
       </div>
+      {showFoot ? (
+        <div className="flex flex-wrap items-center gap-x-2 border-t border-line-soft px-4 sm:px-5">
+          <span
+            className="mr-auto flex min-h-9 items-center text-[11px] text-muted"
+            title={m.whenTs != null ? fullTime : undefined}
+          >
+            {ownWhen ? (
+              <LocalTime
+                ts={m.whenTs!}
+                variant="short"
+                initial={m.whenShort ?? m.whenFull!}
+              />
+            ) : kickoffUnset ? (
+              <span className="text-accent">Kickoff not set</span>
+            ) : null}
+          </span>
+          {m.reschedulePending ? (
+            <RescheduleChip matchId={m.id} pending={m.reschedulePending} />
+          ) : null}
+          {m.reportResult ? (
+            <Link
+              href={matchAnchorPath(m.id, MATCH_ANCHOR.report)}
+              className="relative z-10 inline-flex min-h-11 shrink-0 items-center rounded px-1 text-xs font-semibold text-accent hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-info/60"
+            >
+              Report result
+              <span className="sr-only">
+                : {m.homeName} vs {m.awayName}
+              </span>
+              <span aria-hidden>&nbsp;→</span>
+            </Link>
+          ) : null}
+          {m.watch ? (
+            // Above the card's stretched link (relative z-10), like Report
+            // result.
+            <WatchLink
+              stream={m.watch.stream}
+              watch={m.watch.window}
+              variant="row"
+              matchLabel={`${m.homeName} vs ${m.awayName}`}
+            />
+          ) : null}
+        </div>
+      ) : null}
       {m.standins.length > 0 ? (
         <div className="space-y-1 border-t border-line-soft px-4 py-2 sm:px-5">
           {m.standins.map((line) => (

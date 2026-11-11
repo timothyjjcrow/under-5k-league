@@ -4,8 +4,11 @@ import { resolveSiteUrl } from "@/lib/site-url";
 import {
   PlayoffOutlook,
   PlayoffOutlookFootnote,
-  playoffPathLines,
+  fixtureStake,
+  outlookStillOpen,
+  playoffStatusLine,
 } from "@/components/playoff-outlook";
+import { playoffRaceGroups, type PlayoffVerdict } from "@/lib/home-slate";
 import { AnalysisDisclosure } from "@/components/analysis-disclosure";
 import { leagueProgress, progressSummary } from "@/lib/league-progress";
 import Link from "@/components/app-link";
@@ -49,6 +52,7 @@ import {
 import {
   MATCH_LIST_ORDER,
   byeTeamsByWeek,
+  checkinCountsShown,
   byKickoff,
   groupPlayoffRounds,
   matchRoundLabel,
@@ -516,7 +520,30 @@ export default async function SchedulePage() {
   const toMatchView = (m: Match): MatchView => {
     // Once per match — each call scans the season's whole assignment list
     // for both sides, and this used to run three times per row.
-    const rsvp = rsvpFor(m);
+    const rsvpAll = rsvpFor(m);
+    // The counts stay off a fixture weeks away that nobody has answered.
+    const rsvp =
+      rsvpAll &&
+      checkinCountsShown({
+        scheduledAt: m.scheduledAt,
+        now: scheduleNow,
+        answered:
+          rsvpAll.home.summary.confirmed +
+          rsvpAll.home.summary.out +
+          rsvpAll.away.summary.confirmed +
+          rsvpAll.away.summary.out,
+      })
+        ? rsvpAll
+        : undefined;
+    // What this series means for each side's playoff place (their next
+    // series only): the paths while it is open, the settled status after.
+    const stakes =
+      m.phase === "REGULAR" && m.status !== "COMPLETED"
+        ? {
+            home: fixtureStake(stakesReport?.teams.get(m.homeTeamId), m.id),
+            away: fixtureStake(stakesReport?.teams.get(m.awayTeamId), m.id),
+          }
+        : null;
     const watchWindow = stream ? matchWatchWindow(m, season.isActive) : null;
     return {
       id: m.id,
@@ -528,12 +555,17 @@ export default async function SchedulePage() {
       awayLogoUrl: teamLogoUrl.get(m.awayTeamId) ?? null,
       homeScore: m.homeScore,
       awayScore: m.awayScore,
-      playoffPaths: m.phase === "REGULAR" && m.status !== "COMPLETED"
-        ? {
-            home: playoffPathLines(stakesReport?.teams.get(m.homeTeamId), m.id),
-            away: playoffPathLines(stakesReport?.teams.get(m.awayTeamId), m.id),
-          }
+      playoffPaths: stakes
+        ? { home: stakes.home.paths, away: stakes.away.paths }
         : undefined,
+      ...(stakes && (stakes.home.settled || stakes.away.settled)
+        ? {
+            playoffSettled: {
+              home: stakes.home.settled,
+              away: stakes.away.settled,
+            },
+          }
+        : {}),
       done: m.status === "COMPLETED",
       awaitingResult: resultOverdue(m, freshFrom),
       reportResult: reportDueIds.has(m.id),
@@ -700,7 +732,7 @@ export default async function SchedulePage() {
               name: team.name,
               logoUrl: team.logoUrl,
             }))}
-            initialTeamId={[...myTeamIds][0]}
+            viewerTeamId={[...myTeamIds][0]}
           />
         </details>
       ) : (
@@ -793,7 +825,18 @@ export default async function SchedulePage() {
   const regularWeeks = (
     <ScheduleWeeks
       weeks={orderScheduleWeeks(weekViews, progress.focusWeek)}
-      initialTeamId={[...myTeamIds][0]}
+      // The page opens on the whole league, with the reader's own series
+      // first in each week and marked; "My team" in the filter narrows it.
+      // It used to open filtered to their team, so the league's week sat
+      // behind a select and one card stretched across the page under a
+      // banner that already named that match.
+      viewerTeamId={[...myTeamIds][0]}
+      // Weeks after the league's focus week start as one line per series.
+      openThrough={
+        season.status === "REGULAR_SEASON" || season.status === "DRAFT"
+          ? progress.focusWeek
+          : null
+      }
       teams={sortedTeams}
       // The playoffs' fold carries its own title.
       heading={
@@ -903,7 +946,14 @@ export default async function SchedulePage() {
                 );
               })()
             ) : (
-              regularWeeks
+              <>
+                {regularWeeks}
+                {hasTimes ? (
+                  <p className="text-xs text-muted">
+                    Kickoffs are shown in your time zone.
+                  </p>
+                ) : null}
+              </>
             )}
           </section>
         </div>
@@ -1022,6 +1072,7 @@ export default async function SchedulePage() {
                     report={stakesReport}
                     unresolvedTeamIds={shownDeadHeatTeamIds}
                     tiebreakerError={playoffField.tiebreakers.error}
+                    viewerTeamId={[...myTeamIds][0]}
                   />
                 </ViewTabPanel>
               ) : null}
@@ -1081,7 +1132,6 @@ export default async function SchedulePage() {
           hasTimes && season.status !== "COMPLETE" && matchNight
             ? `Match night ${matchNight}`
             : null,
-          hasTimes ? "Kickoffs shown in your time zone" : null,
         ]
           .filter(Boolean)
           .join(" · ")}
@@ -1095,14 +1145,6 @@ export default async function SchedulePage() {
           ) : undefined
         }
       />
-
-      {seasonPlanView ? (
-        <SeasonPlanFold
-          plan={seasonPlanView.plan}
-          formatLine={formatName(seasonPlanView.format)}
-          description={describeSeasonFormat(seasonPlanView.format)}
-        />
-      ) : null}
 
       {jumpItems.length >= 3 ? (
         <div className={standingsBand ? "xl:hidden" : undefined}>
@@ -1253,6 +1295,17 @@ export default async function SchedulePage() {
         </>
       )}
 
+      {/* The season's calendar closes the page: it answers "what comes after
+          these weeks", and at the top it stood between a phone reader and
+          the first fixture. */}
+      {seasonPlanView ? (
+        <SeasonPlanFold
+          plan={seasonPlanView.plan}
+          formatLine={formatName(seasonPlanView.format)}
+          description={describeSeasonFormat(seasonPlanView.format)}
+        />
+      ) : null}
+
       {showTiebreakers && tiebreakersSettled ? (
         <ScheduleFold
           id="tiebreakers"
@@ -1308,9 +1361,20 @@ function ReportResultPrompt({
   );
 }
 
-// Projected first-round matchups if the season ended today — the same
-// seeding rule startPlayoffs will use, over the live table — plus what each
-// team in the race still needs, from the exact scenario engine.
+const RACE_GROUP: Record<
+  PlayoffVerdict,
+  { title: string; note: string; tone: string }
+> = {
+  in: { title: "In", note: "Sure of a playoff place", tone: "text-success" },
+  open: { title: "In the hunt", note: "Results still decide it", tone: "text-accent" },
+  out: { title: "Out", note: "Can no longer reach the playoffs", tone: "text-muted" },
+};
+
+// The Playoff race tab: every team under In, In the hunt or Out (the reader's
+// own first in its list), then the first round if the season ended today, by
+// the seeding rule Start playoffs uses. It draws straight into the standings
+// card's panel: it used to be a second card inside it, with twelve equal
+// tiles in table order.
 function PlayoffPicture({
   standings,
   projectedPairings,
@@ -1320,6 +1384,7 @@ function PlayoffPicture({
   report,
   unresolvedTeamIds,
   tiebreakerError,
+  viewerTeamId,
 }: {
   standings: ReturnType<typeof computeStandings>;
   /** The field's first round (`projectPlayoffField().pairings`): A1–B4… in groups. */
@@ -1331,6 +1396,7 @@ function PlayoffPicture({
   report: ScenarioReport | null;
   unresolvedTeamIds: string[];
   tiebreakerError: string | null;
+  viewerTeamId?: string;
 }) {
   const order = standings.map((s) => s.teamId);
   const pendingTeamIds = report?.forecast?.basis === "final"
@@ -1341,104 +1407,160 @@ function PlayoffPicture({
     : unresolvedTeamIds;
   const pairings =
     pendingTeamIds.length > 0 || tiebreakerError ? [] : projectedPairings;
-
-  const raceNotes = order.flatMap((teamId) => {
-    const scenario = report?.teams.get(teamId);
-    return scenario ? [{ teamId, scenario }] : [];
-  });
+  const groups = playoffRaceGroups(order, report, viewerTeamId);
+  const scenarios = groups.flatMap((group) =>
+    group.teamIds.flatMap((teamId) => report?.teams.get(teamId) ?? []),
+  );
 
   return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Playoff picture"
-        subtitle="Where each team stands"
-      />
-      <CardBody className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        {tiebreakerError ? (
-          <p className="text-sm text-muted sm:col-span-2">
-            An administrator must review the tiebreaker fixtures before playoff
-            matchups can be confirmed.
-          </p>
-        ) : null}
-        {pendingTeamIds.length > 0 ? (
-          <p className="text-sm text-muted sm:col-span-2">
-            Still tied:{" "}
-            {pendingTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
-            {report?.forecast?.basis === "final"
-              ? "— tiebreaker results will settle the remaining places and seeds."
-              : "— an extra week is needed only if the tie remains after regular-season results."}
-          </p>
-        ) : null}
-        {pairings.map((p, index) => (
-          <div
-            key={p.home}
-            className="relative grid grid-cols-1 overflow-hidden rounded-xl border border-line bg-gradient-to-br from-surface-2/70 to-surface text-sm"
-          >
-            <div className="flex items-center justify-between border-b border-line-soft px-4 py-2 text-[10px] uppercase tracking-wider text-muted">
-              <span>Matchup {String(index + 1).padStart(2, "0")}</span>
-              <span className="text-accent">Projected</span>
-            </div>
-            <ProjectedSide
-              teamId={p.home}
-              seed={seedLabelByTeam.get(p.home)}
-              teamName={teamName}
-              teamLogoUrl={teamLogoUrl}
-            />
-            <div aria-hidden className="mx-4 h-px bg-line-soft" />
-            <ProjectedSide
-              teamId={p.away}
-              seed={seedLabelByTeam.get(p.away)}
-              teamName={teamName}
-              teamLogoUrl={teamLogoUrl}
-            />
-          </div>
-        ))}
-        {raceNotes.length > 0 ? (
-          <div className="sm:col-span-2">
-            <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted">
-              Playoff tracker
-            </div>
-            <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {raceNotes.map((n) => (
-                <li
-                  key={n.teamId}
-                  className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg border border-line-soft bg-surface-2/20 p-3 text-sm"
-                >
-                  <TeamCrest
-                    name={teamName.get(n.teamId) ?? "?"}
-                    seed={n.teamId}
-                    logoUrl={teamLogoUrl.get(n.teamId)}
-                    size={18}
-                    className="shrink-0 rounded"
-                  />
-                  <Link
-                    href={`/teams/${n.teamId}`}
-                    className="min-w-0 flex-1 py-1 -my-1 font-medium [overflow-wrap:anywhere] hover:text-info"
+    <div className="space-y-5">
+      {tiebreakerError ? (
+        <p className="text-sm text-muted">
+          An administrator must review the tiebreaker fixtures before playoff
+          matchups can be confirmed.
+        </p>
+      ) : null}
+      {pendingTeamIds.length > 0 ? (
+        <p className="text-sm text-muted">
+          Still tied:{" "}
+          {pendingTeamIds.map((id) => teamName.get(id) ?? id).join(", ")}{" "}
+          {report?.forecast?.basis === "final"
+            ? "— tiebreaker results will settle the remaining places and seeds."
+            : "— an extra week is needed only if the tie remains after regular-season results."}
+        </p>
+      ) : null}
+      {groups.length > 0 ? (
+        <div
+          data-testid="playoff-race-groups"
+          className="space-y-5"
+        >
+          {groups.map((group) => {
+            const copy = RACE_GROUP[group.key];
+            return (
+              <section
+                key={group.key}
+                aria-label={`${copy.title}: ${group.teamIds.length} ${group.teamIds.length === 1 ? "team" : "teams"}`}
+                className="min-w-0"
+              >
+                <h3 className="flex flex-wrap items-baseline gap-x-2">
+                  <span
+                    className={`text-xs font-semibold uppercase tracking-[0.15em] ${copy.tone}`}
                   >
-                    {teamName.get(n.teamId) ?? "?"}
-                  </Link>
-                  <div className="w-full">
-                    <PlayoffOutlook
-                      scenario={n.scenario}
-                      teamNames={teamName}
-                      compact
-                    />
-                  </div>
-                </li>
-              ))}
-            </ul>
-            {/* One "How this works" for the whole tracker, not one per card. */}
-            <div className="mt-2">
-              <PlayoffOutlookFootnote
-                scenarios={raceNotes.map((n) => n.scenario)}
-                teamNames={teamName}
-              />
-            </div>
+                    {copy.title}
+                  </span>
+                  <span className="font-mono text-xs tabular-nums text-fg">
+                    {group.teamIds.length}
+                  </span>
+                  <span className="text-xs font-normal text-muted">
+                    {copy.note}
+                  </span>
+                </h3>
+                <ul className="mt-2 grid items-start gap-2 [grid-template-columns:repeat(auto-fill,minmax(min(15rem,100%),1fr))]">
+                  {group.teamIds.map((teamId) => {
+                    const scenario = report!.teams.get(teamId)!;
+                    const name = teamName.get(teamId) ?? "?";
+                    const mine = teamId === viewerTeamId;
+                    // A settled team, and one nothing is decided for, is its
+                    // name and one line; the full outlook is for a team whose
+                    // next result changes something.
+                    const brief =
+                      group.key !== "open" || outlookStillOpen(scenario);
+                    return (
+                      <li
+                        key={teamId}
+                        className={`min-w-0 rounded-lg border px-3 py-2 text-sm ${mine ? "border-accent/50 bg-accent/5" : "border-line-soft bg-surface-2/20"}`}
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <TeamCrest
+                            name={name}
+                            seed={teamId}
+                            logoUrl={teamLogoUrl.get(teamId)}
+                            size={18}
+                            className="shrink-0 rounded"
+                          />
+                          <Link
+                            href={`/teams/${teamId}`}
+                            className="-my-1 min-w-0 flex-1 py-1 font-medium [overflow-wrap:anywhere] hover:text-info"
+                          >
+                            {name}
+                          </Link>
+                          {mine ? (
+                            <span className="shrink-0 text-[11px] font-semibold uppercase tracking-wider text-accent">
+                              Your team
+                            </span>
+                          ) : null}
+                        </div>
+                        {brief ? (
+                          // The same hooks as the full outlook, so a team
+                          // reads the same way whichever form it takes.
+                          <div
+                            data-testid="playoff-outlook"
+                            data-team-id={teamId}
+                            className="mt-0.5 text-xs text-muted"
+                          >
+                            <p data-testid="playoff-status">
+                              {playoffStatusLine(scenario)}
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="mt-1">
+                            <PlayoffOutlook
+                              scenario={scenario}
+                              teamNames={teamName}
+                              compact
+                            />
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            );
+          })}
+        </div>
+      ) : null}
+      {scenarios.length > 0 ? (
+        // One "How this works" for the whole race, not one per team.
+        <PlayoffOutlookFootnote scenarios={scenarios} teamNames={teamName} />
+      ) : null}
+      {pairings.length > 0 ? (
+        <section className="min-w-0">
+          <h3 className="text-xs font-semibold uppercase tracking-[0.15em] text-fg">
+            Playoff picture
+          </h3>
+          <p className="mt-0.5 text-xs text-muted">
+            The first round if the season ended today
+          </p>
+          <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {pairings.map((p, index) => (
+              <div
+                key={p.home}
+                className="relative grid min-w-0 grid-cols-1 overflow-hidden rounded-xl border border-line bg-gradient-to-br from-surface-2/70 to-surface text-sm"
+              >
+                <div className="flex items-center justify-between border-b border-line-soft px-4 py-2 text-[10px] uppercase tracking-wider text-muted">
+                  <span>Matchup {String(index + 1).padStart(2, "0")}</span>
+                  <span className="text-accent">Projected</span>
+                </div>
+                <ProjectedSide
+                  teamId={p.home}
+                  seed={seedLabelByTeam.get(p.home)}
+                  teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
+                />
+                <div aria-hidden className="mx-4 h-px bg-line-soft" />
+                <ProjectedSide
+                  teamId={p.away}
+                  seed={seedLabelByTeam.get(p.away)}
+                  teamName={teamName}
+                  teamLogoUrl={teamLogoUrl}
+                />
+              </div>
+            ))}
           </div>
-        ) : null}
-      </CardBody>
-    </Card>
+        </section>
+      ) : null}
+    </div>
   );
 }
 
