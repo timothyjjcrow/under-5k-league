@@ -20,6 +20,10 @@ const FILES = folderSourceFiles(DIR, 12);
 const PAGE = stripLineComments(haystackOf(FILES));
 const CARD = (name: string) =>
   stripLineComments(sourceFile(`${DIR}/${name}`).text);
+/** The captain's assign form, a client component the Standins card mounts. */
+const STANDIN_PICKER = stripLineComments(
+  sourceFile("src/components/standin-picker.tsx").text,
+);
 
 describe("match page files", () => {
   it("reads the page first, then its cards", () => {
@@ -72,9 +76,44 @@ describe("match page standins card", () => {
     // booking or asking for them again.
     expect(PAGE).toContain("loadDeclinedStandinIds(match, myTeamId)");
     expect(PAGE).toMatch(/\}\)\)\.concat\(declinedRows\);/);
-    expect(PAGE).toMatch(
-      /<option key=\{r\.userId\} value=\{r\.userId\} disabled=\{!!blocked\}>/,
+    // The picker lists them last, disabled, with the reason.
+    expect(PAGE).toMatch(/blocked,\s*detail: /);
+    expect(STANDIN_PICKER).toMatch(
+      /<option key=\{s\.userId\} value=\{s\.userId\} disabled=\{!!s\.blocked\}>/,
     );
+    expect(STANDIN_PICKER).toContain("{groups.blocked.map(option)}");
+  });
+
+  // Finding out from the toast which kind of pick it was is too late: the
+  // form says it first, from the server's own rule.
+  it("says what a pick does before it is sent, from the server's rule", () => {
+    expect(STANDIN_PICKER).toContain("standinPickerGroups(standins, cover)");
+    expect(STANDIN_PICKER).toMatch(
+      /cover && standin \? standinPickOutcome\(standin\.mmr, cover\) : null/,
+    );
+    expect(STANDIN_PICKER).toContain('<optgroup label="Books straight away">');
+    expect(STANDIN_PICKER).toContain(
+      "<optgroup label={`Needs the ${otherTeamName} captain's OK`}>",
+    );
+    // Both lists carry a visible label, not only an aria-label.
+    expect(STANDIN_PICKER.match(/<label htmlFor=/g)).toHaveLength(2);
+    expect(STANDIN_PICKER).not.toContain("aria-label=");
+    // Each seat hands the picker the baseline the server will judge by.
+    const card = CARD("standins.tsx");
+    expect(card).toMatch(
+      /const \{ baselineMmr, lowerOut \} = baselineOf\(m\.userId\);/,
+    );
+    expect(card).toMatch(/baselineMmr: seatBaseline,\s*emptySeat: true,/);
+  });
+
+  it("gives a booked standin's row what the captain needs to reach them", () => {
+    const card = CARD("standins.tsx");
+    expect(card).toContain("<PlayerLink userId={a.standin.id}");
+    // The handle only on the captain's own bookings, through the policy.
+    expect(card).toMatch(
+      /a\.teamId === myTeamId &&\s*canViewLeagueContact\(viewer, a\.standin\.id, true\) \? \(\s*a\.standin\.discordName \? \(\s*<DiscordTag/,
+    );
+    expect(card).toContain('href="/players?status=standin"');
   });
 
   // A request is not cover: "counts as N MMR" takes a lower absentee out of
@@ -95,12 +134,17 @@ describe("match page standins card", () => {
 
   it("leads the Covers list with uncovered out players, pre-selecting a lone one", () => {
     expect(PAGE).toMatch(/const cover = coverChoices\(\s*roster,/);
-    // Remounted when the pre-selection changes: an uncontrolled select keeps
-    // its first defaultValue otherwise.
+    // Out players, then an empty seat, then the rest of the roster.
     expect(PAGE).toMatch(
-      /<select\s+key=\{cover\.preselect \?\? ""\}\s+name="replacingUserId"[\s\S]*?defaultValue=\{cover\.preselect \?\? ""\}/,
+      /const coverOptions: StandinPickerCoverOption\[\] = \[\s*\.\.\.cover\.choices\.filter\(\(c\) => c\.out\)[\s\S]*?value: seatValue\(myTeamId\),[\s\S]*?\.filter\(\(c\) => !c\.out\)/,
     );
-    expect(PAGE).toContain(`{" · can't make it"}`);
+    // Remounted when the pre-selection changes: the picker keeps its first
+    // choice otherwise.
+    expect(PAGE).toMatch(
+      /<StandinPicker\s+key=\{cover\.preselect \?\? ""\}[\s\S]*?preselect=\{cover\.preselect\}/,
+    );
+    expect(STANDIN_PICKER).toContain("useState(preselect ?? \"\")");
+    expect(PAGE).toContain(`out ? " · can't make it" : ""`);
   });
 });
 
@@ -110,7 +154,9 @@ describe("match page captain tools order and anchors", () => {
 
   it("puts the cards that need an answer before lobby setup and reporting", () => {
     expect(TOOLS.indexOf("id={MATCH_ANCHOR.tools}")).toBeGreaterThan(-1);
-    const reschedule = tools.indexOf("<RescheduleSection match={match} viewer={viewer} />");
+    const reschedule = tools.indexOf(
+      '<RescheduleSection match={match} viewer={viewer} part="tools" />',
+    );
     const standins = tools.indexOf("<StandinSection");
     const report = tools.indexOf("<ReportResultSection");
     expect(reschedule).toBeGreaterThan(-1);
@@ -134,11 +180,14 @@ describe("match page captain tools order and anchors", () => {
   it("gives every card a deep link lands on its own id", () => {
     // Discord's player-out message and the dashboard's Respond link land here.
     expect(PAGE).toContain("<Card id={MATCH_ANCHOR.standins}");
-    // The locked card and the spectator strip here; the picker card unless a
-    // "moved by ready check" card above it already carries the anchor.
-    expect(PAGE.match(/id=\{MATCH_ANCHOR\.reschedule\}/g)).toHaveLength(2);
-    expect(PAGE).toContain(
-      "id={anchored ? MATCH_ANCHOR.reschedule : undefined}",
+    // The locked card, the spectator strip and the picker card. A captain's
+    // "moved by ready check" cards (under the scoreboard, and the seconds-old
+    // one in Captain tools) carry no id, so the picker card is their anchor.
+    expect(PAGE.match(/id=\{MATCH_ANCHOR\.reschedule\}/g)).toHaveLength(3);
+    expect(PAGE.match(/<LockedInCard lock=\{[^\n]*\} id=\{null\} \/>/g)).toHaveLength(2);
+    // A jump to the card opens its folded picker ("Change the time").
+    expect(PAGE).toMatch(
+      /<AutoOpenDetails\s+id=\{PICKER_ID\}\s+openFor=\{MATCH_ANCHOR\.reschedule\}/,
     );
     // The live ready check and the "moved by ready check" card, which the
     // reschedule section mounts from the shared components.
@@ -157,9 +206,10 @@ describe("match page captain tools order and anchors", () => {
 
 describe("match page captain contact", () => {
   it("shows Discord handles only through the shared contact policy", () => {
-    // Two chips: the Matchup card's captain line and Captain tools'
-    // "Opposing captain" line. Each is gated by canViewLeagueContact.
-    expect(PAGE.match(/<DiscordTag\b/g)).toHaveLength(2);
+    // Three chips: the Matchup card's captain line, Captain tools'
+    // "Opposing captain" line and the Standins card's booked standin (its
+    // own test above). Each is gated by canViewLeagueContact.
+    expect(PAGE.match(/<DiscordTag\b/g)).toHaveLength(3);
     expect(PAGE).toMatch(
       /const captainContact = \(captainId: string\) =>\s*canViewLeagueContact\(/,
     );
@@ -192,6 +242,13 @@ describe("match page reschedule form", () => {
     expect(PICKER).toContain("minTs={minTs}");
     expect(PICKER).toContain("maxTs={maxTs}");
     expect(PICKER).toContain("describedBy={hintId}");
+  });
+
+  it("tags each quick pick by how it sits against the kickoff", () => {
+    expect(PAGE).toMatch(
+      /offset: kickoffOffsetLabel\(\s*ts,\s*match\.scheduledAt\?\.getTime\(\) \?\? null,\s*LEAGUE_CONFIG\.timeZone,\s*\)/,
+    );
+    expect(PICKER).toMatch(/\{offset \? \(\s*<span[^>]*>\s*\{offset\}/);
   });
 
   it("suggests only times the calendar can take", () => {
@@ -518,5 +575,34 @@ describe("the ready check's Lock", () => {
     expect(todos).toContain("open.options.find(lockOffered)");
     expect(card).not.toMatch(/showLock[^\n]*everyoneIn/);
     expect(todos).not.toMatch(/lockRefusal === null && !o\.everyoneIn/);
+  });
+});
+
+describe("match page captain shortcuts", () => {
+  const BOARD = CARD("scoreboard.tsx");
+
+  it("builds the scoreboard's jumps from the tested rule and the cards' gates", () => {
+    expect(BOARD).toMatch(
+      /const captainLinks = showCaptainTools\s*\? captainJumps\(\{[\s\S]*?nowMs: renderedAt,\s*\.\.\.captainCardsOpen\(match, await loadDraftStatus\(match\)\),/,
+    );
+    expect(BOARD).toMatch(/href=\{`#\$\{jump\.anchor\}`\}/);
+    expect(BOARD).toContain("className={buttonClasses(jump.variant, \"sm\")}");
+    // No hand-written jump label is left beside the rule's.
+    expect(BOARD).not.toMatch(/Set up & report|Captain tools ↓/);
+  });
+
+  it("shows a captain 'moved by ready check' under the scoreboard, like the players", () => {
+    expect(PAGE).toMatch(
+      /<RescheduleSection\s+match=\{match\}\s+viewer=\{viewer\}\s+part=\{showCaptainTools \? "moved" : "all"\}/,
+    );
+    const card = CARD("reschedule.tsx");
+    // The lasting card is the top slot's; Captain tools keeps only the
+    // seconds-old celebration, in the place of the check that was locked.
+    expect(card).toMatch(
+      /if \(part === "moved"\) \{[\s\S]*?<LockedInCard lock=\{\{ \.\.\.lock, burst: false \}\} id=\{null\} \/>/,
+    );
+    expect(card).toContain(
+      "{lock?.burst ? <LockedInCard lock={lock} id={null} /> : null}",
+    );
   });
 });

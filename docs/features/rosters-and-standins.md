@@ -176,11 +176,31 @@ standin cover, and match-night check-ins. Main files:
   with why; `coverChoices` puts uncovered OUT players first, and a seat with a
   waiting request leaves the Covers list. Pinned by
   `src/app/matches/[id]/match-page-guards.test.ts`.
+- **The picker says what a pick does before it is sent.** The form is
+  `<StandinPicker>` (`src/components/standin-picker.tsx`, a client component
+  inside the card's `<ActionForm>`): "Player they cover" first, then "Standin
+  to bring in", both with visible labels. Each seat carries the baseline the
+  server will judge by (`namedCoverBaseline`, or the roster's lowest for an
+  empty seat), so once a seat is chosen `standinPickerGroups` groups the pool
+  into "Books straight away" (strongest first), "Needs the <team> captain's
+  OK" (smallest gap first, unknown MMRs last) and "Can't be picked", and
+  `standinPickOutcome` words the line under it and the button ("Assign
+  standin" or "Ask the other captain"). A captain used to learn which kind of
+  pick it was from the toast (audit, 2026-11-10). Both rules are the server's
+  own (`standinNeedsApproval`, `standinApprovalReason`); the server still
+  decides at submit.
+- **A booked standin's row is how the captain reaches them:** a profile
+  link, signup MMR and roles on every row, and on the captain's own bookings
+  the Discord handle (`DiscordTag`, through `canViewLeagueContact`) or "(no
+  Discord on file)". The card's footer links the pool
+  (`/players?status=standin`).
 - **Show cover problems where the fixer looks.** The admin card recomputes
   double-bookings live (`standinClashes`; any retime can create one, and
   `clashesAfterRetime` reports it in that toast) and lists uncovered OUTs and
   booked standins who said OUT (`matchCoverIssues`). The captain's card opens with
-  "✗ Out and uncovered" and shows roles and "no Discord" in the picker. /me shows
+  "✗ Out and uncovered" and shows roles and "no Discord" in the picker. The
+  team's own page says the same in its Match prep card
+  ([pages-and-ui](pages-and-ui.md#teams-teams-teamsid)). /me shows
   bookings to any ACTIVE unrostered signup (the empty card only to STANDINs).
   Profiles credit "Stood in for N matches" from COMPLETED matches. /schedule lists
   standins.
@@ -286,8 +306,12 @@ the rows in `StandinRequest`.
   Withdraw for the asking captain; Agree (only while booking is open) and
   Decline for the other. Captain to-dos tells the other captain an answer is
   waiting, and an OUT player whose cover is waiting isn't listed as uncovered.
-  The form's note states the rule and links `/rules#rosters`, and the Covers
-  list shows each player's MMR. The admin cover banner still counts that player
+  The form's note states the rule in one line and links `/rules#rosters` (the
+  picker's groups carry the detail), and the Covers list shows each player's
+  MMR. The request toast is two short sentences ("Asked the <team> captain to
+  agree. <S> is booked once they say yes"): the card under it carries the
+  reason and both MMRs, and the old three-sentence toast covered that card on
+  a phone. The admin cover banner still counts that player
   as uncovered (a request is not cover) but reads "<P> — waiting on the <other
   team> captain's OK for <S> (agree, decline or withdraw below)", dropping
   "agree" wherever the row hides it (`uncoveredByRequest`'s `canAgree`).

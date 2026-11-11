@@ -390,8 +390,23 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   read-only strip. Surfaces: the card (`src/components/reschedule/`, mounted
   by `src/app/matches/[id]/reschedule.tsx`: in Captain tools for captains,
   under the scoreboard for players), captain to-dos ("Answer the ready check",
-  "Lock it in"), the Home strip in `MyNextMatch`, the ⏳ chip on /schedule
-  and the admin list with Clear.
+  "Lock it in"), the Home strip in `MyNextMatch`, the team page's Match prep
+  card, the ⏳ chip on /schedule and the admin list with Clear.
+- **A captain's page mounts the section twice** (`part`): "moved" under the
+  scoreboard is only the "moved by ready check" card, where the players see
+  it, without an anchor or the burst; "tools" in Captain tools is everything
+  else and carries `#match-reschedule`, plus the same card for the seconds it
+  celebrates, in the place of the check the captain just locked. Everyone
+  else gets "all" under the scoreboard. The scoreboard's "Change the time"
+  jump lands on the picker card and opens its fold (`AutoOpenDetails`
+  `openFor`).
+- **The card says what the lock does, and who is in.** Under a time a captain
+  can lock but not everyone has answered, one line says the lock moves the
+  match now without waiting for the other answers (and that "I'm in" is the
+  captain's own answer when both buttons show): "Accept & lock in" was the
+  biggest button on the card and only its confirm said so. A named viewer
+  reads "In: …" beside "Can't: …" and "Waiting on …": the pips are avatars
+  and initials, and a phone has no hover for their titles.
 - **The card is live.** It polls `GET /api/reschedule?match=<id>` every 15s
   while its tab is visible (read-only, viewer-tailored, `private, no-store`)
   and answers optimistically (`withMyAnswer`); a lost answer response is
@@ -399,12 +414,17 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
 - **Quick picks come from `suggestRescheduleTimes`:** the kickoff's time of
   day on nearby days on the league's clock, plus an hour either side, minus
   anything within four hours of either team's other fixtures or booked
-  scrims or past the deadline, closest to the kickoff first. The custom
-  picker reads the viewer's own clock ("your time"; source-guarded).
+  scrims or past the deadline, closest to the kickoff first. Each pick is
+  tagged by how it sits against the kickoff ("1 hr later", "2 days earlier",
+  "1 week later": `kickoffOffsetLabel`, days counted on the league's clock),
+  so a captain doesn't work out that Wednesday is two days before Friday. The
+  custom picker reads the viewer's own clock ("your time"; source-guarded).
 - **A lock is remembered for a day.** `loadRecentLock` shows "Moved by ready
   check" with the ready count while the locked time is still the kickoff; a
   lock under 20 seconds old plays the burst, which is the celebration the
-  person who completed it sees when the page re-renders.
+  person who completed it sees when the page re-renders. Captains get the
+  day-long card under the scoreboard too (it used to sit at the bottom of the
+  page, inside Captain tools).
 
 ## Calendar feed
 

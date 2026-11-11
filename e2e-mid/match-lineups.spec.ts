@@ -151,6 +151,7 @@ test("players check in and captains bring in standins without any lineup confirm
     expect(readyTop).toBeLessThan(gameTop);
     await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
+    await expect(page.locator("#match-standins")).toContainText("Books straight away.");
     await page.getByRole("button", { name: "Assign standin", exact: true }).click();
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
@@ -193,9 +194,14 @@ test("a standin over the MMR allowance waits for the other captain, who agrees o
     await db.registration.update({ where: { seasonId_userId: { seasonId: f.seasonId, userId: standin.id } }, data: { mmr: 3000 } });
 
     await login(page, f.users[0], path);
-    await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(standin.id);
+    // Covers first: once a seat is chosen the form says what the pick does,
+    // before anything is sent, and the button says it too.
     await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
-    await page.getByRole("button", { name: "Assign standin", exact: true }).click();
+    await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(standin.id);
+    await expect(page.locator("#match-standins")).toContainText(
+      `Needs the ${f.awayName} captain's OK first, since the standin is 200 MMR above the player they cover.`,
+    );
+    await page.getByRole("button", { name: "Ask the other captain", exact: true }).click();
     const waiting = page.locator("#match-standins li").filter({ hasText: `waiting for the ${f.awayName} captain to agree` });
     await expect(waiting).toContainText("200 MMR above the player they cover");
     await expect(waiting.getByRole("button", { name: "Withdraw", exact: true })).toBeVisible();

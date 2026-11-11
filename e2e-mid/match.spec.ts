@@ -123,8 +123,22 @@ test("captains can report an open series and get a clear correction handoff once
   ).toBeVisible();
 
   await page.goto(openHref!);
-  const captainJump = page.getByRole("link", { name: "Set up & report ↓" });
+  // The scoreboard says what the page can do for a captain. This fixture
+  // kicks off within three hours, so it is match night: lobby setup and
+  // reporting lead, then finding cover and moving the time.
+  const shortcuts = page.getByRole("navigation", { name: "Captain shortcuts" });
+  await expect(shortcuts.getByRole("link")).toHaveText([
+    "Set up & report ↓",
+    "Find a standin ↓",
+    "Change the time ↓",
+  ]);
+  const captainJump = shortcuts.getByRole("link", { name: "Set up & report" });
   await expect(captainJump).toBeInViewport();
+  // "Change the time" lands on the Reschedule card and opens its picker.
+  await shortcuts.getByRole("link", { name: "Change the time" }).click();
+  await expect(page).toHaveURL(/#match-reschedule$/);
+  await expect(page.getByRole("group", { name: /Quick picks/ })).toBeVisible();
+  await page.evaluate(() => window.scrollTo(0, 0));
   await expect(
     page.locator("#match-games").getByRole("button", { name: "✓ I'm in" }),
   ).toBeVisible();

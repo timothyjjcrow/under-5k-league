@@ -838,7 +838,28 @@ the league is already draftable and many visitors have joined. Write for both.
   pool (`HeroPool columns="container"`) steps two, three, four across with
   the rail's width, so it is two in the rail and wider on a tablet.
 - **A roster row keeps its chips on the name's line** (flex-wrap), so most
-  rows are one 44px line instead of a name over an empty badge row.
+  rows are one 44px line instead of a name over an empty badge row. The
+  signup MMR follows the rank badge ("3,400 MMR", left out while unknown): it
+  is the number the standin rule measures cover against.
+- **The team's own people get a "Match prep" card** under the next series
+  (`match-prep.tsx` over `loadTeamWeek`, `team-week-service.ts`, and the pure
+  `teamWeekNotes`, `team-week.ts`): the side's check-in count (named answers
+  for the captain, through the check-in banner's own `loadCheckinSide`), then
+  one line per thing waiting, each linking to the match-page card that deals
+  with it: a player out with no cover, an open seat, the other captain's
+  standin request, a ready check, the captain's own request waiting, and who
+  is standing in. A captain gets the scoreboard's jumps (`captainJumps`); a
+  player gets "Open the match to check in". It renders only for the team's
+  captain and roster on an unfinished series of the active season, streamed
+  in its own Suspense, so the public page pays nothing for it. The page used
+  to show a date and "Open match" (audit, 2026-11-10).
+  `src/app/teams/[id]/match-prep.test.ts` pins who gets it.
+- **The next-series card shows the weekday and a countdown**
+  (`ProfileMatchSpotlight`, shared with the profile: `LocalTime` "full" and
+  `<Countdown>` while the state is "Next series").
+- **"Edit team name and logo" is one quiet line under the header,** its form
+  in a panel only when open: a once-a-season job was a full-width bar above
+  everything the captain came for.
 
 ## The player pool (`/players`)
 
@@ -1176,6 +1197,19 @@ the league is already draftable and many visitors have joined. Write for both.
   Create/Start in Captain tools; other players, booked standins and admins get
   `lobby-panel.tsx` (`seesPlayerLobbyPanel`, `lobby-access.ts`, matching who
   `resolveDotaLobby` lets view it).
+- **A captain's scoreboard carries jumps to their cards** (`<nav
+  aria-label="Captain shortcuts">` over `captainJumps`,
+  `src/lib/match-captain-jumps.ts`): "Find a standin", "Change the time" and
+  "Set up & report" (or "Record next game", or "Captain tools" while results
+  are closed). Captain tools sit below the preview and every box score, and
+  the one button used to read "Set up & report" three days before kickoff, so
+  nothing said the page could find cover or move the match (audit,
+  2026-11-10). Days out, cover and the time lead and nothing is primary; from
+  `MATCH_NIGHT_LEAD_MS` (3h) before kickoff, and once a game is in, lobby
+  setup and reporting lead as the primary. Each jump shows only while its
+  card would take the action (`captainCardsOpen`: the cards' own
+  `standinAssignmentOpen` and `matchLogisticsOpen` gates). The team page's
+  Match prep card reuses the same list.
 - **The scoreboard's crests are the header's centrepiece:** each sits over
   its team's name at every width, about 110px on a phone, 140px from `sm`
   and 190px from `lg` (`TeamSide`; they were 64px, and from `lg` the row was
