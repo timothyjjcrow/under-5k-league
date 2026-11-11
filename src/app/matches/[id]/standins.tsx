@@ -21,9 +21,16 @@ import {
   captainDeclineStandinRequest,
   captainRemoveStandin,
 } from "@/app/actions/standins";
+import { canViewLeagueContact } from "@/lib/visibility";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import Link from "@/components/app-link";
-import { Card, CardBody, CardHeader, textLink } from "@/components/ui";
+import { DiscordTag } from "@/components/discord-tag";
+import {
+  StandinPicker,
+  type StandinPickerCoverOption,
+  type StandinPickerStandinOption,
+} from "@/components/standin-picker";
+import { Card, CardBody, CardHeader, PlayerLink, textLink } from "@/components/ui";
 import {
   loadDeclinedStandinIds,
   loadDraftStatus,
@@ -38,6 +45,9 @@ import {
 // to your roster + the season's unrostered ACTIVE signups. A standin over the
 // MMR allowance waits for the other captain: their requests show here, with
 // Agree and Decline for the other captain and Withdraw for the asking one.
+// The assign form says which of the two a pick does before it is sent
+// (StandinPicker over standinPickOutcome), and a booked standin's row carries
+// what the captain needs to reach them: profile, MMR, roles, Discord handle.
 export async function StandinSection({
   match,
   viewer,
@@ -198,10 +208,6 @@ export async function StandinSection({
       ...requestRows,
     ]),
   }));
-  const pickerOptions = [
-    ...poolChoices.filter((c) => !c.blocked),
-    ...poolChoices.filter((c) => c.blocked),
-  ];
   // Players a BOOKING covers. A request is not cover: it holds the seat, but
   // never takes its player out of the MMR rule's baseline (coverBaseline).
   const bookedIds = new Set(
@@ -240,13 +246,16 @@ export async function StandinSection({
     name: m.user.name,
     mmr: mmrOf.get(m.userId) ?? 0,
   }));
-  const countsAs = (userId: string) => {
-    const { lowerOut } = namedCoverBaseline({
+  // A named seat's baseline and who set it, as the server judges it.
+  const baselineOf = (userId: string) =>
+    namedCoverBaseline({
       replaced: { userId, mmr: mmrOf.get(userId) ?? 0 },
       teammates,
       outUserIds: outIds,
       coveredUserIds: bookedIds,
     });
+  const countsAs = (userId: string) => {
+    const { lowerOut } = baselineOf(userId);
     return lowerOut ? ` · counts as ${standinMmrLabel(lowerOut.mmr)}` : "";
   };
   // OUT-and-uncovered on MY roster: the admin card has always alerted on
@@ -261,6 +270,71 @@ export async function StandinSection({
   const uncoveredOut = cover.choices
     .filter((c) => c.out)
     .map((c) => c.member);
+
+  // The form's two lists. Each seat carries the baseline the MMR rule will
+  // measure against, so the picker can say what a pick does before it is
+  // sent: uncovered OUT players first, then an empty seat, then the rest.
+  const namedCover = (
+    m: (typeof roster)[number],
+    out: boolean,
+  ): StandinPickerCoverOption => {
+    const { baselineMmr, lowerOut } = baselineOf(m.userId);
+    return {
+      value: m.userId,
+      label: `${m.user.name} (${standinMmrLabel(mmrOf.get(m.userId) ?? 0)}${
+        out ? " · can't make it" : ""
+      }${countsAs(m.userId)})`,
+      baselineMmr,
+      emptySeat: false,
+      lowerOutName: lowerOut?.name ?? null,
+    };
+  };
+  const coverOptions: StandinPickerCoverOption[] = [
+    ...cover.choices.filter((c) => c.out).map((c) => namedCover(c.member, true)),
+    ...(openSeats > 0
+      ? [
+          {
+            value: seatValue(myTeamId),
+            label: `an empty roster seat (${openSeats} unfilled · counts as ${standinMmrLabel(seatBaseline)})`,
+            baselineMmr: seatBaseline,
+            emptySeat: true,
+            lowerOutName: null,
+          },
+        ]
+      : []),
+    ...cover.choices
+      .filter((c) => !c.out)
+      .map((c) => namedCover(c.member, false)),
+  ];
+  // Option text carries what the 9pm decision needs: seat fit (roles) and
+  // whether a ping can reach them at all. "no Discord" = neither a verified
+  // link nor a typed handle. Someone the server would refuse (already in
+  // this match, booked the same night, declined) stays listed but can't be
+  // picked, and says why.
+  const standinOptions: StandinPickerStandinOption[] = poolChoices.map(
+    ({ reg: r, blocked }) => {
+      const roles = roleShort(r.roles).join("/");
+      const unreachable = !r.user.discordId && !r.user.discordName;
+      return {
+        userId: r.userId,
+        name: r.user.name,
+        mmr: r.mmr,
+        blocked,
+        detail: `${standinMmrLabel(r.mmr)}${roles ? ` · ${roles}` : ""}${
+          unreachable ? " · no Discord" : ""
+        }`,
+      };
+    },
+  );
+  // What a booked standin's row says about them: MMR and roles from their
+  // signup. A captain of this match in the active season may see contact.
+  const signupOf = new Map(registrations.map((r) => [r.userId, r]));
+  const standinFacts = (userId: string) => {
+    const reg = signupOf.get(userId);
+    if (!reg) return null;
+    const roles = roleShort(reg.roles).join("/");
+    return `${standinMmrLabel(reg.mmr)}${roles ? ` · ${roles}` : ""}`;
+  };
 
   // A phase where assignment is closed and nothing is booked or asked has
   // nothing to say — don't render an empty card with a disabled story.
@@ -288,8 +362,10 @@ export async function StandinSection({
                 key={a.id}
                 className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-line bg-surface-2/40 px-3 py-1.5"
               >
-                <span className="min-w-0">
-                  <strong>{a.standin.name}</strong>{" "}
+                <span className="min-w-0 [overflow-wrap:anywhere]">
+                  <PlayerLink userId={a.standin.id} className="font-semibold">
+                    {a.standin.name}
+                  </PlayerLink>{" "}
                   {/* A null `replaced` is an EMPTY-SEAT cover on a short
                       roster, not missing data — it rendered as "in for ?". */}
                   {a.replaced ? (
@@ -300,8 +376,28 @@ export async function StandinSection({
                   ) : (
                     <span className="text-muted">filling an open seat </span>
                   )}
-                  <span className="text-muted">· {teamNameOf(a.teamId)}</span>
+                  <span className="text-muted">
+                    · {teamNameOf(a.teamId)}
+                    {standinFacts(a.standin.id)
+                      ? ` · ${standinFacts(a.standin.id)}`
+                      : ""}
+                  </span>
                 </span>
+                {/* How to reach the standin you booked: the toast says to
+                    contact them, so the handle is on their row. */}
+                {a.teamId === myTeamId &&
+                canViewLeagueContact(viewer, a.standin.id, true) ? (
+                  a.standin.discordName ? (
+                    <DiscordTag
+                      name={a.standin.discordName}
+                      verified={!!a.standin.discordId}
+                    />
+                  ) : (
+                    <span className="text-xs text-muted">
+                      (no Discord on file)
+                    </span>
+                  )
+                ) : null}
                 {a.teamId !== myTeamId ? null : seriesStarted ? (
                   // Removing cover mid-series would drop the standin from the
                   // remaining games, so the server refuses it. Say so rather
@@ -459,93 +555,32 @@ export async function StandinSection({
             the Discord; late joiners can still sign up as standins.
           </p>
         ) : (
-          <ActionForm
-            action={captainAssignStandin}
-            hidden={{ matchId: match.id }}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <select
-              name="standinUserId"
-              required
-              aria-label="Standin to bring in"
-              className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
-              defaultValue=""
-            >
-              <option value="" disabled>
-                Standin…
-              </option>
-              {/* Option text carries what the 9pm decision needs: seat fit
-                  (roles) and whether a ping can reach them at all. "no
-                  Discord" = neither a verified link nor a typed handle. */}
-              {/* Someone the server would refuse (already in this match, or
-                  booked the same night) stays listed but can't be picked,
-                  and says why. */}
-              {pickerOptions.map(({ reg: r, blocked }) => {
-                const roles = roleShort(r.roles).join("/");
-                const unreachable = !r.user.discordId && !r.user.discordName;
-                return (
-                  <option key={r.userId} value={r.userId} disabled={!!blocked}>
-                    {blocked
-                      ? `${r.user.name} (${blocked})`
-                      : `${r.user.name} (${standinMmrLabel(r.mmr)}${roles ? ` · ${roles}` : ""}${unreachable ? " · no Discord" : ""})`}
-                  </option>
-                );
-              })}
-            </select>
-            {/* Keyed on the pre-selection: an uncontrolled select keeps its
-                first defaultValue, so a new "can't make it" needs a remount. */}
-            <select
+          <ActionForm action={captainAssignStandin} hidden={{ matchId: match.id }}>
+            {/* Keyed on the pre-selection: the picker keeps its first
+                choice, so a new "can't make it" needs a remount. */}
+            <StandinPicker
               key={cover.preselect ?? ""}
-              name="replacingUserId"
-              required
-              aria-label="Player they cover"
-              className="h-10 min-w-0 max-w-full rounded-lg border border-line bg-surface-2/50 px-2 text-sm"
-              defaultValue={cover.preselect ?? ""}
-            >
-              <option value="" disabled>
-                Covers…
-              </option>
-              {cover.choices
-                .filter((c) => c.out)
-                .map(({ member: m }) => (
-                  <option key={m.userId} value={m.userId}>
-                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)}
-                    {" · can't make it"}
-                    {countsAs(m.userId)})
-                  </option>
-                ))}
-              {openSeats > 0 ? (
-                <option value={seatValue(myTeamId)}>
-                  an empty roster seat ({openSeats} unfilled · counts as{" "}
-                  {standinMmrLabel(seatBaseline)})
-                </option>
-              ) : null}
-              {cover.choices
-                .filter((c) => !c.out)
-                .map(({ member: m }) => (
-                  <option key={m.userId} value={m.userId}>
-                    {m.user.name} ({standinMmrLabel(mmrOf.get(m.userId) ?? 0)}
-                    {countsAs(m.userId)})
-                  </option>
-                ))}
-            </select>
-            <SubmitButton variant="secondary" size="sm">
-              Assign standin
-            </SubmitButton>
+              covers={coverOptions}
+              standins={standinOptions}
+              preselect={cover.preselect}
+              otherTeamName={teamNameOf(otherTeamId)}
+            />
           </ActionForm>
         )}
         {assignOpen && poolChoices.some((c) => !c.blocked) ? (
           <p className="text-xs text-muted">
-            A standin up to {STANDIN_MMR_ALLOWANCE} MMR above the player they
-            cover is booked straight away; if a lower-MMR teammate said they
-            can&apos;t make it and has no cover yet, it&apos;s measured against
-            them instead. Any higher, or with an MMR the site doesn&apos;t
-            know, and the {teamNameOf(otherTeamId)} captain has to agree first;
-            an empty seat counts as your lowest-MMR player. Someone they
-            decline can&apos;t be booked or asked for again for this
-            match.{" "}
+            Up to {STANDIN_MMR_ALLOWANCE} MMR above the seat books straight
+            away; higher, or an unknown MMR, needs the{" "}
+            {teamNameOf(otherTeamId)} captain&apos;s OK.{" "}
             <Link href="/rules#rosters" className={textLink("whitespace-nowrap")}>
               Standin rules
+            </Link>
+            {" · "}
+            <Link
+              href="/players?status=standin"
+              className={textLink("whitespace-nowrap")}
+            >
+              Browse the standin pool
             </Link>
           </p>
         ) : null}

@@ -13,6 +13,7 @@ import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
 import { profileMatch, profileMatchState } from "@/lib/profile-match";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { getSeasonGameScores } from "@/lib/cached-queries";
+import { Suspense } from "react";
 import { notFound } from "next/navigation";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
@@ -53,6 +54,7 @@ import { ChampionStrip } from "@/components/champion-moment";
 import { getTeamJersey } from "@/lib/team-jerseys";
 import { TeamJerseyPreview } from "@/components/team-jersey-preview";
 import { TeamIdentityForm } from "@/components/team-identity-form";
+import { MatchPrep } from "./match-prep";
 import { editTeamIdentity } from "@/app/actions/teams";
 import { canEditTeamIdentity } from "@/lib/team-identity";
 import { canViewLeagueContact } from "@/lib/visibility";
@@ -87,6 +89,9 @@ import {
   TeamCrest,
   textLink,
 } from "@/components/ui";
+
+// A fixed locale: a number in server-rendered markup (CLAUDE.md).
+const MMR_NUMBER = new Intl.NumberFormat("en-US");
 
 export async function generateMetadata({
   params,
@@ -305,6 +310,8 @@ export default async function TeamPage({
     coverage.some((r) => r.count > 0);
   // Which player prefers which roles → per-row badges in the roster card.
   const rolesByUser = new Map(rosterRegs.map((r) => [r.userId, r.roles]));
+  // Each player's signup MMR, beside their name on the roster.
+  const mmrByUser = new Map(rosterRegs.map((r) => [r.userId, r.mmr]));
   // The season hue its crest wears (published by the root layout).
   const hue = teamHueVar(team.id);
   // The roster's most-commonly listed hero → a faint banner backdrop. Kept
@@ -362,6 +369,17 @@ export default async function TeamPage({
     nowMs,
     team.season.isActive && team.season.status !== SEASON_STATUS.COMPLETE,
   );
+  // The team's own people get a "Match prep" card for an unfinished series:
+  // check-ins, cover and anything waiting, with links to the match's cards.
+  const prepMatch =
+    viewer &&
+    team.season.isActive &&
+    !team.withdrawn &&
+    featuredMatch &&
+    featuredMatch.status !== "COMPLETED" &&
+    (viewer.id === team.captainId || memberIds.includes(viewer.id))
+      ? featuredMatch
+      : null;
   // Resting this week: say so before the spotlight shows a match a week away.
   const byeWeek =
     team.season.isActive &&
@@ -613,11 +631,19 @@ export default async function TeamPage({
           </div>
         </div>
         {canEditTeam ? (
-          <details className="mt-3 rounded-[var(--radius)] border border-line bg-surface px-4">
-            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium text-muted hover:text-fg">
-              ✎ Edit team name and logo
+          // A quiet line, not a full-width bar: it is a once-a-season job,
+          // and it sat above everything the captain came for.
+          <details className="group mt-2">
+            <summary className="inline-flex min-h-11 cursor-pointer list-none items-center gap-1 rounded text-xs font-medium text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
+              <span aria-hidden>✎</span> Edit team name and logo
+              <span
+                aria-hidden
+                className="transition-transform group-open:rotate-180"
+              >
+                ▾
+              </span>
             </summary>
-            <div className="space-y-3 pb-4">
+            <div className="space-y-3 rounded-[var(--radius)] border border-line bg-surface px-4 py-4">
               <p className="text-xs text-muted">
                 Changes save right away and are posted in the league Discord.
                 {viewer?.role === "ADMIN"
@@ -730,6 +756,27 @@ export default async function TeamPage({
             </section>
           ) : null}
 
+          {prepMatch && viewer ? (
+            <Suspense fallback={null}>
+              <MatchPrep
+                match={prepMatch}
+                season={team.season}
+                draftStatus={draftStatus}
+                teamId={team.id}
+                otherTeamName={
+                  teamName.get(
+                    prepMatch.homeTeamId === id
+                      ? prepMatch.awayTeamId
+                      : prepMatch.homeTeamId,
+                  ) ?? "the other team"
+                }
+                roundLabel={matchRoundLabel(prepMatch, playoffRounds)}
+                viewer={viewer}
+                nowMs={nowMs}
+              />
+            </Suspense>
+          ) : null}
+
           <section
             id="team-roster"
             aria-label="Team roster"
@@ -781,6 +828,13 @@ export default async function TeamPage({
                           <Badge tone="accent">Captain</Badge>
                         ) : null}
                         <RankBadge rankTier={m.user.rankTier} />
+                        {/* The signup MMR: the number the standin rule
+                            measures cover against. Left out while unknown. */}
+                        {mmrByUser.get(m.userId) ? (
+                          <span className="text-xs tabular-nums text-muted">
+                            {MMR_NUMBER.format(mmrByUser.get(m.userId)!)} MMR
+                          </span>
+                        ) : null}
                         {canViewLeagueContact(
                           viewer,
                           m.userId,

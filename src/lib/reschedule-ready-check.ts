@@ -378,6 +378,52 @@ export function suggestRescheduleTimes(options: {
 }
 
 /**
+ * How an offered time sits against the current kickoff, for a quick pick's
+ * tag: "1 hr later", "2 days earlier", "1 week later", or both parts when
+ * the day and the time of day both move ("1 day later, 1 hr earlier"). A
+ * bare date made a captain work out that Wednesday is two days before
+ * Friday. Days are counted on the league's clock, like the picks themselves,
+ * so "1 day later" is the same time of day across a clock change. Null with
+ * no kickoff to compare with, or for the kickoff itself.
+ */
+export function kickoffOffsetLabel(
+  timeMs: number,
+  kickoffMs: number | null,
+  timeZone: string | null,
+): string | null {
+  if (kickoffMs == null || timeMs === kickoffMs) return null;
+  const formatter = timeZone ? zoneFormatter(timeZone) : null;
+  const toWall = (ms: number) =>
+    formatter ? wallTime(new Date(ms), formatter) : ms;
+  const wall = toWall(timeMs);
+  const kickoffWall = toWall(kickoffMs);
+  const days =
+    Math.floor(wall / DAY_MS) - Math.floor(kickoffWall / DAY_MS);
+  const minutes = Math.round((wall - kickoffWall - days * DAY_MS) / MINUTE_MS);
+  const side = (n: number) => (n > 0 ? "later" : "earlier");
+  const plural = (n: number, unit: string) =>
+    `${n} ${unit}${n === 1 ? "" : "s"}`;
+  const parts: string[] = [];
+  if (days !== 0) {
+    const n = Math.abs(days);
+    parts.push(
+      `${n % 7 === 0 ? plural(n / 7, "week") : plural(n, "day")} ${side(days)}`,
+    );
+  }
+  if (minutes !== 0) {
+    const n = Math.abs(minutes);
+    const hours = Math.floor(n / 60);
+    const rest = n % 60;
+    parts.push(
+      `${[hours ? `${hours} hr` : null, rest ? `${rest} min` : null]
+        .filter(Boolean)
+        .join(" ")} ${side(minutes)}`,
+    );
+  }
+  return parts.join(", ");
+}
+
+/**
  * Whether an open ready check still asks anything of anyone: at least one of
  * its times hasn't passed. A passed time can't be answered (answers refuse
  * it) or usefully locked, so a check whose every time has gone stops

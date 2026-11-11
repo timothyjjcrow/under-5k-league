@@ -6,13 +6,17 @@ import {
   loadReadyCheckView,
   loadRecentLock,
 } from "@/lib/reschedule-ready-check-service";
-import { suggestRescheduleTimes } from "@/lib/reschedule-ready-check";
+import {
+  kickoffOffsetLabel,
+  suggestRescheduleTimes,
+} from "@/lib/reschedule-ready-check";
 import { FIXTURE_CONFLICT_WINDOW_MS } from "@/lib/fixture-conflict";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { MATCH_STATUS, SCRIM_STATUS } from "@/lib/constants";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 import { cancelReschedule, respondReschedule } from "@/app/actions/reschedule";
 import { ActionForm, SubmitButton } from "@/components/action-form";
+import { AutoOpenDetails } from "@/components/auto-open-details";
 import { LocalTime } from "@/components/local-time";
 import {
   ProposeTimes,
@@ -25,6 +29,8 @@ import { loadDraftStatus, type MatchPageMatch, type MatchViewer } from "./load";
 
 /** How far ahead the quick picks look. */
 const SUGGESTION_DAYS = 10;
+/** The folded picker inside the Reschedule card. */
+const PICKER_ID = `${MATCH_ANCHOR.reschedule}-picker`;
 
 /**
  * Captain-to-captain rescheduling, run as a ready check. A captain offers up
@@ -40,14 +46,34 @@ const SUGGESTION_DAYS = 10;
 export async function RescheduleSection({
   match,
   viewer,
+  part = "all",
 }: {
   match: MatchPageMatch;
   viewer: MatchViewer;
+  /**
+   * A captain's page splits the section in two. "moved" is the slot under
+   * the scoreboard: only the "moved by ready check" card, where the players
+   * see it too. "tools" is Captain tools: everything else, and it carries
+   * the anchor. Everyone else gets "all" under the scoreboard.
+   */
+  part?: "all" | "moved" | "tools";
 }) {
   // Async server component: request time, once, for the picker's earliest
   // allowed time and the deadline read (not client render state).
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
+  if (part === "moved") {
+    const lock =
+      match.status === MATCH_STATUS.SCHEDULED
+        ? await loadRecentLock(match, nowMs)
+        : null;
+    // No anchor (the card in Captain tools carries it) and no burst: the
+    // captain who just locked it is looking at Captain tools, where the
+    // celebration plays in place.
+    return lock ? (
+      <LockedInCard lock={{ ...lock, burst: false }} id={null} />
+    ) : null;
+  }
   const [draftStatus, view] = await Promise.all([
     loadDraftStatus(match),
     loadReadyCheckView(match, viewer, nowMs),
@@ -72,11 +98,14 @@ export async function RescheduleSection({
         ? composerProps(match, nowMs)
         : Promise.resolve(null),
     ]);
-    if (!lock) return composer ? <ProposeCard composer={composer} /> : null;
+    if (part === "all") return lock ? <LockedInCard lock={lock} /> : null;
+    // Captain tools: the lasting "moved" card is under the scoreboard, so
+    // here it shows only for the seconds it celebrates, in the place of the
+    // ready check the captain just locked.
     return (
-      <div className="min-w-0 space-y-4">
-        <LockedInCard lock={lock} />
-        {composer ? <ProposeCard composer={composer} anchored={false} /> : null}
+      <div className="min-w-0 space-y-4 empty:hidden">
+        {lock?.burst ? <LockedInCard lock={lock} id={null} /> : null}
+        {composer ? <ProposeCard composer={composer} /> : null}
       </div>
     );
   }
@@ -158,20 +187,13 @@ export async function RescheduleSection({
   );
 }
 
-/** A captain's picker when nothing is open: folded shut until wanted. */
-function ProposeCard({
-  composer,
-  anchored = true,
-}: {
-  composer: ProposeTimesProps;
-  /** False when a card above already carries the reschedule anchor. */
-  anchored?: boolean;
-}) {
+/**
+ * A captain's picker when nothing is open: folded shut until wanted, and
+ * opened by a jump to the card (the scoreboard's "Change the time").
+ */
+function ProposeCard({ composer }: { composer: ProposeTimesProps }) {
   return (
-    <Card
-      id={anchored ? MATCH_ANCHOR.reschedule : undefined}
-      className="scroll-mt-24"
-    >
+    <Card id={MATCH_ANCHOR.reschedule} className="scroll-mt-24">
       <CardHeader
         title="Reschedule"
         subtitle={
@@ -181,7 +203,11 @@ function ProposeCard({
         }
       />
       <CardBody>
-        <details className="group">
+        <AutoOpenDetails
+          id={PICKER_ID}
+          openFor={MATCH_ANCHOR.reschedule}
+          className="group"
+        >
           <summary className="inline-flex h-10 cursor-pointer list-none items-center gap-2 rounded-lg border border-accent/50 bg-accent/10 px-4 text-sm font-medium text-fg transition-colors hover:bg-accent/20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent sm:h-9 [&::-webkit-details-marker]:hidden">
             <span aria-hidden>🗓️</span> Propose new times
             <span
@@ -194,7 +220,7 @@ function ProposeCard({
           <div className="mt-4">
             <ProposeTimes {...composer} />
           </div>
-        </details>
+        </AutoOpenDetails>
       </CardBody>
     </Card>
   );
@@ -267,6 +293,12 @@ async function composerProps(
     suggestions: suggestions.map((ts) => ({
       ts,
       parts: leagueMatchTimeParts(new Date(ts)),
+      // "1 hr later", "2 days earlier": how the pick sits against the kickoff.
+      offset: kickoffOffsetLabel(
+        ts,
+        match.scheduledAt?.getTime() ?? null,
+        LEAGUE_CONFIG.timeZone,
+      ),
     })),
     minTs: nowMs,
     // The browser keeps the custom time a minute inside the deadline.

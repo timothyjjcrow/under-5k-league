@@ -157,6 +157,7 @@ export default async function MatchDetailPage({
         championPresentation={championPresentation}
         resultPending={resultPending}
         showCaptainTools={showCaptainTools}
+        renderedAt={renderedAt}
       />
 
       {/* Between games, being ready for the next one is the only thing a
@@ -240,9 +241,15 @@ export default async function MatchDetailPage({
       ) : null}
 
       {/* Pending time changes stay visible to spectators. Captain controls
-          live together below the match, with a primary jump in the scoreboard. */}
-      {!showCaptainTools && match.status !== "COMPLETED" ? (
-        <RescheduleSection match={match} viewer={viewer} />
+          live together below the match, with their jumps in the scoreboard;
+          a captain still gets "moved by ready check" up here, where the
+          players see it, not at the bottom of the page. */}
+      {match.status !== "COMPLETED" ? (
+        <RescheduleSection
+          match={match}
+          viewer={viewer}
+          part={showCaptainTools ? "moved" : "all"}
+        />
       ) : null}
 
       <section

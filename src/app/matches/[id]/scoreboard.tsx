@@ -13,7 +13,7 @@ import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
 import { teamTint } from "@/lib/team-tint";
-import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { captainCardsOpen, captainJumps } from "@/lib/match-captain-jumps";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
@@ -27,12 +27,17 @@ import {
   TeamCrest,
   buttonClasses,
 } from "@/components/ui";
-import type { MatchPageGame, MatchPageMatch, MatchViewer } from "./load";
+import {
+  loadDraftStatus,
+  type MatchPageGame,
+  type MatchPageMatch,
+  type MatchViewer,
+} from "./load";
 
 /**
  * The page's visible title: both teams, the series score (or VS), the
  * round and state badges, the kickoff, a finished match's pick'em verdict,
- * the captain's jump to their tools, and a chip per played game.
+ * the captain's jumps to their cards, and a chip per played game.
  */
 export async function MatchScoreboard({
   match,
@@ -42,6 +47,7 @@ export async function MatchScoreboard({
   championPresentation,
   resultPending,
   showCaptainTools,
+  renderedAt,
 }: {
   match: MatchPageMatch;
   games: MatchPageGame[];
@@ -52,6 +58,8 @@ export async function MatchScoreboard({
   /** Kickoff has passed and the series isn't complete. */
   resultPending: boolean;
   showCaptainTools: boolean;
+  /** The page's request time, for the captain shortcuts' "match night". */
+  renderedAt: number;
 }) {
   // A finished match tells a signed-in picker how their pick'em call went,
   // so nobody has to go back to /pickem to find out.
@@ -70,6 +78,17 @@ export async function MatchScoreboard({
         pickedTeamId: myCall.pickedTeamId,
       })
     : null;
+  // A captain's jumps to their cards, each gated like the card it lands on.
+  // The draft status is the request-cached read those cards share.
+  const captainLinks = showCaptainTools
+    ? captainJumps({
+        resultsOpen: matchResultsOpen(match.season.status, match.phase),
+        seriesStarted: match.status === "LIVE" || games.length > 0,
+        kickoffMs: match.scheduledAt?.getTime() ?? null,
+        nowMs: renderedAt,
+        ...captainCardsOpen(match, await loadDraftStatus(match)),
+      })
+    : [];
   const hasSeriesScore =
     match.status === "COMPLETED" ||
     match.status === "LIVE" ||
@@ -269,24 +288,26 @@ export async function MatchScoreboard({
               called={calledItCount(pickemCalls, match)}
             />
           ) : null}
-          {showCaptainTools ? (
-            // Lands on lobby setup and reporting, which now follow the
-            // reschedule and standin cards; anything waiting on the
-            // captain there gets its own line under the scoreboard.
-            <a
-              href={`#${
-                matchResultsOpen(match.season.status, match.phase)
-                  ? MATCH_ANCHOR.report
-                  : MATCH_ANCHOR.tools
-              }`}
-              className={buttonClasses("primary", "sm")}
+          {captainLinks.length > 0 ? (
+            // The captain's cards sit below the preview and every box
+            // score, so the scoreboard says what the page can do: find a
+            // standin, change the time, set up and report (captainJumps
+            // orders them by the clock). Anything already waiting on the
+            // captain gets its own line under the scoreboard.
+            <nav
+              aria-label="Captain shortcuts"
+              className="flex basis-full flex-wrap items-center justify-center gap-2"
             >
-              {!matchResultsOpen(match.season.status, match.phase)
-                ? "Captain tools ↓"
-                : match.status === "LIVE" || games.length > 0
-                  ? "Record next game ↓"
-                  : "Set up & report ↓"}
-            </a>
+              {captainLinks.map((jump) => (
+                <a
+                  key={jump.anchor}
+                  href={`#${jump.anchor}`}
+                  className={buttonClasses(jump.variant, "sm")}
+                >
+                  {jump.label} <span aria-hidden>↓</span>
+                </a>
+              ))}
+            </nav>
           ) : null}
         </div>
       </CardBody>

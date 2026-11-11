@@ -1,4 +1,5 @@
 import Link from "@/components/app-link";
+import { Countdown } from "@/components/countdown";
 import { LocalTime } from "@/components/local-time";
 import { Badge, LinkArrow, TeamCrest } from "@/components/ui";
 import { formatLeagueMatchTime } from "@/lib/match-time";
@@ -106,11 +107,17 @@ export function ProfileMatchSpotlight({
         <span className="flex flex-wrap items-center gap-2 text-muted">
           {done && match.forfeit ? <Badge tone="neutral">Forfeit</Badge> : null}
           {match.scheduledAt ? (
-            <LocalTime
-              ts={match.scheduledAt.getTime()}
-              variant="short"
-              initial={formatLeagueMatchTime(match.scheduledAt, "short")}
-            />
+            // The weekday too: "Wed, Nov 11" is what people plan around.
+            <>
+              <LocalTime
+                ts={match.scheduledAt.getTime()}
+                variant="full"
+                initial={formatLeagueMatchTime(match.scheduledAt, "full")}
+              />
+              {state === "Next series" ? (
+                <Countdown targetMs={match.scheduledAt.getTime()} />
+              ) : null}
+            </>
           ) : (
             <span>{done ? "Time not recorded" : "Time TBD"}</span>
           )}

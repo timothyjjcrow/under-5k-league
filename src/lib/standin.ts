@@ -319,3 +319,81 @@ export function coverChoices<T extends { userId: string }>(
     preselect: out.length === 1 ? out[0].userId : null,
   };
 }
+
+/** One seat the captain's picker can cover, with what the MMR rule measures. */
+export type StandinPickerCover = {
+  /** The form value: a userId, or `seatValue(teamId)` for an empty seat. */
+  value: string;
+  /** The seat's baseline as the server judges it; null when unknown. */
+  baselineMmr: number | null;
+  emptySeat: boolean;
+  /** A lower teammate who said they're out set the baseline (their name). */
+  lowerOutName: string | null;
+};
+
+/** One standin the captain's picker lists. */
+export type StandinPickerStandin = {
+  userId: string;
+  /** Signup MMR; 0 = unknown. */
+  mmr: number;
+  /** `standinPickerBlock`'s reason; null when they can be picked. */
+  blocked: string | null;
+};
+
+/**
+ * What picking this standin for this seat does on the captain's card, before
+ * they press anything: "book" (within the allowance, booked at once) or
+ * "ask" (the other captain has to agree first), with the reason the request
+ * will carry. The same rule the server runs (`standinNeedsApproval` over the
+ * seat's baseline), so the picker and the toast never disagree.
+ */
+export function standinPickOutcome(
+  standinMmr: number,
+  cover: Pick<StandinPickerCover, "baselineMmr" | "emptySeat" | "lowerOutName">,
+): { kind: "book" } | { kind: "ask"; reason: string } {
+  if (!standinNeedsApproval(standinMmr, cover.baselineMmr))
+    return { kind: "book" };
+  return {
+    kind: "ask",
+    reason: standinApprovalReason({
+      standinMmr,
+      baselineMmr: cover.baselineMmr,
+      emptySeat: cover.emptySeat,
+      lowerOutName: cover.lowerOutName,
+    }),
+  };
+}
+
+/**
+ * The picker's standin list for the chosen seat, in the order a captain
+ * wants it: who books straight away (strongest first: the best cover they
+ * can lock in on their own), then who needs the other captain's OK (smallest
+ * gap first, unknown MMRs last), then who can't be picked at all. With no
+ * seat chosen yet nothing can be judged, so everyone pickable is `unsorted`,
+ * in the order given.
+ */
+export function standinPickerGroups<T extends StandinPickerStandin>(
+  standins: readonly T[],
+  cover: Pick<
+    StandinPickerCover,
+    "baselineMmr" | "emptySeat" | "lowerOutName"
+  > | null,
+): { unsorted: T[]; book: T[]; ask: T[]; blocked: T[] } {
+  const open = standins.filter((s) => !s.blocked);
+  const blocked = standins.filter((s) => s.blocked);
+  if (!cover) return { unsorted: open, book: [], ask: [], blocked };
+  const books = (s: T) => standinPickOutcome(s.mmr, cover).kind === "book";
+  // Exact stored keys, the id last: the same order every render.
+  const byId = (a: T, b: T) => a.userId.localeCompare(b.userId);
+  return {
+    unsorted: [],
+    book: open.filter(books).sort((a, b) => b.mmr - a.mmr || byId(a, b)),
+    ask: open
+      .filter((s) => !books(s))
+      .sort(
+        (a, b) =>
+          Number(a.mmr <= 0) - Number(b.mmr <= 0) || a.mmr - b.mmr || byId(a, b),
+      ),
+    blocked,
+  };
+}

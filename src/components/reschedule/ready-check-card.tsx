@@ -479,6 +479,15 @@ function OptionCard({
               </SubmitButton>
             </ActionForm>
           ) : null}
+          {showLock && notReady > 0 ? (
+            // What the lock does that an answer doesn't: said on the card,
+            // not only in the confirm.
+            <p className="w-full text-xs text-muted [overflow-wrap:anywhere]">
+              {canAnswer
+                ? "“I'm in” is your own answer. The lock moves the match to this time now, without waiting for the other answers."
+                : "The lock moves the match to this time now, without waiting for the other answers."}
+            </p>
+          ) : null}
         </div>
       ) : null}
     </li>
@@ -530,6 +539,11 @@ function SideRow({
   const waitingNames = named && !nobodyYet ? waiting.map((s) => s.name) : [];
   const outNames = named
     ? side.seats.filter((s) => s.answer === "out").map((s) => s.name)
+    : [];
+  // The pips are avatars and initials, and a phone has no hover for their
+  // titles, so everyone who answered is named in words too.
+  const inNames = named
+    ? side.seats.filter((s) => s.answer === "ready").map((s) => s.name)
     : [];
   return (
     <div className="min-w-0">
@@ -609,12 +623,16 @@ function SideRow({
       </div>
       {nobodyYet ? (
         <p className="mt-1 text-xs text-muted sm:pl-34">No answers yet</p>
-      ) : waitingNames.length || outNames.length ? (
+      ) : inNames.length || waitingNames.length || outNames.length ? (
         <p className="mt-1 text-xs text-muted [overflow-wrap:anywhere] sm:pl-34">
+          {inNames.length ? (
+            <span className="text-success">In: {inNames.join(", ")}</span>
+          ) : null}
+          {inNames.length && outNames.length ? " · " : null}
           {outNames.length ? (
             <span className="text-danger-soft">Can&apos;t: {outNames.join(", ")}</span>
           ) : null}
-          {outNames.length && waitingNames.length ? " · " : null}
+          {(inNames.length || outNames.length) && waitingNames.length ? " · " : null}
           {waitingNames.length ? <span>Waiting on {waitingNames.join(", ")}</span> : null}
         </p>
       ) : null}

@@ -20,7 +20,12 @@ export type ProposeTimesProps = {
   matchId: string;
   /** Quick picks that fit the calendar (suggestRescheduleTimes), each with
    *  the server's parts as its hydration snapshot. */
-  suggestions: { ts: number; parts: TimeParts }[];
+  suggestions: {
+    ts: number;
+    parts: TimeParts;
+    /** kickoffOffsetLabel: "1 hr later", "2 days earlier"; null = no kickoff. */
+    offset?: string | null;
+  }[];
   /** Earliest / latest instants the custom picker allows. */
   minTs: number;
   maxTs: number | null;
@@ -113,7 +118,7 @@ export function ProposeTimes({
             Quick picks <span className="font-normal normal-case">· your time</span>
           </legend>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
-            {suggestions.map(({ ts, parts }) => {
+            {suggestions.map(({ ts, parts, offset }) => {
               const on = picked.includes(ts);
               return (
                 <button
@@ -130,6 +135,11 @@ export function ProposeTimes({
                   )}
                 >
                   <TimeStack ts={ts} initial={parts} />
+                  {offset ? (
+                    <span className="mt-0.5 block text-xs text-muted">
+                      {offset}
+                    </span>
+                  ) : null}
                   {on ? (
                     <span
                       aria-hidden

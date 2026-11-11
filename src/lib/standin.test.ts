@@ -12,6 +12,8 @@ import {
   standinPickerBlock,
   STANDIN_CONFLICT_HOURS,
   STANDIN_MMR_ALLOWANCE,
+  standinPickOutcome,
+  standinPickerGroups,
 } from "./standin";
 
 const at = (iso: string) => new Date(iso);
@@ -431,5 +433,104 @@ describe("coverChoices", () => {
       ["p1", false],
     ]);
     expect(preselect).toBeNull();
+  });
+});
+
+// The captain's picker says what a pick does before it is sent, from the
+// same rule the server runs.
+describe("standinPickOutcome", () => {
+  const seat = { baselineMmr: 2400, emptySeat: false, lowerOutName: null };
+
+  it("books within the allowance and asks past it, like the server", () => {
+    expect(standinPickOutcome(2400 + STANDIN_MMR_ALLOWANCE, seat)).toEqual({
+      kind: "book",
+    });
+    expect(standinPickOutcome(2400 + STANDIN_MMR_ALLOWANCE + 1, seat)).toEqual({
+      kind: "ask",
+      reason: "the standin is 101 MMR above the player they cover",
+    });
+  });
+
+  it("asks for an unknown MMR on either side, with the request's own reason", () => {
+    expect(standinPickOutcome(0, seat)).toEqual({
+      kind: "ask",
+      reason: "the standin's MMR is unknown",
+    });
+    expect(
+      standinPickOutcome(2400, { ...seat, baselineMmr: null }),
+    ).toEqual({ kind: "ask", reason: "the covered player's MMR is unknown" });
+  });
+
+  it("names the lower absentee and the empty seat as the request will", () => {
+    expect(
+      standinPickOutcome(2300, {
+        baselineMmr: 2000,
+        emptySeat: false,
+        lowerOutName: "Low Lou",
+      }),
+    ).toEqual({
+      kind: "ask",
+      reason:
+        "the standin is 300 MMR above Low Lou (2,000), who said they can't make it",
+    });
+    expect(
+      standinPickOutcome(3500, {
+        baselineMmr: 2400,
+        emptySeat: true,
+        lowerOutName: null,
+      }),
+    ).toEqual({
+      kind: "ask",
+      reason: "the standin is 1,100 MMR above the team's lowest-MMR player",
+    });
+  });
+});
+
+describe("standinPickerGroups", () => {
+  const pool = [
+    { userId: "high", mmr: 4900, blocked: null },
+    { userId: "unknown", mmr: 0, blocked: null },
+    { userId: "near", mmr: 2450, blocked: null },
+    { userId: "low", mmr: 2100, blocked: null },
+    { userId: "mid", mmr: 3400, blocked: null },
+    { userId: "busy", mmr: 2200, blocked: "booked that night" },
+  ];
+  const seat = { baselineMmr: 2400, emptySeat: false, lowerOutName: null };
+  const ids = (list: { userId: string }[]) => list.map((s) => s.userId);
+
+  it("leaves the pool as given until a seat is chosen, the blocked last", () => {
+    const groups = standinPickerGroups(pool, null);
+    expect(ids(groups.unsorted)).toEqual(["high", "unknown", "near", "low", "mid"]);
+    expect(groups.book).toEqual([]);
+    expect(groups.ask).toEqual([]);
+    expect(ids(groups.blocked)).toEqual(["busy"]);
+  });
+
+  it("leads with who books straight away, strongest first", () => {
+    const groups = standinPickerGroups(pool, seat);
+    expect(groups.unsorted).toEqual([]);
+    expect(ids(groups.book)).toEqual(["near", "low"]);
+    // Smallest gap first; an unknown MMR last.
+    expect(ids(groups.ask)).toEqual(["mid", "high", "unknown"]);
+    expect(ids(groups.blocked)).toEqual(["busy"]);
+  });
+
+  it("never offers a blocked standin as bookable, whatever their MMR", () => {
+    const groups = standinPickerGroups(pool, seat);
+    expect(ids([...groups.book, ...groups.ask])).not.toContain("busy");
+  });
+
+  it("asks for everyone when the seat's MMR is unknown", () => {
+    const groups = standinPickerGroups(pool, { ...seat, baselineMmr: null });
+    expect(groups.book).toEqual([]);
+    expect(ids(groups.ask)).toEqual(["low", "near", "mid", "high", "unknown"]);
+  });
+
+  it("breaks an MMR tie by id, the same way every render", () => {
+    const tie = [
+      { userId: "b", mmr: 2400, blocked: null },
+      { userId: "a", mmr: 2400, blocked: null },
+    ];
+    expect(ids(standinPickerGroups(tie, seat).book)).toEqual(["a", "b"]);
   });
 });

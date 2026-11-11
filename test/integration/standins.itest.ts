@@ -1163,7 +1163,11 @@ describe("standin MMR rule", () => {
     expect(res.reachUserId).toBe(fx.away.captainId);
     expect(res.announcement).toContain("The **Away** captain has to agree first");
     expect(res.announcement).toContain("101 MMR above the player they cover");
-    expect(res.message).toContain("Asked Away Captain (the Away captain) to agree");
+    // Short: the card under the toast carries the reason and the MMRs.
+    expect(res.message).toMatch(
+      /^Asked the Away captain to agree\. .+ is booked once they say yes$/,
+    );
+    expect(res.message).not.toContain("MMR");
   });
 
   it("an admin's booking from the panel books over the rule, and says so", async () => {
@@ -1691,7 +1695,11 @@ describe("standin MMR rule: a lower teammate who's out", () => {
       baselineUserId: fx.low.id,
     });
     const why = "the standin is 1,200 MMR above Low Lou (2,000), who said they can't make it";
-    expect(res.message).toContain(`since ${why}`);
+    // The toast stays short (the card under it and the picker's own line
+    // carry the reason); the log, the post and the stored row say whose MMR.
+    expect(res.message).toBe(
+      "Asked the Away captain to agree. Sub Sam is booked once they say yes",
+    );
     expect(res.summary).toContain(why);
     // The post keeps Home Carry's own number and names Low Lou's.
     expect(res.announcement).toContain("for **Home Carry** (3,200 MMR)");
@@ -1857,7 +1865,7 @@ describe("standin MMR rule: a lower teammate who's out", () => {
     });
     const res = await coverCarry(fx);
     expect(res.ok && res.pending).toBe(true);
-    if (res.ok) expect(res.message).toContain("since the covered player's MMR is unknown");
+    if (res.ok) expect(res.summary).toContain("(the covered player's MMR is unknown)");
     expect(await prisma.standinRequest.findFirstOrThrow()).toMatchObject({
       baselineMmr: null,
       baselineUserId: null,

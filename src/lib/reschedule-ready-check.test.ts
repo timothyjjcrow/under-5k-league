@@ -15,6 +15,7 @@ import {
   optionStatusLine,
   parseRescheduleOptions,
   serializeRescheduleOptions,
+  kickoffOffsetLabel,
   suggestRescheduleTimes,
   tallyOption,
   type ReadySide,
@@ -581,5 +582,67 @@ describe("withMyAnswer", () => {
     expect(withMyAnswer(view, T1, "ready").options[0].captains.away).toBe(
       "ready",
     );
+  });
+});
+
+describe("kickoffOffsetLabel", () => {
+  // Fri Nov 13 2026, 6 PM in Los Angeles (PST, UTC-8).
+  const kickoff = Date.UTC(2026, 10, 14, 2, 0);
+  const LA = "America/Los_Angeles";
+
+  it("tags a pick by how it sits against the kickoff", () => {
+    expect(kickoffOffsetLabel(kickoff + HOUR, kickoff, LA)).toBe("1 hr later");
+    expect(kickoffOffsetLabel(kickoff - HOUR, kickoff, LA)).toBe("1 hr earlier");
+    expect(kickoffOffsetLabel(kickoff - 2 * DAY, kickoff, LA)).toBe(
+      "2 days earlier",
+    );
+    expect(kickoffOffsetLabel(kickoff + DAY, kickoff, LA)).toBe("1 day later");
+    expect(kickoffOffsetLabel(kickoff + 7 * DAY, kickoff, LA)).toBe(
+      "1 week later",
+    );
+    expect(kickoffOffsetLabel(kickoff + 90 * 60_000, kickoff, LA)).toBe(
+      "1 hr 30 min later",
+    );
+  });
+
+  it("names both parts when the day and the time of day both move", () => {
+    expect(kickoffOffsetLabel(kickoff + DAY - HOUR, kickoff, LA)).toBe(
+      "1 day later, 1 hr earlier",
+    );
+  });
+
+  it("counts days on the league's clock across a clock change", () => {
+    // Sat Oct 31 2026 6 PM PDT; the clocks go back on Nov 1, so the same
+    // time of day a day later is 25 hours on.
+    const before = Date.UTC(2026, 10, 1, 1, 0);
+    expect(kickoffOffsetLabel(before + 25 * HOUR, before, LA)).toBe(
+      "1 day later",
+    );
+  });
+
+  it("says nothing without a kickoff, or for the kickoff itself", () => {
+    expect(kickoffOffsetLabel(kickoff, null, LA)).toBeNull();
+    expect(kickoffOffsetLabel(kickoff, kickoff, LA)).toBeNull();
+  });
+
+  it("tags every quick pick the suggester offers", () => {
+    const picks = suggestRescheduleTimes({
+      kickoffMs: kickoff,
+      fallbackAnchorMs: null,
+      nowMs: kickoff - 3 * DAY,
+      deadlineMs: null,
+      busyMs: [],
+      windowMs: 4 * HOUR,
+      timeZone: LA,
+      count: 6,
+    });
+    expect(picks.map((t) => kickoffOffsetLabel(t, kickoff, LA))).toEqual([
+      "2 days earlier",
+      "1 day earlier",
+      "1 hr earlier",
+      "1 hr later",
+      "1 day later",
+      "2 days later",
+    ]);
   });
 });

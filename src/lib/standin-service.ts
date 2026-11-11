@@ -1081,11 +1081,12 @@ async function requestStandinApproval(
     emptySeat: target.replacingUserId === null,
     lowerOutName: ask.lowerOut?.name,
   });
-  const otherName = otherCaptain?.name ?? `the ${other.name} captain`;
   return {
     ok: true,
     pending: true,
-    message: `Asked ${otherName} (the ${other.name} captain) to agree, since ${reason}. ${standinName} is booked once they say yes`,
+    // Short on purpose: the Standins card under the toast carries the reason
+    // and both MMRs, and a three-sentence toast covered it on a phone.
+    message: `Asked the ${other.name} captain to agree. ${standinName} is booked once they say yes`,
     summary: `Asked the ${other.name} captain to agree to ${standinName} covering ${
       cover.replacedName ?? "an open seat"
     } for ${cover.coverTeamName} in ${coverLogLabel(match)} (${reason})`,
