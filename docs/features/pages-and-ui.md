@@ -759,7 +759,40 @@ the league is already draftable and many visitors have joined. Write for both.
   part-filled last row the surface colour; the grid draws its hairlines as
   the gap colour, so an empty cell showed as a grey block.
 - **The section title and the team filter share a row** (`ScheduleWeeks
-  heading`); each card names its status in words, so there is no dot legend.
+  heading`); there is no dot legend.
+- **The page opens on the whole league, never filtered to the reader's
+  team.** A rostered reader's series lead each week (`viewerSeriesFirst`) and
+  are marked "Your match", and their team is the filter's first option ("My
+  team · …"). It used to open filtered, so the league's week sat behind a
+  select and one card stretched across the page under the check-in banner
+  that already named that match. Only "Add to calendar" still starts on the
+  reader's own team.
+- **A card says only what is not the default.** An ordinary upcoming fixture
+  shows no status label ("Upcoming" stays in the card's accessible name): the
+  label is for live, final, awaited, result needed and no time yet. A week's
+  shared kickoff prints once in its header (`sharedKickoffTs`) and a card
+  shows a time only when its own differs. The check-in counts show once
+  somebody has answered or inside eight days of kickoff
+  (`checkinCountsShown`). The card's one link is an arrow whose spoken name
+  is "Match page: A vs B".
+- **Weeks after the league's focus week start closed** (`weekStartsCollapsed`
+  with `openThrough`), one line per series like a finished week, with the
+  reader's line marked. Five open weeks of identical cards put the page at
+  about 3,800px. A closed week's lines go two and three across with its
+  cards' breakpoints.
+- **A settled side reads as it does on Home:** "Qualified for playoffs" in
+  green or "Eliminated" in grey (`fixtureStake`), in place of "Any result ·
+  Qualify" in the amber of something still at stake.
+- **The Playoff race tab lists the teams under In, In the hunt and Out**
+  (`playoffRaceGroups`), the reader's team first in its list and marked. A
+  settled team, and one nothing is decided for (`outlookStillOpen`), is its
+  name and one line; the Win/Draw/Loss outlook is for a team whose next
+  result changes something. The projected first round ("Playoff picture")
+  follows. It draws into the standings card's panel, not a card of its own.
+- **The season plan closes the page, and the subtitle is three facts** (the
+  season, the week and series count, the match night); "Kickoffs are shown
+  in your time zone" sits under the weeks. On a phone the first fixture was
+  about 1,400px down.
 - **The team filter holds a pick until the URL catches up.** The URL is the
   source of truth, but the router applies `pushState` in a transition and a
   controlled `<select>` snapped back to its old value meanwhile (the pick

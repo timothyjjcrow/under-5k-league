@@ -214,6 +214,40 @@ export function slateStakeLine(
   };
 }
 
+/**
+ * A team's stake in one fixture for a /schedule card. A settled team reads
+ * the words Home and the team page use ("Qualified for playoffs",
+ * "Eliminated") in their colours; the card used to say "Any result · Qualify"
+ * and "Any result · Out" in the amber of something still at stake. Everyone
+ * else keeps the Win/Draw/Loss paths. Both only on the team's next series.
+ */
+export function fixtureStake(
+  scenario: TeamScenario | undefined,
+  matchId: string,
+): {
+  settled: { text: string; tone: "success" | "accent" | "neutral" } | null;
+  paths: PlayoffPathLine[];
+} {
+  if (!scenario || scenario.nextMatchId !== matchId)
+    return { settled: null, paths: [] };
+  const settledStatus = settledPlayoffStatus(scenario);
+  return settledStatus
+    ? { settled: settledStatus, paths: [] }
+    : { settled: null, paths: playoffPathLines(scenario, matchId) };
+}
+
+/**
+ * True when a team's outlook is only the default "Playoff spot still open"
+ * with no paths under it: early in a season that is every team, and the
+ * Playoff race lists those by name instead of a tile each.
+ */
+export function outlookStillOpen(scenario: TeamScenario): boolean {
+  return (
+    playoffStatusLine(scenario) === STILL_OPEN &&
+    playoffPathLines(scenario).length === 0
+  );
+}
+
 export function PlayoffOutlook({
   scenario,
   teamNames,

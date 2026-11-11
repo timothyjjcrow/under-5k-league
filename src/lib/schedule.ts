@@ -566,11 +566,73 @@ export function orderScheduleWeeks<T extends { week: number }>(
 export function weekStartsCollapsed(
   week: { week: number; completed: number; total: number },
   currentWeek: number | null | undefined,
+  /**
+   * The last week that opens as full cards (the league's focus week). Weeks
+   * after it start as one line per series: who plays whom is all a week two
+   * or three away has to say, and five open weeks of identical "Upcoming"
+   * cards put the standings about 3,800px down the page. Unset (playoff
+   * rounds, a finished season) closes nothing ahead.
+   */
+  openThrough?: number | null,
 ): boolean {
+  if (week.total === 0) return false;
+  if (openThrough != null && week.week > openThrough) return true;
   return (
-    week.total > 0 &&
     week.completed === week.total &&
     (currentWeek == null || week.week < currentWeek)
+  );
+}
+
+/**
+ * A week's series with the viewer's own first, the rest in the order given
+ * (the same reading order as Home's This week). Stable, and a copy.
+ */
+export function viewerSeriesFirst<
+  T extends { homeTeamId: string; awayTeamId: string },
+>(matches: readonly T[], viewerTeamId: string | null | undefined): T[] {
+  if (!viewerTeamId) return [...matches];
+  const mine = (m: T) =>
+    m.homeTeamId === viewerTeamId || m.awayTeamId === viewerTeamId;
+  return [...matches.filter(mine), ...matches.filter((m) => !mine(m))];
+}
+
+/**
+ * The one kickoff every listed series shares, as epoch ms: a week's header
+ * prints it once and its cards drop their own. Null for fewer than two
+ * series, an unset kickoff, or any two that differ (a rescheduled series
+ * keeps its own time on its card).
+ */
+export function sharedKickoffTs(
+  matches: readonly { whenTs: number | null }[],
+): number | null {
+  if (matches.length < 2) return null;
+  const first = matches[0].whenTs;
+  if (first == null) return null;
+  return matches.every((m) => m.whenTs === first) ? first : null;
+}
+
+/** How far ahead a fixture's check-in counts show with nobody answered. */
+const CHECKIN_COUNT_LEAD_MS = 8 * 24 * 3600_000;
+
+/**
+ * Whether a fixture row prints its two check-in counts. Check-in is open on
+ * every scheduled fixture, so every card in every future week read "0/5 ·
+ * 0/5": the counts show once somebody has answered, or inside the week
+ * before kickoff (eight days, so next week's night shows from this one's).
+ */
+export function checkinCountsShown({
+  scheduledAt,
+  now,
+  answered,
+}: {
+  scheduledAt: Date | null;
+  now: number;
+  /** Players on either side who said in or out. */
+  answered: number;
+}): boolean {
+  if (answered > 0) return true;
+  return (
+    scheduledAt != null && scheduledAt.getTime() - now <= CHECKIN_COUNT_LEAD_MS
   );
 }
 

@@ -275,7 +275,7 @@ test("captains can report an open series and get a clear correction handoff once
   await page.goto("/schedule");
   await page
     .getByRole("combobox", { name: "Show matches for" })
-    .selectOption({ label: captainTeamName! });
+    .selectOption({ label: `My team · ${captainTeamName!}` });
   // Filtered weeks keep the collapse rules: the team's finished earlier weeks
   // are one-line results, newest first, and each line opens its match. Scope
   // to #fixtures, clear of the separate "Your next match" check-in banner.

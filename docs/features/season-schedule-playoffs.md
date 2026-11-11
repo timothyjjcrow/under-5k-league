@@ -556,7 +556,7 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   hides them until a regular series is final (`playoffOutlookShown`).
 - **Render through `src/components/playoff-outlook.tsx`** (`PlayoffOutlook`,
   `playoffStatusLine`, `playoffPathLines`) and `PlayoffStatusLine`: clinch marks,
-  /schedule's Playoff tracker, "Tonight's stakes" on regular-season match pages
+  /schedule's Playoff race tab, "Tonight's stakes" on regular-season match pages
   (`src/app/matches/[id]/stakes-banner.tsx`), "What we need" on /teams/[id], home.
 - **"Tonight's stakes" stays silent until the night decides something.**
   `StakesBanner` renders only for a REGULAR match in REGULAR_SEASON once a side
@@ -634,14 +634,17 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   which drift after a correction. The trophy lights only for the completed
   final's winner. On /schedule, home and /seasons/[id], always inside its own
   `overflow-x-auto` (card rule in `pages-and-ui.md`).
-- **ScheduleWeeks** (`schedule-weeks.tsx`): a team dropdown ("All teams" is the
-  way back); this week, weeks to come, then "Earlier weeks"
-  (`orderScheduleWeeks`). The current week is `id="this-week"` (home links
+- **ScheduleWeeks** (`schedule-weeks.tsx`): a team dropdown that starts on
+  "All teams" (the reader's own series lead each week and are marked); this
+  week as cards, weeks to come as one line per series, then "Earlier weeks"
+  (`orderScheduleWeeks`, `weekStartsCollapsed`; card rules in
+  `pages-and-ui.md`). The current week is `id="this-week"` (home links
   `/schedule#this-week`). Byes show per week (`byeTeamsByWeek`) even under a
   team filter, plus "Week N: bye" (`teamByeWeek`). In PLAYOFFS and COMPLETE the
   regular season folds into `ScheduleFold` (`id="fixtures"`).
-- **Playoff picture** (REGULAR_SEASON): the projected first round
-  (`playoffFirstRound`, hidden while ties are open) and the Playoff tracker.
+- **Playoff race tab** (REGULAR_SEASON): every team under In, In the hunt
+  or Out (`playoffRaceGroups`), then the "Playoff picture", the projected
+  first round (hidden while ties are open).
 - **Head-to-head grid**: `crossTable` (`cross-table.ts`) builds cells from the
   ROW team's view over REGULAR matches (a list per pair for double round
   robins); `SeasonGrid` scrolls inside its own box.

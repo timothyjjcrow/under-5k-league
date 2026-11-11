@@ -180,3 +180,30 @@ export function standingSummary({
   const where = `${tied ? "Tied " : ""}${ordinalPlace(place)} ${table ? `in ${table}` : `of ${tableSize}`}`;
   return `${where} · ${record} · ${count(row.points, "pt", "pts")}`;
 }
+
+/**
+ * The playoff race as three lists for /schedule's Playoff race tab: in, in
+ * the hunt, out. Each keeps the table's order, with the viewer's team first
+ * in its own list. Twelve equal tiles in table order made a reader find the
+ * settled teams by reading every one.
+ */
+export function playoffRaceGroups(
+  order: readonly string[],
+  report: Pick<ScenarioReport, "teams"> | null,
+  viewerTeamId?: string | null,
+): { key: PlayoffVerdict; teamIds: string[] }[] {
+  const lists: Record<PlayoffVerdict, string[]> = { in: [], open: [], out: [] };
+  for (const teamId of order) {
+    const scenario = report?.teams.get(teamId);
+    if (scenario) lists[playoffVerdict(scenario)].push(teamId);
+  }
+  return (["in", "open", "out"] as const)
+    .map((key) => ({
+      key,
+      teamIds: [
+        ...lists[key].filter((id) => id === viewerTeamId),
+        ...lists[key].filter((id) => id !== viewerTeamId),
+      ],
+    }))
+    .filter((group) => group.teamIds.length > 0);
+}
