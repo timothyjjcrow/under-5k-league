@@ -13,8 +13,15 @@ test("a captain edits their own team from its page with a live crest preview", a
   await page.goto(
     "/api/auth/dev?name=Identity+Captain&steamId=76561190000991001&redirect=/",
   );
+  // A captain's team tab is Captains, whose Team page link opens the team
+  // page and its name and logo form.
   const dock = page.getByRole("navigation", { name: "Quick navigation" });
-  await dock.getByRole("link", { name: "My Team", exact: true }).click();
+  await dock.getByRole("link", { name: "Captains", exact: true }).click();
+  await expect(page).toHaveURL(/\/captains$/);
+  await page
+    .locator("#team")
+    .getByRole("link", { name: /Team page/ })
+    .click();
   await expect(page).toHaveURL(/\/teams\/[^/]+$/);
   const teamName = (
     await page.getByRole("heading", { level: 1 }).textContent()

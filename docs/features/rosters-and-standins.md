@@ -306,6 +306,8 @@ the rows in `StandinRequest`.
   Withdraw for the asking captain; Agree (only while booking is open) and
   Decline for the other. Captain to-dos tells the other captain an answer is
   waiting, and an OUT player whose cover is waiting isn't listed as uncovered.
+  The to-dos are `captainTodos` (`src/lib/captain-todos.ts`), which the match
+  page, Home's captain line and the Captains page all read.
   The form's note states the rule in one line and links `/rules#rosters` (the
   picker's groups carry the detail), and the Covers list shows each player's
   MMR. The request toast is two short sentences ("Asked the <team> captain to

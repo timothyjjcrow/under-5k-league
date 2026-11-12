@@ -32,6 +32,7 @@ import {
   getViewerFantasyEntered,
   getViewerRegistration,
 } from "@/lib/queries";
+import { captainsPageOpen } from "@/lib/captains";
 import { joinSeasonCta, type NavContent } from "@/lib/site-nav";
 import { siteDescription } from "@/lib/link-preview";
 import { getTeamHueStyleSheet } from "@/lib/team-hue-snapshot";
@@ -107,7 +108,12 @@ export default async function RootLayout({
       user && season
         ? prisma.teamMember.findFirst({
             where: { seasonId: season.id, userId: user.id },
-            select: { teamId: true },
+            // The team's captain and withdrawal ride along for the
+            // Captains link: no second query.
+            select: {
+              teamId: true,
+              team: { select: { captainId: true, withdrawn: true } },
+            },
           })
         : null,
       // The menus hide Schedule, Fantasy and Pick'em until the auction is
@@ -194,6 +200,12 @@ export default async function RootLayout({
           phase={season?.status ?? null}
           seasonName={season?.name ?? null}
           myTeamId={myTeam?.teamId ?? null}
+          captaining={
+            !!user &&
+            !!season &&
+            myTeam?.team.captainId === user.id &&
+            captainsPageOpen(season, myTeam.team)
+          }
           draftStatus={draftStatus}
           content={navContent}
           join={join}

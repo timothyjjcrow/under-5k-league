@@ -346,6 +346,27 @@ describe("site navigation", () => {
     );
   });
 
+  it("puts Captains right after My Team, for a sitting captain only", () => {
+    expect(
+      seasonNav(state(SEASON_STATUS.REGULAR_SEASON), "team-1", true).slice(3, 6),
+    ).toEqual([
+      { href: "/teams", label: "Teams" },
+      { href: "/teams/team-1", label: "My Team" },
+      { href: "/captains", label: "Captains" },
+    ]);
+    // Before the draft there is no Teams page, and still a captain's team.
+    expect(hrefs(seasonNav(state(SEASON_STATUS.SIGNUPS), "team-1", true))).toEqual([
+      "/",
+      "/players",
+      "/inhouse",
+      "/teams/team-1",
+      "/captains",
+    ]);
+    expect(
+      hrefs(seasonNav(state(SEASON_STATUS.REGULAR_SEASON), "team-1")),
+    ).not.toContain("/captains");
+  });
+
   it("lists statistics from the regular season and history once it exists", () => {
     for (const phase of [null, SEASON_STATUS.SIGNUPS, SEASON_STATUS.DRAFT]) {
       const listed = exploreHrefs(state(phase, DRAFT_STATUS.COMPLETE, FULL));
@@ -642,6 +663,28 @@ describe("phone tab bar and its sheet", () => {
       "Inhouse",
       "Teams",
     ]);
+  });
+
+  it("gives a captain's team tab to Captains and moves My Team to the sheet", () => {
+    const captain = seasonNav(
+      state(SEASON_STATUS.REGULAR_SEASON),
+      "team-1",
+      true,
+    );
+    const dock = phoneDock(captain, "/teams/team-1");
+    expect(dock.tabs.at(-1)).toEqual({
+      href: "/captains",
+      label: "Captains",
+      icon: "team",
+    });
+    expect(hrefs(dock.sheet)).toContain("/teams/team-1");
+    expect(hrefs(dock.sheet)).not.toContain("/captains");
+    // During signups a captain who hasn't joined still sees Join there.
+    const join = { href: "/me", label: "Join Season 3" };
+    const signups = seasonNav(state(SEASON_STATUS.SIGNUPS), "team-1", true);
+    expect(phoneDock(signups, "/teams/team-1", join).tabs.at(-1)?.label).toBe(
+      "Join",
+    );
   });
 });
 

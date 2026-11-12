@@ -1,14 +1,10 @@
 import Link from "@/components/app-link";
-import { CHECKIN_NUDGE_THROTTLE_SECONDS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { formatLeagueMatchTime } from "@/lib/match-time";
 import type { PickemControl } from "@/lib/pickem";
 import { teamStripe } from "@/lib/team-tint";
 import type { FormResult, HeadToHead } from "@/lib/team-matches";
-import { remindUnansweredCheckins } from "@/app/actions/availability";
-import { ActionForm, SubmitButton } from "@/components/action-form";
+import { CheckinNudgeControl } from "@/components/checkin-nudge-control";
 import { DiscordTag } from "@/components/discord-tag";
-import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
 import {
   Avatar,
@@ -207,47 +203,7 @@ export function MatchupCard({
               })}
             </ul>
             {nudge && s.teamId === nudge.teamId ? (
-              nudge.sentAt ? (
-                <p className="mt-3 border-t border-line-soft pt-2 text-xs text-muted">
-                  Check-in reminder sent{" "}
-                  <LocalTime
-                    ts={nudge.sentAt.getTime()}
-                    variant="short"
-                    initial={formatLeagueMatchTime(nudge.sentAt, "short")}
-                  />
-                  . You can send another from{" "}
-                  <LocalTime
-                    ts={
-                      nudge.sentAt.getTime() +
-                      CHECKIN_NUDGE_THROTTLE_SECONDS * 1000
-                    }
-                    variant="short"
-                    initial={formatLeagueMatchTime(
-                      new Date(
-                        nudge.sentAt.getTime() +
-                          CHECKIN_NUDGE_THROTTLE_SECONDS * 1000,
-                      ),
-                      "short",
-                    )}
-                  />
-                  .
-                </p>
-              ) : (
-                <ActionForm
-                  action={remindUnansweredCheckins}
-                  hidden={{ matchId: match.id }}
-                  className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-soft pt-3"
-                >
-                  <SubmitButton variant="secondary" size="sm">
-                    {nudge.waiting === 1
-                      ? "Remind the 1 who hasn't answered"
-                      : `Remind the ${nudge.waiting} who haven't answered`}
-                  </SubmitButton>
-                  <span className="text-xs text-muted">
-                    One Discord post that pings only them.
-                  </span>
-                </ActionForm>
-              )
+              <CheckinNudgeControl matchId={match.id} nudge={nudge} />
             ) : null}
           </div>
         ))}

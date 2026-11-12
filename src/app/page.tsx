@@ -2,6 +2,7 @@ import type { Match } from "@prisma/client";
 import { Suspense, type ReactNode } from "react";
 import { DiscordSetupPrompt } from "@/components/discord-setup";
 import { AdminStrip } from "@/components/home/admin-strip";
+import { CaptainStrip } from "@/components/home/captain-strip";
 import { CompleteView, completeHero } from "@/components/home/complete-view";
 import { DraftPhaseView, draftHero } from "@/components/home/draft-view";
 import {
@@ -32,6 +33,7 @@ import {
 import { SignupsView, signupsHero } from "@/components/home/signups-view";
 import { CardSkeleton } from "@/components/ui";
 import { getSessionUser } from "@/lib/auth";
+import { captainsPageOpen } from "@/lib/captains";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { REGISTRATION_STATUS } from "@/lib/constants";
 import { inhouseQueueLeadsHome } from "@/lib/home-inhouse";
@@ -284,6 +286,13 @@ export default async function Home() {
 
   // The admin's own line under the hero (AdminStrip); players never see it.
   const isAdmin = user?.role === "ADMIN";
+  // A sitting captain's line under the hero (CaptainStrip), linking
+  // the Captains page; the same rule as the header link.
+  const captainTeam = user
+    ? (snapshot.teams.find((team) => team.captainId === user.id) ?? null)
+    : null;
+  const showCaptainStrip =
+    !!user && captainsPageOpen(season, captainTeam);
 
   const hero = (
     <Hero
@@ -333,10 +342,23 @@ export default async function Home() {
   return (
     <div className="space-y-5">
       {top}
-      {defending || isAdmin ? (
+      {defending || isAdmin || showCaptainStrip ? (
         <div className="space-y-3">
           {hero}
           {defending ? <DefendingChampionLine champion={defending} /> : null}
+          {showCaptainStrip && user && captainTeam ? (
+            <Suspense
+              fallback={
+                <div className="skeleton h-12 rounded-[var(--radius)]" />
+              }
+            >
+              <CaptainStrip
+                snapshot={snapshot}
+                team={captainTeam}
+                viewerId={user.id}
+              />
+            </Suspense>
+          ) : null}
           {isAdmin ? (
             <Suspense
               fallback={

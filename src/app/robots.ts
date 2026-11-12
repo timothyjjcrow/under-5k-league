@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       // Private / auth-gated areas shouldn't be crawled, nor the casters'
       // stream overlay (a tool for OBS, every page of it noindex anyway).
-      disallow: ["/admin", "/api", "/me", "/draft", "/login", "/overlay"],
+      disallow: ["/admin", "/api", "/me", "/captains", "/draft", "/login", "/overlay"],
     },
     sitemap: `${base}/sitemap.xml`,
   };

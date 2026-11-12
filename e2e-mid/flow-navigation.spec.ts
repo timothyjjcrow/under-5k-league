@@ -12,9 +12,11 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
     "/api/auth/dev?name=Flow+Captain&steamId=76561190000991001&redirect=/schedule",
   );
   const dock = page.getByRole("navigation", { name: "Quick navigation" });
+  // stage.ts makes this identity a captain: the team tab is Captains, and
+  // My Team is one tap away in the sheet.
   await expect(
-    dock.getByRole("link", { name: "My Team", exact: true }),
-  ).toBeVisible();
+    dock.getByRole("link", { name: "Captains", exact: true }),
+  ).toHaveAttribute("href", "/captains");
   await expect(
     dock.getByRole("link", { name: "Schedule", exact: true }),
   ).toHaveAttribute("aria-current", "page");
@@ -57,7 +59,8 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
   await expectNoHorizontalOverflow(page, "mobile dock and Explore");
   // Global team navigation should not pretend a content row was clicked.
   await page.goto("/teams?view=flow-check");
-  await dock.getByRole("link", { name: "My Team", exact: true }).click();
+  await exploreButton.click();
+  await explore.getByRole("link", { name: "My Team", exact: true }).click();
   await expect(page.locator("#main a[data-context-back]")).toHaveAttribute(
     "href",
     "/teams",

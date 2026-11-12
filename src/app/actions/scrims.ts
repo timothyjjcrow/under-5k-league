@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
+import { CAPTAINS_HREF } from "@/lib/captains";
 import { clampInt, localDate, str } from "@/lib/form";
 import { parseAccountId } from "@/lib/dota";
 import type { ActionResult } from "@/lib/action-result";
@@ -36,6 +37,8 @@ import {
 function refreshScrims(scrimId?: string) {
   revalidatePath("/scrims");
   if (scrimId) revalidatePath(`/scrims/${scrimId}`);
+  // The Captains page lists the team's scrims and draws the same controls.
+  revalidatePath(CAPTAINS_HREF);
 }
 
 /**

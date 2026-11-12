@@ -41,6 +41,12 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   recap" resolves to the finished season's own `/seasons/<id>`.
 - **`isActive` (`site-header.tsx`) stops "Teams" and "My Team" both
   highlighting** on your own team page.
+- **A sitting captain gets "Captains" right after My Team**
+  (`seasonNav(state, myTeamId, captaining)`), and on phones the tab bar's team
+  tab opens it while My Team moves to the sheet. The layout reads
+  `captaining` from the roster row it already loads (its team's `captainId`
+  and `withdrawn`), through `captainsPageOpen`: no extra query. See
+  [Captains](#captains-captains).
 - **The account menu has My account (`/me`) and My profile
   (`/players/<id>`)**, the public page captains scout; it used to be reachable
   only from the bottom of /me's Steam card. The layout passes the header
@@ -659,6 +665,12 @@ image has changed. The rules are in `next.config.ts`, and
   upset ("Week 5 upset · X beat Y 2–0, from 6 points behind going into the
   week"), else nothing. Both judge the matches Home already loaded and add
   no query; `week-highlights.test.ts` pins the wiring.
+- **`CaptainStrip` (sitting captains only) sits under the hero, above
+  `AdminStrip`:** "N things need you · Week 3 vs X first", "Nothing needs
+  you right now", or before the auction "Your team: X", and "Manage your
+  team" opens `/captains`. It counts what `loadCaptainTodoRows` finds, the
+  same rule the page and the match page read. Database reads only, run for
+  captains only.
 - **`AdminStrip` (admins only) repeats `/admin`'s next step word for word**
   plus the Needs attention count (`adminHomeLine`). Feed `adminNextStep` and
   `matchAttention` the same inputs as `/admin` or they drift. Database reads
@@ -1434,6 +1446,56 @@ the league is already draftable and many visitors have joined. Write for both.
   ruled line per place. Its section links are the site's `SectionNav`, and a
   lone last champion card takes the whole row.
 
+## Captains (`/captains`)
+
+A captain asked for one place to run their team (2026-11-11), and Tim asked
+for every captain control on it. The page draws the controls the site
+already has, never copies of them, so each keeps its rule and its server
+check (`src/lib/captains.test.ts` pins every one of them):
+
+- **Who gets it is one rule, `captainsPageOpen`** (`src/lib/captains.ts`): a
+  team whose `Team.captainId` is the viewer, not withdrawn, in the active
+  season, from SIGNUPS through PLAYOFFS. The header link, the phone tab,
+  Home's `CaptainStrip` and the page all read it. `Team.captainId` is the
+  authority, never a roster row's `isCaptain`. Anyone else at `/captains`
+  gets "This page is for team captains"; a signed-out visitor goes to
+  `/login?next=/captains`.
+- **Needs you** is `captainTodos` over every open match
+  (`loadCaptainTodoRows`, `captains-service.ts`): an OUT player with no
+  cover, the other captain's standin request, the other captain's ready
+  check, a time to lock in. Each line opens that match's controls here
+  (`captainsMatchHref`: `/captains?match=<id>#<card>`). The match page's
+  "Waiting on you" list is the same function over one match, and both render
+  through `<CaptainTodoItem>`. Before the auction is done it reads nothing
+  and the page shows the draft card instead.
+- **Your matches** (`match-desk.tsx`): chips pick one of the team's open
+  fixtures (`?match=`, read with `singleSearchParam`; live first, then week
+  and kickoff; a bad value falls back to the next fixture). For it the page
+  draws the captain's own `<CheckinBanner>` (with the side's names), the
+  Remind button (`<CheckinNudgeControl>`, shown by `loadCaptainNudge`, the
+  match preview's rule), `<LiveSeriesCheckin>` while the series is live, the
+  "moved by ready check" card, and the match page's whole `<CaptainTools>`:
+  the ready check to move the match (propose, answer, lock in, withdraw),
+  standins (book, ask, agree, decline, withdraw, remove) and lobby setup and
+  reporting. Only one fixture's tools render at a time, so the match page's
+  card ids stay unique.
+- **Scrims** (`scrim-desk.tsx`) draws `/scrims`' own controls from
+  `src/components/scrims/scrim-controls.tsx`: Post availability, Cancel on
+  the team's open or booked scrims (not once live, as the scrim page), and
+  Join on other teams' open times by `scrimJoinCheck`. The scrim actions
+  revalidate `/captains` too (they revalidate only named paths).
+- **Team** (`team-desk.tsx`): the team page's `<TeamIdentityForm>` under
+  `canEditTeamIdentity`, where the team stands (Home's `standingSummary` and
+  `playoffStatusLine`; the bracket line in the playoffs), the roster with
+  Discord handles through `canViewLeagueContact`, and `<TeamCoachesCard>`
+  (add or remove coaches). Signing and releasing players stay with admins.
+- **Layout:** a jump bar (`SectionNav`), Needs you and the match controls at
+  full width, then scrims and the team side by side from `xl`.
+  `e2e-mid/captains.spec.ts` drives every control above through its form and
+  checks 390px.
+- **Not built:** a standin bench for the next match night, coach access to
+  the page, and an admin "view as a team".
+
 ## Side games and account (`/scrims`, `/fantasy`, `/me`)
 
 - **A signed-up player gets the invite ask on `/me` too** while signups are
@@ -1452,6 +1514,10 @@ the league is already draftable and many visitors have joined. Write for both.
 - **Scrims says so when there are no teams yet:** a season before its draft
   gets one EmptyState ("Scrims open once teams exist") instead of a sign-in
   card and six empty lists; the season chips stay.
+- **Scrims' captain controls are shared components**
+  (`src/components/scrims/scrim-controls.tsx`: Post availability, Join,
+  Cancel, the coaches card), which the Captains page draws too. Change them
+  there, not in either page.
 - **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
   history, team records and leaders go three across from `xl` as two-row
   subgrids, so the three lists start on one line whatever their subtitles
