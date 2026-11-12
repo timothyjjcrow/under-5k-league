@@ -2,51 +2,81 @@
 
 import Link from "@/components/app-link";
 import { useSearchParams } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
+import {
+  useEffect,
+  useId,
+  useMemo,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import { SAVE_LIST_CONTEXT_EVENT } from "@/lib/navigation-context";
 import {
   Avatar,
   Badge,
   EmptyState,
-  HeroIcon,
   HeroList,
   LinkArrow,
   PlayerLink,
   RankBadge,
+  RankMedal,
   RoleBadges,
   TeamCrest,
   buttonClasses,
   textLink,
 } from "@/components/ui";
-import { heroById } from "@/lib/heroes";
+import { DraftPlayerCard } from "@/components/draft-player-card";
+import { PubHeroStrip } from "@/components/pub-hero-strip";
+import { heroesForPlayerSearch } from "@/lib/heroes";
 import { DOTA_ROLES } from "@/lib/roles";
 import {
-  filterPoolRows,
+  EMPTY_POOL_FILTER,
+  filterPoolPage,
   inhouseTitle,
   inhouseToken,
   lastSeasonTitle,
   lastSeasonToken,
+  mmrRangeLabel,
   NO_DISCORD_TITLE,
+  normalizeMmrRange,
+  parseMmrInput,
+  POOL_MMR_BANDS,
+  poolFacetCounts,
+  poolFilterActive,
+  poolHeroMatches,
+  poolPanelFilterCount,
+  poolParamsQuery,
+  poolRowFacts,
   PUB_QUIET_TITLE,
   pubHeroTitle,
   pubQuietToken,
   pubTitle,
-  recentHeroTitle,
   pubToken,
-  sortByInhouseRecord,
+  readPoolParams,
+  recentHeroTitle,
+  sortPoolPage,
+  type MmrRange,
+  type PoolFacetCounts,
+  type PoolFilterGates,
+  type PoolPageFilter,
+  type PoolPageSort,
   type PoolPlayer,
+  type PoolRowFacts,
+  type PoolScout,
   type PoolScoutInfo,
-  type PoolSort,
-  type PoolStatusFilter,
 } from "@/lib/player-pool";
-import { pubHasWindow, pubLastPlayed, type PubHero } from "@/lib/pub-stats";
+import type { DraftScout } from "@/lib/draft-scout";
+import { pubHasWindow, pubLastPlayed } from "@/lib/pub-stats";
 import {
+  pubColumn,
   scoutingRowParts,
   scoutingTitle,
+  type ScoutContext,
   type ScoutPart,
 } from "@/lib/pub-scout";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import { aboutText } from "@/lib/about-you";
+import { averageMmr } from "@/lib/pool-stats";
 import { cn, hasText } from "@/lib/utils";
 import { DiscordTag } from "@/components/discord-tag";
 import { usePersistedFlag } from "@/components/room-clock";
@@ -66,14 +96,20 @@ export type PoolDraftInfo = Record<
   }
 >;
 
-/** The component's sort space: the shared lib's three, plus the pool-only
- *  inhouse ordering. Deliberately NOT added to PoolSort — that type is shared
- *  with the draft room, where an inhouse option would be a phantom control. */
-type PoolSortEx = PoolSort | "inhouse";
+/** The Filters panel's id: the sidebar from xl, a fold-out panel below. */
+const PANEL_ID = "pool-filters";
 
-const SORTS: PoolSort[] = ["mmr", "rank", "name"];
-const ROLE_KEYS: string[] = DOTA_ROLES.map((r) => r.key);
-
+/**
+ * The /players pool: a toolbar (search, positions, status), a filter
+ * sidebar beside the list from xl (a fold-out panel under the toolbar
+ * below it), and one compact row per player. A row opens the draft room's
+ * scouting card under it (`DraftPlayerCard`), one at a time.
+ *
+ * Every filter and the sort live in the address bar (`readPoolParams`,
+ * `poolParamsQuery`); row density ("Scouting details") and the card's
+ * "Full scouting" are the reader's own, kept on their device. The rules are
+ * in docs/features/pages-and-ui.md ("The player pool").
+ */
 export function PlayerPool({
   players,
   standinIds,
@@ -83,7 +119,8 @@ export function PlayerPool({
   scout,
   now,
   showContact = false,
-  detailsByDefault = true,
+  signedUpAt,
+  listTitle,
 }: {
   players: PoolPlayer[];
   /** Which rows are STANDIN registrations. A parallel list rather than a
@@ -107,73 +144,68 @@ export function PlayerPool({
    *  for outsiders, so without this flag the component cannot distinguish a
    *  hidden handle from a player who has no Discord. */
   showContact?: boolean;
-  /**
-   * Whether rows open with the scouting line and the player's own words
-   * under the name (`poolDetailsByDefault`: until the auction ends). The
-   * "Scouting details" toggle flips it, remembered on this device.
-   */
-  detailsByDefault?: boolean;
+  /** When each player signed up (epoch ms), for "Sort: Newest". */
+  signedUpAt?: Record<string, number>;
+  /** The phase's name for the list ("Signed up to play", "Draft pool"…). */
+  listTitle: string;
 }) {
-  const [details, setDetails] = usePersistedFlag(
-    "playerPoolDetails",
-    detailsByDefault,
-  );
-  // Data-presence gates (the anyDrafted precedent — never season phase).
-  // Computed before the state hooks: the sort seeding below reads anyInhouse.
-  const anyInhouse = players.some((p) => !!scout?.[p.userId]?.inhouse);
+  const scoutMap = useMemo(() => scout ?? {}, [scout]);
+  const signups = useMemo(() => signedUpAt ?? {}, [signedUpAt]);
   const standinSet = useMemo(() => new Set(standinIds ?? []), [standinIds]);
-  const anyStandin = players.some((p) => standinSet.has(p.userId));
-  const nowMs = now;
-  const grid = rowGrid(anyInhouse);
-  // Filter state seeds from the URL so a captain can SEND someone "the pos-1
-  // free agents" — and so a reload, or a trip to a player's profile and back,
-  // doesn't silently drop the filter they were reading. Read once on mount:
-  // React stays the source of truth, the URL is a mirror (see the effect
-  // below), which keeps chip clicks instant instead of round-tripping to the
-  // server for a filter that is entirely client-side.
-  const params = useSearchParams();
-  const [query, setQuery] = useState(() => params.get("q") ?? "");
-  const [role, setRole] = useState<string | null>(() => {
-    const p = params.get("pos");
-    return p && ROLE_KEYS.includes(p) ? p : null;
-  });
-  const [sort, setSort] = useState<PoolSortEx>(() => {
-    const s = params.get("sort");
-    // A shared ?sort=inhouse link degrades to mmr when the ladder is empty —
-    // the existing invalid-value pattern; the mirror effect then rewrites the
-    // URL, which is the established behavior.
-    if (s === "inhouse") return anyInhouse ? "inhouse" : "mmr";
-    return s && SORTS.includes(s as PoolSort) ? (s as PoolSort) : "mmr";
-  });
-  // A stale ?cap=1 link after the draft starts must not filter invisibly:
-  // the chip that would show (and clear) it is gone by then.
-  const [captainOnly, setCaptainOnly] = useState(
-    () => captainSelectionOpen && params.get("cap") === "1",
+  const facts = useMemo(
+    () =>
+      new Map(
+        players.map((p) => [
+          p.userId,
+          poolRowFacts(p, scoutMap[p.userId], standinSet, now),
+        ]),
+      ),
+    [players, scoutMap, standinSet, now],
   );
-  const [status, setStatus] = useState<PoolStatusFilter>(() => {
-    const s = params.get("status");
-    // A shared ?status=standin link degrades like ?sort=inhouse when there is
-    // nobody to show, rather than filtering to an empty list with no chip;
-    // ?status=player likewise, since without standins its chip is hidden.
-    if (s === "standin" || s === "player") return anyStandin ? s : "all";
-    return s === "drafted" || s === "free" ? s : "all";
-  });
+  // Data-presence gates (never season phase): a control renders only where
+  // it does something, and a column only where someone has data for it.
+  const anyDrafted = players.some((p) => p.drafted);
+  const gates: PoolFilterGates = {
+    captainSelectionOpen,
+    draftStatus: showDraftStatus && anyDrafted,
+    anyStandin: players.some((p) => standinSet.has(p.userId)),
+    anyInhouse: players.some((p) => facts.get(p.userId)?.inhouse),
+    anyReturning: players.some((p) => facts.get(p.userId)?.returning),
+    anyInactive: players.some((p) => facts.get(p.userId)?.inactive),
+    showContact,
+  };
+  const columns = {
+    inhouse: gates.anyInhouse,
+    pubs: players.some((p) => !!scoutMap[p.userId]?.pub?.scout),
+    favorites: players.some((p) => hasText(p.favoriteHeroes)),
+  };
 
-  // Mirror the filters into the address bar. `history.replaceState` rather than
-  // router.replace: this is a purely client-side filter, and a router call
-  // would re-run the page's four Prisma queries on every chip tap. Debounced
-  // because browsers rate-limit replaceState (Safari: 100 per 30s) and the
-  // search box would otherwise fire once per keystroke. Defaults are omitted
-  // so an unfiltered pool has a clean /players URL.
+  // Seeded from the URL once, on mount, so a captain can SEND someone "the
+  // pos-4 and pos-5 free agents under 3,300" and a reload, or a trip to a
+  // profile and back, keeps what they were reading. React is the source of
+  // truth; the URL is a mirror (the effect below).
+  const params = useSearchParams();
+  const [seed] = useState(() => readPoolParams(params, gates));
+  const [filter, setFilter] = useState<PoolPageFilter>(seed.filter);
+  const [sort, setSort] = useState<PoolPageSort>(seed.sort);
+  const [details, setDetails] = usePersistedFlag("playerPoolDetails", false);
+  const [scoutFull, setScoutFull] = usePersistedFlag(
+    "playerPoolScoutFull",
+    false,
+  );
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [panelOpen, setPanelOpen] = useState(false);
+  const update = (patch: Partial<PoolPageFilter>) =>
+    setFilter((f) => ({ ...f, ...patch }));
+
+  // Mirror the filters into the address bar. `history.replaceState`, never
+  // router.replace: the filter is client-side, and a router call would re-run
+  // the page's queries per tap. Debounced because browsers rate-limit
+  // replaceState (Safari: 100 per 30s) and the search box fires per
+  // keystroke; a click through to a profile flushes it first.
   useEffect(() => {
     const syncFilters = () => {
-      const sp = new URLSearchParams();
-      if (query) sp.set("q", query);
-      if (role) sp.set("pos", role);
-      if (sort !== "mmr") sp.set("sort", sort);
-      if (captainOnly) sp.set("cap", "1");
-      if (status !== "all") sp.set("status", status);
-      const qs = sp.toString();
+      const qs = poolParamsQuery(filter, sort);
       const next =
         (qs ? `${window.location.pathname}?${qs}` : window.location.pathname) +
         window.location.hash;
@@ -190,117 +222,329 @@ export function PlayerPool({
       clearTimeout(t);
       window.removeEventListener(SAVE_LIST_CONTEXT_EVENT, syncFilters);
     };
-  }, [query, role, sort, captainOnly, status]);
+  }, [filter, sort]);
 
-  // The draft-status filter only makes sense once someone's been drafted
-  // (post-draft phases) — during SIGNUPS/an empty DRAFT the pool is all free.
-  const anyDrafted = useMemo(() => players.some((p) => p.drafted), [players]);
-
-  const filtered = useMemo(() => {
-    // "inhouse" is a pool-only re-sort layered on the shared lib: filter with
-    // the neutral mmr order, then band by inhouse record (ranked > provisional
-    // > no games; the stable sort keeps the MMR order inside the tail band).
-    const base = filterPoolRows(
-      players,
-      {
-        query,
-        role,
-        sort: sort === "inhouse" ? "mmr" : sort,
-        captainOnly,
-        status,
-      },
-      standinSet,
-    );
-    return sort === "inhouse" ? sortByInhouseRecord(base, scout ?? {}) : base;
-  }, [players, query, role, sort, captainOnly, status, scout, standinSet]);
-  const filtersActive =
-    query !== "" || role !== null || captainOnly || status !== "all";
-  // Sort is deliberately NOT reset: it's an ordering preference, not a filter,
-  // and `filtersActive` doesn't count it either.
-  const resetFilters = () => {
-    setQuery("");
-    setRole(null);
-    setCaptainOnly(false);
-    setStatus("all");
+  const heroes = useMemo(
+    () => heroesForPlayerSearch(filter.query),
+    [filter.query],
+  );
+  const heroIds = useMemo(() => new Set(heroes.map((h) => h.id)), [heroes]);
+  const shown = useMemo(
+    () =>
+      sortPoolPage(filterPoolPage(players, facts, filter, heroIds), sort, {
+        scout: scoutMap,
+        signedUpAt: signups,
+      }),
+    [players, facts, filter, heroIds, sort, scoutMap, signups],
+  );
+  const counts = useMemo(
+    () => poolFacetCounts(players, facts, filter, heroIds),
+    [players, facts, filter, heroIds],
+  );
+  const filtersActive = poolFilterActive(filter);
+  // Sort is an ordering preference, not a filter: Clear keeps it.
+  const resetFilters = () => setFilter(EMPTY_POOL_FILTER);
+  const panelCount = poolPanelFilterCount(filter);
+  const toggleRow = (userId: string) => {
+    const next = openId === userId ? null : userId;
+    setOpenId(next);
+    if (next) {
+      // Bring the opened card into view when it lands below the fold.
+      requestAnimationFrame(() =>
+        document.getElementById(cardIdFor(next))?.scrollIntoView({
+          block: "nearest",
+          behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+            .matches
+            ? "auto"
+            : "smooth",
+        }),
+      );
+    }
   };
+  const titleId = useId();
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="relative min-w-[9rem] flex-1">
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search players…"
-            className="h-11 w-full rounded-lg border border-line bg-surface-2/50 pl-3 pr-8 text-sm outline-none focus:border-accent/60 sm:h-9"
+    <div className="grid grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_19rem] xl:grid-rows-[auto_auto_1fr] xl:gap-x-6">
+      <Toolbar
+        filter={filter}
+        update={update}
+        heroes={heroes.map((h) => h.name)}
+        counts={counts}
+        gates={gates}
+        panelOpen={panelOpen}
+        onPanelToggle={() => setPanelOpen((v) => !v)}
+        panelCount={panelCount}
+      />
+
+      <FilterPanel
+        open={panelOpen}
+        filter={filter}
+        update={update}
+        counts={counts}
+        gates={gates}
+        shownAvgMmr={averageMmr(shown)}
+      />
+
+      {/* The list's name and count, the one "Clear filters" (when the list
+          isn't empty: the empty state carries it then), row density and the
+          sort, on one line at every width. */}
+      <div className="flex min-w-0 items-center justify-between gap-3 xl:col-start-1 xl:row-start-2">
+        <div className="min-w-0 sm:flex sm:flex-wrap sm:items-baseline sm:gap-x-3">
+          <h2 id={titleId} className="text-sm font-semibold text-fg">
+            {listTitle}
+          </h2>
+          <div className="flex flex-wrap items-baseline gap-x-2.5">
+            {/* aria-live: filtering is a keyboard action whose only feedback
+                is this line changing. */}
+            <p aria-live="polite" className="text-xs text-muted">
+              Showing{" "}
+              <span className="font-medium tabular-nums text-fg">
+                {shown.length}
+              </span>{" "}
+              of {players.length} players
+            </p>
+            {filtersActive && shown.length > 0 ? (
+              <button
+                type="button"
+                onClick={resetFilters}
+                className={textLink("text-xs")}
+              >
+                Clear filters
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          {/* Density, not a filter: one line a player, or their scouting
+              line and own words under each row. Not in the URL or "Clear
+              filters"; it is the reader's own, kept on their device. */}
+          <button
+            type="button"
+            onClick={() => setDetails(!details)}
+            aria-pressed={details}
+            aria-label="Scouting details"
+            title="Show each player's scouting line and own words under their row"
+            className={cn(
+              CHIP_BASE,
+              "inline-flex h-10 w-10 items-center justify-center gap-1.5 sm:h-8 sm:w-auto sm:px-2.5",
+              details ? CHIP_ON : CHIP_OFF,
+            )}
+          >
+            <DetailsIcon />
+            <span className="hidden sm:inline">Scouting details</span>
+          </button>
+          <select
+            value={sort}
+            onChange={(e) => setSort(e.target.value as PoolPageSort)}
+            aria-label="Sort players"
+            className="h-10 rounded-lg border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-8"
+          >
+            <option value="mmr">Sort: MMR</option>
+            {gates.anyInhouse ? <option value="inhouse">Sort: Inhouse</option> : null}
+            {/* "Medal", not "Rank": the Inhouse column shows ladder ranks
+                (#1), and this sorts by Dota medal. The value stays "rank" so
+                shared ?sort=rank links keep working. */}
+            <option value="rank">Sort: Medal</option>
+            <option value="name">Sort: Name</option>
+            <option value="newest">Sort: Newest</option>
+          </select>
+        </div>
+      </div>
+
+      <div className="min-w-0 xl:col-start-1 xl:row-start-3">
+        {shown.length === 0 ? (
+          <EmptyState
+            title="No players match"
+            description="Try clearing the search or a filter."
+            action={
+              <button
+                type="button"
+                onClick={resetFilters}
+                className={buttonClasses("secondary", "sm")}
+              >
+                Clear filters
+              </button>
+            }
           />
-          {query ? (
+        ) : (
+          <div
+            className="overflow-hidden rounded-[var(--radius)] border border-line bg-surface/80"
+            style={{ "--pool-columns": poolColumns(columns) } as CSSProperties}
+          >
+            {/* The column header exists from lg, where rows are columns;
+                below it each row is two lines with nothing to label. */}
+            <div
+              aria-hidden
+              className={cn(
+                ROW_GRID,
+                "hidden border-b border-line bg-surface-2/40 py-2 text-[11px] font-medium uppercase tracking-wide text-muted lg:grid",
+              )}
+            >
+              <span />
+              <span>Player</span>
+              <span className="text-right">MMR</span>
+              <span>Roles</span>
+              {columns.inhouse ? <span className="text-right">Inhouse</span> : null}
+              {columns.pubs ? <span className="lg:pl-2">Pubs</span> : null}
+              {columns.favorites ? <span>Favorites</span> : null}
+              <span className="text-right">Status</span>
+              <span />
+            </div>
+            <ul aria-labelledby={titleId} className="divide-y divide-line/60">
+              {shown.map((p) => (
+                <PoolRow
+                  key={p.userId}
+                  player={p}
+                  scout={scoutMap[p.userId]}
+                  facts={facts.get(p.userId)!}
+                  columns={columns}
+                  open={openId === p.userId}
+                  onToggle={toggleRow}
+                  details={details}
+                  now={now}
+                  query={filter.query}
+                  heroes={heroes}
+                  captainSelectionOpen={captainSelectionOpen}
+                  showDraftStatus={showDraftStatus}
+                  draft={draftInfo?.[p.userId]}
+                  showContact={showContact}
+                  scoutFull={scoutFull}
+                  onScoutFullChange={setScoutFull}
+                />
+              ))}
+            </ul>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const cardIdFor = (userId: string) => `pool-scout-${userId}`;
+
+// --- Toolbar ---------------------------------------------------------------------
+
+function Toolbar({
+  filter,
+  update,
+  heroes,
+  counts,
+  gates,
+  panelOpen,
+  onPanelToggle,
+  panelCount,
+}: {
+  filter: PoolPageFilter;
+  update: (patch: Partial<PoolPageFilter>) => void;
+  heroes: string[];
+  counts: PoolFacetCounts;
+  gates: PoolFilterGates;
+  panelOpen: boolean;
+  onPanelToggle: () => void;
+  panelCount: number;
+}) {
+  const toggleRole = (key: string) =>
+    update({
+      roles: filter.roles.includes(key)
+        ? filter.roles.filter((r) => r !== key)
+        : [...filter.roles, key],
+    });
+  const statusChip = (value: PoolPageFilter["status"], label: string, n: number) => (
+    <Chip
+      active={filter.status === value}
+      onClick={() => update({ status: filter.status === value ? "all" : value })}
+      count={n}
+    >
+      {label}
+    </Chip>
+  );
+  const anyStatus = gates.anyStandin || gates.draftStatus || gates.captainSelectionOpen;
+  return (
+    <div className="min-w-0 space-y-2 xl:col-start-1 xl:row-start-1">
+      <div className="flex items-center gap-2">
+        <div className="relative min-w-0 flex-1">
+          <input
+            type="search"
+            value={filter.query}
+            onChange={(e) => update({ query: e.target.value })}
+            placeholder="Search players or heroes…"
+            aria-label="Search players or heroes"
+            className="h-11 w-full rounded-lg border border-line bg-surface-2/50 pl-3 pr-10 text-sm outline-none focus:border-accent/60 sm:h-9 [&::-webkit-search-cancel-button]:hidden"
+          />
+          {filter.query ? (
             <button
               type="button"
-              onClick={() => setQuery("")}
+              onClick={() => update({ query: "" })}
               aria-label="Clear search"
-              className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg"
+              className="absolute right-1 top-1/2 grid h-9 w-9 -translate-y-1/2 place-items-center rounded-full text-muted transition-colors hover:bg-surface-2 hover:text-fg sm:h-8 sm:w-8"
             >
               ✕
             </button>
           ) : null}
         </div>
+        {/* The sidebar holds these from xl; below it they fold out here. */}
+        <button
+          type="button"
+          onClick={onPanelToggle}
+          aria-expanded={panelOpen}
+          aria-controls={PANEL_ID}
+          className={cn(
+            CHIP_BASE,
+            "inline-flex h-11 shrink-0 items-center gap-1.5 px-3 sm:h-9 xl:hidden",
+            panelOpen || panelCount > 0 ? CHIP_ON : CHIP_OFF,
+          )}
+        >
+          <FilterIcon />
+          Filters
+          {panelCount > 0 ? (
+            <span className="rounded-full bg-accent/25 px-1.5 text-xs tabular-nums">
+              {panelCount}
+              <span className="sr-only"> on</span>
+            </span>
+          ) : null}
+        </button>
+      </div>
+      {heroes.length > 0 ? (
+        <p className="text-xs text-muted">
+          Also finding players of{" "}
+          <span className="text-fg">{heroes.join(", ")}</span>: a favorite, or
+          in their pubs.
+        </p>
+      ) : null}
 
+      {/* gap-y-2: a wrapped row of chips stays 8px from the one above. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
         <div
           className="flex items-center gap-1"
           role="group"
           aria-label="Filter by role"
         >
-          <span
-            aria-hidden
-            className="mr-0.5 hidden text-xs font-medium uppercase tracking-wide text-muted sm:inline"
-          >
-            Role
-          </span>
-          <RoleChip
-            active={role === null}
+          <Chip
+            active={filter.roles.length === 0}
+            onClick={() => update({ roles: [] })}
             label="All roles"
-            onClick={() => setRole(null)}
+            square
           >
             All
-          </RoleChip>
+          </Chip>
           {DOTA_ROLES.map((r) => (
-            <RoleChip
+            <Chip
               key={r.key}
-              active={role === r.key}
-              title={r.label}
-              // A bare "1" is not a name. Text content beats `title` for the
-              // accessible name, so without this a screen reader announced
-              // "1, pressed" with nothing to say it meant Carry — and on touch
-              // the tooltip never appears at all.
+              active={filter.roles.includes(r.key)}
+              onClick={() => toggleRole(r.key)}
+              title={`${r.short} · ${r.label}`}
+              // A bare "1" is not a name: text content beats `title` for the
+              // accessible name, and touch never shows a tooltip.
               label={`Position ${r.key} — ${r.label}`}
-              onClick={() => setRole(role === r.key ? null : r.key)}
+              square
             >
               {r.key}
-            </RoleChip>
+            </Chip>
           ))}
         </div>
 
-        {captainSelectionOpen ? (
-          <button
-            type="button"
-            onClick={() => setCaptainOnly((v) => !v)}
-            aria-pressed={captainOnly}
-            className={cn(
-              CHIP_BASE,
-              "h-11 px-3 sm:h-9",
-              captainOnly ? CHIP_ON : CHIP_OFF,
-            )}
-          >
-            Wants captain
-          </button>
-        ) : null}
-
-        {(showDraftStatus && anyDrafted) || anyStandin ? (
-          // flex-wrap: with standins and a draft both present this group is
-          // four chips, 350px. That fits a 390px phone's 358px row; a 360px
-          // phone's is 328px, so the last chip wraps instead of scrolling the
-          // page. gap-y-2 keeps a wrapped row the toolbar's 8px away.
+        {anyStatus ? (
+          // flex-wrap: four chips with counts don't fit a 360px phone's row.
           <div
             className="flex flex-wrap items-center gap-x-1 gap-y-2"
             role="group"
@@ -309,481 +553,852 @@ export function PlayerPool({
             {/* Players and Standins split the pool by registration type, so
                 both exist only while there are standins to split off. Players
                 leads: Drafted and Free agents are kinds of player. */}
-            {anyStandin ? (
-              <StatusChip
-                active={status === "player"}
-                onClick={() =>
-                  setStatus((s) => (s === "player" ? "all" : "player"))
-                }
-              >
-                Players
-              </StatusChip>
-            ) : null}
-            {showDraftStatus && anyDrafted ? (
+            {gates.anyStandin ? statusChip("player", "Players", counts.status.player) : null}
+            {gates.draftStatus ? (
               <>
-                <StatusChip
-                  active={status === "drafted"}
-                  onClick={() =>
-                    setStatus((s) => (s === "drafted" ? "all" : "drafted"))
-                  }
-                >
-                  Drafted
-                </StatusChip>
-                <StatusChip
-                  active={status === "free"}
-                  onClick={() =>
-                    setStatus((s) => (s === "free" ? "all" : "free"))
-                  }
-                >
-                  Free agents
-                </StatusChip>
+                {statusChip("drafted", "Drafted", counts.status.drafted)}
+                {statusChip("free", "Free agents", counts.status.free)}
               </>
             ) : null}
-            {anyStandin ? (
-              <StatusChip
-                active={status === "standin"}
-                onClick={() =>
-                  setStatus((s) => (s === "standin" ? "all" : "standin"))
-                }
+            {gates.anyStandin ? statusChip("standin", "Standins", counts.status.standin) : null}
+            {gates.captainSelectionOpen ? (
+              <Chip
+                active={filter.captainOnly}
+                onClick={() => update({ captainOnly: !filter.captainOnly })}
+                count={counts.captain}
               >
-                Standins
-              </StatusChip>
+                Wants captain
+              </Chip>
             ) : null}
           </div>
         ) : null}
-
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value as PoolSortEx)}
-          className="h-11 rounded-lg border border-line bg-surface-2/50 px-2 text-sm outline-none focus:border-accent/60 focus-visible:ring-2 focus-visible:ring-accent/60 sm:h-9"
-          aria-label="Sort players"
-        >
-          <option value="mmr">Sort: MMR</option>
-          {anyInhouse ? <option value="inhouse">Sort: Inhouse</option> : null}
-          {/* "Medal", not "Rank": the Inhouse column beside it shows ladder
-              ranks (#1), and this sorts by Dota medal. The value stays "rank"
-              so shared ?sort=rank links keep working. */}
-          <option value="rank">Sort: Medal</option>
-          <option value="name">Sort: Name</option>
-        </select>
-
-        {/* Density, not a filter: one line per player, or the scouting line
-            and their own words under each name. Not in the URL or "Clear
-            filters"; it is the reader's preference. */}
-        <button
-          type="button"
-          onClick={() => setDetails(!details)}
-          aria-pressed={details}
-          className={cn(
-            CHIP_BASE,
-            "h-11 px-3 sm:h-9 lg:ml-auto",
-            details ? CHIP_ON : CHIP_OFF,
-          )}
-        >
-          Scouting details
-        </button>
       </div>
-
-      {/* aria-live: filtering is a keyboard action whose only feedback used to
-          be this line silently changing. */}
-      <div
-        aria-live="polite"
-        className="flex items-center gap-2 text-xs text-muted"
-      >
-        <span>
-          Showing <span className="font-medium text-fg">{filtered.length}</span>{" "}
-          of {players.length} players
-        </span>
-        {/* Exactly ONE "Clear filters" exists at a time. When the filters match
-            nothing the EmptyState below carries it, where the reader is already
-            looking; this line yields rather than offering a second control with
-            the same name two inches above it. */}
-        {filtersActive && filtered.length > 0 ? (
-          <button type="button" onClick={resetFilters} className={textLink()}>
-            Clear filters
-          </button>
-        ) : null}
-      </div>
-
-      {filtered.length === 0 ? (
-        <EmptyState
-          title="No players match"
-          description="Try clearing the search or role filters."
-          action={
-            <button
-              type="button"
-              onClick={resetFilters}
-              className={buttonClasses("secondary", "sm")}
-            >
-              Clear filters
-            </button>
-          }
-        />
-      ) : (
-        <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-surface/80">
-          {/* The column header is what turns this from a list into a table.
-              It only exists from md up, because below that each row stacks and
-              there are no columns to label. */}
-          <div
-            aria-hidden
-            className={cn(
-              grid,
-              "hidden border-b border-line bg-surface-2/40 px-4 py-2 text-[11px] font-medium uppercase tracking-wide text-muted md:grid",
-            )}
-          >
-            <span />
-            <span>Player</span>
-            <span className="text-right">MMR</span>
-            {anyInhouse ? (
-              <span className="hidden text-right lg:block">Inhouse</span>
-            ) : null}
-            <span>Roles</span>
-            <span className="hidden xl:block">Favorite heroes</span>
-            <span className="text-right">Status</span>
-          </div>
-          <ul className="divide-y divide-line/60">
-            {filtered.map((p) => {
-              const sc = scout?.[p.userId];
-              const ih = sc?.inhouse;
-              const pub = sc?.pub;
-              // Measured when the snapshot was taken, and only while it is
-              // recent: an old snapshot says nothing about last week.
-              const activity = pub ? pubLastPlayed(pub, nowMs) : null;
-              // One quote line per row: what they wrote about themselves.
-              // Signups made before the form had one "About you" box keep a
-              // captain note and goals; both show, joined, never one dropped.
-              const about = aboutText(
-                { captainNote: p.captainNote, statement: sc?.statement },
-                " · ",
-              );
-              const quote = about
-                ? { text: about, label: "About this player" }
-                : null;
-              return (
-                <li
-                  key={p.userId}
-                  className={cn(
-                    grid,
-                    "grid items-center px-4 transition-colors hover:bg-surface-2/40",
-                    details ? "py-3" : "py-2",
-                  )}
-                >
-                  {/* 1 — avatar */}
-                  <PlayerLink userId={p.userId} className="shrink-0">
-                    <Avatar name={p.name} src={p.avatar} size={34} />
-                  </PlayerLink>
-
-                  {/* 2 — name, contact, note */}
-                  <span className="min-w-0">
-                    <PlayerLink
-                      userId={p.userId}
-                      className="block truncate text-sm font-medium"
-                    >
-                      {p.name}
-                    </PlayerLink>
-                    {/* mt-2, not mt-0.5: the name and the Dotabuff link are two
-                      separate destinations stacked in one cell, and once both
-                      carry TAP_SAFE their hit boxes were overlapping by 6px —
-                      a band where a tap landed on whichever painted last. A
-                      target that is big enough but ambiguous is worse than a
-                      small one; hit boxes may touch, never overlap.
-                      gap-y-2, not gap-y-1: the scouting tokens make wraps
-                      routine, and two TAP_SAFE targets on wrapped lines 4px
-                      apart overlap by ~4px (each grows 4px toward the other).
-                      8px of real spacing is the stacked-TAP_SAFE floor. */}
-                    {details ? (
-                      <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-2 text-xs text-muted">
-                        {/* Facts before actions: the scouting tokens lead, the
-                          outbound links follow. Plain text — no new tap targets
-                          on a line already carrying two. The league's own
-                          history goes first: for a returning player it is the
-                          most direct evidence a captain has. */}
-                        {sc?.lastSeason ? (
-                          // Free text (season and team names), so it may break
-                          // anywhere rather than widen a phone row.
-                          <span
-                            className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
-                            title={lastSeasonTitle(sc.lastSeason)}
-                          >
-                            {lastSeasonToken(sc.lastSeason)}
-                          </span>
-                        ) : null}
-                        {ih ? (
-                          <span
-                            className="tabular-nums lg:hidden"
-                            title={inhouseTitle(ih)}
-                          >
-                            {inhouseToken(ih)}
-                          </span>
-                        ) : null}
-                        {pub && pubHasWindow(pub) ? (
-                          <span
-                            className="tabular-nums"
-                            title={pubTitle(pub, nowMs)}
-                          >
-                            {pubToken(pub, nowMs)}
-                          </span>
-                        ) : null}
-                        {pub?.scout ? (
-                          <PubScoutLine
-                            parts={scoutingRowParts(pub.scout, {
-                              roles: p.roles,
-                              signupMmr: p.mmr,
-                              rankTier: p.rankTier,
-                              league: LEAGUE_CONFIG.region,
-                            })}
-                            title={scoutingTitle(pub.scout, {
-                              roles: p.roles,
-                              signupMmr: p.mmr,
-                              rankTier: p.rankTier,
-                              league: LEAGUE_CONFIG.region,
-                            })}
-                          />
-                        ) : null}
-                        {/* What they play now beats what they played years
-                            ago: their last 100 games' heroes once the
-                            snapshot has them, else the all-time list. */}
-                        {pub?.scout && pub.scout.heroes.length > 0 ? (
-                          <PubHeroStrip
-                            label="Recent pubs"
-                            heroes={pub.scout.heroes.slice(0, 3)}
-                            titleOf={(h) => recentHeroTitle(h, pub.scout!.games)}
-                          />
-                        ) : pub && pub.topHeroes.length > 0 ? (
-                          <PubHeroStrip
-                            label="Most played (pubs)"
-                            heroes={pub.topHeroes}
-                            titleOf={pubHeroTitle}
-                          />
-                        ) : null}
-                        {activity?.quiet ? (
-                          <span title={PUB_QUIET_TITLE}>
-                            {pubQuietToken(activity)}
-                          </span>
-                        ) : null}
-                        {p.accountId ? (
-                          <a
-                            href={`https://www.dotabuff.com/players/${p.accountId}`}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={textLink()}
-                          >
-                            Dotabuff <LinkArrow out />
-                          </a>
-                        ) : null}
-                        <DiscordTag
-                          name={p.discordName}
-                          verified={p.discordVerified}
-                        />
-                        {showContact && !p.discordName ? (
-                          /* The absence IS the information on draft night: this
-                           player can't be reached where the league lives. Only
-                           for authorized league viewers — hidden handles must
-                           never be presented as missing data. */
-                          <span className="text-muted" title={NO_DISCORD_TITLE}>
-                            no Discord
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : null}
-                    {details && quote ? (
-                      <span
-                        className="mt-1 block truncate text-xs italic text-muted"
-                        title={quote.label}
-                      >
-                        &ldquo;{quote.text}&rdquo;
-                      </span>
-                    ) : null}
-                  </span>
-
-                  {/* 3 — MMR + medal. The default sort key, so it gets the
-                    tabular figure treatment and its own right-aligned column
-                    rather than being one wrapping fragment among six. Stays on
-                    the name's row at every width — it is the one number a
-                    scanning captain wants beside the name. */}
-                  <span className="flex items-center justify-end gap-1.5">
-                    <RankBadge rankTier={p.rankTier} />
-                    {p.mmr > 0 ? (
-                      <span className="text-sm font-semibold tabular-nums text-fg">
-                        {p.mmr}
-                      </span>
-                    ) : (
-                      <span
-                        className="text-sm text-muted"
-                        title="No MMR on this signup"
-                      >
-                        —
-                      </span>
-                    )}
-                  </span>
-
-                  {/* 3b — inhouse record, lg+ only (below lg it rides the meta
-                    line above). Claimed MMR beside the observed rating is the
-                    exact comparison a bidding captain makes. Renders only when
-                    the league has ANY inhouse data (the column exists then);
-                    a player without games gets an empty cell, never a dash.
-                    Not a link — zero tap-target obligations. */}
-                  {anyInhouse ? (
-                    <span
-                      className="hidden lg:flex lg:flex-col lg:items-end"
-                      title={ih ? inhouseTitle(ih) : undefined}
-                    >
-                      {ih ? (
-                        <>
-                          <span
-                            className={cn(
-                              "text-sm font-semibold tabular-nums",
-                              // The rankInhouse rule: provisionals are dimmed and
-                              // never ranked.
-                              ih.rank == null && "text-muted",
-                            )}
-                          >
-                            {ih.rating}
-                            {ih.rank != null ? (
-                              <span className="ml-1 text-xs font-normal text-muted">
-                                #{ih.rank}
-                              </span>
-                            ) : null}
-                          </span>
-                          <span className="text-xs tabular-nums text-muted">
-                            {ih.wins}–{ih.losses}
-                            {ih.rank == null ? ` · ${ih.games}g` : ""}
-                          </span>
-                        </>
-                      ) : null}
-                    </span>
-                  ) : null}
-
-                  {/* 4 — roles, and (below md) the favorite-heroes strip riding
-                    along with them: both answer "what does this player play",
-                    and packing them onto one phone row is what keeps a row to
-                    three lines. The strip is labeled here because on a phone
-                    there is no column header, and the meta line above carries
-                    a second (pub most-played) strip. */}
-                  <span
-                    className={cn(CELL, "flex flex-wrap items-center gap-2")}
-                  >
-                    <RoleBadges roles={p.roles} />
-                    {hasText(p.favoriteHeroes) ? (
-                      <span className="flex items-center gap-1.5 md:hidden">
-                        <span className="text-xs text-muted">
-                          Favorite heroes
-                        </span>
-                        <HeroList value={p.favoriteHeroes} size={22} max={6} />
-                      </span>
-                    ) : null}
-                  </span>
-
-                  {/* 5 — status: standin, captain, team or free agent, plus
-                    captain interest while captains are being chosen. DOM order
-                    puts this BEFORE heroes so md gets its five tracks in the
-                    right order; `xl:order` swaps the two back for the wide
-                    layout, where heroes want the column to the LEFT of status.
-                    It spans both phone tracks rather than sitting in track 3 —
-                    an `auto` track sized by a "Techies Anonymous $4" chip stole
-                    ~170px back off the name column on the row above. */}
-                  <span
-                    className={cn(
-                      CELL,
-                      "flex flex-wrap items-center gap-1.5 justify-end md:justify-end xl:order-2",
-                    )}
-                  >
-                    {/* Only volunteers still waiting on the call: a designated
-                      captain reads "Captain" instead, and after the auction
-                      starts the volunteers who weren't picked stop carrying
-                      a signup-week badge for the rest of the season. */}
-                    {captainSelectionOpen &&
-                    p.wantsCaptain &&
-                    !draftInfo?.[p.userId]?.captain ? (
-                      <Badge tone="accent">Wants captain</Badge>
-                    ) : null}
-                    {draftInfo?.[p.userId]?.captain ? (
-                      <Badge tone="accent">Captain</Badge>
-                    ) : null}
-                    {standinSet.has(p.userId) ? (
-                      // Before the draft-status branch: a standin is never
-                      // rostered, and "Free agent" would say they can be signed.
-                      <Badge>Standin</Badge>
-                    ) : p.drafted ? (
-                      draftInfo?.[p.userId] ? (
-                        <TeamChip info={draftInfo[p.userId]} />
-                      ) : (
-                        <Badge tone="success">Drafted</Badge>
-                      )
-                    ) : showDraftStatus ? (
-                      <Badge tone="accent">Free agent</Badge>
-                    ) : null}
-                  </span>
-
-                  {/* 6 — favorite heroes in their own column, xl only: between
-                    md and xl there is no track to spare, and above they ride
-                    with the roles. */}
-                  <span className={cn(CELL, "hidden xl:order-1 xl:block")}>
-                    <HeroList value={p.favoriteHeroes} size={22} max={4} />
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      )}
     </div>
   );
 }
 
+// --- Filter panel (the sidebar from xl) ---------------------------------------
+
+function FilterPanel({
+  open,
+  filter,
+  update,
+  counts,
+  gates,
+  shownAvgMmr,
+}: {
+  open: boolean;
+  filter: PoolPageFilter;
+  update: (patch: Partial<PoolPageFilter>) => void;
+  counts: PoolFacetCounts;
+  gates: PoolFilterGates;
+  shownAvgMmr: number;
+}) {
+  const anyPlayerFilter =
+    gates.anyReturning || gates.anyInhouse || gates.showContact || gates.anyInactive;
+  const roleMax = Math.max(1, ...Object.values(counts.roles));
+  return (
+    <aside
+      id={PANEL_ID}
+      aria-label="More filters"
+      className={cn(
+        open ? "block" : "hidden",
+        // From xl: the sidebar, beside the toolbar and the whole list, held
+        // under the header while the list scrolls. Its own scroll only if a
+        // short window can't hold it.
+        "min-w-0 xl:sticky xl:top-20 xl:col-start-2 xl:row-span-3 xl:row-start-1 xl:block xl:max-h-[calc(100dvh-6rem)] xl:self-start xl:overflow-y-auto",
+      )}
+    >
+      {/* Its sections are h3s; this keeps the outline h1 → h2 → h3. */}
+      <h2 className="sr-only">More filters</h2>
+      <div className="rounded-[var(--radius)] border border-line bg-surface/80 md:grid md:grid-cols-2 xl:block">
+        <PanelSection
+          title="MMR"
+          aside={shownAvgMmr > 0 ? `list average ${MMR_FORMAT.format(shownAvgMmr)}` : undefined}
+        >
+          <MmrFilter
+            range={filter.mmr}
+            onChange={(mmr) => update({ mmr })}
+            bandCounts={counts.mmrBands}
+          />
+        </PanelSection>
+
+        {anyPlayerFilter ? (
+          <PanelSection title="Players">
+            <div className="flex flex-wrap gap-x-1 gap-y-2">
+              {gates.anyReturning ? (
+                <>
+                  <Chip
+                    active={filter.history === "returning"}
+                    onClick={() =>
+                      update({
+                        history: filter.history === "returning" ? "any" : "returning",
+                      })
+                    }
+                    title="Played on a league team in an earlier season"
+                    count={counts.history.returning}
+                  >
+                    Returning
+                  </Chip>
+                  <Chip
+                    active={filter.history === "new"}
+                    onClick={() =>
+                      update({ history: filter.history === "new" ? "any" : "new" })
+                    }
+                    title="Hasn't played on a league team in an earlier season"
+                    count={counts.history.new}
+                  >
+                    New to the league
+                  </Chip>
+                </>
+              ) : null}
+              {gates.anyInhouse ? (
+                <Chip
+                  active={filter.inhouseOnly}
+                  onClick={() => update({ inhouseOnly: !filter.inhouseOnly })}
+                  title="Has games on the inhouse ladder"
+                  count={counts.inhouse}
+                >
+                  Plays inhouses
+                </Chip>
+              ) : null}
+              {gates.showContact ? (
+                <Chip
+                  active={filter.discordOnly}
+                  onClick={() => update({ discordOnly: !filter.discordOnly })}
+                  title="Has a Discord handle on file, so a captain can reach them"
+                  count={counts.discord}
+                >
+                  On Discord
+                </Chip>
+              ) : null}
+              {gates.anyInactive ? (
+                <Chip
+                  active={filter.hideInactive}
+                  onClick={() => update({ hideInactive: !filter.hideInactive })}
+                  title="Hides players with no pub game OpenDota has seen in over two months. Players it can't see stay listed."
+                  count={counts.inactive}
+                >
+                  Hide inactive
+                </Chip>
+              ) : null}
+            </div>
+          </PanelSection>
+        ) : null}
+
+        {/* The shape of what is listed, beside the list: how many of the
+            players matching everything else play each position. Read-only;
+            the position chips filter. Wide screens only, where it has room. */}
+        <PanelSection title="Positions" className="hidden xl:block">
+          <div className="space-y-1.5">
+            {DOTA_ROLES.map((r) => (
+              <div key={r.key} className="flex items-center gap-2 text-xs">
+                <span className="w-[6.5rem] shrink-0 truncate text-muted">
+                  {r.short} · {r.label}
+                </span>
+                <span
+                  aria-hidden
+                  className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-surface-2"
+                >
+                  <span
+                    className="block h-full rounded-full bg-accent/60"
+                    style={{ width: `${(counts.roles[r.key] / roleMax) * 100}%` }}
+                  />
+                </span>
+                <span className="w-6 shrink-0 text-right tabular-nums text-fg">
+                  {counts.roles[r.key]}
+                </span>
+              </div>
+            ))}
+          </div>
+        </PanelSection>
+      </div>
+    </aside>
+  );
+}
+
+const MMR_FORMAT = new Intl.NumberFormat("en-US");
+
+function PanelSection({
+  title,
+  aside,
+  className,
+  children,
+}: {
+  title: string;
+  aside?: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section
+      className={cn(
+        // Stacked in the sidebar and on a phone; side by side on a tablet,
+        // where the second section takes a rule on its left instead.
+        "min-w-0 border-line-soft p-3 [&:not(:first-child)]:border-t md:[&:nth-child(2)]:border-l md:[&:nth-child(2)]:border-t-0 xl:[&:nth-child(2)]:border-l-0 xl:[&:nth-child(2)]:border-t",
+        className,
+      )}
+    >
+      <h3 className="mb-2 flex items-baseline justify-between gap-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        {title}
+        {aside ? (
+          <span className="font-normal normal-case tracking-normal">{aside}</span>
+        ) : null}
+      </h3>
+      {children}
+    </section>
+  );
+}
+
+/** Two boxes for any range, and the histogram's bands for the usual ones. */
+function MmrFilter({
+  range,
+  onChange,
+  bandCounts,
+}: {
+  range: MmrRange;
+  onChange: (range: MmrRange) => void;
+  bandCounts: number[];
+}) {
+  // The boxes keep what was typed ("30" on the way to "3000"); the filter
+  // reads the parsed number. A band click or Clear rewrites both.
+  const [text, setText] = useState(() => ({
+    min: range.min?.toString() ?? "",
+    max: range.max?.toString() ?? "",
+  }));
+  const parsedText = { min: parseMmrInput(text.min), max: parseMmrInput(text.max) };
+  if (parsedText.min !== range.min || parsedText.max !== range.max) {
+    // The range moved without a keystroke (a band, Clear filters): show it.
+    // Setting state during render is React's pattern for "derive from a
+    // prop that changed".
+    setText({ min: range.min?.toString() ?? "", max: range.max?.toString() ?? "" });
+  }
+  const type = (which: "min" | "max", value: string) => {
+    const next = { ...text, [which]: value };
+    setText(next);
+    onChange({ min: parseMmrInput(next.min), max: parseMmrInput(next.max) });
+  };
+  const current = normalizeMmrRange(range);
+  const maxCount = Math.max(1, ...bandCounts);
+  const label = mmrRangeLabel(range);
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <input
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={5}
+          value={text.min}
+          onChange={(e) => type("min", e.target.value)}
+          placeholder="Min"
+          aria-label="Minimum MMR"
+          className={MMR_BOX}
+        />
+        <span aria-hidden className="text-muted">
+          –
+        </span>
+        <input
+          inputMode="numeric"
+          pattern="[0-9]*"
+          maxLength={5}
+          value={text.max}
+          onChange={(e) => type("max", e.target.value)}
+          placeholder="Max"
+          aria-label="Maximum MMR"
+          className={MMR_BOX}
+        />
+        {label ? (
+          <button
+            type="button"
+            onClick={() => onChange({ min: null, max: null })}
+            className={textLink("shrink-0 text-xs")}
+          >
+            Any MMR
+          </button>
+        ) : null}
+      </div>
+      <div role="group" aria-label="MMR bands" className="space-y-1">
+        {POOL_MMR_BANDS.map((band, i) => {
+          const active = current.min === band.min && current.max === band.max;
+          const n = bandCounts[i] ?? 0;
+          return (
+            <button
+              key={band.label}
+              type="button"
+              aria-pressed={active}
+              aria-label={`${band.label} MMR, ${n} ${n === 1 ? "player" : "players"}`}
+              onClick={() =>
+                onChange(active ? { min: null, max: null } : { min: band.min, max: band.max })
+              }
+              className={cn(
+                "relative flex h-8 w-full items-center justify-between gap-2 overflow-hidden rounded-md border px-2 text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                active
+                  ? "border-accent/50 text-accent"
+                  : "border-transparent text-muted hover:border-line hover:text-fg",
+              )}
+            >
+              <span
+                aria-hidden
+                className={cn(
+                  "absolute inset-y-0 left-0 rounded-md",
+                  active ? "bg-accent/15" : "bg-surface-2/70",
+                )}
+                style={{ width: `${(n / maxCount) * 100}%` }}
+              />
+              <span className="relative">{band.label}</span>
+              <span className="relative tabular-nums text-fg">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+const MMR_BOX =
+  "h-11 w-full min-w-0 rounded-lg border border-line bg-surface-2/50 px-2.5 text-sm tabular-nums outline-none focus:border-accent/60 sm:h-9";
+
+// --- Rows ----------------------------------------------------------------------
+
 /**
- * The shared row template — the header and every row use the SAME computed
- * string, which is the whole point: two copies of these tracks would drift
- * within a week and the header would start lying about which column is which.
- * (A function now, not a const: the Inhouse column exists only when the league
- * has inhouse data, so the template takes that one flag. `rowGrid(false)` is
- * byte-identical to the pre-inhouse template — do NOT fork a second literal.)
- *
- * Below md there are no columns: the avatar keeps the left gutter and every
- * other cell stacks in the second track. That is not a nicety — at 390px the
- * old `justify-between` row gave its right-hand chips `shrink-0` and left the
- * name ~40px, so real players rendered as "P…", "R." and "Dir…".
- *
- * The Inhouse track appears at lg+ ONLY: md's five tracks have no rem budget —
- * a sixth at 768px drops the name to ~140px, recreating the truncation bug
- * class this grid exists to prevent. Below lg the record rides the meta line.
- * The two branches are mutually exclusive, so cn() never sees competing
- * lg:/xl: templates.
+ * The lg+ column tracks for the header and every row, one string set as a
+ * CSS variable on the list (Tailwind can't see a class built at runtime).
+ * Below lg there are no columns: the avatar keeps the gutter, the name and
+ * MMR share line one, and everything else rides line two
+ * (`ROW_GRID`). A column exists only when some player has data for it.
  */
-const rowGrid = (withInhouse: boolean) =>
-  "grid-cols-[2.25rem_minmax(0,1fr)_auto] gap-x-3 gap-y-1.5 " +
-  // The roles track is 7.5rem because that is EXACTLY what five position pills
-  // need (5 x 20px + 4 x 4px gap = 120px). At the 5.5rem it started as, 6 of
-  // the 30 real signups wrapped their pills onto a second line, which is the
-  // one thing a column is supposed to stop happening.
-  "md:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_11rem] " +
-  (withInhouse
-    ? "lg:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_7.5rem_11rem] " +
-      "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_5.5rem_7.5rem_9rem_11rem]"
-    : "xl:grid-cols-[2.25rem_minmax(0,1fr)_5.5rem_7.5rem_9rem_11rem]");
+function poolColumns(cols: { inhouse: boolean; pubs: boolean; favorites: boolean }) {
+  return [
+    "1.75rem", // avatar
+    "minmax(0,1fr)", // name
+    "4.25rem", // MMR + medal
+    "7.25rem", // roles: five pills, 5 x 20px + 4 x 4px
+    cols.inhouse ? "4rem" : null,
+    cols.pubs ? "5rem" : null, // "Support" + a medal, after an 8px gutter
+    cols.favorites ? "4.25rem" : null, // three 20px icons
+    "8rem", // status
+    "2rem", // the scouting toggle
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
 
-/** Cells 3+ share one placement rule: stacked under the name until md. */
-const CELL = "col-start-2 col-span-2 md:col-span-1 md:col-start-auto";
+/** The row grid at every width: phone tracks below lg (avatar, name, MMR,
+ *  toggle; line two spans the last three), the shared column variable from
+ *  lg. */
+const ROW_GRID =
+  "grid grid-cols-[1.75rem_minmax(0,1fr)_auto_auto] gap-x-2.5 gap-y-2 px-3 lg:[grid-template-columns:var(--pool-columns)] lg:gap-y-1";
 
-/** Every filter control shares the kit's focus ring — these are buttons, and
- *  they were the only ones on the page a keyboard user couldn't see land on. */
+function PoolRow({
+  player: p,
+  scout: sc,
+  facts,
+  columns,
+  open,
+  onToggle,
+  details,
+  now,
+  query,
+  heroes,
+  captainSelectionOpen,
+  showDraftStatus,
+  draft,
+  showContact,
+  scoutFull,
+  onScoutFullChange,
+}: {
+  player: PoolPlayer;
+  scout: PoolScout | undefined;
+  facts: PoolRowFacts;
+  columns: { inhouse: boolean; pubs: boolean; favorites: boolean };
+  open: boolean;
+  onToggle: (userId: string) => void;
+  details: boolean;
+  now: number;
+  query: string;
+  heroes: readonly { id: number; name: string }[];
+  captainSelectionOpen: boolean;
+  showDraftStatus: boolean;
+  draft: PoolDraftInfo[string] | undefined;
+  showContact: boolean;
+  scoutFull: boolean;
+  onScoutFullChange: (next: boolean) => void;
+}) {
+  const ih = sc?.inhouse;
+  const pub = sc?.pub;
+  const ctx: ScoutContext = {
+    roles: p.roles,
+    signupMmr: p.mmr,
+    rankTier: p.rankTier,
+    league: LEAGUE_CONFIG.region,
+  };
+  const pubCell = pub?.scout ? pubColumn(pub.scout, ctx) : null;
+  // What they wrote about themselves. Signups from before the one "About
+  // you" box keep a captain note and goals; both show, joined.
+  const about = aboutText({ captainNote: p.captainNote, statement: sc?.statement }, " · ");
+  const heroHits = poolHeroMatches(p, sc, query, heroes);
+  const cardId = cardIdFor(p.userId);
+
+  return (
+    <li
+      // The whole row opens the card for a pointer; the chevron is the
+      // keyboard's and screen reader's control. Links and buttons inside
+      // keep their own clicks, and so does selecting text.
+      onClick={(e) => {
+        const target = e.target as HTMLElement;
+        if (target.closest("a,button,input,select,textarea,summary,[data-pool-card]")) return;
+        if (window.getSelection()?.toString()) return;
+        onToggle(p.userId);
+      }}
+      className={cn(
+        ROW_GRID,
+        "cursor-pointer items-center py-2 transition-colors hover:bg-surface-2/40 lg:py-1.5",
+        open && "bg-surface-2/50 shadow-[inset_3px_0_0_var(--color-accent)] hover:bg-surface-2/50",
+      )}
+    >
+      {/* Decorative: the name beside it is the link. */}
+      <span aria-hidden className="row-span-2 self-center lg:row-span-1">
+        <Avatar name={p.name} src={p.avatar} size={28} />
+      </span>
+
+      <span className="min-w-0">
+        <PlayerLink
+          userId={p.userId}
+          className="block min-w-6 max-w-full truncate text-sm font-medium"
+        >
+          {p.name}
+        </PlayerLink>
+        {heroHits.length > 0 ? (
+          <span className="mt-0.5 block truncate text-xs text-accent">
+            {heroHits.map((h) => h.text).join(" · ")}
+          </span>
+        ) : null}
+      </span>
+
+      {/* The default sort key, beside the name at every width. */}
+      <span className="flex items-center justify-end gap-1.5">
+        <RankBadge rankTier={p.rankTier} />
+        {p.mmr > 0 ? (
+          <span className="text-sm font-semibold tabular-nums text-fg">{p.mmr}</span>
+        ) : (
+          <span className="text-sm text-muted" title="No MMR on this signup">
+            —
+          </span>
+        )}
+      </span>
+
+      {/* Line two below lg; from lg the wrapper dissolves (`contents`) and
+          each cell takes its own column, in the header's order. An empty
+          cell hides below lg so it doesn't add a gap to the line. */}
+      <span className="col-span-3 col-start-2 flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-2 lg:contents">
+        <span className={cn(!hasText(p.roles) && "hidden lg:block")}>
+          <RoleBadges roles={p.roles} />
+        </span>
+
+        {columns.inhouse ? (
+          <span
+            className={cn(
+              "text-xs text-muted lg:flex lg:flex-col lg:items-end",
+              !ih && "hidden",
+            )}
+            title={ih ? inhouseTitle(ih) : undefined}
+          >
+            {ih ? (
+              <>
+                <span className="tabular-nums lg:hidden">{inhouseToken(ih)}</span>
+                <span
+                  className={cn(
+                    "hidden text-sm font-semibold tabular-nums lg:inline",
+                    // Provisionals are dimmed and never ranked.
+                    ih.rank == null ? "text-muted" : "text-fg",
+                  )}
+                >
+                  {ih.rating}
+                  {ih.rank != null ? (
+                    <span className="ml-1 text-xs font-normal text-muted">#{ih.rank}</span>
+                  ) : null}
+                </span>
+                <span className="hidden tabular-nums lg:inline">
+                  {ih.wins}–{ih.losses}
+                  {ih.rank == null ? ` · ${ih.games}g` : ""}
+                </span>
+              </>
+            ) : null}
+          </span>
+        ) : null}
+
+        {columns.pubs ? (
+          <span
+            className={cn(
+              "flex min-w-0 items-center gap-1 text-xs lg:pl-2",
+              !pubCell && "hidden lg:flex",
+            )}
+          >
+            {pubCell ? (
+              <>
+                <span className="text-muted lg:hidden">Pubs</span>
+                {pubCell.role ? (
+                  <span
+                    title={pubCell.role.title}
+                    className={cn("truncate", pubCell.role.warn ? "text-accent" : "text-fg")}
+                  >
+                    {pubCell.role.text}
+                  </span>
+                ) : null}
+                {pubCell.level ? (
+                  <RankMedal
+                    rankTier={pubCell.level.rankTier}
+                    size={18}
+                    label={pubCell.level.title}
+                    className={cn(
+                      "shrink-0 rounded-full",
+                      pubCell.level.warn && "ring-1 ring-accent/80",
+                    )}
+                  />
+                ) : null}
+              </>
+            ) : null}
+          </span>
+        ) : null}
+
+        {columns.favorites ? (
+          // A tablet's line two has room for them (a phone's doesn't); the
+          // label keeps them apart from pub heroes there, where no column
+          // header says which strip is which.
+          <span
+            className={cn(
+              "hidden min-w-0 items-center gap-1.5 text-xs text-muted lg:flex",
+              hasText(p.favoriteHeroes) && "md:flex",
+            )}
+          >
+            <span className="lg:hidden">Favorites</span>
+            <HeroList value={p.favoriteHeroes} size={20} max={3} className="flex-nowrap" />
+          </span>
+        ) : null}
+
+        <StatusCell
+          player={p}
+          standin={facts.standin}
+          captainSelectionOpen={captainSelectionOpen}
+          showDraftStatus={showDraftStatus}
+          draft={draft}
+        />
+      </span>
+
+      {/* Beside the MMR on line one below lg, so line two has the row's
+          whole width and a long team name can't push the toggle under it;
+          the last column from lg. */}
+      <button
+        type="button"
+        onClick={() => onToggle(p.userId)}
+        aria-expanded={open}
+        aria-controls={open ? cardId : undefined}
+        aria-label={`Scouting for ${p.name}`}
+        title={open ? "Close the scouting card" : "Open the scouting card"}
+        className="col-start-4 row-start-1 -my-1 grid h-8 w-8 place-items-center self-center justify-self-end rounded-md text-muted transition-colors hover:bg-surface-2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 lg:col-start-auto lg:row-start-auto lg:my-0"
+      >
+        <ChevronIcon open={open} />
+      </button>
+
+      {details ? (
+        <DetailLines scout={sc} ctx={ctx} now={now} about={about} />
+      ) : null}
+
+      {open ? (
+        <div data-pool-card className="col-span-full min-w-0 lg:[grid-column:2/-1]">
+          <DraftPlayerCard
+            variant="pool"
+            id={cardId}
+            name={p.name}
+            player={p}
+            scout={draftScout(p, sc, about)}
+            nowMs={now}
+            full={scoutFull}
+            onFullChange={onScoutFullChange}
+            actions={
+              <CardLinks player={p} showContact={showContact} />
+            }
+          />
+        </div>
+      ) : null}
+    </li>
+  );
+}
+
+/** The card's facts in the draft room's shape (`DraftScout`), from the
+ *  pool's: the same helpers then phrase them the same on both pages. */
+function draftScout(p: PoolPlayer, sc: PoolScout | undefined, about: string): DraftScout {
+  return {
+    ...(sc?.pub ? { pub: sc.pub } : {}),
+    ...(sc?.inhouse ? { inhouse: sc.inhouse } : {}),
+    ...(sc?.lastSeason ? { lastSeason: sc.lastSeason } : {}),
+    ...(hasText(p.favoriteHeroes) ? { favoriteHeroes: p.favoriteHeroes } : {}),
+    ...(about ? { about } : {}),
+  };
+}
+
+/** Standin, captain, team or free agent, plus captain interest while
+ *  captains are being chosen. */
+function StatusCell({
+  player: p,
+  standin,
+  captainSelectionOpen,
+  showDraftStatus,
+  draft,
+}: {
+  player: PoolPlayer;
+  standin: boolean;
+  captainSelectionOpen: boolean;
+  showDraftStatus: boolean;
+  draft: PoolDraftInfo[string] | undefined;
+}) {
+  const badges: ReactNode[] = [];
+  // Only volunteers still waiting on the call: a designated captain reads
+  // "Captain", and after the auction starts the volunteers who weren't
+  // picked stop carrying a signup-week badge.
+  if (captainSelectionOpen && p.wantsCaptain && !draft?.captain) {
+    badges.push(
+      <Badge key="wants" tone="accent">
+        Wants captain
+      </Badge>,
+    );
+  }
+  // A captain is on their team's roster, so they wear the (C) inside its
+  // team chip (below) rather than a second badge that wrapped the cell.
+  if (standin) {
+    // Before the draft-status branch: a standin is never rostered, and
+    // "Free agent" would say they can be signed.
+    badges.push(<Badge key="standin">Standin</Badge>);
+  } else if (p.drafted) {
+    badges.push(
+      draft ? (
+        <TeamChip key="team" info={draft} />
+      ) : (
+        <Badge key="drafted" tone="success">
+          Drafted
+        </Badge>
+      ),
+    );
+  } else if (showDraftStatus) {
+    badges.push(
+      <Badge key="free" tone="accent">
+        Free agent
+      </Badge>,
+    );
+  }
+  return (
+    <span
+      className={cn(
+        // On line two (below lg) it takes what the line has left, from 8rem,
+        // so a long team name truncates beside the roles instead of
+        // wrapping under them.
+        "flex min-w-0 flex-wrap items-center gap-1.5 max-lg:flex-1 max-lg:basis-32 lg:justify-end",
+        badges.length === 0 && "hidden lg:flex",
+      )}
+    >
+      {badges}
+    </span>
+  );
+}
+
+/** Scouting details: the facts line and the player's own words, across the
+ *  row under the name, one line each where the screen allows. No links:
+ *  those are in the card, so the line adds no tap targets. */
+function DetailLines({
+  scout: sc,
+  ctx,
+  now,
+  about,
+}: {
+  scout: PoolScout | undefined;
+  ctx: ScoutContext;
+  now: number;
+  about: string;
+}) {
+  const pub = sc?.pub;
+  // Measured when the snapshot was taken, and only while it is recent: an
+  // old snapshot says nothing about last week.
+  const activity = pub ? pubLastPlayed(pub, now) : null;
+  const facts: ReactNode[] = [];
+  if (sc?.lastSeason) {
+    facts.push(
+      // Free text (season and team names): may break anywhere rather than
+      // widen a phone row.
+      <span
+        key="last"
+        className="min-w-0 tabular-nums [overflow-wrap:anywhere]"
+        title={lastSeasonTitle(sc.lastSeason)}
+      >
+        {lastSeasonToken(sc.lastSeason)}
+      </span>,
+    );
+  }
+  if (pub && pubHasWindow(pub)) {
+    facts.push(
+      <span key="pubs" className="tabular-nums" title={pubTitle(pub, now)}>
+        {pubToken(pub, now)}
+      </span>,
+    );
+  }
+  if (pub?.scout) {
+    facts.push(
+      <PubScoutLine
+        key="scout"
+        parts={scoutingRowParts(pub.scout, ctx)}
+        title={scoutingTitle(pub.scout, ctx)}
+      />,
+    );
+  }
+  // What they play now beats what they played years ago: their last 100
+  // games' heroes once the snapshot has them, else the all-time list. Kept
+  // apart from the favorite heroes, which they chose themselves.
+  if (pub?.scout && pub.scout.heroes.length > 0) {
+    const window = pub.scout.games;
+    facts.push(
+      <PubHeroStrip
+        key="heroes"
+        label="Recent pubs"
+        heroes={pub.scout.heroes.slice(0, 3)}
+        titleOf={(h) => recentHeroTitle(h, window)}
+      />,
+    );
+  } else if (pub && pub.topHeroes.length > 0) {
+    facts.push(
+      <PubHeroStrip
+        key="heroes"
+        label="Most played (pubs)"
+        heroes={pub.topHeroes}
+        titleOf={pubHeroTitle}
+      />,
+    );
+  }
+  if (activity?.quiet) {
+    facts.push(
+      <span key="quiet" className="text-accent" title={PUB_QUIET_TITLE}>
+        {pubQuietToken(activity)}
+      </span>,
+    );
+  }
+  if (facts.length === 0 && !about) return null;
+  return (
+    <div className="col-span-3 col-start-2 min-w-0 space-y-1 text-xs text-muted lg:[grid-column:2/-1]">
+      {facts.length > 0 ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">{facts}</div>
+      ) : null}
+      {about ? (
+        <p className="truncate italic" title={about}>
+          &ldquo;{about}&rdquo;
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/** How they play pubs, one plain-text fact after another. A read worth a
+ *  second look is tinted, its hover saying why. */
+function PubScoutLine({ parts, title }: { parts: ScoutPart[]; title: string }) {
+  if (parts.length === 0) return null;
+  return (
+    <span className="min-w-0 tabular-nums" title={title}>
+      {/* Each fact is unbreakable ("82% ranked" never splits on a phone);
+          the line wraps between them. */}
+      {parts.map((part, i) => (
+        <span key={part.key}>
+          {i > 0 ? " · " : null}
+          <span className={cn("whitespace-nowrap", part.warn && "text-accent")}>
+            {part.text}
+          </span>
+        </span>
+      ))}
+    </span>
+  );
+}
+
+/** The card's links: the profile, Dotabuff and how to reach them. */
+function CardLinks({ player: p, showContact }: { player: PoolPlayer; showContact: boolean }) {
+  return (
+    <>
+      <Link href={`/players/${p.userId}`} className={textLink()}>
+        Full profile <LinkArrow />
+      </Link>
+      {p.accountId ? (
+        <a
+          href={`https://www.dotabuff.com/players/${p.accountId}`}
+          target="_blank"
+          rel="noreferrer"
+          className={textLink()}
+        >
+          Dotabuff <LinkArrow out />
+        </a>
+      ) : null}
+      <DiscordTag name={p.discordName} verified={p.discordVerified} />
+      {showContact && !p.discordName ? (
+        // The absence IS the information on draft night: this player can't be
+        // reached where the league lives. Only for viewers allowed contact:
+        // a hidden handle must never read as a missing one.
+        <span className="text-muted" title={NO_DISCORD_TITLE}>
+          no Discord
+        </span>
+      ) : null}
+    </>
+  );
+}
+
+/** Post-draft chip: crest + team name (links to the team) with a muted draft
+ * price, or a captain's (C). `TeamCrest` is decorative, so the adjacent name
+ * carries the label. */
+function TeamChip({ info }: { info: NonNullable<PoolDraftInfo[string]> }) {
+  return (
+    <Link
+      href={`/teams/${info.teamId}`}
+      className="flex min-w-0 max-w-full items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-0.5 pr-2 text-xs hover:border-muted/60 hover:no-underline"
+    >
+      <TeamCrest
+        name={info.teamName}
+        seed={info.teamId}
+        logoUrl={info.teamLogoUrl}
+        size={16}
+        className="rounded"
+      />
+      <span className="min-w-0 truncate">{info.teamName}</span>
+      {info.captain ? (
+        <span title="Captain" className="shrink-0 font-semibold text-accent">
+          <span aria-hidden>(C)</span>
+          <span className="sr-only">, captain</span>
+        </span>
+      ) : info.price != null ? (
+        <span className="shrink-0 text-muted">${info.price}</span>
+      ) : null}
+    </Link>
+  );
+}
+
+// --- Chips ------------------------------------------------------------------------
+
+/** Every filter control shares the kit's focus ring. */
 const CHIP_BASE =
   "rounded-lg border text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60";
 const CHIP_ON = "border-accent/50 bg-accent/15 text-accent";
 const CHIP_OFF = "border-line text-muted hover:border-muted/60 hover:text-fg";
 
-function RoleChip({
+function Chip({
   active,
   onClick,
   title,
   label,
+  count,
+  square = false,
   children,
 }: {
   active: boolean;
   onClick: () => void;
   title?: string;
   label?: string;
-  children: React.ReactNode;
+  /** How many rows it would show; part of its name ("Standins 3"). */
+  count?: number;
+  /** The one-character position chips: square, 44px on a phone. */
+  square?: boolean;
+  children: ReactNode;
 }) {
   return (
     <button
@@ -794,135 +1409,76 @@ function RoleChip({
       aria-pressed={active}
       className={cn(
         CHIP_BASE,
-        "grid h-11 min-w-11 place-items-center px-2.5 sm:h-9 sm:min-w-9",
+        "inline-flex h-11 items-center justify-center gap-1.5 sm:h-9",
+        square ? "min-w-11 px-2.5 sm:min-w-9" : "px-3",
         active ? CHIP_ON : CHIP_OFF,
       )}
     >
       {children}
-    </button>
-  );
-}
-
-function StatusChip({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={cn(CHIP_BASE, "h-11 px-3 sm:h-9", active ? CHIP_ON : CHIP_OFF)}
-    >
-      {children}
-    </button>
-  );
-}
-
-/**
- * What they ACTUALLY play — the self-picked favorite heroes live in their own
- * column; these are OpenDota's lifetime most-played. The visible label is what
- * tells the two icon strips apart on a phone, where both sit in one row; it is
- * aria-hidden because the strip's own spoken label already says it.
- * role="img" + a spoken label per the decorative-indicator convention; each
- * icon's title names the hero and its record.
- */
-/** How they play pubs, one plain-text fact after another (no tap targets:
- *  the line already carries two). A role that contradicts the signup's side
- *  is tinted, its hover saying why. */
-function PubScoutLine({
-  parts,
-  title,
-}: {
-  parts: ScoutPart[];
-  title: string;
-}) {
-  if (parts.length === 0) return null;
-  return (
-    <span className="min-w-0 tabular-nums" title={title}>
-      {/* Each fact is unbreakable ("82% ranked" never splits on a phone);
-          the line wraps between them. */}
-      {parts.map((part, i) => (
-        <span key={part.key}>
-          {i > 0 ? " · " : null}
-          <span
-            className={cn("whitespace-nowrap", part.warn && "text-accent")}
-          >
-            {part.text}
-          </span>
+      {count != null ? (
+        <span
+          className={cn(
+            "text-xs font-normal tabular-nums",
+            active ? "text-accent/80" : "text-muted",
+          )}
+        >
+          {count}
         </span>
-      ))}
-    </span>
-  );
-}
-
-export function PubHeroStrip({
-  label,
-  heroes,
-  titleOf,
-}: {
-  label: string;
-  heroes: PubHero[];
-  titleOf: (h: PubHero) => string;
-}) {
-  return (
-    <span className="flex items-center gap-1">
-      <span aria-hidden>{label}</span>
-      <span
-        role="img"
-        aria-label={`${label}: ${heroes
-          .map((h) => heroById(h.heroId)?.name ?? `Hero #${h.heroId}`)
-          .join(", ")}`}
-        className="flex items-center gap-1"
-      >
-        {heroes.map((h) => {
-          const hero = heroById(h.heroId);
-          // title on the ICON, not a wrapper — the browser shows the innermost
-          // title, and the img fills any span around it.
-          return hero ? (
-            <span key={h.heroId} aria-hidden>
-              <HeroIcon hero={hero} size={18} title={titleOf(h)} />
-            </span>
-          ) : null;
-        })}
-      </span>
-    </span>
-  );
-}
-
-/** Post-draft chip: crest + team name (links to the team) with a muted draft
- * price. `TeamCrest` is decorative, so the adjacent name carries the label. */
-function TeamChip({
-  info,
-}: {
-  info: {
-    teamId: string;
-    teamName: string;
-    teamLogoUrl?: string | null;
-    price: number | null;
-  };
-}) {
-  return (
-    <Link
-      href={`/teams/${info.teamId}`}
-      className="flex min-w-0 items-center gap-1.5 rounded-full border border-line bg-surface-2/50 py-1 pl-0.5 pr-2 text-xs hover:border-muted/60 hover:no-underline"
-    >
-      <TeamCrest
-        name={info.teamName}
-        seed={info.teamId}
-        logoUrl={info.teamLogoUrl}
-        size={16}
-        className="rounded"
-      />
-      <span className="max-w-[9rem] truncate">{info.teamName}</span>
-      {info.price != null ? (
-        <span className="text-muted">${info.price}</span>
       ) : null}
-    </Link>
+    </button>
+  );
+}
+
+function ChevronIcon({ open }: { open: boolean }) {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className={cn("transition-transform motion-reduce:transition-none", open && "rotate-180")}
+    >
+      <path d="m4 6 4 4 4-4" />
+    </svg>
+  );
+}
+
+function DetailsIcon() {
+  return (
+    <svg
+      width={16}
+      height={16}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      aria-hidden
+      className="shrink-0"
+    >
+      <path d="M2.5 3.5h11M2.5 6.5h7M2.5 9.5h11M2.5 12.5h7" />
+    </svg>
+  );
+}
+
+function FilterIcon() {
+  return (
+    <svg
+      width={14}
+      height={14}
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.75}
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <path d="M2 4h12M4.5 8h7M7 12h2" />
+    </svg>
   );
 }

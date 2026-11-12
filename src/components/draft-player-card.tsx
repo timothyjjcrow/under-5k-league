@@ -1,5 +1,6 @@
+import type { ReactNode } from "react";
 import { HeroList, RankMedal, textLink } from "@/components/ui";
-import { PubHeroStrip } from "@/components/player-pool";
+import { PubHeroStrip } from "@/components/pub-hero-strip";
 import {
   PubRecentHeroes,
   PubRoleAverageLines,
@@ -46,6 +47,7 @@ export function DraftPlayerCard({
   nowMs,
   full,
   onFullChange,
+  actions,
 }: {
   variant: "lot" | "pool";
   name: string;
@@ -61,6 +63,9 @@ export function DraftPlayerCard({
   /** The full card, or the compact one (the room's per-viewer choice). */
   full: boolean;
   onFullChange: (next: boolean) => void;
+  /** A row of links under the scouting (the /players card's profile,
+   *  Dotabuff and Discord). Unset renders exactly what the draft room has. */
+  actions?: ReactNode;
 }) {
   const view = draftCardView({
     player,
@@ -95,7 +100,7 @@ export function DraftPlayerCard({
     !view.favoriteHeroes &&
     !view.about &&
     !view.nothingOnFile;
-  if (empty) return null;
+  if (empty && !actions) return null;
 
   return (
     <div
@@ -290,6 +295,13 @@ export function DraftPlayerCard({
           ) : null}
         </>
       )}
+      {actions ? (
+        // gap-y-2: the links carry TAP_SAFE, and wrapped rows of them need
+        // 8px between them or their hit boxes overlap.
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs">
+          {actions}
+        </div>
+      ) : null}
     </div>
   );
 }

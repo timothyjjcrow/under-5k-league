@@ -875,38 +875,107 @@ the league is already draftable and many visitors have joined. Write for both.
 
 ## The player pool (`/players`)
 
-- **One grid string for header and rows:** `rowGrid(withInhouse)` in
-  `player-pool.tsx`. Two copies drift and the header lies about its columns;
-  never fork a literal. Scouting columns: `docs/features/players-and-registration.md`.
-- **Below `md` there are no columns:** the avatar keeps the gutter and every
-  other cell stacks in the second track (`CELL`), because `shrink-0` chips in a
-  `justify-between` row cut names to "P…" at 390px.
-- **The status chip spans both phone tracks** (an `auto` track sized by a long
-  team chip starves the name). **Favorite heroes ride with the roles below
-  `md`, hide between `md` and `xl`, and get their own track at `xl`**, where
-  `xl:order-*` puts them before status.
+Rebuilt on 2026-11-12 (Tim: more compact, more players on a screen, more
+filters, a useful right sidebar). `src/components/player-pool.tsx` draws it;
+the filter rules are pure in `src/lib/player-pool.ts`
+(`players-and-registration.md` has the scouting facts).
+
+- **The layout:** the title's subtitle carries the pool's shape
+  (`poolSubtitle`: "Season 7 · 37 players and 3 standins · average 2,580
+  MMR"), then the toolbar (search, the position chips, the status chips),
+  a line with the list's name, its count, "Scouting details" and the sort,
+  then the list. From xl a **sticky filter sidebar** (19rem, `aside "More
+  filters"`) sits beside all of it: the MMR range and its bands, the
+  Players toggles and the Positions bars. Below xl the same element folds
+  out under the toolbar from the **Filters** button, which counts the
+  panel's active filters (`poolPanelFilterCount`); there is one copy of
+  every control. The page grid is `xl:grid-rows-[auto_auto_1fr]` with the
+  aside spanning all three rows, so a short list grows its own row (the
+  `1fr`) to the aside's height instead of opening gaps between the toolbar
+  and the list. The aside scrolls inside itself only when a short window
+  can't hold it.
+- **A row is one line from lg and two below it.** One template string
+  (`poolColumns`) is set as `--pool-columns` on the list and read by the
+  header and every row (`ROW_GRID`, `lg:[grid-template-columns:var(--pool-columns)]`):
+  Tailwind can't see a class built at runtime, and two copies drift until
+  the header lies about its columns. The Inhouse, Pubs and Favorites
+  columns exist only when someone has that data. Below lg the avatar keeps
+  the gutter, line one is the name, the MMR and the toggle, and line two
+  (roles, the inhouse token, the Pubs cell, favorites from md, status)
+  wraps under them; from lg that wrapper is `display: contents`, so the
+  same cells are grid columns in the header's order. An empty cell hides
+  below lg so it adds no gap. The status cell takes what line two has left
+  from 8rem, so a long team name truncates beside the roles instead of
+  wrapping under them (360px is the check).
+- **The toggle sits beside the MMR below lg** (its own track), so line two
+  has the whole width and nothing can push it to a third line.
+- **A row opens the draft room's scouting card under it** (`DraftPlayerCard`
+  `variant="pool"`, built by `draftScout` from the pool's facts, with the
+  card's `actions` slot holding Full profile, Dotabuff and the Discord tag
+  or "no Discord"), one card at a time. The chevron is the control
+  (`aria-expanded`, "Scouting for {name}"); a pointer click anywhere on the
+  row that is not a link, a button or a text selection opens it too.
+  "Full scouting" is the reader's own (`usePersistedFlag
+  "playerPoolScoutFull"`).
+- **"Scouting details" sets row density, not a filter:** off (the default
+  everywhere since 2026-11-12), a row is one line; on, a line across the
+  row under the name carries the last season, the pub record, the scouting
+  read and recent pub heroes, then one line of the player's own words.
+  Neither line has a link: those are in the card. The choice persists on
+  the reader's device (`usePersistedFlag "playerPoolDetails"`) and stays
+  out of the URL and "Clear filters". It is an icon button beside the sort
+  below sm.
 - **The pool is the whole page:** standins are rows with a Standin badge;
   the Players and Standins chips (`?status=player`, `?status=standin`) split
   the pool by registration type, shown only while there are standins
   (Tim, 2026-10-30: "you can filter the stand-ins, but you can't just filter
-  the players"). Rosters live on `/teams`. "Wants captain" shows only
-  while `captainSelectionOpen`, on volunteers not yet picked.
-- **Filters live in the URL** (`q`, `pos`, `sort`, `cap=1`,
-  `status=drafted|free|player|standin`, defaults omitted). They seed from
-  `useSearchParams` on mount (hence the `<Suspense>` around `<PlayerPool>`); a
-  stale `cap=1` or `status=player|standin` with no chip to show shows
-  everyone. They
-  mirror back with `history.replaceState`, never `router.replace` (that re-runs
-  the page's server queries per tap), debounced 250ms (browsers rate-limit
-  `replaceState`). React is the source of truth. `sort` is not a filter, so
-  `resetFilters` and `filtersActive` ignore it. `e2e/pages.spec.ts` reopens the
-  URL cold, because seeding from it is the half that rots.
-- **"Scouting details" sets row density, not a filter:** on, each row carries
-  the scouting line (last season, pubs, Dotabuff, Discord) and the player's
-  own words; off, a row is one line. The default is `poolDetailsByDefault`
-  (on until the auction ends, when the pool turns into "who is where"), and
-  the viewer's choice persists on their device (`usePersistedFlag
-  "playerPoolDetails"`). It stays out of the URL and "Clear filters".
+  the players"). Drafted and Free agents are about full players: a standin
+  is never a free agent. Rosters live on `/teams`. "Wants captain" shows
+  only while `captainSelectionOpen`, on volunteers not yet picked. A
+  rostered captain wears "(C)" in their team chip rather than a second
+  badge, which wrapped the status cell.
+- **Every chip counts what it would show, given every OTHER filter**
+  (`poolFacetCounts`): "Standins 3", "Plays inhouses 12", the MMR bands and
+  the Positions bars. The count is part of the chip's name.
+- **The filters** (`PoolPageFilter`, `poolRowMatches`): the search matches
+  names and, for a hero's name or alias, players with that hero among
+  their favorites, recent pub heroes or most played (`heroesForPlayerSearch`
+  in `heroes.ts`: an exact hero or alias, else a word that starts with
+  three or more letters, never a substring inside a word, so "ant" is
+  Anti-Mage and not Enchantress). A row kept for a hero says so under the
+  name ("Lion: a favorite, 12 of their last 100 pubs"). Positions are
+  any-of ("4 or 5"). The MMR range is inclusive with open ends, a reversed
+  range means the span between, and an unknown MMR (0) is never inside one.
+  The Players toggles are Returning / New to the league (an earlier league
+  season on file or not), Plays inhouses, On Discord (offered only to a
+  viewer allowed contact, `showContact`, since every handle is blank for
+  anyone else) and Hide inactive, which hides only players whose fresh
+  snapshot says they went quiet: no snapshot is unknown, and stays.
+- **Filters live in the URL** (`q`, `pos=4,5`, `sort`, `cap=1`,
+  `status=drafted|free|player|standin`, `mmr=3000-3500` or `3000-` or
+  `-3300`, `history=returning|new`, `inhouse=1`, `discord=1`, `active=1`;
+  defaults omitted, so an unfiltered pool is a bare `/players`). They seed
+  once from `useSearchParams` on mount (hence the `<Suspense>` around
+  `<PlayerPool>`) through `readPoolParams`, which drops anything with no
+  control to show it (a stale `cap=1`, `status=standin` with no standins,
+  `sort=inhouse` with no ladder, `discord=1` for a viewer without contact).
+  They mirror back through `poolParamsQuery` with `history.replaceState`,
+  never `router.replace` (that re-runs the page's server queries per tap),
+  debounced 250ms (browsers rate-limit `replaceState`), flushed by
+  `SAVE_LIST_CONTEXT_EVENT` before a click through to a profile. React is
+  the source of truth. `sort` is not a filter: "Clear filters" keeps it.
+  `e2e/pages.spec.ts` reopens the URL cold, because seeding from it is the
+  half that rots.
+- **The sorts:** MMR (default), Inhouse (with a ladder), Medal, Name and
+  Newest (the signup's `createdAt`, sent as `signedUpAt`). `PoolSort`, the
+  type the draft room shares, keeps only its three (`PoolPageSort` adds the
+  page's two).
+- **Tests:** `player-pool.test.ts` (filters, facets, sorts, the URL both
+  ways), `heroes.test.ts`, `pub-scout.test.ts` (`pubColumn`) and
+  `e2e/pages.spec.ts`: the chips, the URL round trip, the density toggle,
+  the card, and a 390px pass with the Filters panel and a card open
+  (overflow, tap targets, overlapping targets). The mid-season suite's
+  pool is empty; see a full one with `npm run fixture:signups`.
 
 ## Player profile and compare (`/players/[id]`, `/players/compare`)
 

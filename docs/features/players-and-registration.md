@@ -200,12 +200,18 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   `player-pool.ts`). Pass the server `now` so SSR and hydration agree.
 - **Inhouse record** comes from `loadInhouseLadder` (in-process memo, 60s TTL,
   dropped when the result cursor moves, `resetInhouseLadderCache` seam), not
-  `unstable_cache`: inhouse games never bust `"games"`. A 5.5rem column at lg+
-  only (a sixth md track truncates names), a meta-line token below.
+  `unstable_cache`: inhouse games never bust `"games"`. A 4rem column from lg
+  (rating and #rank over W–L), the `inhouseToken` on line two below it.
   Provisionals are dimmed, unranked, `· Ng`; no games is an empty cell.
-- **"Sort: Inhouse" stays component-local** (`PoolSortEx`), or the draft room
-  gets a phantom control. `sortByInhouseRecord` orders by ladder rank, which
-  carries the full tiebreak (rating alone shows #5 above #4).
+- **"Sort: Inhouse" stays out of `PoolSort`** (it is `PoolPageSort`'s, with
+  Newest), or the draft room gets a phantom control. `sortByInhouseRecord`
+  orders by ladder rank, which carries the full tiebreak (rating alone shows
+  #5 above #4).
+- **The Pubs column says the side and the level in a glance** (`pubColumn`,
+  `pub-scout.ts`): "Pos 2", "Core", "Support" or "Both" and the medal their
+  games average, each tinted exactly when the scouting line would tint it,
+  the finding in the hover (the medal's `label`). The full line is behind
+  "Scouting details" and in the card.
 - **Pub snapshot:** `User.pubStats` (JSON; read only via `parsePubStats`) +
   `pubStatsAt`. `fetchPubStats` needs all three of `/wl?limit=100`, `/heroes`
   and `/matches?limit=100&significant=0` (projected to the six fields
@@ -249,12 +255,14 @@ Grid, filter and URL rules: `pages-and-ui.md`.
     passes upgrade signups first. `parsePubScout` reads an older version as
     unknown, so nothing half-shaped renders meanwhile.
   - **Shown where the W/L token is,** for an ACTIVE signup only: the pool
-    row's line (`scoutingRowParts`: "plays Pos 3 · in Ancient 5 games ·
-    solo · US East", warnings tinted, each fact unbreakable, every finding
-    in the hover) with "Recent pubs" heroes from the window in place of the
-    all-time strip, and the profile's "Pub scouting" card
-    (`profile-pub-scouting.tsx`), first in the "Player profile" band. The
-    hero pool's all-time list says "all time".
+    row's Pubs cell (`pubColumn`), its "Scouting details" line
+    (`scoutingRowParts`: "plays Pos 3 · in Ancient 5 games · solo · US
+    East", warnings tinted, each fact unbreakable, every finding in the
+    hover) with "Recent pubs" heroes from the window in place of the
+    all-time strip, the row's scouting card (the draft room's, below), and
+    the profile's "Pub scouting" card (`profile-pub-scouting.tsx`), first in
+    the "Player profile" band. The hero pool's all-time list says "all
+    time".
   - **Keep the card small** (Tim, 2026-10-21: the first report's list of
     rows took too much space). It is a grid of tiles (`scoutingTiles`: a
     label, a few-word lead, a one-line note, the full finding as the hover),
@@ -271,15 +279,17 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   played" at snapshot time and only while fresh (`pubLastPlayed`); quiet past
   `PUB_QUIET_DAYS`. Profiles reuse the token, and their heroes card shows the
   top-5 pub heroes even with no league games.
-- **Keep pub heroes apart from favorite heroes.** Pool rows show the top 3
-  heroes of their last 100 games ("Recent pubs", from the scouting report),
-  or the all-time most-played from OpenDota's `/heroes` until the snapshot
-  has a report (`poolPubRecord` slices `topHeroes`; `PubHeroStrip` in
-  `player-pool.tsx`); the self-typed favorite
-  heroes keep their own column. One is what a player plays, the other what
-  they claim, so never merge or substitute them. On a phone both icon strips
-  share one row, so keep the visible "Recent pubs" (or "Most played (pubs)")
-  label: it is the only thing that tells them apart.
+- **Keep pub heroes apart from favorite heroes.** A pool row's details line
+  and card show the top heroes of their last 100 games ("Recent pubs", from
+  the scouting report), or the all-time most-played from OpenDota's
+  `/heroes` until the snapshot has a report (`poolPubRecord` slices
+  `topHeroes`; `PubHeroStrip`, `src/components/pub-hero-strip.tsx`); the
+  self-typed favorite heroes keep their own column ("Favorites", labelled
+  on a tablet's line two). One is what a player plays, the other what they
+  claim, so never merge or substitute them. Where both icon strips share a
+  row, keep the visible "Recent pubs" (or "Most played (pubs)") label: it is
+  the only thing that tells them apart. The search finds a hero in either
+  (`poolHeroMatches` says which).
 - **Last league season** (`loadPoolLastSeasons`): team, record, price, title
   from seasons created before the active one, from the Seasons card's facts.
   The appearances come from the Hall of Fame's cached career facts
@@ -287,8 +297,10 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   champions are its own reads.
 - **Show "no Discord" only to viewers allowed contact:** handles are blanked
   for others, so the row can't tell hidden from missing. Pool: `showContact`
-  from `canViewLeagueDirectoryContact`; profile: `canViewLeagueContact`
-  (`src/lib/visibility.ts`).
+  from `canViewLeagueDirectoryContact` (it also gates the "On Discord"
+  filter, which would otherwise hide everyone); profile:
+  `canViewLeagueContact` (`src/lib/visibility.ts`). In the pool the handle
+  and the marker are in the row's scouting card.
 - **Capture pub stats where medals are captured:** login (`ensurePubStats`,
   missing-only so login never pays a recurring call), `/me` link and refresh,
   and the player data refreshes (`results-and-opendota.md`). Never overwrite on
@@ -305,9 +317,14 @@ Grid, filter and URL rules: `pages-and-ui.md`.
   builds: compact, a strip of segments from the record and the profile's
   role and level tiles; under "Full scouting", the profile's tiles (`ScoutTileGrid`), "Recent
   pubs" kept apart from "Favorite heroes", and every finding in full under
-  "More scouting" ([draft](draft.md#the-draft-room-client)).
-- **Coverage limit:** no test renders the scouting cells; check them at
-  390/768/1024/1440 with `npm run fixture:signups`.
+  "More scouting" ([draft](draft.md#the-draft-room-client)). **/players
+  opens the same card** under a row (`DraftPlayerCard`, its facts built by
+  `draftScout` in `player-pool.tsx` from the page's own payload, so it costs
+  no request), with the profile, Dotabuff and Discord in its `actions`.
+- **Coverage limit:** the e2e suite's pool has two seeded pub snapshots
+  (`e2e/seed-draft-scouting.ts`), so its rows and the 390px pass render a
+  Pubs cell, but no test reads the cells' words; check them at
+  360/390/820/1024/1440 with `npm run fixture:signups`.
 
 ## Profile Seasons card (`/players/[id]`)
 

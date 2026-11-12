@@ -1,6 +1,12 @@
 import { LEAGUE_CONFIG } from "../src/lib/league-config";
 import { test, expect } from "@playwright/test";
-import { trackPageErrors } from "../e2e-mid/helpers";
+import {
+  expectNoHorizontalOverflow,
+  expectNoOverlappingTargets,
+  expectTapTargets,
+  trackPageErrors,
+  untilHydrated,
+} from "../e2e-mid/helpers";
 
 // Read-only render checks for the enhanced UI — these catch client-render /
 // hydration errors a browser sees but a raw HTML fetch would not. They must not
@@ -78,19 +84,27 @@ test("logout confirms the session ended", async ({ page }) => {
 
 test("players page renders the pool scouting tools", async ({ page }) => {
   await page.goto("/players");
-  await expect(page.getByPlaceholder("Search players…")).toBeVisible();
+  await expect(page.getByPlaceholder("Search players or heroes…")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Wants captain" }),
   ).toBeVisible();
   await expect(
     page.getByRole("group", { name: "Filter by role" }),
   ).toBeVisible();
+  // From xl (this suite's 1280px) the rest of the filters sit beside the
+  // list, with no Filters button to open them.
+  await expect(
+    page
+      .getByRole("complementary", { name: "More filters" })
+      .getByRole("textbox", { name: "Minimum MMR" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Filters/ })).toHaveCount(0);
 });
 
-// Row density is the reader's own choice, kept on their device: one line a
-// player, or the scouting line and the player's own words under each name.
-// Signups open detailed; the reload is the assertion that matters.
-test("the pool's scouting details toggle folds rows and survives a reload", async ({
+// Row density is the reader's own choice, kept on their device: one compact
+// line a player, or the scouting line and the player's own words under each
+// row. Rows open compact; the reload is the assertion that matters.
+test("the pool's scouting details toggle unfolds rows and survives a reload", async ({
   page,
 }) => {
   const assertNoErrors = trackPageErrors(page);
@@ -102,20 +116,134 @@ test("the pool's scouting details toggle folds rows and survives a reload", asyn
   const quote = page.getByText(
     /Flexible on role, good comms\.|Best on cores, can flex support\.|Reliable — rarely misses games\.|Aggressive playstyle, loves to gank\.|Comfortable drafting \/ shotcalling\./,
   );
-  await expect(toggle).toHaveAttribute("aria-pressed", "true");
-  await expect(quote.first()).toBeVisible();
-
-  await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "false");
   await expect(quote).toHaveCount(0);
+
+  await untilHydrated(page, toggle);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "true");
+  await expect(quote.first()).toBeVisible();
 
   await page.reload();
-  await expect(toggle).toHaveAttribute("aria-pressed", "false");
-  await expect(quote).toHaveCount(0);
-
-  await toggle.click();
   await expect(toggle).toHaveAttribute("aria-pressed", "true");
   await expect(quote.first()).toBeVisible();
+
+  await untilHydrated(page, toggle);
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-pressed", "false");
+  await expect(quote).toHaveCount(0);
+  assertNoErrors();
+});
+
+// Positions are any-of, the MMR range has bands for the usual spans, and
+// both live in the URL like every filter. The cold reopen is the assertion
+// that matters: seeding FROM the URL is the half that rots.
+test("positions and an MMR band narrow the pool and survive a shared link", async ({
+  page,
+}) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/players");
+  const roles = page.getByRole("group", { name: "Filter by role" });
+  const more = page.getByRole("complementary", { name: "More filters" });
+  const band = more.getByRole("button", { name: /^Under 2,000 MMR/ });
+  const list = page.getByRole("list", { name: "Signed up to play" });
+  await untilHydrated(page, roles);
+
+  await roles.getByRole("button", { name: "Position 4 — Soft Support" }).click();
+  await roles.getByRole("button", { name: "Position 5 — Hard Support" }).click();
+  await expect(roles.getByRole("button", { name: "All roles" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  await band.click();
+  await expect(band).toHaveAttribute("aria-pressed", "true");
+  await expect(more.getByRole("textbox", { name: "Maximum MMR" })).toHaveValue("1999");
+  await expect(page).toHaveURL(/[?&]pos=4,5(&|$)/);
+  await expect(page).toHaveURL(/[?&]mmr=-1999(&|$)/);
+  // The count line and the list agree.
+  const shown = Number(
+    await page.getByText(/^Showing \d+ of \d+ players$/).locator("span").innerText(),
+  );
+  if (shown > 0) await expect(list.locator(":scope > li")).toHaveCount(shown);
+
+  // Re-open the URL cold, as a recipient of the link would.
+  await page.goto(page.url());
+  await expect(
+    roles.getByRole("button", { name: "Position 4 — Soft Support" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    roles.getByRole("button", { name: "Position 5 — Hard Support" }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(band).toHaveAttribute("aria-pressed", "true");
+  await expect(more.getByRole("textbox", { name: "Maximum MMR" })).toHaveValue("1999");
+
+  // Typing a bound replaces the band; clearing returns a bare /players.
+  await untilHydrated(page, band);
+  await more.getByRole("textbox", { name: "Minimum MMR" }).fill("1000");
+  await expect(band).toHaveAttribute("aria-pressed", "false");
+  await expect(page).toHaveURL(/[?&]mmr=1000-1999(&|$)/);
+  await page.getByRole("button", { name: "Clear filters" }).click();
+  await expect(page).toHaveURL(/\/players$/);
+  await expect(more.getByRole("textbox", { name: "Maximum MMR" })).toHaveValue("");
+  assertNoErrors();
+});
+
+// A row opens the draft room's scouting card under it, one at a time, with
+// the player's profile one link away.
+test("a pool row opens its scouting card, one at a time", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.goto("/players");
+  // The list's own rows only: an open card holds a list of its own (the
+  // scouting segments of a player with a pub snapshot, like the seeded
+  // Dendi and Topson), and the seed's random MMRs decide who sorts first.
+  const rows = page
+    .getByRole("list", { name: "Signed up to play" })
+    .locator(":scope > li");
+  const first = rows.first();
+  const name = (await first.getByRole("link").first().innerText()).trim();
+  const toggle = first.getByRole("button", { name: `Scouting for ${name}` });
+  await untilHydrated(page, toggle);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-expanded", "true");
+  const card = page.getByRole("group", { name: `Scouting: ${name}` });
+  await expect(card).toBeVisible();
+  await expect(card.getByRole("link", { name: "Full profile" })).toHaveAttribute(
+    "href",
+    /^\/players\/[^/]+$/,
+  );
+
+  // A click on the row itself (not a link) opens it too, and closes the
+  // first: one card at a time keeps the list compact.
+  await rows.nth(1).click({ position: { x: 5, y: 5 } });
+  await expect(card).toHaveCount(0);
+  await expect(toggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("group", { name: /^Scouting: / })).toHaveCount(1);
+  assertNoErrors();
+});
+
+// The phone layout with everything open: the Filters panel (the sidebar's
+// fold-out below xl) and a scouting card. The seeded signups make this the
+// one suite whose pool has rows to measure.
+test("the pool fits a phone with the filters and a card open", async ({ page }) => {
+  const assertNoErrors = trackPageErrors(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/players");
+  const filters = page.getByRole("button", { name: /^Filters/ });
+  await untilHydrated(page, filters);
+  await filters.click();
+  await expect(filters).toHaveAttribute("aria-expanded", "true");
+  await expect(page.getByRole("textbox", { name: "Minimum MMR" })).toBeVisible();
+  await page
+    .getByRole("list", { name: "Signed up to play" })
+    .locator(":scope > li")
+    .first()
+    .getByRole("button", { name: /^Scouting for / })
+    .click();
+  await expect(page.getByRole("group", { name: /^Scouting: / })).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/players phone");
+  await expectTapTargets(page, "/players phone");
+  await expectNoOverlappingTargets(page, "/players phone");
   assertNoErrors();
 });
 

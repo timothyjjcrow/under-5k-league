@@ -215,17 +215,25 @@ export function RankMedal({
   rankTier,
   size = 24,
   showLabel = false,
+  label,
   className,
 }: {
   rankTier: number | null | undefined;
   size?: number;
   showLabel?: boolean;
+  /**
+   * What the medal is spoken and hovered as, when it stands for something
+   * other than the player's own medal ("Plays at: Ancient 3 games…" on the
+   * /players Pubs cell). Unset names the medal, exactly as shipped.
+   */
+  label?: string;
   className?: string;
 }) {
   const tier = rankMedalTier(rankTier);
   if (tier === 0) return null;
   const stars = rankStars(rankTier);
   const name = rankMedalName(rankTier);
+  const spoken = label ?? name;
   // 72px copies (public/ranks/72) cover every medal drawn at up to 24px on a
   // 3x phone screen: about a tenth of the 256px masters' bytes (/players
   // downloaded 374KB of medals). Larger medals, and the share pictures
@@ -261,8 +269,8 @@ export function RankMedal({
   return (
     <span
       className={cn("inline-flex items-center gap-1.5", className)}
-      title={name}
-      aria-label={name}
+      title={spoken}
+      aria-label={spoken}
     >
       {medal}
       {showLabel ? (

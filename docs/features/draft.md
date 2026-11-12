@@ -590,8 +590,9 @@ room (`room-wait.ts`, `room-version.ts`, `inhouse-room-cache.ts`'s
     `prisma/` would force a database release).
 - **The Available list shares `filterAndSortPlayers` with `/players`**
   (`player-pool.ts`: search, role chips, MMR/rank/name sort). It must never
-  learn about standins, which the room never lists; `/players` narrows by
-  type first in `filterPoolRows`.
+  learn about standins, which the room never lists; `/players` narrows its
+  rows with its own filters first (`filterPoolPage`, `poolRowMatches`) and
+  sorts through the shared lib (`sortPoolPage`).
 
 ## Recap and Discord
 

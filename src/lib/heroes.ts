@@ -241,6 +241,31 @@ export function heroSearchDestination(query: string, seasonId?: string): string 
 }
 
 /**
+ * The heroes a /players search names, kept narrow because the same box
+ * searches player names: an exact hero, asset key or alias ("am", "jugg"),
+ * else, from three letters, heroes with a word that starts with the text
+ * ("lanc" → Phantom Lancer, "proph" → Nature's Prophet), alphabetically.
+ * Never a substring inside a word: "ant" would otherwise also name
+ * Enchantress and both Phantoms.
+ */
+export function heroesForPlayerSearch(query: string, limit = 3): Hero[] {
+  const n = norm(query);
+  if (!n) return [];
+  const exact = BY_NORM.get(n);
+  if (exact) return [exact];
+  if (n.length < 3) return [];
+  return HEROES.filter((hero) =>
+    hero.name
+      .toLowerCase()
+      .replace(/['’]/g, "")
+      .split(/[^a-z0-9]+/)
+      .some((word) => word.startsWith(n)),
+  )
+    .sort((a, b) => a.name.localeCompare(b.name))
+    .slice(0, limit);
+}
+
+/**
  * Heroes whose name, asset key or common shorthand matches what someone typed
  * into the hero search: an exact hero or alias first ("am", "jugg"), then
  * names that start with the text, then names that contain it, alphabetically.

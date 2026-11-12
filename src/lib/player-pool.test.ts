@@ -2,19 +2,37 @@ import { describe, expect, it } from "vitest";
 import {
   buildPoolInhouseInfo,
   buildPoolLastSeasons,
+  EMPTY_POOL_FILTER,
   filterAndSortPlayers,
-  filterPoolRows,
+  filterPoolPage,
   lastSeasonTitle,
   lastSeasonToken,
   inhouseToken,
+  mmrInRange,
+  mmrRangeLabel,
+  NO_MMR_RANGE,
+  parseMmrInput,
+  parseMmrRange,
+  POOL_MMR_BANDS,
+  poolFacetCounts,
+  poolFilterActive,
+  poolHeroMatches,
+  poolPanelFilterCount,
+  poolParamsQuery,
+  poolRowFacts,
   pubHeroTitle,
   pubQuietToken,
+  readPoolParams,
   recentHeroTitle,
   pubTitle,
   pubToken,
   sortByInhouseRecord,
+  sortPoolPage,
+  type PoolFilterGates,
   type PoolLastSeason,
+  type PoolPageFilter,
   type PoolPlayer,
+  type PoolScout,
   type PoolScoutInfo,
 } from "./player-pool";
 
@@ -113,51 +131,314 @@ describe("draft-status filter", () => {
   });
 });
 
-describe("filterPoolRows (standins share the /players table)", () => {
+describe("the /players filters (standins share the table)", () => {
+  const NOW = Date.UTC(2026, 10, 12);
+  const DAY = 86_400_000;
+  const pub = (lastPlayedDaysAgo: number) => ({
+    recentWins: 5,
+    recentLosses: 5,
+    lastPlayedAt: Math.floor((NOW - lastPlayedDaysAgo * DAY) / 1000),
+    checkedAt: NOW - DAY,
+    topHeroes: [{ heroId: 26, games: 40, wins: 22 }], // Lion
+    scout: null,
+  });
   const rows = [
-    mk({ name: "Drafted", mmr: 4000, drafted: true, roles: "1" }),
-    mk({ name: "Free", mmr: 3000, roles: "2" }),
+    mk({ name: "Drafted", mmr: 4000, drafted: true, roles: "1", favoriteHeroes: "Invoker" }),
+    mk({ name: "Free", mmr: 3000, roles: "2", wantsCaptain: true, discordName: "free#1" }),
     mk({ name: "Sub", mmr: 3500, roles: "1,5" }),
     mk({ name: "Spare", mmr: 1000, roles: "4" }),
+    mk({ name: "Blank", mmr: 0, roles: "3" }),
   ];
   const standins = new Set(["Sub", "Spare"]);
-  const names = (filter: Parameters<typeof filterPoolRows>[1]) =>
-    filterPoolRows(rows, filter, standins).map((p) => p.name);
+  const scout: PoolScoutInfo = {
+    Drafted: {
+      lastSeason: {
+        seasonName: "Season 6",
+        teamName: "Dire Straits",
+        record: null,
+        price: 12,
+        captain: false,
+        champion: false,
+      },
+      inhouse: { rating: 1040, rank: 3, wins: 6, losses: 2, games: 8 },
+    },
+    Free: { pub: pub(3) },
+    Sub: { pub: pub(120) },
+  };
+  const facts = new Map(
+    rows.map((r) => [r.userId, poolRowFacts(r, scout[r.userId], standins, NOW)]),
+  );
+  const names = (over: Partial<PoolPageFilter>, heroIds = new Set<number>()) =>
+    filterPoolPage(rows, facts, { ...EMPTY_POOL_FILTER, ...over }, heroIds).map(
+      (p) => p.name,
+    );
 
-  it("lists everyone by default, standins interleaved by the chosen sort", () => {
-    expect(names({})).toEqual(["Drafted", "Sub", "Free", "Spare"]);
+  it("keeps everyone, in input order, with no filter", () => {
+    expect(names({})).toEqual(["Drafted", "Free", "Sub", "Spare", "Blank"]);
   });
-  it("search, role and sort reach standins too", () => {
-    expect(names({ query: "sub" })).toEqual(["Sub"]);
-    expect(names({ role: "1" })).toEqual(["Drafted", "Sub"]);
-    expect(names({ sort: "name" })).toEqual(["Drafted", "Free", "Spare", "Sub"]);
+  it("search, positions and status reach standins too", () => {
+    expect(names({ query: "SUB" })).toEqual(["Sub"]);
+    expect(names({ roles: ["1"] })).toEqual(["Drafted", "Sub"]);
+  });
+  it("positions are any-of: Pos 4 or 5 finds both supports", () => {
+    expect(names({ roles: ["4", "5"] })).toEqual(["Sub", "Spare"]);
   });
   it("the Standins chip narrows to standins and keeps the other filters", () => {
     expect(names({ status: "standin" })).toEqual(["Sub", "Spare"]);
-    expect(names({ status: "standin", role: "4" })).toEqual(["Spare"]);
+    expect(names({ status: "standin", roles: ["4"] })).toEqual(["Spare"]);
   });
   it("the Players chip hides standins and keeps the other filters", () => {
-    expect(names({ status: "player" })).toEqual(["Drafted", "Free"]);
-    expect(names({ status: "player", role: "1" })).toEqual(["Drafted"]);
-    expect(names({ status: "player", sort: "name" })).toEqual([
-      "Drafted",
-      "Free",
-    ]);
+    expect(names({ status: "player" })).toEqual(["Drafted", "Free", "Blank"]);
+    expect(names({ status: "player", roles: ["1"] })).toEqual(["Drafted"]);
   });
   it("never counts a standin as a free agent or as drafted", () => {
-    expect(names({ status: "free" })).toEqual(["Free"]);
+    expect(names({ status: "free" })).toEqual(["Free", "Blank"]);
     expect(names({ status: "drafted" })).toEqual(["Drafted"]);
   });
   it("leaves the shared lib standin-blind (the draft room's filter)", () => {
-    // Without the type narrowing a standin reads as an undrafted player.
+    // Without the page's narrowing a standin reads as an undrafted player.
     expect(
-      filterAndSortPlayers(rows, { status: "free" }).map((p) => p.name),
-    ).toEqual(["Sub", "Free", "Spare"]);
+      filterAndSortPlayers(rows, { status: "free", sort: "name" }).map(
+        (p) => p.name,
+      ),
+    ).toEqual(["Blank", "Free", "Spare", "Sub"]);
+  });
+  it("an MMR range is inclusive, open-ended, and never holds an unknown MMR", () => {
+    expect(names({ mmr: { min: 3000, max: 3500 } })).toEqual(["Free", "Sub"]);
+    expect(names({ mmr: { min: null, max: 3000 } })).toEqual(["Free", "Spare"]);
+    expect(names({ mmr: { min: 3600, max: null } })).toEqual(["Drafted"]);
+    // Reversed boxes still mean the span between them.
+    expect(names({ mmr: { min: 3500, max: 3000 } })).toEqual(["Free", "Sub"]);
+  });
+  it("splits returning players from first-timers", () => {
+    expect(names({ history: "returning" })).toEqual(["Drafted"]);
+    expect(names({ history: "new" })).toEqual(["Free", "Sub", "Spare", "Blank"]);
+  });
+  it("filters to inhouse players and to reachable ones", () => {
+    expect(names({ inhouseOnly: true })).toEqual(["Drafted"]);
+    expect(names({ discordOnly: true })).toEqual(["Free"]);
+    expect(names({ captainOnly: true })).toEqual(["Free"]);
+  });
+  it("hides only players KNOWN to have gone quiet; no snapshot stays", () => {
+    expect(names({ hideInactive: true })).toEqual([
+      "Drafted",
+      "Free",
+      "Spare",
+      "Blank",
+    ]);
+  });
+  it("a hero search finds favorites and pub heroes, beside name matches", () => {
+    expect(names({ query: "Lion" }, new Set([26]))).toEqual(["Free", "Sub"]);
+    expect(names({ query: "invoker" }, new Set([74]))).toEqual(["Drafted"]);
   });
   it("does not mutate the input", () => {
     const before = rows.map((p) => p.name);
-    names({ status: "standin", sort: "name" });
+    names({ status: "standin", roles: ["1"] });
     expect(rows.map((p) => p.name)).toEqual(before);
+  });
+
+  describe("facet counts leave out their own filter", () => {
+    it("counts every option against the other filters", () => {
+      const counts = poolFacetCounts(
+        rows,
+        facts,
+        { ...EMPTY_POOL_FILTER, roles: ["1"], status: "standin" },
+        new Set(),
+      );
+      // Positions ignore the position filter but keep "standins only".
+      expect(counts.roles).toEqual({ "1": 1, "2": 0, "3": 0, "4": 1, "5": 1 });
+      // Status ignores the status filter but keeps Pos 1.
+      expect(counts.status).toEqual({ player: 1, standin: 1, drafted: 1, free: 0 });
+    });
+    it("bands MMR without the range and leaves unknown MMR out", () => {
+      const counts = poolFacetCounts(
+        rows,
+        facts,
+        { ...EMPTY_POOL_FILTER, mmr: { min: 3000, max: 3999 } },
+        new Set(),
+      );
+      expect(counts.mmrBands).toEqual([1, 0, 2, 1, 0]);
+    });
+    it("counts the toggles' rows", () => {
+      const counts = poolFacetCounts(rows, facts, EMPTY_POOL_FILTER, new Set());
+      expect(counts.history).toEqual({ returning: 1, new: 4 });
+      expect(counts.inhouse).toBe(1);
+      expect(counts.discord).toBe(1);
+      expect(counts.captain).toBe(1);
+      expect(counts.inactive).toBe(1);
+    });
+  });
+});
+
+describe("sortPoolPage", () => {
+  const rows = [
+    mk({ name: "Low", mmr: 1000 }),
+    mk({ name: "High", mmr: 5000 }),
+    mk({ name: "Mid", mmr: 3000 }),
+  ];
+  const ctx = {
+    scout: {
+      Low: { inhouse: { rating: 1100, rank: 1, wins: 5, losses: 1, games: 6 } },
+    } satisfies PoolScoutInfo,
+    signedUpAt: { Low: 3, High: 1, Mid: 2 },
+  };
+  const order = (sort: Parameters<typeof sortPoolPage>[1]) =>
+    sortPoolPage(rows, sort, ctx).map((p) => p.name);
+  it("sorts by MMR, name, inhouse record and newest signup", () => {
+    expect(order("mmr")).toEqual(["High", "Mid", "Low"]);
+    expect(order("name")).toEqual(["High", "Low", "Mid"]);
+    expect(order("inhouse")).toEqual(["Low", "High", "Mid"]);
+    expect(order("newest")).toEqual(["Low", "Mid", "High"]);
+  });
+  it("keeps the MMR order for signups without a time", () => {
+    expect(
+      sortPoolPage(rows, "newest", { ...ctx, signedUpAt: {} }).map((p) => p.name),
+    ).toEqual(["High", "Mid", "Low"]);
+  });
+});
+
+describe("the /players address bar", () => {
+  const open: PoolFilterGates = {
+    captainSelectionOpen: true,
+    draftStatus: true,
+    anyStandin: true,
+    anyInhouse: true,
+    anyReturning: true,
+    anyInactive: true,
+    showContact: true,
+  };
+  const read = (qs: string, gates = open) =>
+    readPoolParams(new URLSearchParams(qs), gates);
+
+  it("round-trips every filter and the sort", () => {
+    const qs =
+      "q=lion&pos=4,5&sort=newest&cap=1&status=standin&mmr=3000-3500&history=returning&inhouse=1&discord=1&active=1";
+    const { filter, sort } = read(qs);
+    expect(filter).toEqual({
+      query: "lion",
+      roles: ["4", "5"],
+      status: "standin",
+      captainOnly: true,
+      mmr: { min: 3000, max: 3500 },
+      history: "returning",
+      inhouseOnly: true,
+      discordOnly: true,
+      hideInactive: true,
+    });
+    expect(sort).toBe("newest");
+    expect(poolParamsQuery(filter, sort)).toBe(qs);
+  });
+  it("leaves defaults out, so an unfiltered pool is a bare /players", () => {
+    expect(poolParamsQuery(EMPTY_POOL_FILTER, "mmr")).toBe("");
+  });
+  it("keeps an old single-position link working", () => {
+    expect(read("pos=1").filter.roles).toEqual(["1"]);
+    expect(read("pos=9,2,2").filter.roles).toEqual(["2"]);
+  });
+  it("never filters by a control that isn't on the page", () => {
+    const closed: PoolFilterGates = {
+      captainSelectionOpen: false,
+      draftStatus: false,
+      anyStandin: false,
+      anyInhouse: false,
+      anyReturning: false,
+      anyInactive: false,
+      showContact: false,
+    };
+    const { filter, sort } = read(
+      "cap=1&status=standin&history=new&inhouse=1&discord=1&active=1&sort=inhouse",
+      closed,
+    );
+    expect(filter).toEqual(EMPTY_POOL_FILTER);
+    expect(sort).toBe("mmr");
+    expect(read("status=free", closed).filter.status).toBe("all");
+    expect(read("status=player", closed).filter.status).toBe("all");
+  });
+  it("ignores junk", () => {
+    expect(read("sort=bogus&status=x&mmr=abc&history=maybe").filter).toEqual(
+      EMPTY_POOL_FILTER,
+    );
+    expect(read("sort=bogus").sort).toBe("mmr");
+  });
+});
+
+describe("MMR ranges", () => {
+  it("parses open ends and swaps a reversed range", () => {
+    expect(parseMmrRange("3000-")).toEqual({ min: 3000, max: null });
+    expect(parseMmrRange("-3300")).toEqual({ min: null, max: 3300 });
+    expect(parseMmrRange("4000-3000")).toEqual({ min: 3000, max: 4000 });
+    expect(parseMmrRange("-")).toEqual(NO_MMR_RANGE);
+    expect(parseMmrRange("3k-4k")).toEqual(NO_MMR_RANGE);
+  });
+  it("reads a typed box as digits only", () => {
+    expect(parseMmrInput(" 3200 ")).toBe(3200);
+    expect(parseMmrInput("")).toBeNull();
+    expect(parseMmrInput("3,200")).toBeNull();
+    expect(parseMmrInput("-1")).toBeNull();
+  });
+  it("labels a range the way the bands do", () => {
+    expect(mmrRangeLabel({ min: 3000, max: 3999 })).toBe("3,000–3,999");
+    expect(mmrRangeLabel({ min: 3000, max: null })).toBe("From 3,000");
+    expect(mmrRangeLabel({ min: null, max: 3300 })).toBe("Up to 3,300");
+    expect(mmrRangeLabel(NO_MMR_RANGE)).toBeNull();
+  });
+  it("has bands that cover every known MMR exactly once", () => {
+    for (const mmr of [1, 1999, 2000, 2999, 3000, 4999, 5000, 12000]) {
+      expect(
+        POOL_MMR_BANDS.filter((band) => mmrInRange(mmr, band)),
+      ).toHaveLength(1);
+    }
+    expect(POOL_MMR_BANDS.some((band) => mmrInRange(0, band))).toBe(false);
+  });
+});
+
+describe("filter state", () => {
+  it("counts only the Filters panel's own filters on its button", () => {
+    expect(poolPanelFilterCount(EMPTY_POOL_FILTER)).toBe(0);
+    expect(
+      poolPanelFilterCount({
+        ...EMPTY_POOL_FILTER,
+        query: "x",
+        roles: ["1"],
+        status: "standin",
+        mmr: { min: 3000, max: null },
+        hideInactive: true,
+      }),
+    ).toBe(2);
+  });
+  it("says when anything narrows the list", () => {
+    expect(poolFilterActive(EMPTY_POOL_FILTER)).toBe(false);
+    expect(poolFilterActive({ ...EMPTY_POOL_FILTER, query: "  " })).toBe(false);
+    expect(
+      poolFilterActive({ ...EMPTY_POOL_FILTER, mmr: { min: null, max: 1 } }),
+    ).toBe(true);
+  });
+});
+
+describe("poolHeroMatches", () => {
+  const lion = { id: 26, name: "Lion" };
+  it("says where a hero-matched row plays the hero", () => {
+    expect(
+      poolHeroMatches(
+        mk({ name: "Zed", favoriteHeroes: "Lion, Pudge" }),
+        {
+          pub: {
+            recentWins: 1,
+            recentLosses: 1,
+            lastPlayedAt: null,
+            checkedAt: null,
+            topHeroes: [],
+            scout: { heroes: [{ heroId: 26, games: 12 }], games: 100 },
+          },
+        } as unknown as PoolScout,
+        "lion",
+        [lion],
+      ),
+    ).toEqual([{ heroId: 26, text: "Lion: a favorite, 12 of their last 100 pubs" }]);
+  });
+  it("is empty when the name matched or no hero is named", () => {
+    expect(poolHeroMatches(mk({ name: "Lionheart" }), undefined, "lion", [lion])).toEqual([]);
+    expect(poolHeroMatches(mk({ name: "Zed" }), undefined, "zed", [])).toEqual([]);
   });
 });
 

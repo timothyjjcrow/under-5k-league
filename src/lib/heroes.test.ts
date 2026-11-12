@@ -9,6 +9,7 @@ import {
   heroBySlug,
   heroPagePath,
   heroSearchDestination,
+  heroesForPlayerSearch,
   heroSlug,
   searchHeroes,
 } from "./heroes";
@@ -161,5 +162,27 @@ describe("heroSearchDestination", () => {
   it("goes back to Hero meta when nothing matches", () => {
     expect(heroSearchDestination("zzzz")).toBe("/meta");
     expect(heroSearchDestination("", "s1")).toBe("/meta?season=s1");
+  });
+});
+
+describe("heroesForPlayerSearch", () => {
+  const names = (q: string) => heroesForPlayerSearch(q).map((h) => h.name);
+  it("names an exact hero or alias at any length", () => {
+    expect(names("am")).toEqual(["Anti-Mage"]);
+    expect(names("Lion")).toEqual(["Lion"]);
+    expect(names("jugg")).toEqual(["Juggernaut"]);
+  });
+  it("matches the start of a word from three letters, never inside one", () => {
+    expect(names("lanc")).toEqual(["Phantom Lancer"]);
+    expect(names("proph")).toEqual(["Death Prophet", "Nature's Prophet"]);
+    expect(names("ant")).toEqual(["Anti-Mage"]);
+  });
+  it("names nothing for short or unknown text, so names still search", () => {
+    expect(names("x")).toEqual([]);
+    expect(names("zz")).toEqual([]);
+    expect(names("player")).toEqual([]);
+  });
+  it("caps the list", () => {
+    expect(heroesForPlayerSearch("sha").length).toBeLessThanOrEqual(3);
   });
 });

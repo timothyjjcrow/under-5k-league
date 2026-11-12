@@ -1,6 +1,6 @@
 // Pure filtering + sorting for the player-pool UI. Kept DB-free so it's
 // unit-testable and reusable on client and server.
-import { heroById } from "./heroes";
+import { heroById, parseHeroList } from "./heroes";
 import type { PubScout } from "./pub-scout";
 import {
   pubCheckedAgo,
@@ -8,7 +8,7 @@ import {
   pubWinRate,
   type PubActivity,
 } from "./pub-stats";
-import { parseRoles } from "./roles";
+import { parseRoles, serializeRoles } from "./roles";
 import { seriesRecordText } from "./team-matches";
 
 export type PoolPlayer = {
@@ -410,35 +410,454 @@ export type FilterablePlayer = {
  *  registration types, "player" (full players only) and "standin". */
 export type PoolStatusFilter = "all" | "drafted" | "free" | "player" | "standin";
 
-/**
- * The /players pool's filter. Standins sit in the same table as full players,
- * so search, roles and sort work for everyone, but registration type is a
- * pool-only fact: `filterAndSortPlayers` is shared with the draft room, which
- * must never list a standin, so neither PoolPlayer nor PoolFilter learns about
- * it. The type narrowing happens here, then the shared lib does the rest.
- *
- * "player" is the complement of "standin": every full player, drafted or not.
- * "drafted" and "free" are about FULL players too: a standin is never rostered,
- * so the lib alone would count every standin as a free agent, and a free agent
- * is someone a captain can sign (signFreeAgent refuses standins).
- * Never mutates the input.
- */
-export function filterPoolRows<
-  T extends FilterablePlayer & { userId: string },
->(
-  rows: T[],
-  filter: Omit<PoolFilter, "status"> & { status?: PoolStatusFilter },
+// --- The /players page's filters ----------------------------------------------
+// Everything below is /players only. `filterAndSortPlayers` (further down) is
+// shared with the draft room, which never lists a standin and has its own
+// controls, so neither it, PoolPlayer, PoolFilter nor PoolSort learns about
+// anything here: the page narrows its rows with these, then sorts through the
+// shared lib.
+
+/** League history: everyone, players who played an earlier league season,
+ *  or players who never have. */
+export type PoolHistoryFilter = "any" | "returning" | "new";
+
+/** An MMR range with open ends. */
+export type MmrRange = { min: number | null; max: number | null };
+
+export const NO_MMR_RANGE: MmrRange = { min: null, max: null };
+
+/** The MMR histogram's bands, inclusive, open at both ends of the scale. */
+export const POOL_MMR_BANDS: readonly (MmrRange & { label: string })[] = [
+  { min: null, max: 1999, label: "Under 2,000" },
+  { min: 2000, max: 2999, label: "2,000–2,999" },
+  { min: 3000, max: 3999, label: "3,000–3,999" },
+  { min: 4000, max: 4999, label: "4,000–4,999" },
+  { min: 5000, max: null, label: "5,000+" },
+];
+
+/** Everything the /players filters can say. Sort is not a filter. */
+export type PoolPageFilter = {
+  /** Matches player names, and heroes they play (`heroesForPlayerSearch`). */
+  query: string;
+  /** Positions "1".."5"; a row matches when it lists ANY of them. Empty = all. */
+  roles: readonly string[];
+  status: PoolStatusFilter;
+  captainOnly: boolean;
+  mmr: MmrRange;
+  history: PoolHistoryFilter;
+  inhouseOnly: boolean;
+  /** Only players with a Discord handle on file (offered only to viewers
+   *  who may see handles: for anyone else every handle is blank). */
+  discordOnly: boolean;
+  /** Hide players whose pub snapshot says they have gone quiet. A player
+   *  with no snapshot is unknown, never inactive, so they stay. */
+  hideInactive: boolean;
+};
+
+export const EMPTY_POOL_FILTER: PoolPageFilter = {
+  query: "",
+  roles: [],
+  status: "all",
+  captainOnly: false,
+  mmr: NO_MMR_RANGE,
+  history: "any",
+  inhouseOnly: false,
+  discordOnly: false,
+  hideInactive: false,
+};
+
+/** The facts the filters read that are not on PoolPlayer, worked out once
+ *  per row (`poolRowFacts`) rather than per keystroke. */
+export type PoolRowFacts = {
+  standin: boolean;
+  /** Played on a league team in an earlier season (`lastSeason`). */
+  returning: boolean;
+  inhouse: boolean;
+  /** Their pub snapshot is fresh and says they have gone quiet. */
+  inactive: boolean;
+  /** Favorite heroes, recent pub heroes and all-time pub heroes. */
+  heroIds: ReadonlySet<number>;
+};
+
+export function poolRowFacts(
+  player: { userId: string; favoriteHeroes: string },
+  scout: PoolScout | undefined,
   standinIds: ReadonlySet<string>,
-): T[] {
-  const { status = "all", ...rest } = filter;
-  const typed =
-    status === "all"
-      ? rows
-      : rows.filter((r) => standinIds.has(r.userId) === (status === "standin"));
-  return filterAndSortPlayers(typed, {
-    ...rest,
-    status: status === "standin" || status === "player" ? "all" : status,
+  nowMs: number,
+): PoolRowFacts {
+  const heroIds = new Set<number>(
+    parseHeroList(player.favoriteHeroes).matched.map((h) => h.id),
+  );
+  for (const h of scout?.pub?.scout?.heroes ?? []) heroIds.add(h.heroId);
+  for (const h of scout?.pub?.topHeroes ?? []) heroIds.add(h.heroId);
+  const activity = scout?.pub ? pubLastPlayed(scout.pub, nowMs) : null;
+  return {
+    standin: standinIds.has(player.userId),
+    returning: !!scout?.lastSeason,
+    inhouse: !!scout?.inhouse,
+    inactive: !!activity?.quiet,
+    heroIds,
+  };
+}
+
+/** Each filter that can be left out to count its own options. */
+type PoolFacet =
+  | "query"
+  | "roles"
+  | "status"
+  | "captain"
+  | "mmr"
+  | "history"
+  | "inhouse"
+  | "discord"
+  | "inactive";
+
+/** An unknown MMR (0) never falls inside a range: unknown is not low. */
+export function mmrInRange(mmr: number, range: MmrRange): boolean {
+  const { min, max } = normalizeMmrRange(range);
+  if (min == null && max == null) return true;
+  if (mmr <= 0) return false;
+  return (min == null || mmr >= min) && (max == null || mmr <= max);
+}
+
+/** A reversed range ("4000 to 3000") still means the span between them. */
+export function normalizeMmrRange(range: MmrRange): MmrRange {
+  const { min, max } = range;
+  return min != null && max != null && min > max
+    ? { min: max, max: min }
+    : range;
+}
+
+/** A typed MMR box: digits only, up to five; anything else is no bound. */
+export function parseMmrInput(text: string): number | null {
+  const digits = text.trim();
+  return /^\d{1,5}$/.test(digits) ? Number(digits) : null;
+}
+
+/** `?mmr=3000-3500`, `3000-` (from) or `-3300` (up to). */
+export function parseMmrRange(raw: string | null | undefined): MmrRange {
+  const m = /^(\d{1,5})?-(\d{1,5})?$/.exec((raw ?? "").trim());
+  if (!m || (!m[1] && !m[2])) return NO_MMR_RANGE;
+  return normalizeMmrRange({
+    min: m[1] ? Number(m[1]) : null,
+    max: m[2] ? Number(m[2]) : null,
   });
+}
+
+function mmrRangeParam(range: MmrRange): string | null {
+  const { min, max } = normalizeMmrRange(range);
+  return min == null && max == null ? null : `${min ?? ""}-${max ?? ""}`;
+}
+
+/** "3,000–3,999", "From 3,000", "Up to 3,300". */
+export function mmrRangeLabel(range: MmrRange): string | null {
+  const { min, max } = normalizeMmrRange(range);
+  const fmt = (n: number) => MMR_FORMAT.format(n);
+  if (min != null && max != null) return `${fmt(min)}–${fmt(max)}`;
+  if (min != null) return `From ${fmt(min)}`;
+  if (max != null) return `Up to ${fmt(max)}`;
+  return null;
+}
+
+const MMR_FORMAT = new Intl.NumberFormat("en-US");
+
+/** Whether one row passes the filter, leaving out `skip` (to count that
+ *  facet's own options). `heroIds` is the query's heroes, computed once. */
+function poolRowMatches(
+  row: FilterablePlayer & { discordName?: string },
+  facts: PoolRowFacts,
+  filter: PoolPageFilter,
+  heroIds: ReadonlySet<number>,
+  skip?: PoolFacet,
+): boolean {
+  const q = filter.query.trim().toLowerCase();
+  if (skip !== "query" && q) {
+    const byName = row.name.toLowerCase().includes(q);
+    if (!byName && ![...heroIds].some((id) => facts.heroIds.has(id))) {
+      return false;
+    }
+  }
+  if (skip !== "roles" && filter.roles.length > 0) {
+    const listed = parseRoles(row.roles);
+    if (!filter.roles.some((r) => listed.includes(r))) return false;
+  }
+  if (skip !== "status" && filter.status !== "all") {
+    // A standin is never rostered, so "drafted" and "free" are about full
+    // players: a free agent is someone a captain can sign, and
+    // signFreeAgent refuses standins.
+    if (filter.status === "standin" && !facts.standin) return false;
+    if (filter.status !== "standin" && facts.standin) return false;
+    if (filter.status === "drafted" && !row.drafted) return false;
+    if (filter.status === "free" && row.drafted) return false;
+  }
+  if (skip !== "captain" && filter.captainOnly && !row.wantsCaptain) {
+    return false;
+  }
+  if (skip !== "mmr" && !mmrInRange(row.mmr, filter.mmr)) return false;
+  if (skip !== "history" && filter.history !== "any") {
+    if (facts.returning !== (filter.history === "returning")) return false;
+  }
+  if (skip !== "inhouse" && filter.inhouseOnly && !facts.inhouse) return false;
+  if (skip !== "discord" && filter.discordOnly && !row.discordName) {
+    return false;
+  }
+  if (skip !== "inactive" && filter.hideInactive && facts.inactive) {
+    return false;
+  }
+  return true;
+}
+
+/** The rows the filter keeps, in their input order. Never mutates. */
+export function filterPoolPage<T extends FilterablePlayer & { userId: string }>(
+  rows: readonly T[],
+  facts: ReadonlyMap<string, PoolRowFacts>,
+  filter: PoolPageFilter,
+  heroIds: ReadonlySet<number>,
+): T[] {
+  return rows.filter((r) => {
+    const f = facts.get(r.userId);
+    return !!f && poolRowMatches(r, f, filter, heroIds);
+  });
+}
+
+/** How many rows each option would show, given every OTHER filter: the
+ *  counts beside the chips and the MMR histogram's bars. */
+export type PoolFacetCounts = {
+  roles: Record<string, number>;
+  mmrBands: number[];
+  status: { player: number; standin: number; drafted: number; free: number };
+  captain: number;
+  history: { returning: number; new: number };
+  inhouse: number;
+  discord: number;
+  /** Rows "Hide inactive" would take out. */
+  inactive: number;
+};
+
+export function poolFacetCounts<
+  T extends FilterablePlayer & { userId: string; discordName?: string },
+>(
+  rows: readonly T[],
+  facts: ReadonlyMap<string, PoolRowFacts>,
+  filter: PoolPageFilter,
+  heroIds: ReadonlySet<number>,
+): PoolFacetCounts {
+  const without = (skip: PoolFacet) =>
+    rows.flatMap((r) => {
+      const f = facts.get(r.userId);
+      return f && poolRowMatches(r, f, filter, heroIds, skip)
+        ? [{ row: r, facts: f }]
+        : [];
+    });
+  const roles: Record<string, number> = {};
+  for (const key of ["1", "2", "3", "4", "5"]) roles[key] = 0;
+  for (const { row } of without("roles")) {
+    for (const key of parseRoles(row.roles)) roles[key] += 1;
+  }
+  const mmrRows = without("mmr");
+  const status = without("status");
+  const history = without("history");
+  return {
+    roles,
+    mmrBands: POOL_MMR_BANDS.map(
+      (band) => mmrRows.filter(({ row }) => mmrInRange(row.mmr, band)).length,
+    ),
+    status: {
+      player: status.filter((x) => !x.facts.standin).length,
+      standin: status.filter((x) => x.facts.standin).length,
+      drafted: status.filter((x) => !x.facts.standin && x.row.drafted).length,
+      free: status.filter((x) => !x.facts.standin && !x.row.drafted).length,
+    },
+    captain: without("captain").filter((x) => x.row.wantsCaptain).length,
+    history: {
+      returning: history.filter((x) => x.facts.returning).length,
+      new: history.filter((x) => !x.facts.returning).length,
+    },
+    inhouse: without("inhouse").filter((x) => x.facts.inhouse).length,
+    discord: without("discord").filter((x) => !!x.row.discordName).length,
+    inactive: without("inactive").filter((x) => x.facts.inactive).length,
+  };
+}
+
+/** True when anything narrows the list (sort never does). */
+export function poolFilterActive(filter: PoolPageFilter): boolean {
+  return (
+    filter.query.trim() !== "" ||
+    filter.roles.length > 0 ||
+    filter.status !== "all" ||
+    filter.captainOnly ||
+    filter.mmr.min != null ||
+    filter.mmr.max != null ||
+    filter.history !== "any" ||
+    filter.inhouseOnly ||
+    filter.discordOnly ||
+    filter.hideInactive
+  );
+}
+
+/** How many of the Filters panel's own filters are on: the count on the
+ *  button that opens it, where the panel is folded away. */
+export function poolPanelFilterCount(filter: PoolPageFilter): number {
+  return [
+    filter.mmr.min != null || filter.mmr.max != null,
+    filter.history !== "any",
+    filter.inhouseOnly,
+    filter.discordOnly,
+    filter.hideInactive,
+  ].filter(Boolean).length;
+}
+
+/** The /players sorts: the shared three, plus two the draft room never has. */
+export type PoolPageSort = PoolSort | "inhouse" | "newest";
+
+/**
+ * Order the kept rows. MMR, medal and name go through the shared lib;
+ * "inhouse" bands the MMR order by ladder record; "newest" puts the latest
+ * signups first (ties keep the MMR order). Never mutates.
+ */
+export function sortPoolPage<T extends FilterablePlayer & { userId: string }>(
+  rows: readonly T[],
+  sort: PoolPageSort,
+  ctx: { scout: PoolScoutInfo; signedUpAt: Readonly<Record<string, number>> },
+): T[] {
+  const base = filterAndSortPlayers([...rows], {
+    sort: sort === "inhouse" || sort === "newest" ? "mmr" : sort,
+  });
+  if (sort === "inhouse") return sortByInhouseRecord(base, ctx.scout);
+  if (sort === "newest") {
+    return [...base].sort(
+      (a, b) => (ctx.signedUpAt[b.userId] ?? 0) - (ctx.signedUpAt[a.userId] ?? 0),
+    );
+  }
+  return base;
+}
+
+/** What /players can offer right now. A control renders only where it does
+ *  something, and a stale link never filters by a control that isn't there. */
+export type PoolFilterGates = {
+  captainSelectionOpen: boolean;
+  /** The draft has rostered someone, and the phase shows draft status. */
+  draftStatus: boolean;
+  anyStandin: boolean;
+  anyInhouse: boolean;
+  anyReturning: boolean;
+  anyInactive: boolean;
+  showContact: boolean;
+};
+
+const SORT_PARAMS: readonly PoolPageSort[] = [
+  "mmr",
+  "rank",
+  "name",
+  "inhouse",
+  "newest",
+];
+
+/**
+ * Read the filters and sort from the address bar, so a shared link (or a
+ * trip to a profile and back) shows what the sender saw. Anything with no
+ * control to show it degrades to its default rather than filtering
+ * invisibly: `?status=standin` with no standins, `?cap=1` once captains are
+ * chosen, `?sort=inhouse` with no ladder, and so on.
+ */
+export function readPoolParams(
+  params: { get(name: string): string | null },
+  gates: PoolFilterGates,
+): { filter: PoolPageFilter; sort: PoolPageSort } {
+  const status = params.get("status");
+  const sortRaw = params.get("sort");
+  const sort: PoolPageSort =
+    sortRaw === "inhouse"
+      ? gates.anyInhouse
+        ? "inhouse"
+        : "mmr"
+      : SORT_PARAMS.includes(sortRaw as PoolPageSort)
+        ? (sortRaw as PoolPageSort)
+        : "mmr";
+  const history = params.get("history");
+  return {
+    filter: {
+      query: params.get("q") ?? "",
+      roles: parseRoles(params.get("pos")),
+      status:
+        status === "standin" || status === "player"
+          ? gates.anyStandin
+            ? status
+            : "all"
+          : status === "drafted" || status === "free"
+            ? gates.draftStatus
+              ? status
+              : "all"
+            : "all",
+      captainOnly: gates.captainSelectionOpen && params.get("cap") === "1",
+      mmr: parseMmrRange(params.get("mmr")),
+      history:
+        gates.anyReturning && (history === "returning" || history === "new")
+          ? history
+          : "any",
+      inhouseOnly: gates.anyInhouse && params.get("inhouse") === "1",
+      discordOnly: gates.showContact && params.get("discord") === "1",
+      hideInactive: gates.anyInactive && params.get("active") === "1",
+    },
+    sort,
+  };
+}
+
+/** The address bar's query for a filter and sort; defaults are left out, so
+ *  an unfiltered pool is a bare /players. */
+export function poolParamsQuery(
+  filter: PoolPageFilter,
+  sort: PoolPageSort,
+): string {
+  const sp = new URLSearchParams();
+  if (filter.query) sp.set("q", filter.query);
+  if (filter.roles.length > 0) sp.set("pos", serializeRoles([...filter.roles]));
+  if (sort !== "mmr") sp.set("sort", sort);
+  if (filter.captainOnly) sp.set("cap", "1");
+  if (filter.status !== "all") sp.set("status", filter.status);
+  const mmr = mmrRangeParam(filter.mmr);
+  if (mmr) sp.set("mmr", mmr);
+  if (filter.history !== "any") sp.set("history", filter.history);
+  if (filter.inhouseOnly) sp.set("inhouse", "1");
+  if (filter.discordOnly) sp.set("discord", "1");
+  if (filter.hideInactive) sp.set("active", "1");
+  // "pos=4,5" reads better in a shared link than "pos=4%2C5", and a comma
+  // is legal in a query; URLSearchParams reads it back either way.
+  return sp.toString().replace(/%2C/gi, ",");
+}
+
+/** A row the search kept for a hero rather than its name: which heroes, and
+ *  where each comes from, for the hint under the name. Empty when the name
+ *  matched or the query names no hero. */
+export function poolHeroMatches(
+  player: { name: string; favoriteHeroes: string },
+  scout: PoolScout | undefined,
+  query: string,
+  heroes: readonly { id: number; name: string }[],
+): { heroId: number; text: string }[] {
+  const q = query.trim().toLowerCase();
+  if (!q || heroes.length === 0 || player.name.toLowerCase().includes(q)) {
+    return [];
+  }
+  const favorites = new Set(
+    parseHeroList(player.favoriteHeroes).matched.map((h) => h.id),
+  );
+  const recent = scout?.pub?.scout;
+  const out: { heroId: number; text: string }[] = [];
+  for (const hero of heroes) {
+    const where: string[] = [];
+    if (favorites.has(hero.id)) where.push("a favorite");
+    const inWindow = recent?.heroes.find((h) => h.heroId === hero.id);
+    if (inWindow && recent) {
+      where.push(`${inWindow.games} of their last ${recent.games} pubs`);
+    } else if (scout?.pub?.topHeroes.some((h) => h.heroId === hero.id)) {
+      where.push("among their most played in pubs");
+    }
+    if (where.length > 0) {
+      out.push({ heroId: hero.id, text: `${hero.name}: ${where.join(", ")}` });
+    }
+  }
+  return out;
 }
 
 /** Filter + sort a player list. Never mutates the input. */
