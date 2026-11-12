@@ -46,10 +46,13 @@ describe("match page standins card", () => {
     expect(card).toMatch(
       /const requests =\s*match\.status === MATCH_STATUS\.COMPLETED \? \[\] : match\.standinRequests;/,
     );
-    // Captain to-dos points the other captain at the card.
-    expect(CARD("captain-todos.tsx")).toMatch(
+    // Captain to-dos (the match page's list, Home's captain line and
+    // the Captains page all read captainTodos) point the other captain at
+    // the card.
+    expect(sourceFile("src/lib/captain-todos.ts").text).toMatch(
       /match\.standinRequests\.filter\(\(r\) => r\.teamId !== myTeamId\)/,
     );
+    expect(CARD("captain-todos.tsx")).toContain("captainTodos({");
   });
 
   it("offers Remove only before the series has a game", () => {
@@ -199,8 +202,11 @@ describe("match page captain tools order and anchors", () => {
     expect(
       sourceFile("src/components/reschedule/locked-in-card.tsx").text,
     ).toContain("id = MATCH_ANCHOR.reschedule");
-    expect(PAGE).toContain("href={`#${MATCH_ANCHOR.standins}`}");
-    expect(PAGE).toContain("href={`#${MATCH_ANCHOR.reschedule}`}");
+    // The captain's to-do lines jump to the card that answers them
+    // (CAPTAIN_TODO_CARD, pinned in captain-todos.test.ts).
+    expect(PAGE).toContain(
+      "href={`#${MATCH_ANCHOR[CAPTAIN_TODO_CARD[todo.kind]]}`}",
+    );
   });
 });
 
@@ -369,6 +375,9 @@ describe("match page scouting report", () => {
 });
 
 describe("match page check-in reminder", () => {
+  const NUDGE = stripLineComments(
+    sourceFile("src/components/checkin-nudge-control.tsx").text,
+  );
   it("offers the reminder only to a captain, under their own side, while check-in is open", () => {
     // sendCheckinNudge refuses everyone but this match's captains, anything
     // but their own team, a closed check-in and a league with no channel;
@@ -380,15 +389,19 @@ describe("match page check-in reminder", () => {
     expect(PAGE).toMatch(/\.unansweredUserIds\.filter\(\(id\) => id !== viewer!\.id\)/);
     expect(PAGE).toMatch(/nudgeTeamId && nudgeWaiting > 0 && \(await getWebhookUrl\(\)\)/);
     expect(PAGE).toContain("{nudge && s.teamId === nudge.teamId ? (");
-    expect(PAGE).toMatch(/action=\{remindUnansweredCheckins\}\s*hidden=\{\{ matchId: match\.id \}\}/);
+    // The control is shared with the Captains page.
+    expect(PAGE).toContain(
+      "<CheckinNudgeControl matchId={match.id} nudge={nudge} />",
+    );
+    expect(NUDGE).toMatch(/action=\{remindUnansweredCheckins\}\s*hidden=\{\{ matchId \}\}/);
   });
 
   it("is a single press with no confirm, and says when the next one is allowed", () => {
-    expect(PAGE).toMatch(
+    expect(NUDGE).toMatch(
       /action=\{remindUnansweredCheckins\}[\s\S]{0,300}<SubmitButton variant="secondary" size="sm">/,
     );
     expect(PAGE).toContain("checkinNudgeBlockedSince(");
-    expect(PAGE).toContain("You can send another from");
+    expect(NUDGE).toContain("You can send another from");
   });
 });
 
@@ -570,7 +583,7 @@ describe("the ready check's Lock", () => {
   // one whose move was refused, so it must keep its Lock.
   it("comes from lockOffered on the card and in the captain's to-dos", () => {
     const card = sourceFile("src/components/reschedule/ready-check-card.tsx").text;
-    const todos = sourceFile("src/app/matches/[id]/captain-todos.tsx").text;
+    const todos = sourceFile("src/lib/captain-todos.ts").text;
     expect(card).toContain("const showLock = isCaptain && lockOffered(option);");
     expect(todos).toContain("open.options.find(lockOffered)");
     expect(card).not.toMatch(/showLock[^\n]*everyoneIn/);

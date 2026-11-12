@@ -15,16 +15,13 @@ import {
   scrimNotPlayedCutoff,
 } from "@/lib/scrim-view";
 import { parseGamePlayers } from "@/lib/player-stats";
-import { LocalDatetimeField } from "@/components/local-datetime-field";
 import { LocalTime } from "@/components/local-time";
-import { ActionForm, SubmitButton } from "@/components/action-form";
 import {
-  addTeamCoach,
-  cancelScrim,
-  createScrim,
-  joinScrim,
-  removeTeamCoach,
-} from "@/app/actions/scrims";
+  ScrimCancelButton,
+  ScrimJoinButton,
+  ScrimPostForm,
+  TeamCoachesCard,
+} from "@/components/scrims/scrim-controls";
 import {
   Badge,
   Card,
@@ -43,9 +40,6 @@ export const metadata = shareMetadata(
   "Post team availability, book casual league scrims, and review scrim-only results and statistics.",
   "/scrims",
 );
-
-const inputClass =
-  "h-10 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";
 
 function ScrimTime({ date }: { date: Date }) {
   return (
@@ -222,39 +216,7 @@ export default async function ScrimsPage({
             subtitle={`${myCaptainTeam.name} is available to practice. A captain from another active team can claim the slot.`}
           />
           <CardBody>
-            <ActionForm
-              action={createScrim}
-              className="flex flex-col gap-3 sm:flex-row sm:items-end"
-            >
-              {/* A datetime needs about 18rem; stretched across the card it
-                  pushed Format and Post to the far edge. A flex column, not
-                  space-y: the field's hidden twin is the last child, so
-                  space-y put a margin under the visible box and lifted it
-                  6px above Format and Post. */}
-              <label className="flex min-w-0 flex-col gap-1.5 text-sm sm:w-72">
-                <span className="block text-xs font-medium text-muted">
-                  Available date and time
-                </span>
-                <LocalDatetimeField
-                  name="scheduledAt"
-                  tsName="scheduledAtTs"
-                  required
-                  className={`${inputClass} w-full`}
-                />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm">
-                <span className="block text-xs font-medium text-muted">
-                  Format
-                </span>
-                <select name="bestOf" defaultValue="1" className={inputClass}>
-                  <option value="1">Best of 1</option>
-                  <option value="2">Best of 2</option>
-                  <option value="3">Best of 3</option>
-                  <option value="5">Best of 5</option>
-                </select>
-              </label>
-              <SubmitButton>Post availability</SubmitButton>
-            </ActionForm>
+            <ScrimPostForm />
           </CardBody>
         </Card>
       ) : viewer && seasonOpen ? (
@@ -340,24 +302,9 @@ export default async function ScrimsPage({
                       >
                         Details
                       </Link>
-                      {canJoin ? (
-                        <ActionForm action={joinScrim} hidden={{ scrimId: scrim.id }}>
-                          <SubmitButton size="sm">Join scrim</SubmitButton>
-                        </ActionForm>
-                      ) : null}
+                      {canJoin ? <ScrimJoinButton scrimId={scrim.id} /> : null}
                       {canCancel ? (
-                        <ActionForm
-                          action={cancelScrim}
-                          hidden={{ scrimId: scrim.id }}
-                        >
-                          <SubmitButton
-                            size="sm"
-                            variant="ghost"
-                            confirm="Cancel this open scrim time?"
-                          >
-                            Cancel
-                          </SubmitButton>
-                        </ActionForm>
+                        <ScrimCancelButton scrimId={scrim.id} booked={false} />
                       ) : null}
                     </div>
                   </div>
@@ -420,64 +367,7 @@ export default async function ScrimsPage({
       </div>
 
       {myCaptainTeam && seasonOpen ? (
-        <Card id="coaches" tone="quiet">
-          <CardHeader
-            title={`${myCaptainTeam.name} coaches`}
-            subtitle="Coaches must have signed into the site once. They can manage your side’s casual guest IDs and fetch scrim results, but cannot post, claim, or cancel scrims."
-            headingLevel={2}
-          />
-          <CardBody className="space-y-4">
-            <ActionForm
-              action={addTeamCoach}
-              className="flex flex-col gap-2 sm:flex-row sm:items-end"
-            >
-              <label className="min-w-0 flex-1 space-y-1.5 text-sm sm:max-w-md">
-                <span className="block text-xs font-medium text-muted">
-                  Coach Dota ID, SteamID64, or profile URL
-                </span>
-                <input
-                  name="coachRef"
-                  required
-                  placeholder="Account ID or profile URL"
-                  className={`${inputClass} w-full`}
-                />
-              </label>
-              {/* Secondary: a set-once form must not compete with Post
-                  availability, the page's one main action. */}
-              <SubmitButton size="sm" variant="secondary">
-                Add coach
-              </SubmitButton>
-            </ActionForm>
-            {myCaptainTeam.staff.length > 0 ? (
-              <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
-                {myCaptainTeam.staff.map((staff) => (
-                  <li
-                    key={staff.id}
-                    className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-                  >
-                    <PlayerLink userId={staff.userId}>
-                      {staff.user.name}
-                    </PlayerLink>
-                    <ActionForm
-                      action={removeTeamCoach}
-                      hidden={{ staffId: staff.id }}
-                    >
-                      <SubmitButton
-                        variant="ghost"
-                        size="sm"
-                        confirm={`Remove ${staff.user.name}'s coach access?`}
-                      >
-                        Remove
-                      </SubmitButton>
-                    </ActionForm>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="text-sm text-muted">No coaches assigned.</p>
-            )}
-          </CardBody>
-        </Card>
+        <TeamCoachesCard team={myCaptainTeam} />
       ) : null}
       </>
       )}

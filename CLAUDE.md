@@ -34,7 +34,7 @@ note before changing that area: it is required reading, not background.
 | [inhouse-duels](docs/features/inhouse-duels.md) | the 1v1 mid queue and duels: pairing, their bot lobbies, results and clocks, the 1v1 card on `/inhouse`, the 1v1 leaderboard |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
 | [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
-| [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
+| [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, the Captains page (`/captains`), `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
 | [players-and-registration](docs/features/players-and-registration.md) | signup and MMR rules, the Discord a signup needs, the player pool and scouting, profiles, compare, team names, logos and jerseys |
 | [stats-and-side-games](docs/features/stats-and-side-games.md) | impact points, honors, Leaders, Hall of Fame, Record book, Hero meta and the hero pages, power rankings, scouting, fantasy, pick'em, scrims, news |
 | [match-night-poll](docs/features/match-night-poll.md) | the match-night poll: its availability grid, the count, the viewer's-clock conversion, the Home card or its admin section |

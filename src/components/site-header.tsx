@@ -54,6 +54,7 @@ export function SiteHeader({
   phase,
   seasonName,
   myTeamId,
+  captaining = false,
   draftStatus = null,
   content,
   join = null,
@@ -65,6 +66,8 @@ export function SiteHeader({
   phase: string | null;
   seasonName: string | null;
   myTeamId: string | null;
+  /** The viewer captains a team in the active season (`captainsPageOpen`). */
+  captaining?: boolean;
   /** The active season's auction status; only read during DRAFT. */
   draftStatus?: string | null;
   /** What the league has on record; decides which data pages are offered. */
@@ -82,7 +85,7 @@ export function SiteHeader({
   // Every list below comes from src/lib/site-nav.ts, which the footer shares:
   // one name, one group and one visibility rule per page.
   const navState = { ...content, phase, draftStatus, draftRoomSoon, seasonId };
-  const items = seasonNav(navState, myTeamId);
+  const items = seasonNav(navState, myTeamId, captaining);
   // The logo is the home link on wide screens.
   const desktopItems = items.filter((item) => item.href !== "/");
   const exploreSections = exploreNav(navState);

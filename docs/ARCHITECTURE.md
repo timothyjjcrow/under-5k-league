@@ -722,7 +722,7 @@ Rules that follow from the layering:
 
 ## 5. Page inventory
 
-26 pages. "Nav from X" = the link appears from that phase onward
+28 pages. "Nav from X" = the link appears from that phase onward
 (`src/lib/site-nav.ts`, the one page list behind the header, Explore, the
 phone tab bar and the footer); most pages still render if visited directly.
 
@@ -731,6 +731,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/`                | Phase/offseason-aware dashboard (five league phases plus offseason), plus the roll call, the match-night poll and the inhouse night bar | Always; the roll call while an admin has it open during signups or the draft, the poll card while a poll is open and for a week after it closes, the bar while a night is planned or on | `getSeasonSnapshot`, `computeStandings`, `scenarioReport`, `focusSlate`, cached leaders scan, `loadHomePoll`, `loadHomeRollCall`  |
 | `/login`           | Steam login + dev quick-login, return-path/error/logout feedback                               | Signed out; available in every phase                                                               | —                                                                                                             |
 | `/me`              | My account: signup, Steam-derived Dota metadata refresh, Discord linking, withdraw, prefill    | Signed in; identity controls available in every phase, signup interaction follows season phase     | Registration, prior-season prefill, live Discord membership, rank/medal hint (independent reads parallelized) |
+| `/captains`        | Captains: a captain runs their team. Needs you across every open match; per fixture the check-in banner, Remind, the match page's Captain tools (ready check, standins, lobby and reporting); scrims (post, cancel, join); team name and logo, roster contacts, coaches | Sitting captain of the active season, SIGNUPS to PLAYOFFS (`captainsPageOpen`); nav right after My Team | `captainTodos` per open match (`loadCaptainTodoRows`), the chosen match (`loadMatch`), the season snapshot and matches, the team's scrims and staff |
 | `/players`         | Player pool table with standins as rows (URL-mirrored filters)                                 | Always                                                                                             | 4 inline queries → client `PlayerPool`                                                                        |
 | `/players/[id]`    | Player profile: career stats, report card, achievements, seasons, inhouse card                 | Always                                                                                             | Indexed `getPlayerGameFacts` two-pass read; cached `getRecordWatchBook`                                       |
 | `/players/compare` | GET-form two-player career comparison with invalid/missing/same-player states                  | Always                                                                                             | Trusted `getAllGameScores`, `meetings`; metadata uses the same career eligibility                             |

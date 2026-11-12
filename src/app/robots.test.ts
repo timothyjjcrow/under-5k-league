@@ -6,7 +6,7 @@ describe("robots policy", () => {
     const policy = robots();
     expect(policy.rules).toMatchObject({
       allow: "/",
-      disallow: expect.arrayContaining(["/admin", "/api", "/me", "/login"]),
+      disallow: expect.arrayContaining(["/admin", "/api", "/me", "/captains", "/login"]),
     });
   });
 

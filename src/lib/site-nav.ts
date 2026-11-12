@@ -12,6 +12,7 @@
 // Pure on purpose (no React, no Prisma): the client header, the server footer
 // and the unit tests all import it.
 
+import { CAPTAINS_HREF, CAPTAINS_LABEL } from "./captains";
 import { DRAFT_STATUS, REGISTRATION_STATUS, SEASON_STATUS } from "./constants";
 import { draftPhasePresentation, seasonPhaseLabel } from "./season-copy";
 
@@ -261,11 +262,13 @@ const NAV_PAGES: readonly NavPage[] = [
 /**
  * The primary row: the season's own pages that are useful right now. The
  * viewer's own team ("My Team") sits where Teams does whenever they are on a
- * roster, including a captain whose team exists before the draft.
+ * roster, including a captain whose team exists before the draft. A sitting
+ * captain (`captainsPageOpen`) gets Captains right after it.
  */
 export function seasonNav(
   state: NavState,
   myTeamId: string | null = null,
+  captaining = false,
 ): NavLink[] {
   const links: NavLink[] = [];
   for (const page of NAV_PAGES) {
@@ -273,6 +276,9 @@ export function seasonNav(
     if (page.visible(state)) links.push(linkFor(page, state));
     if (page.href === "/teams" && myTeamId) {
       links.push({ href: `/teams/${myTeamId}`, label: "My Team" });
+    }
+    if (page.href === "/teams" && captaining) {
+      links.push({ href: CAPTAINS_HREF, label: CAPTAINS_LABEL });
     }
   }
   return links;
@@ -397,12 +403,16 @@ export function phoneDock(
     : has("/schedule")
       ? "/schedule"
       : "/inhouse";
-  const teamHref =
-    myTeamHref && has(myTeamHref)
+  // A captain's team tab opens Captains, where they run the team; My Team
+  // moves to the sheet.
+  const teamHref = has(CAPTAINS_HREF)
+    ? CAPTAINS_HREF
+    : myTeamHref && has(myTeamHref)
       ? myTeamHref
       : has("/teams")
         ? "/teams"
         : "/players";
+  const teamTab: DockTab[] = pick(teamHref, "team");
   const tabs: DockTab[] = [
     ...pick("/", "home"),
     ...pick(focusHref, "matches"),
@@ -415,7 +425,7 @@ export function phoneDock(
             icon: "join" as const,
           },
         ]
-      : pick(teamHref, "team")),
+      : teamTab),
   ];
   const inTabs = new Set(tabs.map((tab) => tab.href));
   return { tabs, sheet: items.filter((item) => !inTabs.has(item.href)) };
