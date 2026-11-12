@@ -119,8 +119,10 @@ Captain report, admin import, league feed and roster scan all end in
   first. Classify against every fixture the rosters fit, attribute by closest
   kickoff, run `pickSeriesGames`, then import oldest first; a failed earlier
   game stops later ones leapfrogging it. COMPLETED fixtures and full `bestOf`
-  fixtures never take a game; a scrim that used the ticket is left to the scrim
-  importer.
+  fixtures never take a game. A game a booked scrim may own (a scrim hosted
+  with the ticket) is never imported here: a complete pass returns it in
+  `scrimCandidates`, and every caller hands those to `recordScrimGamesFromFeed`
+  ([scrims](stats-and-side-games.md#scrims)).
 - **Bound automatic runs and remember their work.** `auto: true` fetches at most
   `AUTO_SYNC.LEAGUE_MAX_FETCHES_PER_RUN` unknown ids per run (a typo'd league
   id can list thousands). Fetched payloads persist as `ImportCandidate` rows
@@ -170,7 +172,7 @@ Captain report, admin import, league feed and roster scan all end in
   may sleep until `AUTOMATION_GATE_HARD_HORIZON_MS`. Give a new automated step
   its own wake in the gate, and bump `AUTOMATION_GATE_VERSION` and its key when
   the snapshot shape or deadline rules change (`automation-gate-constants.ts`,
-  currently 13). Version, cache key, tag and the tests that pin them move
+  currently 17). Version, cache key, tag and the tests that pin them move
   together. When two branches each bumped it, the merge takes a number above
   both, so neither build's cached decision is trusted.
 - **Isolate steps and name failures.** Each `runResultSync` step checks its
@@ -211,7 +213,9 @@ Captain report, admin import, league feed and roster scan all end in
 - **Only fixtures in their window.** Only REGULAR_SEASON and PLAYOFFS run. A
   match is due from `AUTO_SYNC.MIN_MINUTES_AFTER_KICKOFF` after `scheduledAt`
   until `WINDOW_HOURS` later while not COMPLETED; a LIVE series keeps scanning
-  for games 2 and 3; a match with no kickoff is never auto-scanned.
+  for games 2 and 3; a match with no kickoff is never auto-scanned. With a
+  ticket, a booked scrim in its feed window (`scrimFeedDueWhere`, 8 hours) is
+  due for the feed too, on the same throttle, but never for a roster scan.
 - **League feed first, roster scan as fallback.** With a league id, one
   `syncLeagueGames({ auto: true })` runs per `LEAGUE_INTERVAL_SECONDS` behind
   the `leagueAutoSyncAt` claim. A fixture still missing after

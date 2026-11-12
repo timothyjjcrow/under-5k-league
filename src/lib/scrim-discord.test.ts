@@ -34,10 +34,15 @@ describe("scrim announcements", () => {
       whenMs: WHEN,
       bestOf: 1,
       withdrawnHostOffersMs: withdrawn,
+      hasLeagueTicket: true,
     });
     expect(msg).toContain("**Dire Straits** claimed your scrim time");
     expect(msg).toContain("You host");
     expect(msg).toContain("**Straits Cap**");
+    expect(msg).toContain("lobby's name, password and settings on the scrim page");
+    expect(msg).toContain(
+      "Set this season's league ticket in the lobby, or the games won't record.",
+    );
     expect(msg).toContain("Your other open times within four hours");
     for (const ms of withdrawn) expect(msg).toContain(`<t:${ms / 1000}:f>`);
     expect(msg).toContain("were withdrawn");
@@ -50,8 +55,11 @@ describe("scrim announcements", () => {
       whenMs: WHEN,
       bestOf: 1,
       withdrawnHostOffersMs: [],
+      hasLeagueTicket: false,
     });
     expect(none).not.toContain("withdrawn");
+    // Only a ticketed season can say the ticket records the games.
+    expect(none).not.toContain("league ticket");
     const one = scrimClaimedMessage({
       scrimId: "s1",
       hostTeamName: "Radiant Raccoons",
@@ -60,6 +68,7 @@ describe("scrim announcements", () => {
       whenMs: WHEN,
       bestOf: 1,
       withdrawnHostOffersMs: [WHEN + 3_600_000],
+      hasLeagueTicket: true,
     });
     expect(one).toContain("Your other open time within four hours");
     expect(one).toContain("was withdrawn");
@@ -123,6 +132,7 @@ describe("scrim announcements", () => {
         whenMs: WHEN,
         bestOf: 1,
         withdrawnHostOffersMs: [],
+        hasLeagueTicket: true,
       }),
       scrimCancelledMessage({
         hostTeamName: EVIL,

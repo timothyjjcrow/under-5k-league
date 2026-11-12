@@ -7,6 +7,7 @@ import {
 } from "@/components/playoff-outlook";
 import Link from "@/components/app-link";
 import { ContextBackLink } from "@/components/context-back-link";
+import { TeamScrims } from "./team-scrims";
 import { ShareButton } from "@/components/share-button";
 import { SectionNav } from "@/components/section-nav";
 import { ProfileMatchSpotlight } from "@/components/profile-match-spotlight";
@@ -413,6 +414,8 @@ export default async function TeamPage({
     ...(showOverview ? [{ id: "team-overview", label: "Overview" }] : []),
     { id: "team-roster", label: "Roster" },
     ...(myMatches.length > 0 ? [{ id: "team-matches", label: "Matches" }] : []),
+    // TeamScrims always renders for an active season's team.
+    ...(team.season.isActive ? [{ id: "team-scrims", label: "Scrims" }] : []),
     ...(teamHeroes.length > 0 ? [{ id: "team-heroes", label: "Heroes" }] : []),
     ...(h2h.length > 0 ? [{ id: "team-rivals", label: "Head-to-head" }] : []),
     ...(showOutlookCard
@@ -450,11 +453,6 @@ export default async function TeamPage({
               name, and the calendar in the Matches card. */}
           <span className="flex flex-wrap items-center gap-x-4 gap-y-2">
             <ShareButton path={`/teams/${team.id}`} title={team.name} />
-            {team.season.isActive ? (
-              <Link href="/scrims" className={textLink("text-sm")}>
-                Scrims <LinkArrow />
-              </Link>
-            ) : null}
             {team.season.isActive ? (
               team.season.status === SEASON_STATUS.SIGNUPS ? (
                 // The week's job before the draft: scouting the pool.
@@ -1071,6 +1069,17 @@ export default async function TeamPage({
               </CardBody>
             </Card>
           )}
+
+          {/* Practice, apart from the league card above: what's coming up
+              (with the lobby setup), recent results and the scrim record. */}
+          <Suspense fallback={null}>
+            <TeamScrims
+              teamId={team.id}
+              seasonId={team.seasonId}
+              seasonActive={team.season.isActive}
+              nowMs={nowMs}
+            />
+          </Suspense>
         </div>
         {hasRail ? (
           <div className="@container min-w-0 space-y-5">

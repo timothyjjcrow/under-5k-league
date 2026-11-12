@@ -537,7 +537,10 @@ image has changed. The rules are in `next.config.ts`, and
 - **The slot addresses the viewer.** Mid-season: `MyNextMatch` (their next
   check-in, `<CheckinBanner variant="panel">`) with "Where you stand" under
   it in the regular season, or for someone with no team and no signup, the
-  late standin signup plus the inhouse queue.
+  late standin signup plus the inhouse queue. A rostered player's team's
+  booked scrim adds one "Scrim" line to its lobby setup from 12 hours before
+  to 4 hours after its start, in every branch of `MyNextMatch`
+  ([scrims](stats-and-side-games.md#scrims)).
 - **"Where you stand" is said once, in the hero** (`MyStanding`, built in
   `seasonHero`): the team's place and record in words (`tablePlace`,
   `standingSummary`: "5th in Group A · 1 win, 3 losses · 3 pts", "Tied 4th"

@@ -16,8 +16,16 @@ import {
   teamByeWeek,
 } from "@/lib/schedule";
 import type { VisibilityViewer } from "@/lib/visibility";
+import { LocalTime } from "@/components/local-time";
+import { SCRIM_STATUS } from "@/lib/constants";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { YourTeamLine, captainContact } from "./hero-controls";
 import { fmtWhen } from "./when";
+
+/** Home shows the team's booked scrim from this long before its start… */
+const SCRIM_TODAY_AHEAD_MS = 12 * 60 * 60 * 1000;
+/** …until this long after it (a live series stays while it's in the window). */
+const SCRIM_TODAY_BEHIND_MS = 4 * 60 * 60 * 1000;
 
 // The signed-in league member's panel in the hero mid-season: their next
 // unplayed match with one-click check-in, the thing a rostered player most
@@ -85,12 +93,75 @@ export async function MyNextMatch({
   });
   const playoffRounds = playoffTotalRounds(matches);
   const teamNameOf = (id: string) => teamById.get(id)?.name ?? "?";
+  // The viewer's team's booked scrim, from SCRIM_TODAY_AHEAD_MS before it
+  // starts until SCRIM_TODAY_BEHIND_MS after (or while it's live): one line
+  // to its lobby setup, so a player knows where to be. Rostered players
+  // only, one indexed read ([seasonId, status, scheduledAt]).
+  const scrimTeam = rosterTeams.find((t) => !t.withdrawn) ?? null;
+  const scrimToday = scrimTeam
+    ? await prisma.scrim.findFirst({
+        where: {
+          seasonId,
+          status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+          scheduledAt: {
+            gte: new Date(nowMs - SCRIM_TODAY_BEHIND_MS),
+            lte: new Date(nowMs + SCRIM_TODAY_AHEAD_MS),
+          },
+          OR: [{ hostTeamId: scrimTeam.id }, { opponentTeamId: scrimTeam.id }],
+        },
+        orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+        select: {
+          id: true,
+          status: true,
+          scheduledAt: true,
+          hostTeamId: true,
+          hostTeam: { select: { name: true } },
+          opponentTeam: { select: { name: true } },
+        },
+      })
+    : null;
   // A team resting this week is told so before the match after it, instead
   // of the panel jumping silently to a fixture a week away.
   const byeWeek =
     teamId && seasonStatus === "REGULAR_SEASON"
       ? teamByeWeek(matches, teamId, nowMs)
       : null;
+  // Shown in every branch below: a scrim day isn't only a match week's.
+  const scrimNote =
+    scrimToday && scrimTeam ? (
+      <Link
+        href={`/scrims/${scrimToday.id}#lobby`}
+        data-testid="home-scrim-today"
+        className="group flex items-start gap-3 rounded-[var(--radius)] border border-line bg-surface-2/40 px-4 py-3 text-sm"
+      >
+        <span className="shrink-0 rounded bg-accent/15 px-2 py-0.5 text-xs font-semibold text-accent">
+          {scrimToday.status === SCRIM_STATUS.LIVE ? "Scrim live" : "Scrim"}
+        </span>
+        <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
+          <span className="font-medium">
+            vs{" "}
+            {scrimToday.hostTeamId === scrimTeam.id
+              ? (scrimToday.opponentTeam?.name ?? "?")
+              : scrimToday.hostTeam.name}
+          </span>{" "}
+          <span className="text-muted">
+            ·{" "}
+            <LocalTime
+              ts={scrimToday.scheduledAt.getTime()}
+              variant="short"
+              initial={formatLeagueMatchTime(scrimToday.scheduledAt, "short")}
+            />{" "}
+            ·{" "}
+            {scrimToday.hostTeamId === scrimTeam.id
+              ? "your team hosts"
+              : `${scrimToday.hostTeam.name} hosts`}
+          </span>
+        </span>
+        <span className="shrink-0 text-info group-hover:underline">
+          Lobby <LinkArrow />
+        </span>
+      </Link>
+    ) : null;
   const notes = (
     <>
       {byeWeek != null ? <ByeWeekNote week={byeWeek} who="Your team" /> : null}
@@ -146,6 +217,7 @@ export async function MyNextMatch({
           </span>
         </Link>
       ) : null}
+      {scrimNote}
     </>
   );
 
@@ -170,7 +242,7 @@ export async function MyNextMatch({
   const myTeam = teamId ? teamById.get(teamId) : undefined;
   if (!next && idle === "no-fixtures" && myTeam) {
     // Rostered, schedule not out yet: who they play for is the useful part.
-    return (
+    const line = (
       <YourTeamLine
         team={myTeam}
         viewerId={userId}
@@ -183,13 +255,21 @@ export async function MyNextMatch({
         fixturesSoon
       />
     );
+    return scrimNote ? (
+      <div className="space-y-2">
+        {scrimNote}
+        {line}
+      </div>
+    ) : (
+      line
+    );
   }
   if (!next) {
     const onlyFinalLeft =
       matches.some((m) => m.phase === "FINAL" && m.status !== "COMPLETED") &&
       !matches.some((m) => m.phase === "PLAYOFF" && m.status !== "COMPLETED");
     const copy = idleCopy(idle, onlyFinalLeft);
-    return (
+    const idleCard = (
       <Card className="p-4 text-sm">
         <div className="font-medium">{copy.title}</div>
         <p className="mt-1 text-muted">{copy.text}</p>
@@ -200,6 +280,14 @@ export async function MyNextMatch({
           {copy.cta} <LinkArrow />
         </Link>
       </Card>
+    );
+    return scrimNote ? (
+      <div className="space-y-2">
+        {scrimNote}
+        {idleCard}
+      </div>
+    ) : (
+      idleCard
     );
   }
 

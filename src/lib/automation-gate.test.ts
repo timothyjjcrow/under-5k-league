@@ -92,6 +92,10 @@ import {
   INHOUSE_NIGHT_START_POST_WINDOW_MS,
   serializeInhouseNight,
 } from "./inhouse-night";
+import {
+  SCRIM_FEED_CLOSES_AFTER_MS,
+  SCRIM_FEED_OPENS_AFTER_MS,
+} from "./scrim-window";
 
 const NOW = Date.parse("2026-08-16T20:00:00.000Z");
 
@@ -183,7 +187,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 16,
+      version: 17,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -277,7 +281,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 16,
+      version: 17,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -455,6 +459,94 @@ describe("computeAutomationGateSnapshot", () => {
     expect(snapshot).toMatchObject({
       nextWakeAtMs: leagueThrottleAt,
       reason: "LEAGUE",
+    });
+  });
+
+  describe("a booked scrim on a ticketed season", () => {
+    const scrimSeason = (
+      scrims: NonNullable<AutomationGateSeason["scrims"]>,
+      dotaLeagueId: string | null = "42",
+    ) => season({ status: "REGULAR_SEASON", dotaLeagueId, scrims });
+
+    it("wakes the worker when its feed window opens", () => {
+      const scheduledAt = NOW + 60 * 60_000;
+      const snapshot = computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            scrimSeason([{ status: "SCHEDULED", scheduledAt: new Date(scheduledAt) }]),
+          ],
+        }),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({
+        nextWakeAtMs: scheduledAt + SCRIM_FEED_OPENS_AFTER_MS,
+        reason: "LEAGUE",
+      });
+    });
+
+    it("reads the feed on the league throttle while its window is open", () => {
+      const leagueThrottleAt = NOW + 20_000;
+      const snapshot = computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            scrimSeason([
+              { status: "LIVE", scheduledAt: new Date(NOW - 60 * 60_000) },
+            ]),
+          ],
+          settings: {
+            [SETTING_KEYS.LEAGUE_AUTO_SYNC_AT]: new Date(
+              leagueThrottleAt - AUTO_SYNC.LEAGUE_INTERVAL_SECONDS * 1_000 - 1,
+            ).toISOString(),
+          },
+        }),
+        NOW,
+      );
+      expect(snapshot).toMatchObject({
+        nextWakeAtMs: leagueThrottleAt,
+        reason: "LEAGUE",
+      });
+    });
+
+    it("sleeps after its window, and on a season with no ticket", () => {
+      const closed = computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            scrimSeason([
+              {
+                status: "SCHEDULED",
+                scheduledAt: new Date(NOW - SCRIM_FEED_CLOSES_AFTER_MS - 1),
+              },
+            ]),
+          ],
+        }),
+        NOW,
+      );
+      expect(closed.reason).toBeNull();
+      const ticketless = computeAutomationGateSnapshot(
+        inputs({
+          seasons: [
+            scrimSeason(
+              [{ status: "SCHEDULED", scheduledAt: new Date(NOW - 60 * 60_000) }],
+              null,
+            ),
+          ],
+        }),
+        NOW,
+      );
+      expect(ticketless.reason).toBeNull();
+    });
+
+    it("refuses a scrim that isn't booked", () => {
+      expect(() =>
+        computeAutomationGateSnapshot(
+          inputs({
+            seasons: [
+              scrimSeason([{ status: "OPEN", scheduledAt: new Date(NOW) }]),
+            ],
+          }),
+          NOW,
+        ),
+      ).toThrow(/booked scrim status is unknown/);
     });
   });
 
@@ -2238,7 +2330,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 16,
+      version: 17,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,
@@ -2362,6 +2454,38 @@ describe("loadAutomationGateSnapshot", () => {
         /lobby marked over has no finish time/,
       );
       expect(await decisionThroughTheCache()).toEqual({ run: true });
+    });
+
+    it("reads the season's booked scrims whose feed window can still be open", async () => {
+      quietSite([]);
+      const scheduledAt = NOW + 30 * 60_000;
+      prismaMocks.season.findMany.mockResolvedValue([
+        season({
+          status: "REGULAR_SEASON",
+          dotaLeagueId: "42",
+          scrims: [{ status: "SCHEDULED", scheduledAt: new Date(scheduledAt) }],
+        }),
+      ]);
+      await expect(loadAutomationGateSnapshot(NOW)).resolves.toMatchObject({
+        nextWakeAtMs: scheduledAt + SCRIM_FEED_OPENS_AFTER_MS,
+        reason: "LEAGUE",
+      });
+      expect(prismaMocks.season.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            scrims: {
+              where: {
+                status: { in: ["SCHEDULED", "LIVE"] },
+                opponentTeamId: { not: null },
+                scheduledAt: {
+                  gte: new Date(NOW - SCRIM_FEED_CLOSES_AFTER_MS),
+                },
+              },
+              select: { status: true, scheduledAt: true },
+            },
+          }),
+        }),
+      );
     });
   });
 });

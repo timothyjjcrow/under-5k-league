@@ -8,9 +8,11 @@ import {
   INHOUSE_STATUS,
   MATCH_PHASE,
   MATCH_STATUS,
+  SCRIM_STATUS,
   SEASON_STATUS,
   WEEK_REMINDER,
 } from "./constants";
+import { SCRIM_FEED_CLOSES_AFTER_MS, scrimFeedWindow } from "./scrim-window";
 import { normalizeDiscordWebhookUrl } from "./discord-webhook.mjs";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { databaseNow } from "./database-time";
@@ -152,6 +154,17 @@ export type AutomationGateSeason = {
     nominationEndsAt: Date | null;
   } | null;
   matches: AutomationGateMatch[];
+  /**
+   * Booked scrims (SCHEDULED or LIVE, with an opponent) whose feed window
+   * may still be open: a ticketed season reads the league feed for them
+   * (`scrimFeedWindow`). Optional so callers that predate scrims read none.
+   */
+  scrims?: AutomationGateScrim[];
+};
+
+export type AutomationGateScrim = {
+  status: string;
+  scheduledAt: Date;
 };
 
 export type AutomationGateInputs = {
@@ -622,6 +635,14 @@ export function computeAutomationGateSnapshot(
       if (match.autoSyncedAt) dateMs(match.autoSyncedAt, "match.autoSyncedAt");
       if (match.completedAt) dateMs(match.completedAt, "match.completedAt");
     }
+    for (const scrim of season.scrims ?? []) {
+      invariant(
+        scrim.status === SCRIM_STATUS.SCHEDULED ||
+          scrim.status === SCRIM_STATUS.LIVE,
+        "booked scrim status is unknown",
+      );
+      dateMs(scrim.scheduledAt, "scrim.scheduledAt");
+    }
   }
 
   if (
@@ -690,6 +711,24 @@ export function computeAutomationGateSnapshot(
       const rosterAt = Math.max(rosterOpensAt, rosterThrottle, matchThrottle);
       if (rosterAt <= closesAt) {
         addCandidate(candidates, nowMs, rosterAt, "LEAGUE");
+      }
+    }
+    // A booked scrim hosted with the season's ticket records from the same
+    // feed, on the same throttle, for its feed window only (no roster scan).
+    if (season.dotaLeagueId?.trim()) {
+      for (const scrim of season.scrims ?? []) {
+        const { opensAtMs, closesAtMs } = scrimFeedWindow(
+          dateMs(scrim.scheduledAt, "scrim.scheduledAt"),
+        );
+        if (nowMs > closesAtMs) continue;
+        if (nowMs < opensAtMs) {
+          addCandidate(candidates, nowMs, opensAtMs, "LEAGUE");
+          continue;
+        }
+        const leagueAt = Math.max(nowMs, leagueThrottle, leagueFeedRetryAt);
+        if (leagueAt <= closesAtMs) {
+          addCandidate(candidates, nowMs, leagueAt, "LEAGUE");
+        }
       }
     }
   }
@@ -1301,6 +1340,16 @@ export async function loadAutomationGateSnapshot(
               select: { startTime: true, durationSecs: true, fetchedAt: true },
             },
           },
+        },
+        // Booked scrims whose feed window can still be open (the same rows
+        // scrimFeedDueWhere reads once it opens).
+        scrims: {
+          where: {
+            status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+            opponentTeamId: { not: null },
+            scheduledAt: { gte: new Date(nowMs - SCRIM_FEED_CLOSES_AFTER_MS) },
+          },
+          select: { status: true, scheduledAt: true },
         },
       },
     }),

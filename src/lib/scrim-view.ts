@@ -1,27 +1,10 @@
 // What the scrim pages tell captains to do. Pure: plain values in, copy out.
 
 import { SCRIM_STATUS } from "./constants";
-import { seriesLobbyRule } from "./match-hosting";
 import {
   SCRIM_DETECT_WINDOW_AFTER_MS,
   SCRIM_PAST_GRACE_MS,
 } from "./scrim-window";
-
-/**
- * The one line on a booked scrim that settles who makes the lobby. The
- * posting team hosts — the same rule the "claimed" ping gives its captain —
- * so neither captain has to ask. Region is LEAGUE_CONFIG.gameServerRegion,
- * never a hard-coded one.
- */
-export function scrimHostLine(m: {
-  hostTeamName: string;
-  hostCaptainName: string;
-  opponentCaptainName: string;
-  bestOf: number;
-  region: string;
-}): string {
-  return `${m.hostCaptainName} (${m.hostTeamName}) hosts: make the Dota lobby on ${m.region} and send ${m.opponentCaptainName} the lobby name and password on Discord. ${seriesLobbyRule(m.bestOf)}.`;
-}
 
 export type ScrimJoinCheck =
   | { canJoin: true; teamName: string }
@@ -87,9 +70,10 @@ export function scrimJoinCheck(m: {
 }
 
 /**
- * The claiming captain's toast: booked, who hosts (so they know whose
- * message to wait for), and which OPEN times the booking withdrew — theirs
- * and the posting team's — because nothing else on the page says so.
+ * The claiming captain's toast: booked, who hosts, where the lobby's details
+ * are (the scrim page shows both teams its name, password and settings), and
+ * which OPEN times the booking withdrew — theirs and the posting team's —
+ * because nothing else on the page says so.
  */
 export function scrimBookedToast(m: {
   hostTeamName: string;
@@ -100,7 +84,7 @@ export function scrimBookedToast(m: {
   const times = (count: number) =>
     count === 1 ? "open time" : `${count} other open times`;
   const parts = [
-    `Scrim booked. ${m.hostCaptainName} (${m.hostTeamName}) hosts and will send you the lobby details on Discord.`,
+    `Scrim booked. ${m.hostCaptainName} (${m.hostTeamName}) hosts; the lobby's name, password and settings are on the scrim page.`,
   ];
   if (m.ownWithdrawn > 0) {
     parts.push(

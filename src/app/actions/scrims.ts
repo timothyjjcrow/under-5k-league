@@ -1,6 +1,7 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
+import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { requireUser } from "@/lib/auth";
 import { CAPTAINS_HREF } from "@/lib/captains";
 import { clampInt, localDate, str } from "@/lib/form";
@@ -34,11 +35,18 @@ import {
   removeScrimGame as removeGameInService,
 } from "@/lib/scrim-result-service";
 
-function refreshScrims(scrimId?: string) {
+function refreshScrims(
+  scrimId?: string,
+  { feedWork = false }: { feedWork?: boolean } = {},
+) {
   revalidatePath("/scrims");
   if (scrimId) revalidatePath(`/scrims/${scrimId}`);
   // The Captains page lists the team's scrims and draws the same controls.
   revalidatePath(CAPTAINS_HREF);
+  // A booked scrim is automated work: the worker reads the league feed for
+  // it (scrimFeedDueWhere). Booking, cancelling or finishing one moves that
+  // work, so the cached automation gate must recompute its next wake.
+  if (feedWork) updateTag(AUTOMATION_GATE_TAG);
 }
 
 /**
@@ -133,7 +141,7 @@ export async function joinScrim(
   const scrimId = str(formData, "scrimId");
   try {
     const booked = await joinInService(auth.user.id, scrimId);
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     const withdrawnBy = (teamId: string | undefined) =>
       booked.withdrawnOffers.filter((offer) => offer.teamId === teamId);
     const hostWithdrawn = withdrawnBy(booked.hostTeam.id);
@@ -148,6 +156,7 @@ export async function joinScrim(
         withdrawnHostOffersMs: hostWithdrawn.map((offer) =>
           offer.scheduledAt.getTime(),
         ),
+        hasLeagueTicket: booked.hasLeagueTicket,
       }),
       booked.notifyUserIds,
     );
@@ -184,7 +193,7 @@ export async function cancelScrim(
       auth.user.role === "ADMIN",
       scrimId,
     );
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     await pingCaptains(
       scrimCancelledMessage({
         hostTeamName: cancelled.hostTeamName,
@@ -332,7 +341,7 @@ export async function importScrimGame(
       str(formData, "dotaMatchRef"),
     );
     if (!result.ok) return { error: result.error };
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     return { ok: true, message: result.message };
   } catch (error) {
     return {
@@ -358,7 +367,7 @@ export async function autoDetectScrimGames(
       scrimId,
     );
     if (!result.ok) return { error: result.error };
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     return { ok: true, message: result.message };
   } catch (error) {
     return {
@@ -386,7 +395,7 @@ export async function removeScrimGame(
       str(formData, "scrimGameId"),
     );
     if (!result.ok) return { error: result.error };
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     return { ok: true, message: result.message };
   } catch (error) {
     return {
@@ -412,7 +421,7 @@ export async function endScrimSeries(
       auth.user.role === "ADMIN",
       scrimId,
     );
-    refreshScrims(scrimId);
+    refreshScrims(scrimId, { feedWork: true });
     return { ok: true, message: ended.message };
   } catch (error) {
     return {
