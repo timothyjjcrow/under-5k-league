@@ -16,6 +16,7 @@ import {
   textLink,
 } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";
+import { CAPTAINS_ANCHOR } from "@/lib/captains";
 import { MATCH_STATUS, SEASON_STATUS } from "@/lib/constants";
 import { standingSummary, tablePlace } from "@/lib/home-slate";
 import { projectPlayoffField } from "@/lib/playoff-field";
@@ -28,6 +29,7 @@ import {
   canViewLeagueContact,
   hasActiveLeagueParticipation,
 } from "@/lib/visibility";
+import { cn } from "@/lib/utils";
 
 /**
  * The team itself: its name and logo (the team page's own form and rule,
@@ -88,8 +90,14 @@ export async function TeamDesk({
     true,
   );
   return (
-    <div id="team" className="scroll-mt-24 space-y-5">
-      <Card>
+    <div
+      id={CAPTAINS_ANCHOR.team}
+      className={cn(
+        "grid scroll-mt-24 grid-cols-1 items-start gap-5",
+        seasonOpen && "xl:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]",
+      )}
+    >
+      <Card className="min-w-0">
         <CardHeader
           headingLevel={2}
           title="Your team"
@@ -99,9 +107,14 @@ export async function TeamDesk({
             </Link>
           }
         />
-        <CardBody className="space-y-5">
+        <CardBody
+          className={cn(
+            "grid grid-cols-1 items-start gap-x-8 gap-y-5",
+            canEdit && "lg:grid-cols-2",
+          )}
+        >
           {canEdit ? (
-            <div className="space-y-2">
+            <div className="min-w-0 space-y-2">
               <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted">
                 Name and logo
               </h3>
@@ -125,47 +138,51 @@ export async function TeamDesk({
               />
             </div>
           ) : null}
-          {season.status === SEASON_STATUS.REGULAR_SEASON ? (
-            <Standing snapshot={snapshot} matches={matches} teamId={team.id} />
-          ) : season.status === SEASON_STATUS.PLAYOFFS ? (
-            <Playoffs matches={matches} teamId={team.id} />
-          ) : null}
-          <div>
-            <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
-              Roster
-            </h3>
-            <ul aria-label="Your roster" className="divide-y divide-line-soft text-sm">
-              {roster.map((m) => (
-                <li
-                  key={m.userId}
-                  className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
-                >
-                  <PlayerLink
-                    userId={m.userId}
-                    className="min-w-6 font-medium [overflow-wrap:anywhere]"
+          <div className="min-w-0 space-y-5">
+            {season.status === SEASON_STATUS.REGULAR_SEASON ? (
+              <Standing snapshot={snapshot} matches={matches} teamId={team.id} />
+            ) : season.status === SEASON_STATUS.PLAYOFFS ? (
+              <Playoffs matches={matches} teamId={team.id} />
+            ) : null}
+            <div>
+              <h3 className="mb-1 text-[11px] font-semibold uppercase tracking-wider text-muted">
+                Roster
+              </h3>
+              <ul aria-label="Your roster" className="divide-y divide-line-soft text-sm">
+                {roster.map((m) => (
+                  <li
+                    key={m.userId}
+                    className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 py-2"
                   >
-                    {m.user.name}
-                  </PlayerLink>
-                  {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
-                  <RankBadge rankTier={m.user.rankTier} />
-                  {canViewLeagueContact(viewer, m.userId, contact) &&
-                  m.user.discordName ? (
-                    <DiscordTag
-                      name={m.user.discordName}
-                      verified={!!m.user.discordId}
-                    />
-                  ) : null}
-                </li>
-              ))}
-            </ul>
-            <p className="mt-2 text-xs text-muted">
-              Signing or releasing a player goes through an admin.
-            </p>
+                    <PlayerLink
+                      userId={m.userId}
+                      className="min-w-6 font-medium [overflow-wrap:anywhere]"
+                    >
+                      {m.user.name}
+                    </PlayerLink>
+                    {m.isCaptain ? <Badge tone="accent">Captain</Badge> : null}
+                    <RankBadge rankTier={m.user.rankTier} />
+                    {canViewLeagueContact(viewer, m.userId, contact) &&
+                    m.user.discordName ? (
+                      <DiscordTag
+                        name={m.user.discordName}
+                        verified={!!m.user.discordId}
+                      />
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-2 text-xs text-muted">
+                Signing or releasing a player goes through an admin.
+              </p>
+            </div>
           </div>
         </CardBody>
       </Card>
       {seasonOpen ? (
-        <TeamCoachesCard team={{ name: team.name, staff }} id="team-coaches" />
+        <div className="min-w-0">
+          <TeamCoachesCard team={{ name: team.name, staff }} id="team-coaches" />
+        </div>
       ) : null}
     </div>
   );

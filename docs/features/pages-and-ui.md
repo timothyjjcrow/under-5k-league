@@ -1586,31 +1586,65 @@ check (`src/lib/captains.test.ts` pins every one of them):
   "Waiting on you" list is the same function over one match, and both render
   through `<CaptainTodoItem>`. Before the auction is done it reads nothing
   and the page shows the draft card instead.
-- **Your matches** (`match-desk.tsx`): chips pick one of the team's open
+- **Your matches** (`match-desk.tsx`): tiles pick one of the team's open
   fixtures (`?match=`, read with `singleSearchParam`; live first, then week
-  and kickoff; a bad value falls back to the next fixture). For it the page
-  draws the captain's own `<CheckinBanner>` (with the side's names), the
-  Remind button (`<CheckinNudgeControl>`, shown by `loadCaptainNudge`, the
-  match preview's rule), `<LiveSeriesCheckin>` while the series is live, the
-  "moved by ready check" card, and the match page's whole `<CaptainTools>`:
-  the ready check to move the match (propose, answer, lock in, withdraw),
-  standins (book, ask, agree, decline, withdraw, remove) and lobby setup and
-  reporting. Only one fixture's tools render at a time, so the match page's
-  card ids stay unique.
+  and kickoff; a bad value falls back to the next fixture). Each tile shows
+  the round, the opponent, the kickoff and how many "Needs you" lines that
+  match has, so the run of open matches reads at a glance. The open
+  fixture's header carries the match page's shortcuts (`captainJumps`: "Find
+  a standin", "Change the time", "Set up & report"), each shown only while
+  its card would take the action, because those cards sit below the
+  check-in and a captain shouldn't have to scroll to learn they are here.
+  For the open fixture the page draws the captain's own `<CheckinBanner>` (with the side's names;
+  its "Line up cover" goes to this page's Standins card through the
+  banner's `coverHref`), the Remind button (`<CheckinNudgeControl>`, shown
+  by `loadCaptainNudge`, the match preview's rule), `<LiveSeriesCheckin>`
+  while the series is live, the "moved by ready check" card, and the match
+  page's whole `<CaptainTools>`: the ready check to move the match (propose,
+  answer, lock in, withdraw), standins (book, ask, agree, decline, withdraw,
+  remove) and lobby setup and reporting. Only one fixture's tools render at
+  a time, so the match page's card ids stay unique.
 - **Scrims** (`scrim-desk.tsx`) draws `/scrims`' own controls from
   `src/components/scrims/scrim-controls.tsx`: Post availability, Cancel on
   the team's open or booked scrims (not once live, as the scrim page), and
   Join on other teams' open times by `scrimJoinCheck`. The scrim actions
   revalidate `/captains` too (they revalidate only named paths).
+- **A booked scrim is run here, not on its own page** (`scrim-manager.tsx`,
+  2026-11-13). One of the team's booked or live scrims is open at a time
+  (`?scrim=`; the next one by default; a value that isn't the team's booking
+  is ignored), and for it the page draws what `/scrims/<id>` gives a
+  captain: "Your next step" (`scrimNextStep`), `<ScrimLobbyCard>` with the
+  name, password and ticket, both lineups with the captain's casual guests
+  (`<ScrimLineups>`), the games recorded so far, the fallback for a game
+  that didn't record (`<ScrimResultTools>`), and "End series" on a live one
+  (`<ScrimEndSeriesForm>`). Which of them a viewer gets is one pure rule for
+  both pages, `scrimManageView` (`src/lib/scrim-view.ts`), and the controls
+  live in `src/components/scrims/scrim-manage.tsx`. Cancel stays on the
+  scrim's row in the list; box scores stay on the scrim's page.
+- **Links inside the page keep what is open** (`captainsHref`,
+  `src/lib/captains.ts`): picking a scrim keeps `?match=`, and picking a
+  fixture keeps `?scrim=`.
+- **Before the auction is done the draft card leads** (`draft-desk.tsx`):
+  draft night, the team's budget (`draftBudgetsForDisplay`, the team page's
+  number: projected until Start, money left after), seats to fill, the pool
+  size, the season's clocks, the players bought so far and, while the
+  auction runs, the bid allowance line. Bidding and nominating stay in the
+  draft room, which is a live room.
 - **Team** (`team-desk.tsx`): the team page's `<TeamIdentityForm>` under
   `canEditTeamIdentity`, where the team stands (Home's `standingSummary` and
   `playoffStatusLine`; the bracket line in the playoffs), the roster with
   Discord handles through `canViewLeagueContact`, and `<TeamCoachesCard>`
   (add or remove coaches). Signing and releasing players stay with admins.
-- **Layout:** a jump bar (`SectionNav`), Needs you and the match controls at
-  full width, then scrims and the team side by side from `xl`.
+- **Layout:** a jump bar (`SectionNav`), then each section at full width in
+  the order a captain works: Needs you (or the draft card), the match
+  controls, scrims (the lists side by side from `lg`, then the open scrim),
+  and the team card beside its coaches from `xl`.
   `e2e-mid/captains.spec.ts` drives every control above through its form and
   checks 390px.
+- **What still leaves the page, on purpose:** the draft room, the full match
+  page (scouting, box scores), a scrim's box scores, the standings and the
+  player pool. They are views or live rooms; every captain write the site
+  has, outside the auction itself, is on this page.
 - **Not built:** a standin bench for the next match night, coach access to
   the page, and an admin "view as a team".
 
@@ -1634,8 +1668,11 @@ check (`src/lib/captains.test.ts` pins every one of them):
   card and six empty lists; the season chips stay.
 - **Scrims' captain controls are shared components**
   (`src/components/scrims/scrim-controls.tsx`: Post availability, Join,
-  Cancel, the coaches card), which the Captains page draws too. Change them
-  there, not in either page.
+  Cancel, the coaches card; `scrim-manage.tsx`: End series, the result
+  fallback tools, the lineups with their guest forms), which the Captains
+  page draws too. Change them there, not in either page. Who gets which
+  control on a scrim is `scrimManageView` (`src/lib/scrim-view.ts`), read by
+  the scrim's page and the Captains page.
 - **Scrims pairs its lists.** Open and booked sit side by side from `lg`;
   history, team records and leaders go three across from `xl` as two-row
   subgrids, so the three lists start on one line whatever their subtitles

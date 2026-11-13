@@ -65,10 +65,13 @@ export function ScrimJoinButton({ scrimId }: { scrimId: string }) {
 export function ScrimCancelButton({
   scrimId,
   booked,
+  label = "Cancel",
 }: {
   scrimId: string;
   /** A claimed scrim; an open time otherwise. */
   booked: boolean;
+  /** The button's text ("Cancel scrim" where nothing else names the scrim). */
+  label?: string;
 }) {
   return (
     <ActionForm action={cancelScrim} hidden={{ scrimId }}>
@@ -81,7 +84,7 @@ export function ScrimCancelButton({
             : "Cancel this open scrim time?"
         }
       >
-        Cancel
+        {label}
       </SubmitButton>
     </ActionForm>
   );

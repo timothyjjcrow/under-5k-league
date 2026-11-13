@@ -2,12 +2,8 @@ import type { Match } from "@prisma/client";
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import Link from "@/components/app-link";
-import { LocalTime } from "@/components/local-time";
 import { SectionNav } from "@/components/section-nav";
 import {
-  Card,
-  CardBody,
-  CardHeader,
   CardSkeleton,
   EmptyState,
   LinkArrow,
@@ -15,18 +11,18 @@ import {
   buttonClasses,
 } from "@/components/ui";
 import { getSessionUser } from "@/lib/auth";
-import { CAPTAINS_HREF, captainsPageOpen } from "@/lib/captains";
-import { getCaptainTeam, loadCaptainTodoRows } from "@/lib/captains-service";
-import { DRAFT_STATUS, SEASON_STATUS } from "@/lib/constants";
-import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
-import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
-  getSeasonMatches,
-  getSeasonSnapshot,
-  type SeasonSnapshot,
-} from "@/lib/queries";
+  CAPTAINS_ANCHOR,
+  CAPTAINS_HREF,
+  captainsPageOpen,
+} from "@/lib/captains";
+import { getCaptainTeam, loadCaptainTodoRows } from "@/lib/captains-service";
+import { SEASON_STATUS } from "@/lib/constants";
+import { postAuctionWorkOpen } from "@/lib/league-lifecycle";
+import { getSeasonMatches, getSeasonSnapshot } from "@/lib/queries";
 import { playoffTotalRounds } from "@/lib/schedule";
 import { singleSearchParam } from "@/lib/search-params";
+import { DraftDesk } from "./draft-desk";
 import { MatchDesk, openFixtures } from "./match-desk";
 import { NeedsYou } from "./needs-you";
 import { ScrimDesk } from "./scrim-desk";
@@ -39,8 +35,10 @@ export const metadata = { title: "Captains" };
  * is the one the rest of the site already uses, drawn here as well: the match
  * page's Captain tools (the ready check that moves a match, standins, lobby
  * setup and reporting) for any of the team's open fixtures, the check-in
- * banner and its Remind button, the scrim forms, the team name and logo
- * form, and the coaches card. Each posts to the same server action, which
+ * banner and its Remind button, the scrim forms and a booked scrim's lobby,
+ * guests and results (the scrim page's own), the team name and logo form,
+ * and the coaches card. Before the auction is done the draft card leads
+ * instead. Each control posts to the same server action, which
  * re-checks the captain and the season, so nothing here can do more than
  * those cards can. "Needs you" is `captainTodos` over every open match, the
  * rule the match page's "Waiting on you" list and Home's captain line read.
@@ -48,7 +46,10 @@ export const metadata = { title: "Captains" };
 export default async function CaptainsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ match?: string | string[] }>;
+  searchParams: Promise<{
+    match?: string | string[];
+    scrim?: string | string[];
+  }>;
 }) {
   const [user, query] = await Promise.all([getSessionUser(), searchParams]);
   if (!user) redirect(`/login?next=${CAPTAINS_HREF}`);
@@ -80,24 +81,34 @@ export default async function CaptainsPage({
   const requested = singleSearchParam(query.match);
   const selected =
     fixtures.find((m) => m.id === requested) ?? fixtures[0] ?? null;
+  // A repeated ?scrim= reads as none; the scrim desk checks it is the team's.
+  const requestedScrim = singleSearchParam(query.scrim) ?? null;
+  const todoCounts = new Map<string, number>();
+  for (const row of todos) {
+    todoCounts.set(row.matchId, (todoCounts.get(row.matchId) ?? 0) + 1);
+  }
   const sections = [
-    ...(fixturesOpen ? [{ id: "needs-you", label: "Needs you" }] : []),
-    ...(selected ? [{ id: "matches", label: "Matches" }] : []),
-    { id: "scrims", label: "Scrims" },
-    { id: "team", label: "Team" },
+    fixturesOpen
+      ? { id: CAPTAINS_ANCHOR.needsYou, label: "Needs you" }
+      : { id: "draft", label: "Draft" },
+    ...(selected ? [{ id: CAPTAINS_ANCHOR.matches, label: "Matches" }] : []),
+    { id: CAPTAINS_ANCHOR.scrims, label: "Scrims" },
+    { id: CAPTAINS_ANCHOR.team, label: "Team" },
   ];
 
   return (
     <div className="space-y-5">
       <PageTitle
         title="Captains"
-        subtitle={`${team.name} · ${season.name}. Move matches, book standins, check your roster in, set up the lobby, book scrims and edit your team, all from here.`}
+        subtitle={`${team.name} · ${season.name}. Move matches, book standins, check your roster in, set up lobbies, run your scrims and edit your team, all from here.`}
       />
       <SectionNav items={sections} label="Captains sections" />
       {fixturesOpen ? (
         <NeedsYou todos={todos} />
       ) : (
-        <DraftCard season={season} draftStatus={draftStatus} />
+        <Suspense fallback={<CardSkeleton rows={3} />}>
+          <DraftDesk snapshot={snapshot} teamId={team.id} />
+        </Suspense>
       )}
       {selected ? (
         <Suspense fallback={<CardSkeleton rows={6} />}>
@@ -109,6 +120,8 @@ export default async function CaptainsPage({
             rounds={playoffTotalRounds(matches)}
             viewer={user}
             nowMs={nowMs}
+            todoCounts={todoCounts}
+            scrimId={requestedScrim}
           />
         </Suspense>
       ) : fixturesOpen ? (
@@ -118,30 +131,27 @@ export default async function CaptainsPage({
           description="Your team has no open fixtures right now. New ones show up here as soon as they are published."
         />
       ) : null}
-      <div className="grid grid-cols-1 items-start gap-5 xl:grid-cols-2">
-        <div className="min-w-0">
-          <Suspense fallback={<CardSkeleton rows={4} />}>
-            <ScrimDesk
-              seasonId={season.id}
-              team={team}
-              seasonOpen={seasonOpen}
-              hasLeagueTicket={!!season.dotaLeagueId}
-              nowMs={nowMs}
-            />
-          </Suspense>
-        </div>
-        <div className="min-w-0">
-          <Suspense fallback={<CardSkeleton rows={4} />}>
-            <TeamDesk
-              snapshot={snapshot}
-              matches={matches}
-              team={team}
-              viewer={user}
-              seasonOpen={seasonOpen}
-            />
-          </Suspense>
-        </div>
-      </div>
+      <Suspense fallback={<CardSkeleton rows={4} />}>
+        <ScrimDesk
+          seasonId={season.id}
+          team={team}
+          viewer={user}
+          seasonOpen={seasonOpen}
+          leagueId={season.dotaLeagueId}
+          nowMs={nowMs}
+          matchId={selected?.id ?? null}
+          requestedScrimId={requestedScrim}
+        />
+      </Suspense>
+      <Suspense fallback={<CardSkeleton rows={4} />}>
+        <TeamDesk
+          snapshot={snapshot}
+          matches={matches}
+          team={team}
+          viewer={user}
+          seasonOpen={seasonOpen}
+        />
+      </Suspense>
     </div>
   );
 }
@@ -160,50 +170,5 @@ function NotACaptain() {
         }
       />
     </div>
-  );
-}
-
-function DraftCard({
-  season,
-  draftStatus,
-}: {
-  season: SeasonSnapshot["season"];
-  draftStatus: string | null;
-}) {
-  return (
-    <Card tone="feature">
-      <CardHeader
-        headingLevel={2}
-        title="The draft"
-        subtitle={
-          season.draftAt ? (
-            <>
-              Draft night:{" "}
-              <LocalTime
-                ts={season.draftAt.getTime()}
-                variant="full"
-                initial={formatLeagueMatchTime(season.draftAt, "full")}
-              />
-            </>
-          ) : (
-            "Draft night isn't set yet"
-          )
-        }
-      />
-      <CardBody className="flex flex-wrap gap-2">
-        <Link
-          href="/draft"
-          className={buttonClasses(
-            draftStatus === DRAFT_STATUS.IN_PROGRESS ? "primary" : "secondary",
-            "sm",
-          )}
-        >
-          Draft room <LinkArrow />
-        </Link>
-        <Link href="/players" className={buttonClasses("secondary", "sm")}>
-          Scout the player pool <LinkArrow />
-        </Link>
-      </CardBody>
-    </Card>
   );
 }

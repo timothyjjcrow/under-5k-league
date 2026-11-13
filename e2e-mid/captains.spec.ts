@@ -11,7 +11,8 @@ import {
 // The Captains page (/captains): a captain runs their team from one page with
 // the site's own controls. This drives each of them through its real form:
 // book a standin from "Needs you", check in, send a ready check, post and
-// cancel a scrim, rename the team. Direct writes only stage the suite's own
+// cancel a scrim, manage a booked scrim (lobby setup, a guest), rename the
+// team. Direct writes only stage the suite's own
 // two teams and their fixture, and the finally block removes them.
 // This suite writes only to the explicitly configured disposable fixture.
 const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
@@ -25,6 +26,8 @@ type User = { id: string; steamId: string; name: string };
 type Fixture = {
   matchId: string;
   homeId: string;
+  awayId: string;
+  awayCaptain: User;
   homeName: string;
   awayName: string;
   captain: User;
@@ -104,6 +107,8 @@ async function withFixture(
     await run({
       matchId,
       homeId,
+      awayId,
+      awayCaptain: users[size],
       homeName,
       awayName,
       captain: users[0],
@@ -177,6 +182,21 @@ test("a captain runs their team from the Captains page", async ({ page, request 
     await expect(
       main.getByRole("heading", { level: 1, name: "Captains", exact: true }),
     ).toBeVisible();
+
+    // The open fixture says what the page does for it: standins and moving
+    // the match are a tap away, on this page.
+    const shortcuts = main.getByRole("navigation", { name: "Captain shortcuts" });
+    await expect(
+      shortcuts.getByRole("link", { name: /Find a standin/ }),
+    ).toHaveAttribute("href", "#match-standins");
+    await expect(
+      shortcuts.getByRole("link", { name: /Change the time/ }),
+    ).toHaveAttribute("href", "#match-reschedule");
+
+    // "Line up cover" under the check-in stays on this page.
+    await expect(
+      main.getByRole("link", { name: /Line up cover/ }),
+    ).toHaveAttribute("href", "#match-standins");
 
     // Needs you → the Standins card on this page → book cover there.
     const needs = main.getByRole("list", { name: "Needs you" });
@@ -253,6 +273,73 @@ test("a captain runs their team from the Captains page", async ({ page, request 
       )
       .toBe(1);
     await expect(scrims.getByRole("list", { name: "Your scrims" })).toHaveCount(0);
+
+    // A booked scrim is run from here too: the other team posted a time and
+    // this team claimed it (staged; claiming is the scrims suite's job).
+    const season = await db.season.findFirstOrThrow({ where: { isActive: true } });
+    const members = await db.teamMember.findMany({
+      where: { teamId: { in: [f.homeId, f.awayId] } },
+      select: { teamId: true, userId: true, user: { select: { name: true } } },
+    });
+    const scrim = await db.scrim.create({
+      data: {
+        seasonId: season.id,
+        hostTeamId: f.awayId,
+        opponentTeamId: f.homeId,
+        createdById: f.awayCaptain.id,
+        scheduledAt: new Date(Date.now() + 5 * 86400_000),
+        bestOf: 3,
+        status: "SCHEDULED",
+        participants: {
+          create: members.map((m, i) => ({
+            teamId: m.teamId,
+            userId: m.userId,
+            displayName: m.user.name,
+            dotaAccountId: 990_000_000 + i,
+          })),
+        },
+      },
+    });
+    await page.goto("/captains");
+    const desk = page.getByTestId("scrim-desk");
+    await expect(
+      desk.getByRole("heading", { name: `Your scrim vs ${f.awayName}` }),
+    ).toBeVisible();
+    await expect(desk.getByTestId("scrim-next-step")).toContainText(
+      `${f.awayCaptain.name} hosts`,
+    );
+    await expect(desk.getByRole("heading", { name: "Lobby setup" })).toBeVisible();
+    await expect(desk).toContainText("Lobby name");
+    await expect(
+      page
+        .locator("#scrims")
+        .getByRole("list", { name: "Your scrims" })
+        .getByRole("link", { name: /Open below/ }),
+    ).toHaveAttribute(
+      "href",
+      new RegExp(`/captains\\?match=${f.matchId}&scrim=${scrim.id}#scrim-desk$`),
+    );
+    // A casual guest for this side, added and removed without leaving.
+    await untilHydrated(page, desk);
+    await desk.getByRole("textbox", { name: "Guest name" }).fill("Captains Guest");
+    await desk.getByRole("textbox", { name: "Dota or Steam ID" }).fill("123456789");
+    await desk.getByRole("button", { name: "Add casual guest", exact: true }).click();
+    const guests = () =>
+      db.scrimParticipant.count({
+        where: { scrimId: scrim.id, teamId: f.homeId, guest: true },
+      });
+    await expect.poll(guests).toBe(1);
+    await expect(desk).toContainText("Captains Guest");
+    page.once("dialog", (dialog) => dialog.accept());
+    await desk.getByRole("button", { name: "Remove", exact: true }).click();
+    await expect.poll(guests).toBe(0);
+    // The fallback for a game that didn't record is here as well, folded
+    // away while a ticketed season's games still record by themselves.
+    const missing = desk.locator("summary").filter({ hasText: "Game missing?" });
+    if (await missing.count()) await missing.click();
+    await expect(
+      desk.getByRole("button", { name: "Search for games", exact: true }),
+    ).toBeVisible();
 
     // The team: rename it with the team page's own form.
     const renamed = `${f.homeName} Renamed`;

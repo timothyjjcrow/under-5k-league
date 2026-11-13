@@ -156,3 +156,90 @@ export function scrimEndedMessage(m: ScrimScore): string {
     ? `Series ended at ${score}. ${winner} win it.`
     : `Series ended level at ${score}, with no winner.`;
 }
+
+/** Who the viewer is to one scrim, as the page and the Captains page read it. */
+export type ScrimViewerFacts = {
+  isAdmin: boolean;
+  captainsHost: boolean;
+  captainsAway: boolean;
+  coachesHost: boolean;
+  coachesAway: boolean;
+  /** A rostered player on either side. */
+  rostered: boolean;
+};
+
+export type ScrimManageView = {
+  role: "host-captain" | "away-captain" | "member" | "other";
+  /** Captain or coach of that side: its guests are theirs to add and remove. */
+  managesHost: boolean;
+  managesAway: boolean;
+  /** Claimed and still to play (not listed as "Not played"). */
+  booked: boolean;
+  /** Lineups can still change. */
+  mutable: boolean;
+  showCancel: boolean;
+  canEndSeries: boolean;
+  /** "Add a game by its match ID" and "Search the players' matches". */
+  showResultTools: boolean;
+  /** Tools sit under "Game missing?" while games still record by themselves. */
+  foldTools: boolean;
+  /** Both teams, their coaches and admins get the lobby's password. */
+  seesPassword: boolean;
+};
+
+/**
+ * Which of a scrim's controls this viewer gets: one rule for the scrim's own
+ * page and the Captains page, so the two can't disagree. It mirrors the
+ * scrim services' refusals (captains cancel and end a series; captains and
+ * coaches manage guests and results; a live scrim can't be cancelled; a
+ * finished season takes no changes), and the services re-check all of it.
+ */
+export function scrimManageView(m: {
+  status: string;
+  hasOpponent: boolean;
+  /** The active season isn't complete. */
+  seasonOpen: boolean;
+  /** `isScrimNotPlayed` for this scrim. */
+  notPlayed: boolean;
+  /** The season has a league ticket, so games record by themselves. */
+  hasTicket: boolean;
+  kickoffPassed: boolean;
+  /** Null for a signed-out visitor. */
+  viewer: ScrimViewerFacts | null;
+}): ScrimManageView {
+  const v = m.viewer;
+  const live = m.status === SCRIM_STATUS.LIVE;
+  const scheduled = m.status === SCRIM_STATUS.SCHEDULED;
+  const managesHost = !!v && (v.captainsHost || v.coachesHost);
+  const managesAway =
+    !!v && m.hasOpponent && (v.captainsAway || v.coachesAway);
+  const captainsAway = !!v && m.hasOpponent && v.captainsAway;
+  const role = !v
+    ? "other"
+    : v.captainsHost
+      ? "host-captain"
+      : captainsAway
+        ? "away-captain"
+        : v.rostered || v.coachesHost || (m.hasOpponent && v.coachesAway)
+          ? "member"
+          : "other";
+  const isAdmin = !!v && v.isAdmin;
+  const canCancel = !!v && (isAdmin || v.captainsHost || captainsAway);
+  const mutable =
+    live || (m.seasonOpen && (m.status === SCRIM_STATUS.OPEN || scheduled));
+  return {
+    role,
+    managesHost,
+    managesAway,
+    booked: m.hasOpponent && !m.notPlayed && (scheduled || live),
+    mutable,
+    showCancel: canCancel && mutable && !live,
+    canEndSeries: canCancel && live && m.hasOpponent,
+    showResultTools:
+      m.hasOpponent &&
+      (isAdmin || managesHost || managesAway) &&
+      (live || (scheduled && (isAdmin || m.seasonOpen))),
+    foldTools: m.hasTicket && !m.notPlayed && (!m.kickoffPassed || live),
+    seesPassword: role !== "other" || isAdmin,
+  };
+}

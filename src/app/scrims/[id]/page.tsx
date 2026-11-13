@@ -13,14 +13,10 @@ import { heroById } from "@/lib/heroes";
 import { parseGamePlayers } from "@/lib/player-stats";
 import {
   isScrimNotPlayed,
-  scrimEndConfirm,
   scrimJoinCheck,
+  scrimManageView,
 } from "@/lib/scrim-view";
-import {
-  scrimNextStep,
-  scrimRecordingLine,
-  type ScrimViewerRole,
-} from "@/lib/scrim-lobby";
+import { scrimNextStep, scrimRecordingLine } from "@/lib/scrim-lobby";
 import { scrimLobbyPassword } from "@/lib/scrim-lobby-password";
 import {
   describeScrimConflict,
@@ -31,17 +27,14 @@ import { canViewLeagueContact } from "@/lib/visibility";
 import { LocalTime } from "@/components/local-time";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { DiscordTag } from "@/components/discord-tag";
+import { ScrimCancelButton } from "@/components/scrims/scrim-controls";
 import { ScrimLobbyCard } from "@/components/scrims/scrim-lobby-card";
 import {
-  addScrimGuest,
-  autoDetectScrimGames,
-  cancelScrim,
-  endScrimSeries,
-  importScrimGame,
-  joinScrim,
-  removeScrimGuest,
-  removeScrimGame,
-} from "@/app/actions/scrims";
+  ScrimEndSeriesForm,
+  ScrimLineups,
+  ScrimResultTools,
+} from "@/components/scrims/scrim-manage";
+import { joinScrim, removeScrimGame } from "@/app/actions/scrims";
 import {
   Badge,
   Card,
@@ -78,9 +71,6 @@ export async function generateMetadata({
       : `${scrim.hostTeam.name} scrim availability`,
   };
 }
-
-const inputClass =
-  "h-10 min-w-0 rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60";
 
 const captainSelect = {
   select: { id: true, name: true, discordName: true, discordId: true },
@@ -317,22 +307,28 @@ export default async function ScrimDetailPage({
 
   const coaches = (team: typeof scrim.hostTeam | null) =>
     !!viewer && !!team && team.staff.some((staff) => staff.userId === viewer.id);
-  const teamManager = (team: typeof scrim.hostTeam | null) =>
-    !!viewer && !!team && (team.captainId === viewer.id || coaches(team));
-  const managesHost = teamManager(scrim.hostTeam);
-  const managesAway = teamManager(scrim.opponentTeam);
   const isAdmin = viewer?.role === "ADMIN";
-  const role: ScrimViewerRole = !viewer
-    ? "other"
-    : scrim.hostTeam.captainId === viewer.id
-      ? "host-captain"
-      : scrim.opponentTeam?.captainId === viewer.id
-        ? "away-captain"
-        : viewerMembership ||
-            coaches(scrim.hostTeam) ||
-            coaches(scrim.opponentTeam)
-          ? "member"
-          : "other";
+  // Which controls this viewer gets: the rule the Captains page reads too.
+  const manage = scrimManageView({
+    status: scrim.status,
+    hasOpponent: !!scrim.opponentTeam,
+    seasonOpen,
+    notPlayed,
+    hasTicket,
+    kickoffPassed,
+    viewer: viewer
+      ? {
+          isAdmin,
+          captainsHost: scrim.hostTeam.captainId === viewer.id,
+          captainsAway: scrim.opponentTeam?.captainId === viewer.id,
+          coachesHost: coaches(scrim.hostTeam),
+          coachesAway: coaches(scrim.opponentTeam),
+          rostered: !!viewerMembership,
+        }
+      : null,
+  });
+  const { role, managesHost, managesAway, booked, mutable } = manage;
+  const { showCancel, canEndSeries, showResultTools, foldTools } = manage;
   // Captains and coaches of either side always get the other captain's
   // handle: arranging the lobby is the whole point of this page for them.
   const contactFor = (userId: string) =>
@@ -343,39 +339,12 @@ export default async function ScrimDetailPage({
         managesHost ||
         managesAway,
     );
-  const booked =
-    !!scrim.opponentTeam &&
-    !notPlayed &&
-    (scrim.status === SCRIM_STATUS.SCHEDULED ||
-      scrim.status === SCRIM_STATUS.LIVE);
-  const canManageResults = isAdmin || managesHost || managesAway;
-  const canCancel =
-    !!viewer &&
-    (isAdmin ||
-      scrim.hostTeam.captainId === viewer.id ||
-      scrim.opponentTeam?.captainId === viewer.id);
-  // Same people as Cancel: a series that can't be finished is called at its
-  // current score rather than left LIVE forever (a live scrim can't cancel).
-  const canEndSeries =
-    canCancel && scrim.status === SCRIM_STATUS.LIVE && !!scrim.opponentTeam;
   const participantByAccount = new Map(
     scrim.participants.map((participant) => [
       participant.dotaAccountId,
       participant,
     ]),
   );
-  const activeStatus =
-    scrim.status === SCRIM_STATUS.OPEN ||
-    scrim.status === SCRIM_STATUS.SCHEDULED ||
-    scrim.status === SCRIM_STATUS.LIVE;
-  const mutable =
-    scrim.status === SCRIM_STATUS.LIVE || (seasonOpen && activeStatus);
-  const showCancel = canCancel && mutable && scrim.status !== SCRIM_STATUS.LIVE;
-  const canRecordResults =
-    scrim.status === SCRIM_STATUS.LIVE ||
-    (scrim.status === SCRIM_STATUS.SCHEDULED && (isAdmin || seasonOpen));
-  const showResultTools =
-    !!scrim.opponentTeam && canManageResults && canRecordResults;
   const gamesRecorded = scrim.games.length;
   const nextStep = scrimNextStep({
     role,
@@ -387,18 +356,12 @@ export default async function ScrimDetailPage({
   });
   // Both teams, their coaches and admins get the lobby's password.
   const password =
-    role !== "other" || isAdmin
+    manage.seesPassword
       ? ((value: string | null) =>
           value ? { value } : ("host-chooses" as const))(
           scrimLobbyPassword(scrim.id),
         )
       : ("members-only" as const);
-  // Tools first when a game should be in by now and isn't, or when nothing
-  // records by itself; otherwise one tap away under "Game missing?".
-  const foldTools =
-    hasTicket &&
-    !notPlayed &&
-    (!kickoffPassed || scrim.status === SCRIM_STATUS.LIVE);
   const resultsSubtitle =
     scrim.status === SCRIM_STATUS.COMPLETED
       ? "Practice only: these games count for scrim history and the scrim leaders board, never league standings."
@@ -546,36 +509,21 @@ export default async function ScrimDetailPage({
                   Can&apos;t play the rest? Either captain can end the series
                   at the current score.
                 </p>
-                <ActionForm action={endScrimSeries} hidden={{ scrimId: scrim.id }}>
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    confirm={scrimEndConfirm({
-                      hostTeamName: scrim.hostTeam.name,
-                      awayTeamName: scrim.opponentTeam.name,
-                      hostScore: scrim.hostScore,
-                      awayScore: scrim.awayScore,
-                    })}
-                  >
-                    End series at {scrim.hostScore}–{scrim.awayScore}
-                  </SubmitButton>
-                </ActionForm>
+                <ScrimEndSeriesForm
+                  scrimId={scrim.id}
+                  hostTeamName={scrim.hostTeam.name}
+                  awayTeamName={scrim.opponentTeam.name}
+                  hostScore={scrim.hostScore}
+                  awayScore={scrim.awayScore}
+                />
               </>
             ) : null}
             {showCancel ? (
-              <ActionForm action={cancelScrim} hidden={{ scrimId: scrim.id }}>
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  confirm={
-                    scrim.opponentTeam
-                      ? "Cancel this scrim? The other captain is told, and no result can be added."
-                      : "Cancel this open scrim time?"
-                  }
-                >
-                  Cancel scrim
-                </SubmitButton>
-              </ActionForm>
+              <ScrimCancelButton
+                scrimId={scrim.id}
+                booked={!!scrim.opponentTeam}
+                label="Cancel scrim"
+              />
             ) : null}
           </div>
         ) : null}
@@ -749,10 +697,10 @@ export default async function ScrimDetailPage({
                   <summary className="cursor-pointer py-3 text-sm font-medium text-fg">
                     Game missing?
                   </summary>
-                  <ResultTools scrimId={scrim.id} />
+                  <ScrimResultTools scrimId={scrim.id} />
                 </details>
               ) : (
-                <ResultTools scrimId={scrim.id} />
+                <ScrimResultTools scrimId={scrim.id} />
               )
             ) : null}
           </CardBody>
@@ -765,168 +713,27 @@ export default async function ScrimDetailPage({
           subtitle="Games are matched to these Dota accounts: at least 3 a side must play. Rosters are copied in when the scrim is booked; captains and coaches can add a guest who plays for their side, without touching the league roster."
           headingLevel={2}
         />
-        <CardBody className="grid gap-5 md:grid-cols-2">
-          {[scrim.hostTeam, scrim.opponentTeam].map((team) => {
-            if (!team) return null;
-            const manages =
-              team.id === scrim.hostTeamId ? managesHost : managesAway;
-            const participants = scrim.participants.filter(
-              (participant) => participant.teamId === team.id,
-            );
-            return (
-              <section key={team.id} className="min-w-0 space-y-3">
-                <div className="flex items-center gap-2">
-                  <TeamCrest
-                    seed={team.id}
-                    name={team.name}
-                    logoUrl={team.logoUrl}
-                    size={30}
-                  />
-                  <h3 className="min-w-0 truncate font-display font-semibold">
-                    {team.name}
-                  </h3>
-                  <Badge>
-                    {participants.length}{" "}
-                    {participants.length === 1 ? "player" : "players"}
-                  </Badge>
-                </div>
-                <ul className="divide-y divide-line/60 rounded-lg border border-line/70">
-                  {participants.map((participant) => (
-                    <li
-                      key={participant.id}
-                      className="flex items-center justify-between gap-3 px-3 py-2 text-sm"
-                    >
-                      <div className="min-w-0">
-                        {participant.userId ? (
-                          <PlayerLink
-                            userId={participant.userId}
-                            className="max-w-full truncate"
-                          >
-                            {participant.displayName}
-                          </PlayerLink>
-                        ) : (
-                          <span className="block truncate font-medium">
-                            {participant.displayName}
-                          </span>
-                        )}
-                        {/* A guest has no profile, so the account they were
-                            added with is the only way to tell who they are. */}
-                        {participant.guest ? (
-                          <p className="font-mono text-[11px] text-muted">
-                            Dota {participant.dotaAccountId}
-                          </p>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {participant.userId === team.captainId ? (
-                          <Badge tone="accent">Captain</Badge>
-                        ) : null}
-                        {participant.guest ? <Badge tone="info">Guest</Badge> : null}
-                        {participant.guest && manages && mutable ? (
-                          <ActionForm
-                            action={removeScrimGuest}
-                            hidden={{
-                              scrimId: scrim.id,
-                              participantId: participant.id,
-                            }}
-                          >
-                            <SubmitButton
-                              size="sm"
-                              variant="ghost"
-                              confirm={`Remove ${participant.displayName} from this scrim lineup?`}
-                            >
-                              Remove
-                            </SubmitButton>
-                          </ActionForm>
-                        ) : null}
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-                {manages && mutable ? (
-                  <ActionForm
-                    action={addScrimGuest}
-                    hidden={{ scrimId: scrim.id }}
-                    className="grid gap-2 rounded-lg border border-dashed border-line p-3 sm:grid-cols-2"
-                  >
-                    <label className="space-y-1 text-xs text-muted">
-                      Guest name
-                      <input
-                        name="displayName"
-                        required
-                        maxLength={60}
-                        placeholder="Display name"
-                        className={`${inputClass} w-full`}
-                      />
-                    </label>
-                    <label className="space-y-1 text-xs text-muted">
-                      Dota or Steam ID
-                      <input
-                        name="accountRef"
-                        required
-                        placeholder="ID or profile URL"
-                        className={`${inputClass} w-full`}
-                      />
-                    </label>
-                    <SubmitButton size="sm" className="sm:col-span-2">
-                      Add casual guest
-                    </SubmitButton>
-                  </ActionForm>
-                ) : null}
-              </section>
-            );
-          })}
+        <CardBody>
+          <ScrimLineups
+            scrimId={scrim.id}
+            mutable={mutable}
+            sides={[scrim.hostTeam, scrim.opponentTeam].flatMap((team) =>
+              team
+                ? [
+                    {
+                      team,
+                      manages:
+                        team.id === scrim.hostTeamId ? managesHost : managesAway,
+                      participants: scrim.participants.filter(
+                        (participant) => participant.teamId === team.id,
+                      ),
+                    },
+                  ]
+                : [],
+            )}
+          />
         </CardBody>
       </Card>
-    </div>
-  );
-}
-
-/**
- * The fallback when a game didn't record by itself: by its match ID (a game
- * hosted under another league's ticket is on OpenDota too), or a search of
- * the players' recent public matches. Captains, coaches and admins only.
- */
-function ResultTools({ scrimId }: { scrimId: string }) {
-  return (
-    <div className="grid gap-4 pb-4 md:grid-cols-2">
-      <ActionForm
-        action={importScrimGame}
-        hidden={{ scrimId }}
-        className="space-y-2 rounded-lg border border-line bg-surface-2/30 p-4"
-      >
-        <label className="block space-y-1 text-sm font-medium">
-          Add a game by its Dota match ID
-          <input
-            name="dotaMatchRef"
-            required
-            placeholder="Match ID or OpenDota URL"
-            className={`${inputClass} w-full font-normal`}
-          />
-        </label>
-        <p className="text-xs text-muted">
-          For a game OpenDota has that didn&apos;t record by itself, such as
-          one hosted under another league&apos;s ticket. A lobby with no
-          ticket at all never reaches OpenDota.
-        </p>
-        <SubmitButton variant="secondary" size="sm">
-          Add game
-        </SubmitButton>
-      </ActionForm>
-      <ActionForm
-        action={autoDetectScrimGames}
-        hidden={{ scrimId }}
-        className="space-y-2 rounded-lg border border-line bg-surface-2/30 p-4"
-      >
-        <p className="text-sm font-medium">Search the players&apos; matches</p>
-        <p className="text-xs text-muted">
-          Looks through both lineups&apos; recent public matches for a game
-          with at least 3 of each side in it.
-        </p>
-        <SubmitButton variant="secondary" size="sm">
-          Search for games
-        </SubmitButton>
-      </ActionForm>
     </div>
   );
 }

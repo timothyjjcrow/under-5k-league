@@ -34,6 +34,7 @@ export function CheckinBanner({
   viewerIsCaptain = false,
   side = null,
   detailsHref,
+  coverHref,
   variant = "strip",
 }: {
   matchId: string;
@@ -60,6 +61,12 @@ export function CheckinBanner({
    */
   side?: CheckinSideView | null;
   detailsHref?: string;
+  /**
+   * Where a captain's "Line up cover" goes. The default is the match page's
+   * Standins card; the Captains page draws that card itself and passes its
+   * in-page anchor.
+   */
+  coverHref?: string;
   /**
    * `strip` (the default, and byte-for-byte what /schedule and /matches/[id]
    * already render) is a wide low-profile bar. `panel` stacks into a narrow
@@ -217,6 +224,7 @@ export function CheckinBanner({
           side={side}
           matchId={matchId}
           remainingGames={remainingGames}
+          coverHref={coverHref}
           className={panel ? "mt-3" : "basis-full"}
         />
       ) : null}
@@ -234,11 +242,13 @@ function SideSummary({
   side,
   matchId,
   remainingGames,
+  coverHref,
   className,
 }: {
   side: CheckinSideView;
   matchId: string;
   remainingGames: boolean;
+  coverHref?: string;
   className?: string;
 }) {
   const { names } = side;
@@ -265,7 +275,7 @@ function SideSummary({
         </span>
         {side.role === "captain" && sideNeedsCover(side.counts) ? (
           <Link
-            href={matchAnchorPath(matchId, MATCH_ANCHOR.standins)}
+            href={coverHref ?? matchAnchorPath(matchId, MATCH_ANCHOR.standins)}
             className={textLink("whitespace-nowrap")}
           >
             Line up cover <LinkArrow />
