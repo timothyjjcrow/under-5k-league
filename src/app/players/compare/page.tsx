@@ -14,8 +14,14 @@ import {
   compareDefaults,
   meetings,
   sharedSeries,
+  tapeRow,
+  tapeTally,
   type Meetings,
+  type TapeRow,
 } from "@/lib/compare";
+import { fantasyPoints } from "@/lib/fantasy";
+import { killParticipationByPlayer } from "@/lib/leader-ranking";
+import { ComparePicker } from "@/components/compare-picker";
 import { getPlayerGameFacts } from "@/lib/player-game-history";
 import { loadPlayoffRoundsBySeason } from "@/lib/playoff-rounds";
 import { matchRoundLabel } from "@/lib/schedule";
@@ -34,7 +40,6 @@ import {
   PageTitle,
   PlayerLink,
   RankBadge,
-  buttonClasses,
   textLink,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
@@ -95,49 +100,6 @@ export async function generateMetadata({
     `Compare two ${LEAGUE_CONFIG.name} players across every imported league game, including careers, heroes, and shared results.`,
     "/players/compare",
   );
-}
-
-type StatRow = {
-  label: string;
-  a: string;
-  b: string;
-  /** 1 = A better, -1 = B better, 0 = tie/no call. */
-  edge: number;
-};
-
-function row(
-  label: string,
-  a: number | null,
-  b: number | null,
-  opts: {
-    lowerBetter?: boolean;
-    fmt?: (n: number) => string;
-    /** Both players' game counts — a side with none has no record to compare. */
-    contested?: boolean;
-  } = {},
-): StatRow {
-  const fmt = opts.fmt ?? ((n: number) => String(n));
-  // A player with zero games isn't "better" at anything. Left unguarded, an
-  // unplayed comparison highlighted 0 avg deaths as the winning side and
-  // 0% win rate as the losing one — both meaningless.
-  if (opts.contested === false) {
-    return {
-      label,
-      a: a == null ? "—" : fmt(a),
-      b: b == null ? "—" : fmt(b),
-      edge: 0,
-    };
-  }
-  if (a == null || b == null) {
-    return {
-      label,
-      a: a == null ? "—" : fmt(a),
-      b: b == null ? "—" : fmt(b),
-      edge: 0,
-    };
-  }
-  const sign = Math.sign(a - b) * (opts.lowerBetter ? -1 : 1);
-  return { label, a: fmt(a), b: fmt(b), edge: sign };
 }
 
 export default async function ComparePage({
@@ -289,42 +251,74 @@ export default async function ComparePage({
 
   // Only compare when BOTH sides actually have games on record.
   const contested = !!sumA && !!sumB && sumA.games > 0 && sumB.games > 0;
-  const rows: StatRow[] =
+  // Impact points per game (the Player of the Week score) and the share of
+  // their team's kills each was in on: the two numbers /leaders ranks that a
+  // plain K/D/A line doesn't show.
+  const impactOf = (userId: string) => {
+    let tenths = 0;
+    let played = 0;
+    for (const game of games) {
+      const line = game.lines.find((candidate) => candidate.userId === userId);
+      if (!line) continue;
+      played += 1;
+      tenths += Math.round(
+        fantasyPoints(line, line.isRadiant === game.radiantWin) * 10,
+      );
+    }
+    return played > 0 ? Math.round(tenths / played) / 10 : null;
+  };
+  const involvement = comparable ? killParticipationByPlayer(games) : null;
+  const involvementOf = (userId: string) => {
+    const stat = involvement?.get(userId);
+    return stat ? Math.round(stat.rate) : null;
+  };
+  const oneDecimal = (n: number) => n.toFixed(1);
+  const rows: TapeRow[] =
     sumA && sumB
       ? [
-          // Games played is context, not a contest — never highlighted.
-          {
-            label: "Games",
-            a: String(sumA.games),
-            b: String(sumB.games),
-            edge: 0,
-          },
-          // Nor are wins: more games means more wins, and win rate below
-          // already makes the comparison.
-          {
-            label: "Wins",
-            a: String(sumA.wins),
-            b: String(sumB.wins),
-            edge: 0,
-          },
-          row("Win rate", sumA.winRate, sumB.winRate, {
-            fmt: (n) => `${n}%`,
+          // Games played is context, not a contest: never highlighted. Nor
+          // are wins: more games means more wins, and win rate below already
+          // makes the comparison.
+          tapeRow("Games", sumA.games, sumB.games, { contested: false }),
+          tapeRow("Wins", sumA.wins, sumB.wins, { contested: false }),
+          tapeRow("Win rate", sumA.winRate, sumB.winRate, {
+            format: (n) => `${n}%`,
             contested,
           }),
-          row("KDA", sumA.kda, sumB.kda, { contested }),
-          row("Avg kills", sumA.avgKills, sumB.avgKills, { contested }),
-          row("Avg deaths", sumA.avgDeaths, sumB.avgDeaths, {
+          tapeRow("Impact / game", impactOf(a!.id), impactOf(b!.id), {
+            format: oneDecimal,
+            contested,
+          }),
+          tapeRow("KDA", sumA.kda, sumB.kda, { format: oneDecimal, contested }),
+          tapeRow("Avg kills", sumA.avgKills, sumB.avgKills, { format: oneDecimal, contested }),
+          tapeRow("Avg deaths", sumA.avgDeaths, sumB.avgDeaths, {
             lowerBetter: true,
+            format: oneDecimal,
             contested,
           }),
-          row("Avg assists", sumA.avgAssists, sumB.avgAssists, { contested }),
-          row("Avg GPM", sumA.avgGpm, sumB.avgGpm, { contested }),
-          row("Avg net worth", sumA.avgNetWorth, sumB.avgNetWorth, {
-            fmt: formatNetWorth,
+          tapeRow("Avg assists", sumA.avgAssists, sumB.avgAssists, { format: oneDecimal, contested }),
+          tapeRow("Kill share", involvementOf(a!.id), involvementOf(b!.id), {
+            format: (n) => `${n}%`,
+            contested,
+          }),
+          tapeRow("Avg GPM", sumA.avgGpm, sumB.avgGpm, { contested }),
+          tapeRow("Avg net worth", sumA.avgNetWorth, sumB.avgNetWorth, {
+            format: formatNetWorth,
             contested,
           }),
         ]
       : [];
+  const tally = tapeTally(rows);
+  // Heroes both have played, marked in each pool below.
+  const sharedHeroes = new Set(
+    sumA && sumB
+      ? sumA.topHeroes
+          .map((hero) => hero.heroId)
+          .filter((heroId) =>
+            sumB.topHeroes.some((hero) => hero.heroId === heroId),
+          )
+      : [],
+  );
 
   return (
     <div className="space-y-5">
@@ -343,49 +337,11 @@ export default async function ComparePage({
       {users.length > 0 ? (
         <Card>
           <CardBody>
-            <form
-              method="get"
-              className="flex flex-wrap items-end gap-3"
-              action="/players/compare"
-            >
-              <label className="min-w-[12rem] flex-1 text-xs text-muted">
-                Player A
-                <select
-                  name="a"
-                  defaultValue={defaultA}
-                  className="mt-1 block h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60 sm:h-10"
-                >
-                  <option value="" disabled>
-                    Pick a player…
-                  </option>
-                  {users.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="min-w-[12rem] flex-1 text-xs text-muted">
-                Player B
-                <select
-                  name="b"
-                  defaultValue={defaultB}
-                  className="mt-1 block h-11 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm text-fg outline-none focus:border-accent/60 sm:h-10"
-                >
-                  <option value="" disabled>
-                    Pick a player…
-                  </option>
-                  {users.map((u) => (
-                    <option key={u.id} value={u.id}>
-                      {u.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <button type="submit" className={buttonClasses("accent")}>
-                Compare
-              </button>
-            </form>
+            <ComparePicker
+              players={users.map((u) => ({ id: u.id, name: u.name }))}
+              defaultA={defaultA}
+              defaultB={defaultB}
+            />
             <p className="mt-2 text-xs text-muted">
               Only players with at least one imported league game are listed.
             </p>
@@ -478,14 +434,15 @@ export default async function ComparePage({
             />
             <CardBody>
               {/* Each name heads its own column of figures: A's at the left
-                  edge, B's mirrored to the right edge. */}
-              <div className="mb-4 grid grid-cols-2 gap-4">
+                  edge, B's mirrored to the right edge, and between them how
+                  many of the lines below each one leads. */}
+              <div className="mb-4 grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-3">
                 {[a, b].map((u, i) => (
                   <div
                     key={u.id}
                     className={cn(
                       "flex min-w-0 items-center gap-2.5",
-                      i === 1 && "flex-row-reverse text-right",
+                      i === 1 && "col-start-3 flex-row-reverse text-right",
                     )}
                   >
                     <Avatar name={u.name} src={u.avatar} size={36} />
@@ -504,11 +461,32 @@ export default async function ComparePage({
                     </span>
                   </div>
                 ))}
+                {contested ? (
+                  <p className="col-start-2 row-start-1 text-center">
+                    <span className="block font-display text-2xl font-semibold leading-none tabular-nums">
+                      <span className={cn(tally.a > tally.b && "text-success")}>
+                        {tally.a}
+                      </span>
+                      <span className="px-1 text-muted">–</span>
+                      <span className={cn(tally.b > tally.a && "text-success")}>
+                        {tally.b}
+                      </span>
+                    </span>
+                    <span className="mt-1 block text-[11px] uppercase tracking-wide text-muted">
+                      stats led
+                    </span>
+                  </p>
+                ) : null}
               </div>
-              <table className="w-full text-sm">
+              <table className="w-full table-fixed text-sm">
                 <caption className="sr-only">
                   Career comparison between {a.name} and {b.name}
                 </caption>
+                <colgroup>
+                  <col className="w-[22%]" />
+                  <col />
+                  <col className="w-[22%]" />
+                </colgroup>
                 <thead className="sr-only">
                   <tr>
                     <th scope="col">{a.name}</th>
@@ -520,18 +498,40 @@ export default async function ComparePage({
                   {rows.map((r) => (
                     <tr key={r.label} className="border-b border-line/40">
                       <td
-                        className={`w-1/3 py-2 text-left tabular-nums ${r.edge > 0 ? "font-semibold text-success" : "text-fg"}`}
+                        className={`py-2 text-left tabular-nums ${r.edge > 0 ? "font-semibold text-success" : "text-fg"}`}
                       >
                         {r.a}
                       </td>
-                      <th
-                        scope="row"
-                        className="w-1/3 py-2 text-center text-xs font-normal uppercase tracking-wide text-muted"
-                      >
-                        {r.label}
+                      <th scope="row" className="px-1 py-2 font-normal">
+                        <span className="block text-center text-xs uppercase tracking-wide text-muted">
+                          {r.label}
+                        </span>
+                        {/* The two figures as bars from the middle outwards,
+                            the leader's in green. Decoration: the figures
+                            beside them are the values. */}
+                        <span aria-hidden="true" className="mt-1 flex gap-0.5">
+                          <span className="flex h-1.5 flex-1 justify-end overflow-hidden rounded-l-full bg-surface-3/65">
+                            <span
+                              className={cn(
+                                "h-full rounded-l-full",
+                                r.edge > 0 ? "bg-success/80" : "bg-muted/45",
+                              )}
+                              style={{ width: `${r.aShare * 100}%` }}
+                            />
+                          </span>
+                          <span className="flex h-1.5 flex-1 overflow-hidden rounded-r-full bg-surface-3/65">
+                            <span
+                              className={cn(
+                                "h-full rounded-r-full",
+                                r.edge < 0 ? "bg-success/80" : "bg-muted/45",
+                              )}
+                              style={{ width: `${r.bShare * 100}%` }}
+                            />
+                          </span>
+                        </span>
                       </th>
                       <td
-                        className={`w-1/3 py-2 text-right tabular-nums ${r.edge < 0 ? "font-semibold text-success" : "text-fg"}`}
+                        className={`py-2 text-right tabular-nums ${r.edge < 0 ? "font-semibold text-success" : "text-fg"}`}
                       >
                         {r.b}
                       </td>
@@ -539,6 +539,10 @@ export default async function ComparePage({
                   ))}
                 </tbody>
               </table>
+              <p className="mt-3 text-xs leading-relaxed text-muted">
+                Green marks the better figure; games and wins are context and
+                never count. Impact is the Player of the Week score per game.
+              </p>
             </CardBody>
           </Card>
 
@@ -565,6 +569,11 @@ export default async function ComparePage({
                             <span className="min-w-0 flex-1 truncate">
                               {hero?.name ?? `Hero #${h.heroId}`}
                             </span>
+                            {sharedHeroes.has(h.heroId) ? (
+                              <span className="shrink-0 rounded bg-accent/15 px-1.5 py-0.5 text-xs font-medium text-accent">
+                                Both
+                              </span>
+                            ) : null}
                             <span className="tabular-nums text-muted">
                               {h.wins}–{h.games - h.wins}
                             </span>

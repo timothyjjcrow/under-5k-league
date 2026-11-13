@@ -3,6 +3,8 @@ import {
   compareDefaults,
   meetings,
   sharedSeries,
+  tapeRow,
+  tapeTally,
   type MeetingGame,
 } from "./compare";
 
@@ -151,5 +153,49 @@ describe("compareDefaults", () => {
 
   it("leaves both empty for a viewer without league games", () => {
     expect(compareDefaults({ ...none, viewerId: null })).toEqual({ a: "", b: "" });
+  });
+});
+
+describe("tapeRow", () => {
+  it("gives the edge to the bigger figure and sizes both bars against it", () => {
+    expect(tapeRow("KDA", 8, 4, { format: (n) => n.toFixed(1) })).toEqual({
+      label: "KDA",
+      a: "8.0",
+      b: "4.0",
+      edge: 1,
+      aShare: 1,
+      bShare: 0.5,
+    });
+    expect(tapeRow("Avg GPM", 400, 500).edge).toBe(-1);
+    expect(tapeRow("Avg GPM", 500, 500).edge).toBe(0);
+  });
+
+  it("gives a lower-is-better line to the smaller figure, whose bar is the shorter one", () => {
+    const row = tapeRow("Avg deaths", 2, 4, { lowerBetter: true });
+    expect(row.edge).toBe(1);
+    expect([row.aShare, row.bShare]).toEqual([0.5, 1]);
+  });
+
+  it("never calls an uncontested or missing figure the better one", () => {
+    // A player with no games has 0 avg deaths: not a win.
+    expect(
+      tapeRow("Avg deaths", 0, 3, { lowerBetter: true, contested: false }).edge,
+    ).toBe(0);
+    const missing = tapeRow("Avg GPM", null, 480);
+    expect(missing).toMatchObject({ a: "—", b: "480", edge: 0, aShare: 0, bShare: 1 });
+    expect(tapeRow("Avg GPM", null, null)).toMatchObject({ aShare: 0, bShare: 0 });
+  });
+});
+
+describe("tapeTally", () => {
+  it("counts the lines each side leads and ignores the level ones", () => {
+    const rows = [
+      tapeRow("Games", 9, 4, { contested: false }),
+      tapeRow("KDA", 8, 4),
+      tapeRow("Avg kills", 3, 4),
+      tapeRow("Avg assists", 9, 4),
+      tapeRow("Avg GPM", 500, 500),
+    ];
+    expect(tapeTally(rows)).toEqual({ a: 2, b: 1 });
   });
 });

@@ -89,12 +89,32 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
 ## Leaders
 
 - **Rank what the player did** (Tim's decision). No total-wins, win-rate or
-  "Winningest" board: they ranked the team's record. Kills and assists are
+  "Winningest" ranking: they ranked the team's record. Kills and assists are
   per game with a flat `PER_GAME_MIN_GAMES` (3, `src/lib/player-stats.ts`,
-  shared with the season awards) so volume can't win; other average boards
-  cap their floor at the most-played count so they aren't empty early. Keep
-  "Most games". `leaders-guards.test.ts` pins the constant and both boards.
-  Details and nav: `pages-and-ui.md`.
+  shared with the season awards) so volume can't win; the other averages cap
+  their floor at the most-played count (`rateGamesFloor`) so they aren't
+  empty early. Keep "Most games". `leaders-guards.test.ts` pins the constant,
+  both per-game rankings and the absence of a wins key.
+- **One table, worked out once** (`buildLeaderTable`, `src/lib/leader-table.ts`,
+  tested): every player's season line under every stat in `LEADER_STAT_KEYS`.
+  A cell is a value, its label, a hint, a sample and `ranked` (whether it
+  meets that stat's minimum). A zero or a missing optional field (GPM, net
+  worth, healing, benchmarks) is no cell at all, never a zero. Kill
+  involvement, sustain and the report card are listed only when someone ranks
+  on them; the rest always show.
+- **`rankByCell` (`leader-ranking.ts`) is the one ranking:** players who meet
+  the minimum, best first, then the bigger sample, then id, with competition
+  ranks on the value shown (1, 1, 3). The explorer calls it once per stat
+  for the list's order, the tiles' leaders and each player's place in their
+  card, so the three can't disagree.
+- **The MVP race is the season MVP's own rule** (Claude's call, 2026-11-12,
+  on Tim's "use your judgment"): impact points per game with the award's
+  floor, half the most games anyone has played (`mvpGamesFloor`, the same
+  number as `awards.ts`). It is the default ranking, so mid-season the page
+  opens on who the award would crown today. `leader-table.test.ts` pins it
+  to `computeSeasonAwards`. It is impact points, so a win adds to it: that
+  is the award's rule, not a team-record ranking.
+- Layout and nav: `pages-and-ui.md`.
 
 ## Season awards (the recap)
 
@@ -138,7 +158,11 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
 ## Record book
 
 - **`/records`**: all-time single-game records (Player, Match lists; season
-  switcher once two seasons have games). Player records: kills, assists, net
+  switcher once two seasons have games). A record opens the marks behind it
+  (`recordLadders`, `RECORD_LADDER_SIZE` 5 with the record): one entry per
+  game line, so a player can hold several places, and an equal mark sits
+  behind the earlier game, which makes every ladder's first entry exactly
+  the record `leagueRecords` names (`records.test.ts` pins that). Player records: kills, assists, net
   worth, GPM, XPM, last hits, denies, hero and tower damage, healing
   (`PLAYER_RECORDS`). Game records (`GAME_RECORDS`): longest, fastest,
   bloodiest, biggest stomp, closest (20+ kills), most kills in defeat.
@@ -152,8 +176,9 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   unsafe stored duration/scores become 0 and show in `StatsDataNotice`;
   missing economy fields are null, never 0.
 - **The book is cached as what it shows, never as rows.** `/records` reads
-  `getRecordBookView(scope)` (`recordBookView`: the book, its diagnostics and
-  counts, the seasons with games, each match record's fixture) and the match
+  `getRecordBookView(scope)` (`recordBookView`: the book and its ladders,
+  its diagnostics and counts, the seasons with games, the fixture of every
+  match on a match record's ladder) and the match
   preview, the profile and its link picture read `getRecordWatchBook()` (the
   book plus every career best, as JSON through `recordWatchBookData`), both in
   `cached-queries.ts` under the result revision, the "games" tag and 60s:
@@ -228,10 +253,18 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 
 ## Hero meta
 
-- **`/meta` is one season's report** (`?season=`): headline, one sortable
+- **`/meta` is one season's report** (`?season=`): headlines, one sortable
   table (`HeroMetaTable`, no URL state), never-picked heroes in one
   `<details>`. "Best win rate" needs `META_HEADLINE_MIN_PICKS` (8) picks,
   compared exactly (a 3-0 hero is not a headline).
+- **"Signature pick" is the player with the most games on one hero**
+  (`metaHeadlines`' `signature`): from `META_SIGNATURE_MIN_GAMES` (3), then
+  more wins, then the more-picked hero. Two games on a hero is a repeat, not
+  a signature, so early in a season the headline is absent.
+- **Sorting by win % places only heroes with `META_WIN_RATE_MIN_PICKS` (3)
+  picks.** The rest keep their record and list after a ruled line that says
+  why: a 1–0 hero is "100%" and used to head the table. No control for it:
+  the page's old sample filter was removed as clutter (2026-09).
 - **Only trusted, complete 5v5 boxes count.** A game with any unknown hero is
   dropped whole (`allHeroesKnown`, through `metaLines`) so coverage can't pass
   100%, with a catalogue-update notice. A deleted player shows as "Former

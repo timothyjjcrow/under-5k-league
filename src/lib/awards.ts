@@ -56,7 +56,8 @@ type Agg = {
 
 const kdaOf = (a: Agg) => (a.kills + a.assists) / Math.max(1, a.deaths);
 const avgGpmOf = (a: Agg) => (a.gpmGames > 0 ? a.gpmSum / a.gpmGames : 0);
-/** Per game to one decimal, the value /leaders ranks and shows (topBy). */
+/** Per game to one decimal, the value /leaders ranks and shows
+ *  (leader-table.ts). */
 const perGameOf = (total: number, games: number) =>
   Math.round((total / games) * 10) / 10;
 

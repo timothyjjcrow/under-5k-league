@@ -3,6 +3,7 @@ import {
   allHeroesKnown,
   heroMeta,
   metaHeadlines,
+  META_SIGNATURE_MIN_GAMES,
   type HeroMetaRow,
   type MetaGame,
   type MetaLine,
@@ -208,7 +209,11 @@ describe("metaHeadlines", () => {
   });
 
   it("is empty for no picks", () => {
-    expect(metaHeadlines([])).toEqual({ mostPicked: null, bestWinRate: null });
+    expect(metaHeadlines([])).toEqual({
+      mostPicked: null,
+      bestWinRate: null,
+      signature: null,
+    });
   });
 
   it("never headlines a small sample's win rate", () => {
@@ -228,5 +233,38 @@ describe("metaHeadlines", () => {
   it("breaks an equal rate by the bigger sample", () => {
     const rows = [row(1, 8, 6), row(2, 12, 9)];
     expect(metaHeadlines(rows).bestWinRate?.heroId).toBe(2);
+  });
+
+  it("names the player with the most games on one hero as the signature pick", () => {
+    const top = (userId: string, games: number, wins: number) => ({
+      userId,
+      games,
+      wins,
+    });
+    const rows = [
+      { ...row(1, 12, 7), topPlayer: top("ann", 3, 1) },
+      { ...row(2, 9, 6), topPlayer: top("ben", 5, 2) },
+      { ...row(3, 8, 5), topPlayer: top("cat", 5, 4) },
+    ];
+    // Five games each for ben and cat: cat's four wins break the tie.
+    expect(metaHeadlines(rows).signature).toEqual({
+      heroId: 3,
+      userId: "cat",
+      games: 5,
+      wins: 4,
+    });
+  });
+
+  it("keeps the more-picked hero on a full signature tie, and waits for three games", () => {
+    const top = { userId: "ann", games: 3, wins: 2 };
+    const tied = [
+      { ...row(1, 12, 7), topPlayer: top },
+      { ...row(2, 9, 6), topPlayer: { ...top, userId: "ben" } },
+    ];
+    expect(metaHeadlines(tied).signature?.heroId).toBe(1);
+    // Two games on a hero is a repeat, not a signature.
+    const early = [{ ...row(1, 12, 7), topPlayer: { ...top, games: 2 } }];
+    expect(metaHeadlines(early).signature).toBeNull();
+    expect(META_SIGNATURE_MIN_GAMES).toBe(3);
   });
 });

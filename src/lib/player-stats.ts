@@ -267,65 +267,11 @@ export function currentStreak(linesNewestFirst: PlayerGameLine[]): Streak {
 
 /**
  * The fewest games a player needs to rank on kills or assists per game: a
- * flat 3, however early in the season. /leaders and the season recap's Kill
- * Leader and Playmaker awards both use it, so they name the same player.
+ * flat 3, however early in the season. /leaders (leader-table.ts) and the
+ * season recap's Kill Leader and Playmaker awards both use it, so they name
+ * the same player.
  */
 export const PER_GAME_MIN_GAMES = 3;
-
-// No wins or win-rate key on purpose: those boards ranked a TEAM's record
-// (every regular on the best team tied at the top), and standings plus Team of
-// the Week already show it. Kills and assists are PER GAME for the same reason
-// — a season total rewarded whoever's team played extra series.
-export type LeaderboardKey =
-  | "kda"
-  | "killsPerGame"
-  | "assistsPerGame"
-  | "games"
-  | "gpm"
-  | "netWorth";
-
-export type LeaderEntry = { id: string; summary: PlayerSummary };
-
-export type LeaderRow = { id: string; value: number; summary: PlayerSummary };
-
-const LEADER_VALUE: Record<LeaderboardKey, (s: PlayerSummary) => number> = {
-  kda: (s) => s.kda,
-  killsPerGame: (s) => s.avgKills,
-  assistsPerGame: (s) => s.avgAssists,
-  games: (s) => s.games,
-  gpm: (s) => s.avgGpm ?? 0,
-  netWorth: (s) => s.avgNetWorth ?? 0,
-};
-
-/**
- * Rank players by a stat. Rate stats (kda, the per-game boards) take a
- * `minGames` floor so a single lucky game can't top the board. Ties break on
- * games played.
- */
-export function topBy(
-  entries: LeaderEntry[],
-  key: LeaderboardKey,
-  { minGames = 1, limit = 5 }: { minGames?: number; limit?: number } = {},
-): LeaderRow[] {
-  const value = LEADER_VALUE[key];
-  const samples = (summary: PlayerSummary) =>
-    key === "gpm"
-      ? summary.gpmGames
-      : key === "netWorth"
-        ? summary.netWorthGames
-        : summary.games;
-  return entries
-    .filter((e) => samples(e.summary) >= minGames)
-    .map((e) => ({ id: e.id, value: value(e.summary), summary: e.summary }))
-    .filter((r) => r.value > 0)
-    .sort(
-      (a, b) =>
-        b.value - a.value ||
-        b.summary.games - a.summary.games ||
-        a.id.localeCompare(b.id),
-    )
-    .slice(0, limit);
-}
 
 function round1(n: number): number {
   return Math.round(n * 10) / 10;

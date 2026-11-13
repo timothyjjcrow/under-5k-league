@@ -3,6 +3,7 @@ import {
   competitionRanks,
   killParticipationByPlayer,
   leaderIdentity,
+  rankByCell,
 } from "./leader-ranking";
 
 describe("competitionRanks", () => {
@@ -85,5 +86,45 @@ describe("killParticipationByPlayer", () => {
       scoredGames: 2,
       rate: 50,
     });
+  });
+});
+
+describe("rankByCell", () => {
+  const cell = (value: number, sample = 1, ranked = true) => ({
+    value,
+    rankValue: Math.round(value * 10),
+    sample,
+    ranked,
+  });
+
+  it("orders best first and leaves out players under the minimum", () => {
+    const rows = [
+      { id: "low", cell: cell(2) },
+      { id: "cameo", cell: cell(99, 1, false) },
+      { id: "high", cell: cell(7) },
+      { id: "none", cell: null },
+    ];
+    expect(rankByCell(rows, (row) => row.cell)).toEqual([
+      { row: rows[2], rank: 1 },
+      { row: rows[0], rank: 2 },
+    ]);
+  });
+
+  it("shares a place on the value shown, and breaks the order by sample then id", () => {
+    // 7.04 and 7.01 both print "7.0": one place, the bigger sample first.
+    const rows = [
+      { id: "b", cell: cell(7.01, 8) },
+      { id: "a", cell: cell(7.04, 3) },
+      { id: "d", cell: cell(5, 4) },
+      { id: "c", cell: cell(5, 4) },
+    ];
+    expect(
+      rankByCell(rows, (row) => row.cell).map(({ row, rank }) => [row.id, rank]),
+    ).toEqual([
+      ["a", 1],
+      ["b", 1],
+      ["c", 3],
+      ["d", 3],
+    ]);
   });
 });

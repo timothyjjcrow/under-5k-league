@@ -1,9 +1,10 @@
 "use client";
 
-// The server precomputes every value and rank. This client component only
-// handles the expand control. There is deliberately no per-board search: with
-// eleven boards on /leaders that was eleven "Find player" buttons, and the
-// viewer's own row is already pinned under the preview with its real rank.
+// One ranked board (Fantasy's standings). The server precomputes every value
+// and rank; this client component only handles the expand control, and pins
+// the viewer's own row under the preview with its real rank. /leaders used
+// one of these per stat until 2026-11; it is one ranking any stat can sort
+// now (leaders-explorer.tsx).
 
 import { useId, useState } from "react";
 import {

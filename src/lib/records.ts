@@ -350,8 +350,11 @@ export type RecordBookView = {
   extendedGames: number;
   /** Every season with a stored game, across all history (the switcher). */
   seasonIdsWithGames: string[];
-  /** Each match record's fixture. */
+  /** The fixture of every match record and of every game on a match
+   *  record's ladder. */
   matchups: { matchId: string; home: string; away: string }[];
+  /** Each record's best marks, the holder first (recordLadders). */
+  ladders: RecordLadders;
 };
 
 export function recordBookView(
@@ -363,6 +366,7 @@ export function recordBookView(
     : rows.filter((row) => row.match.seasonId === seasonId);
   const analysis = analyzeRecordGames(scoped);
   const book = leagueRecords(analysis.games);
+  const ladders = recordLadders(analysis.games);
   const matchupOf = new Map(rows.map((row) => [
     row.matchId,
     { home: row.match.homeTeam.name, away: row.match.awayTeam.name },
@@ -374,12 +378,93 @@ export function recordBookView(
     eligibleGames: analysis.games.length,
     extendedGames: analysis.games.filter(reportsExtendedStats).length,
     seasonIdsWithGames: [...new Set(rows.map((row) => row.match.seasonId))],
-    matchups: [...new Set(book.games.map((record) => record.matchId))]
-      .flatMap((matchId) => {
-        const matchup = matchupOf.get(matchId);
-        return matchup ? [{ matchId, ...matchup }] : [];
-      }),
+    matchups: [
+      ...new Set([
+        ...book.games.map((record) => record.matchId),
+        ...ladders.games.flatMap((ladder) =>
+          ladder.entries.map((record) => record.matchId),
+        ),
+      ]),
+    ].flatMap((matchId) => {
+      const matchup = matchupOf.get(matchId);
+      return matchup ? [{ matchId, ...matchup }] : [];
+    }),
+    ladders,
   };
+}
+
+/** Marks a record's ladder lists, the record itself included. */
+export const RECORD_LADDER_SIZE = 5;
+
+export type RecordLadders = {
+  /** One per player record with a mark, in PLAYER_RECORDS order. */
+  players: { key: string; entries: PlayerRecord[] }[];
+  /** One per match record with a mark, in GAME_RECORDS order. */
+  games: { key: string; entries: GameRecord[] }[];
+};
+
+/**
+ * Each record's best marks, best first: the games behind the record, so the
+ * book shows how close the next ones came. One entry per game line, so a
+ * player can hold several places. An equal mark keeps the earlier game ahead
+ * (the book's tie rule), which makes every ladder's first entry exactly the
+ * record `leagueRecords` names. `games` must be in chronological order.
+ */
+export function recordLadders(
+  games: RecordGame[],
+  size = RECORD_LADDER_SIZE,
+): RecordLadders {
+  // Array.prototype.sort is stable, so equal marks stay in the order they
+  // were collected: chronological.
+  const best = <T extends { value: number }>(marks: T[], ascending = false) =>
+    marks
+      .sort((a, b) => (ascending ? a.value - b.value : b.value - a.value))
+      .slice(0, size);
+
+  const players = PLAYER_RECORDS.flatMap((spec) => {
+    const marks: PlayerRecord[] = [];
+    for (const game of games) {
+      for (const line of game.lines) {
+        if (!line.userId) continue;
+        const value = spec.metric(line);
+        if (value == null) continue;
+        marks.push({
+          key: spec.key,
+          title: spec.title,
+          emoji: spec.emoji,
+          value,
+          userId: line.userId,
+          heroId: line.heroId,
+          matchId: game.matchId,
+          seasonId: game.seasonId,
+          won: line.isRadiant === game.radiantWin,
+        });
+      }
+    }
+    return marks.length ? [{ key: spec.key, entries: best(marks) }] : [];
+  });
+
+  const gameLadders = GAME_RECORDS.flatMap((spec) => {
+    const marks: GameRecord[] = [];
+    for (const game of games) {
+      const value = spec.metric(game);
+      if (value == null) continue;
+      marks.push({
+        key: spec.key,
+        title: spec.title,
+        emoji: spec.emoji,
+        value,
+        matchId: game.matchId,
+        seasonId: game.seasonId,
+        score: `${game.radiantScore}–${game.direScore}`,
+      });
+    }
+    return marks.length
+      ? [{ key: spec.key, entries: best(marks, spec.ascending) }]
+      : [];
+  });
+
+  return { players, games: gameLadders };
 }
 
 /** Compute the record book. `games` must be in chronological order. */

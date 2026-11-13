@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { computeSeasonAwards, type AwardGame } from "./awards";
 import { fantasyPoints } from "./fantasy";
-import { PER_GAME_MIN_GAMES, summarizePlayerGames, topBy } from "./player-stats";
+import { rankByCell } from "./leader-ranking";
+import { buildLeaderTable } from "./leader-table";
+import type { PlayerStat } from "./match-import";
 
 // Helper to build a game line.
 function line(
@@ -186,24 +188,21 @@ describe("computeSeasonAwards", () => {
           ),
       ),
     );
-    const entries = Object.keys(kills).map((id) => ({
-      id,
-      summary: summarizePlayerGames(
-        games.flatMap((g) =>
-          g.lines
-            .filter((l) => l.userId === id)
-            .map((l) => ({ ...l, radiantWin: g.radiantWin })),
-        ),
-      ),
-    }));
+    // The /leaders rankings over the same games (leader-table.ts).
+    const table = buildLeaderTable(
+      games.map((g) => ({
+        radiantWin: g.radiantWin,
+        lines: g.lines as unknown as PlayerStat[],
+      })),
+    );
     const awards = computeSeasonAwards(games);
     for (const [key, board] of [
       ["killLeader", "killsPerGame"],
       ["playmaker", "assistsPerGame"],
     ] as const) {
-      const [top] = topBy(entries, board, { minGames: PER_GAME_MIN_GAMES });
-      expect(top.id).toBe("ben");
-      expect(awards.find((a) => a.key === key)?.userId).toBe(top.id);
+      const [top] = rankByCell(table.rows, (row) => row.cells[board]);
+      expect(top.row.id).toBe("ben");
+      expect(awards.find((a) => a.key === key)?.userId).toBe(top.row.id);
     }
   });
 

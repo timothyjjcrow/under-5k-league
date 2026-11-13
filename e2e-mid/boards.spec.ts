@@ -9,6 +9,7 @@ import {
   expectNoSqueezedText,
   expectTapTargets,
   trackPageErrors,
+  untilHydrated,
 } from "./helpers";
 
 // Read-only: season ids for the season-scoped pages.
@@ -21,21 +22,18 @@ test.afterAll(async () => {
 // previously untested in a browser. Each check: key cards render, the
 // interactive bits respond, and nothing crashed client-side.
 
-test("leaders opens on weekly honors and ranks what each player did", async ({ page }) => {
+test("leaders opens on weekly honors, then one ranking any stat can sort", async ({ page }) => {
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/leaders");
   await expect(page.getByRole("heading", { name: "Leaders" })).toBeVisible();
   const honors = page.getByRole("heading", { name: "Weekly honors", level: 2 });
-  const teamfights = page.getByRole("heading", { name: "Teamfights", level: 2 });
+  const rankings = page.getByRole("heading", { name: "Player rankings", level: 2 });
   await expect(honors).toBeVisible();
-  await expect(teamfights).toBeVisible();
-  await expect(
-    page.getByRole("heading", { name: "Resources & presence", level: 2 }),
-  ).toBeVisible();
+  await expect(rankings).toBeVisible();
   // Honors lead the page: they change every week and the Discord honors
   // post links here for them. They used to sit ~7,900px down on a phone.
   expect((await honors.boundingBox())!.y).toBeLessThan(
-    (await teamfights.boundingBox())!.y,
+    (await rankings.boundingBox())!.y,
   );
   await expect(page.getByText(/is still in progress/i)).toBeVisible();
   // "Impact points" are defined right where Player of the Week shows them.
@@ -43,38 +41,87 @@ test("leaders opens on weekly honors and ranks what each player did", async ({ p
     page.getByText(/earns the most impact points: \+2 per kill/),
   ).toBeVisible();
   // The "How honors unlock" disclosure carries a visible marker.
-  const unlock = page.locator("#weekly-honors summary");
+  const unlock = page.locator("#weekly-honors summary").first();
   await expect(unlock.locator("svg")).toBeVisible();
   await unlock.click();
   await expect(
     page.getByText(/Official after every regular match is final/),
   ).toBeVisible();
-  // No team-record boards, no highlight cards, no per-board search: kills
-  // and assists are per game, and "Most games" still recognises showing up.
+
+  // One tile per stat names its leader and ranks the list. No team-record
+  // rankings: kills and assists are per game, and "Games" still recognises
+  // showing up.
+  const tiles = page.getByRole("group", { name: "Rank players by" });
+  const list = page.locator("#rankings ol");
+  await untilHydrated(page, tiles);
+  for (const stat of ["Impact", "KDA", "Kills", "Assists", "Kill share", "GPM", "Net worth", "Games"]) {
+    await expect(tiles.getByRole("button", { name: new RegExp(`^${stat}`) })).toBeVisible();
+  }
+  await expect(tiles.getByRole("button", { name: /^(Wins|Win rate)/ })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Winning", level: 2 })).toHaveCount(0);
-  await expect(page.locator("#metric-wins, #metric-winRate")).toHaveCount(0);
   await expect(page.getByText("Who is setting the pace?")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Find player" })).toHaveCount(0);
+  // It opens on the MVP race, ten players, with the rest behind one button.
+  await expect(tiles.getByRole("button", { name: /^Impact/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("heading", { name: "MVP race", level: 3 })).toBeVisible();
+  await expect(list.locator("> li")).toHaveCount(10);
+
+  // Picking a stat re-ranks the list and puts the choice in the address.
+  await tiles.getByRole("button", { name: /^Kills/ }).click();
   await expect(page.getByRole("heading", { name: "Kills per game", level: 3 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Assists per game", level: 3 })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Most games", level: 3 })).toBeVisible();
-  await expect(page.locator("#metric-participation")).toBeVisible();
-  const toggle = page.getByRole("button", { name: /Show all/ }).first();
-  await expect(toggle).toBeVisible();
-  await toggle.click();
-  await expect(
-    page.getByRole("button", { name: /Show top 3/ }).first(),
-  ).toBeVisible();
-  // A 55th-percentile player should fill about 55% of the scale, even when
-  // they lead this league. Relative-to-leader scaling would incorrectly fill it.
-  const reportLeader = page.locator("#metric-report li").first();
+  await expect(page.getByText(/averaged over games played\. Min 3 games\./)).toBeVisible();
+  await expect(page).toHaveURL(/\/leaders\?stat=killsPerGame$/);
+  const shown = await list
+    .locator("> li .font-display")
+    .evaluateAll((cells) => cells.map((cell) => Number.parseFloat(cell.textContent ?? "")));
+  expect(shown.length).toBe(10);
+  expect(shown).toEqual([...shown].sort((a, b) => b - a));
+
+  // A row opens the player's whole line, with their place in every stat.
+  const firstRow = list.locator("> li").first();
+  await firstRow.getByRole("button", { name: /^Show .+'s full line$/ }).click();
+  await expect(firstRow.getByText(/^#1 of \d+$/).first()).toBeVisible();
+  await expect(firstRow.getByRole("link", { name: /Full profile/ })).toHaveAttribute("href", /^\/players\/[^/]+$/);
+  await expect(firstRow.getByRole("link", { name: /Compare with a player/ })).toHaveAttribute("href", /^\/players\/compare\?a=/);
+  await firstRow.getByRole("button", { name: /^Hide .+'s full line$/ }).click();
+
+  // The whole league is one click away, and one search finds a player.
+  await page.getByRole("button", { name: /^Show all \d+ players/ }).click();
+  expect(await list.locator("> li").count()).toBeGreaterThan(10);
+  await page.getByRole("button", { name: /^Show top 10/ }).click();
+  await expect(list.locator("> li")).toHaveCount(10);
+  const name = (await firstRow.locator('a[href^="/players/"]').first().innerText()).trim();
+  await page.getByRole("searchbox", { name: "Find a player" }).fill(name);
+  await expect(list.locator("> li").first()).toContainText(name);
+  expect(await list.locator("> li").count()).toBeLessThan(10);
+  await page.getByRole("searchbox", { name: "Find a player" }).fill("zzzz-nobody");
+  await expect(page.getByText(/No player matches that/)).toBeVisible();
+
+  // A link opens on its ranking. A 55th-percentile player should fill about
+  // 55% of the scale, even when they lead this league: relative-to-leader
+  // scaling would fill it.
+  await page.goto("/leaders?stat=report");
+  await expect(page.getByRole("heading", { name: "Best report card", level: 3 })).toBeVisible();
+  const reportLeader = page.locator("#rankings ol > li").first();
   const percentile = Number.parseFloat(
-    await reportLeader.locator(".font-display").innerText(),
+    await reportLeader.locator(".font-display").first().innerText(),
   );
   const fill = await reportLeader
     .locator(".bar-fill")
     .evaluate((bar) => Number.parseFloat((bar as HTMLElement).style.width));
   expect(fill).toBeCloseTo(percentile, 0);
+
+  // On a phone the ranked stat is the row's one figure and the card carries
+  // the rest; nothing overflows or overlaps with a card open.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/leaders");
+  await untilHydrated(page, page.getByRole("group", { name: "Rank players by" }));
+  await page
+    .locator("#rankings ol > li")
+    .first()
+    .getByRole("button", { name: /^Show .+'s full line$/ })
+    .click();
+  await expectNoHorizontalOverflow(page, "/leaders with a card open");
+  await expectNoOverlappingTargets(page, "/leaders with a card open", "#rankings");
   assertNoErrors();
 });
 
@@ -135,7 +182,22 @@ test("hero meta is one table of picked heroes with an honest headline", async ({
   await expect(page.getByRole("button", { name: /Show more heroes/ })).toHaveCount(0);
   // Never-picked heroes fold into one line.
   await expect(page.locator("details summary").filter({ hasText: /not picked yet$/ })).toBeVisible();
+  // Each headline names its hero and links the hero's page.
+  const headlines = page.locator('section[aria-labelledby="meta-sample"]');
+  await expect(headlines.getByRole("link").first()).toHaveAttribute("href", /^\/meta\/[a-z0-9-]+$/);
+  // Sorted by win %, a hero with too few picks to place never heads the
+  // table: the first row has at least three picks.
+  await untilHydrated(page, table);
+  await table.getByRole("button", { name: "Win %" }).click();
+  await expect(table.getByRole("columnheader", { name: "Win %" })).toHaveAttribute("aria-sort", "descending");
+  const topPicks = Number.parseInt(
+    await table.locator("tbody tr").first().locator("td").first().innerText(),
+    10,
+  );
+  expect(topPicks).toBeGreaterThanOrEqual(3);
   await expectNoHorizontalOverflow(page, "/meta");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page, "/meta on a phone");
   assertNoErrors();
 });
 
@@ -150,6 +212,26 @@ test("the record book lists records compactly and scopes by season", async ({ pa
   // No record names a player for their worst game.
   await expect(page.getByText(/Most deaths|Wild card/)).toHaveCount(0);
   await expect(page.getByText(/tie goes to whoever set the mark first/)).toBeVisible();
+  // A record opens the marks that came next, best first.
+  const kills = page.getByRole("button", { name: "Show the next best: Most kills", exact: true });
+  await untilHydrated(page, kills);
+  // Read before the click: opening the row renames its button to "Hide…".
+  const record = Number.parseInt(
+    await kills.locator("xpath=preceding-sibling::div[1]").locator(".font-display").innerText(),
+    10,
+  );
+  await kills.click();
+  const chasers = page.getByRole("list", { name: "Next best: Most kills", exact: true });
+  await expect(chasers.getByRole("listitem").first()).toContainText("2nd");
+  expect(await chasers.getByRole("listitem").count()).toBeLessThanOrEqual(4);
+  await expect(chasers.getByRole("link", { name: "Match →" }).first()).toHaveAttribute("href", /^\/matches\//);
+  const next = Number.parseInt(
+    await chasers.getByRole("listitem").first().locator(".tabular-nums").first().innerText(),
+    10,
+  );
+  expect(next).toBeLessThanOrEqual(record);
+  await page.getByRole("button", { name: "Hide the next best: Most kills", exact: true }).click();
+  await expect(chasers).toHaveCount(0);
   // No champion yet, so no link to a Hall of Fame that would only say so.
   await expect(page.getByRole("link", { name: /Career legends/ })).toHaveCount(0);
   // One season of games: "All seasons" would be the same list, so no picker
@@ -202,16 +284,30 @@ test("player comparison lists real careers, normalizes invalid links, and expose
       options.slice(0, 2).map((option) => (option as HTMLOptionElement).value),
     );
   expect(ids).toHaveLength(2);
+  // Choosing the second player opens the matchup; the Compare button is
+  // for a page whose scripts haven't loaded.
+  await untilHydrated(page, playerA);
   await playerA.selectOption(ids[0]);
   await playerB.selectOption(ids[1]);
-  await page.getByRole("button", { name: "Compare" }).click();
+  await expect(page).toHaveURL(
+    new RegExp(`/players/compare\\?a=${ids[0]}&b=${ids[1]}$`),
+  );
 
   await expect(
     page.getByRole("heading", { name: "Career numbers", level: 2 }),
   ).toBeVisible();
-  await expect(
-    page.getByRole("table", { name: /Career comparison between/ }),
-  ).toBeVisible();
+  const tape = page.getByRole("table", { name: /Career comparison between/ });
+  await expect(tape).toBeVisible();
+  for (const stat of ["Win rate", "Impact / game", "KDA", "Kill share"]) {
+    await expect(tape.getByRole("rowheader", { name: stat })).toBeVisible();
+  }
+  await expect(page.getByText("stats led", { exact: true })).toBeVisible();
+  // Without scripts the plain GET form still opens the same matchup.
+  const plain = await page.request.get(`/players/compare?a=${ids[1]}&b=${ids[0]}`);
+  expect(plain.status()).toBe(200);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page, "/players/compare");
+  await page.setViewportSize({ width: 1280, height: 720 });
   await expect(
     page.getByRole("navigation", { name: "Statistics" }),
   ).toBeVisible();

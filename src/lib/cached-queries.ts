@@ -139,7 +139,7 @@ export async function fetchRecordWatchBook() {
 export async function fetchRecordBookView(seasonId: string | null) {
   return recordBookView(await fetchAllGamesForRecords(), seasonId);
 }
-export const getRecordBookView = createPublicSnapshot("record-book-view-v1", fetchRecordBookView);
+export const getRecordBookView = createPublicSnapshot("record-book-view-v2", fetchRecordBookView);
 
 /** The Hall of Fame's and /players' career inputs: appearances folded per
  *  match, player and team (match outcomes and champions are read fresh by the

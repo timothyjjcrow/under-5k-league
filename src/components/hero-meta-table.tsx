@@ -1,7 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import Link from "@/components/app-link";
+import { META_WIN_RATE_MIN_PICKS } from "@/lib/hero-meta";
 import type { Hero } from "@/lib/heroes";
 import { HeroIcon, PlayerLink, textLink } from "@/components/ui";
 
@@ -25,12 +26,21 @@ function compare(sort: SortKey, a: HeroMetaTableRow, b: HeroMetaTableRow) {
   const byName = a.hero.name.localeCompare(b.hero.name);
   if (sort === "name") return byName;
   if (sort === "winRate") {
-    // Exact wins/picks, then the bigger sample, so a 1-0 hero sits under 5-0.
+    // Heroes with too few picks to place go last: a 1-0 hero is "100%" and
+    // would head the table. Then exact wins/picks, then the bigger sample.
     return (
-      b.wins * a.picks - a.wins * b.picks || b.picks - a.picks || byName
+      Number(placesByWinRate(b)) - Number(placesByWinRate(a)) ||
+      b.wins * a.picks - a.wins * b.picks ||
+      b.picks - a.picks ||
+      byName
     );
   }
   return b.picks - a.picks || b.winRate - a.winRate || byName;
+}
+
+/** Enough picks for its win rate to mean something in a ranking. */
+function placesByWinRate(row: HeroMetaTableRow) {
+  return row.picks >= META_WIN_RATE_MIN_PICKS;
 }
 
 function gamesLabel(games: number) {
@@ -129,8 +139,9 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
           </tr>
         </thead>
         <tbody className="divide-y divide-line-soft">
-          {sorted.map((row) => (
-            <tr key={row.hero.id}>
+          {sorted.map((row, index) => (
+            <Fragment key={row.hero.id}>
+            <tr>
               <th scope="row" className="py-1.5 pl-4 pr-2 text-left font-normal">
                 <div className="flex min-w-0 items-center gap-2.5">
                   <span aria-hidden="true" className="flex shrink-0">
@@ -195,6 +206,20 @@ export function HeroMetaTable({ rows }: { rows: HeroMetaTableRow[] }) {
                 )}
               </td>
             </tr>
+            {/* Sorted by win %, the heroes with too few picks to place
+                follow this line. It comes after the row in the source: the
+                colgroup guard reads the first <tr> for the cell layout. */}
+            {sort === "winRate" &&
+            placesByWinRate(row) &&
+            index + 1 < sorted.length &&
+            !placesByWinRate(sorted[index + 1]) ? (
+              <tr className="bg-surface-2/40">
+                <td colSpan={5} className="px-4 py-1.5 text-xs font-medium text-muted">
+                  {`Fewer than ${META_WIN_RATE_MIN_PICKS} picks: too few games to place by win rate`}
+                </td>
+              </tr>
+            ) : null}
+            </Fragment>
           ))}
         </tbody>
       </table>

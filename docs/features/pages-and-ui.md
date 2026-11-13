@@ -55,11 +55,11 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
 - **Page stats come from pure, tested helpers:** `summarizePlayerGames`
   (`player-stats.ts`, from each `Game`'s player JSON) for profiles,
   `recentForm`/`headToHead` (`team-matches.ts`) for team pages.
-- **`/leaders` opens on Weekly honors, then `topBy` boards** (KDA, kills and
-  assists per game with `PER_GAME_MIN_GAMES`, most games, GPM, net worth, kill
-  involvement, sustain, report card). No wins or win-rate board (they rank the
-  team's record) and no per-board search (`leader-board.tsx` pins the viewer's
-  row).
+- **`/leaders` opens on Weekly honors, then one ranking of every player**
+  (`leaders-explorer.tsx` over `leader-table.ts`): impact, KDA, kills and
+  assists per game with `PER_GAME_MIN_GAMES`, kill involvement, sustain, GPM,
+  net worth, most games, report card. No wins or win-rate ranking (they rank
+  the team's record). Layout: [Stats pages](#stats-pages-leaders-meta-records-hall-of-fame-seasonsid).
 - **`/how-it-works` is the one-screen explainer** (`/features` redirects
   there); its rules are pure in `src/lib/how-it-works.ts` (tested). It prints
   the night through `seasonMatchNightLabel` (`match-night.ts`), never a
@@ -1016,6 +1016,18 @@ the filter rules are pure in `src/lib/player-pool.ts`
   DOM and a phone keep head-to-head, numbers, heroes. The rows are
   `auto_1fr`, so a taller numbers card grows the heroes' row, never the
   head-to-head's. Player B's name heads the right-hand column of figures.
+- **The numbers are a tape** (`tapeRow`, `compare.ts`): each line is both
+  figures with a bar from the middle outwards, sized against the larger one,
+  the better figure in green. The bars show size, so on "Avg deaths" the
+  shorter bar is the green one. Games and wins are context
+  (`contested: false`): never green, never counted. Between the two names,
+  "5–3 stats led" (`tapeTally`). Impact per game and kill share sit beside
+  K/D/A: the two numbers /leaders ranks that a K/D/A line doesn't show.
+- **Choosing the second player opens the matchup** (`compare-picker.tsx`:
+  a change with both set does `router.push`, `scroll: false`). The selects
+  stay native (a phone's own picker, type-ahead on a desktop) inside the GET
+  form, and the Compare button stays for a page whose scripts haven't
+  loaded. A hero both have played is tagged "Both" in each pool.
 
 ## The inhouse page (`/inhouse`)
 
@@ -1474,20 +1486,41 @@ the filter rules are pure in `src/lib/player-pool.ts`
   share it as equal tracks (`grid-flow-col auto-cols-fr`) and a long label
   takes two short lines on a phone. A 2x2 grid spent a second 44px row on the
   same four links.
-- **A leader row is one grid** (`leader-board.tsx`): rank, avatar, the name
-  over "team · hint", the value on the right and the bar under the name (about
-  64px; it was 118). "Team · hint" is split into one part per "·" segment;
-  each part carries its dot in its own left padding and the line is pulled
-  left by that width and clipped, so a line never ends in "·" and a part too
-  long for one line wraps without losing its first letters under the clip.
-- **Boards side by side line up.** A `LeaderBoard` card is a two-row subgrid
-  (`row-span-2 grid-rows-subgrid gap-0`): boards in one grid row share a
-  header height, and "Show all" sits at the foot (`mt-auto`). Outside a grid
-  it is an ordinary two-row grid (Fantasy).
-- **`/leaders` boards go two across from `lg` and three from `xl`.**
-  `BOARD_GRID` has six tracks from `xl` and a board takes two; a last row of
-  one or two boards stretches to fill it, so the data-dependent count (Team
-  sustain) never leaves an empty cell. `leaders-guards.test.ts` pins it.
+- **/leaders is honors, then one ranking any stat can sort**
+  (`leaders-explorer.tsx`; rules in `stats-and-side-games.md`). It replaced
+  nine boards of three rows each, which listed the same players nine times,
+  ran about 3,000px on a desktop and 6,000px on a phone, and had no way to
+  see one player's whole line. Now about 1,800px and 2,600px.
+  - **A tile per stat names its leader and ranks the list** (`aria-pressed`;
+    a tie reads "3 tied"). A phone scrolls the tiles sideways as one strip
+    (ten in rows of three would be 300px before the first player); from `sm`
+    they wrap and stretch (`flex-[1_1_6.75rem]`), so no row has a hole.
+  - **A row is one grid** (`ROW_GRID`): rank, avatar, the name over "team ·
+    hint" and the bar, the ranked stat, the card toggle. From `xl` every stat
+    is a column (`--stat-cols`, set from the stat count) and the headings
+    rank by their stat; below `xl` a ten-column table doesn't fit, so the
+    other stats are `hidden xl:block` and live in the card. The name track
+    is `minmax(0,1fr)`.
+  - **The toggle opens the player's card:** every stat with their place in
+    it ("#3 of 60", or "below the minimum"), their three most-played heroes
+    and links to the profile and to Compare (with the viewer when they have
+    league games, else with that player preset as A).
+  - **Ten players, then "Show all"; a team filter and one "Find a player"
+    box.** One search box is not the old per-board search (eleven buttons).
+    The viewer's row is pinned under the preview with its real rank. Players
+    under the ranked stat's minimum follow the ranking under "Below this
+    ranking's minimum", unplaced and dimmed, once the list is expanded or
+    filtered: a search for one of them must not come back empty.
+  - **`?stat=<key>` opens on that ranking** and the address follows the
+    tiles (`history.replaceState`), so a ranking can be linked. An unknown
+    key opens on the first.
+  - **Honors keep the top of the page** (the Discord honors post links
+    `#weekly-honors`), newest first; weeks past the latest
+    `HONOR_WEEKS_SHOWN` (3) fold into "Earlier weeks".
+- **`leader-board.tsx` is Fantasy's board now** (rank, avatar, the name over
+  "team · hint", the value and the bar, about 64px a row; the "team · hint"
+  line is split into one part per "·" segment so a wrapped part starts
+  clean). As a child of a grid it is a two-row subgrid.
 - **The season recap packs its long lists.** Award cards fill their rows
   (`flex-wrap`, each `flex-[1_1_16rem]`): however many awards a season
   produced, the last row has no empty cell. Rosters go four across from `xl`,
@@ -1514,6 +1547,19 @@ the filter rules are pure in `src/lib/player-pool.ts`
   most-picked hero) and win % each get a thin bar beside the figure, with the
   figure at a fixed width so the bars share a column. Decorative
   (`aria-hidden`): the figure beside it is the value.
+- **Hero meta's headlines sit over each hero's portrait** (`heroPortrait`,
+  fading in from the right behind the text; decoration, `aria-hidden`): Most
+  picked, Best win rate and Signature pick, each naming its hero as a link to
+  the hero's page. An auto-fit band, because the count follows the sample.
+  The divider row for the win % sort comes AFTER its hero's row in the
+  source: the colgroup guard reads the table's first `<tr>` for the cell
+  layout.
+- **A record row's toggle sits beside the row's grid, not in it**
+  (`record-list.tsx`: a flex line of the four-cell grid and a 44px slot), so
+  a record and the marks under it place their cells the same way on a phone
+  (two lines) and from `sm` (one). Placing the toggle inside the grid with
+  explicit rows pushed the holder onto a second line on a desktop. The
+  viewer's own marks carry "You".
 - **Hall of Fame boards use the Leaders shape:** the card header, then one
   ruled line per place. Its section links are the site's `SectionNav`, and a
   lone last champion card takes the whole row.
