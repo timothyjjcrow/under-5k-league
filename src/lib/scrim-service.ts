@@ -65,6 +65,8 @@ export type ScrimMutationSummary = {
   /** The captains the action pings (never the one who acted): every other
    *  active captain for a new time, the posting captain for a claim. */
   notifyUserIds: string[];
+  /** The season has a Valve league ticket: the claim ping says to set it. */
+  hasLeagueTicket: boolean;
 };
 
 /** What cancelScrim reports so its action can tell the other side. */
@@ -158,7 +160,7 @@ async function requireActiveScrimSeason(db: Db) {
       where: { isActive: true },
       orderBy: { createdAt: "desc" },
       take: 2,
-      select: { id: true, status: true },
+      select: { id: true, status: true, dotaLeagueId: true },
     })
     .then(singleActiveSeason);
   if (!season) throw new UserFacingError("There is no active season");
@@ -499,6 +501,7 @@ export async function createScrim(
           snapshottedParticipants: participants.length,
           cancelledOpenOffers: 0,
           withdrawnOffers: [],
+          hasLeagueTicket: !!season.dotaLeagueId,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
@@ -699,6 +702,7 @@ export async function joinScrim(
             scheduledAt: withdrawn.scheduledAt,
           })),
           notifyUserIds: [offer.hostTeam.captainId],
+          hasLeagueTicket: !!season.dotaLeagueId,
         };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

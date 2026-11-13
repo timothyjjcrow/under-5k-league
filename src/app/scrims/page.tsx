@@ -29,6 +29,7 @@ import {
   CardHeader,
   EmptyState,
   KDA,
+  LinkArrow,
   PageTitle,
   PlayerLink,
   TeamCrest,
@@ -85,6 +86,7 @@ export default async function ScrimsPage({
         name: true,
         status: true,
         isActive: true,
+        dotaLeagueId: true,
       },
     }),
   ]);
@@ -114,7 +116,7 @@ export default async function ScrimsPage({
   }
 
   const now = new Date();
-  const [teams, scrims] = await Promise.all([
+  const [teams, scrims, viewerMembership] = await Promise.all([
     prisma.team.findMany({
       where: { seasonId: season.id },
       orderBy: { name: "asc" },
@@ -144,6 +146,12 @@ export default async function ScrimsPage({
         winnerTeam: true,
       },
     }),
+    viewer
+      ? prisma.teamMember.findFirst({
+          where: { seasonId: season.id, userId: viewer.id },
+          select: { teamId: true },
+        })
+      : null,
   ]);
 
   const myCaptainTeam = viewer
@@ -152,6 +160,14 @@ export default async function ScrimsPage({
   const myStaffTeams = viewer
     ? teams.filter((team) => team.staff.some((staff) => staff.userId === viewer.id))
     : [];
+  // The team the viewer plays for, captains or coaches: its scrims lead the
+  // page, with their lobby setup one tap away.
+  const myTeam =
+    myCaptainTeam ??
+    teams.find((team) => team.id === viewerMembership?.teamId) ??
+    myStaffTeams[0] ??
+    null;
+  const hasTicket = !!season.dotaLeagueId;
   const seasonOpen =
     season.isActive && season.status !== SEASON_STATUS.COMPLETE;
   const open = scrims.filter((scrim) => scrim.status === SCRIM_STATUS.OPEN);
@@ -164,7 +180,7 @@ export default async function ScrimsPage({
     <div className="space-y-6">
       <PageTitle
         title="Scrims"
-        subtitle={`${season.name} · Captains post a time, another team claims it, and the result stays entirely outside league standings and records.`}
+        subtitle={`${season.name} · Practice games between league teams, kept out of standings and records.`}
       />
 
       {seasons.length > 1 ? (
@@ -209,35 +225,41 @@ export default async function ScrimsPage({
         />
       ) : (
       <>
-      {myCaptainTeam && seasonOpen ? (
-        <Card tone="feature">
+      {/* Someone on a team gets their team's scrims first (on a phone the
+          explainer filled the first screen); everyone else the explainer. */}
+      {seasonOpen && !myTeam ? (
+        <ScrimSteps hasTicket={hasTicket} signedIn={!!viewer} />
+      ) : null}
+
+      {myTeam && seasonOpen ? (
+        <Card tone={myCaptainTeam ? "feature" : "default"} id="your-team">
           <CardHeader
-            title="Post team availability"
-            subtitle={`${myCaptainTeam.name} is available to practice. A captain from another active team can claim the slot.`}
+            title={`${myTeam.name} scrims`}
+            subtitle={
+              myCaptainTeam
+                ? "Post a time your team can play. Another captain claims it, and its page gives both teams the lobby setup."
+                : "Your captain posts and claims times. When one is booked, its page has the lobby's name, password and settings."
+            }
+            headingLevel={2}
           />
-          <CardBody>
-            <ScrimPostForm />
+          <CardBody className="space-y-4">
+            {/* Render it only where createScrim would accept. */}
+            {myCaptainTeam && !myCaptainTeam.withdrawn ? <ScrimPostForm /> : null}
+            <TeamScrimList
+              teamId={myTeam.id}
+              scrims={scrims.filter(
+                (scrim) =>
+                  scrim.hostTeamId === myTeam.id ||
+                  scrim.opponentTeamId === myTeam.id,
+              )}
+              canCancel={myCaptainTeam?.id === myTeam.id}
+            />
           </CardBody>
         </Card>
-      ) : viewer && seasonOpen ? (
-        <Card tone="quiet">
-          <CardBody className="text-sm text-muted">
-            You can browse scrims now. Only a current team captain can post or
-            claim availability.
-            {myStaffTeams.length > 0
-              ? " As a team coach, you can manage casual guests and fetch results after a scrim is booked."
-              : ""}
-          </CardBody>
-        </Card>
-      ) : !viewer && seasonOpen ? (
-        <Card tone="quiet">
-          <CardBody className="text-sm text-muted">
-            <Link href="/login?next=/scrims" className={textLink()}>
-              Sign in
-            </Link>{" "}
-            to post, claim, or manage a scrim.
-          </CardBody>
-        </Card>
+      ) : null}
+
+      {seasonOpen && myTeam ? (
+        <ScrimSteps hasTicket={hasTicket} signedIn={!!viewer} />
       ) : null}
 
       {/* Open and booked are the two lists of upcoming practice: side by
@@ -329,12 +351,14 @@ export default async function ScrimsPage({
               />
             ) : (
               booked.map((scrim) => (
+                // The matchup gets its own line: beside the badge and time,
+                // two team names were cut to a few letters each.
                 <Link
                   key={scrim.id}
                   href={`/scrims/${scrim.id}`}
-                  className="flex flex-col gap-3 rounded-lg border border-line bg-surface-2/30 p-4 transition-colors hover:border-muted/60 hover:no-underline sm:flex-row sm:items-center sm:justify-between"
+                  className="block rounded-lg border border-line bg-surface-2/30 p-4 transition-colors hover:border-muted/60 hover:no-underline"
                 >
-                  <div className="flex min-w-0 items-center gap-3">
+                  <span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
                     <TeamMark team={scrim.hostTeam} />
                     <span className="text-xs font-medium uppercase text-muted">
                       vs
@@ -342,15 +366,18 @@ export default async function ScrimsPage({
                     {scrim.opponentTeam ? (
                       <TeamMark team={scrim.opponentTeam} />
                     ) : null}
-                  </div>
-                  <div className="flex items-center gap-2 text-sm text-muted">
+                  </span>
+                  <span className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted">
                     {scrim.status === SCRIM_STATUS.LIVE ? (
                       <Badge tone="accent">Live · {scrim.hostScore}–{scrim.awayScore}</Badge>
                     ) : (
                       <Badge tone="info">Booked</Badge>
                     )}
-                    <ScrimTime date={scrim.scheduledAt} />
-                  </div>
+                    <span>
+                      <ScrimTime date={scrim.scheduledAt} /> · Best of{" "}
+                      {scrim.bestOf}
+                    </span>
+                  </span>
                 </Link>
               ))
             )}
@@ -372,6 +399,176 @@ export default async function ScrimsPage({
       </>
       )}
     </div>
+  );
+}
+
+/**
+ * The whole flow in four lines, above the lists: post, claim, host with the
+ * ticket, and the games record themselves. The third step is the one that
+ * was missing: scrims hosted without the season's ticket never reached
+ * OpenDota, so none recorded.
+ */
+function ScrimSteps({
+  hasTicket,
+  signedIn,
+}: {
+  hasTicket: boolean;
+  signedIn: boolean;
+}) {
+  const steps = [
+    {
+      title: "Post a time",
+      body: "A captain posts when their team can play.",
+    },
+    {
+      title: "Claim it",
+      body: "Another team's captain claims it in one click, and the posting captain is pinged on Discord.",
+    },
+    {
+      title: "Host with the ticket",
+      // Only a booked scrim owns its games: an unbooked game under the
+      // ticket between two teams that meet in the league within three days
+      // can be taken for that league match (claimsGame, closest meeting).
+      body: "The posting team hosts. The scrim's page gives both teams the lobby's name, password and the league ticket to set. Use the ticket only for scrims booked here.",
+    },
+    hasTicket
+      ? {
+          title: "It records itself",
+          body: "Games played with the ticket show up on the scrim a few minutes after they end.",
+        }
+      : {
+          title: "No ticket yet",
+          body: "This season has no league ticket yet, so scrim games can't record themselves.",
+        },
+  ];
+  return (
+    <section
+      aria-labelledby="scrim-steps-title"
+      className="rounded-[var(--radius)] border border-line-soft bg-surface/50 px-4 py-3"
+    >
+      <h2 id="scrim-steps-title" className="text-sm font-semibold text-fg">
+        How scrims work
+      </h2>
+      <ol className="mt-2 grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 xl:grid-cols-4">
+        {steps.map((step, index) => (
+          <li key={step.title} className="flex min-w-0 gap-3">
+            <span
+              aria-hidden
+              className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-accent/40 bg-accent/10 text-xs font-semibold text-accent"
+            >
+              {index + 1}
+            </span>
+            <span className="min-w-0 text-sm">
+              <b className="block font-medium text-fg">{step.title}</b>
+              <span className="text-muted">{step.body}</span>
+            </span>
+          </li>
+        ))}
+      </ol>
+      {signedIn ? null : (
+        <p className="mt-3 text-xs text-muted">
+          <Link href="/login?next=/scrims" className={textLink()}>
+            Sign in
+          </Link>{" "}
+          to post, claim or manage a scrim.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/**
+ * The viewer's team's coming scrims: who against, when, who hosts, and the
+ * lobby setup for a booked one. Captains also get Cancel (the scrim page's
+ * rule: either captain, not once it is live; the action re-checks it).
+ */
+function TeamScrimList({
+  teamId,
+  scrims,
+  canCancel,
+}: {
+  teamId: string;
+  scrims: {
+    id: string;
+    status: string;
+    bestOf: number;
+    scheduledAt: Date;
+    hostTeamId: string;
+    hostScore: number;
+    awayScore: number;
+    hostTeam: { name: string };
+    opponentTeam: { name: string } | null;
+  }[];
+  canCancel: boolean;
+}) {
+  if (scrims.length === 0) {
+    return (
+      <EmptyState
+        inline
+        title="No scrims coming up"
+        description={
+          canCancel
+            ? "Post a time above, or claim one under Open availability."
+            : "Your captain can post a time or claim another team's."
+        }
+      />
+    );
+  }
+  return (
+    <ul aria-label="Your team's scrims" className="divide-y divide-line-soft text-sm">
+      {scrims.map((scrim) => {
+        const hosts = scrim.hostTeamId === teamId;
+        const opponent = hosts ? scrim.opponentTeam : scrim.hostTeam;
+        const booked =
+          scrim.status === SCRIM_STATUS.SCHEDULED ||
+          scrim.status === SCRIM_STATUS.LIVE;
+        const ownScore = hosts ? scrim.hostScore : scrim.awayScore;
+        const otherScore = hosts ? scrim.awayScore : scrim.hostScore;
+        return (
+          <li
+            key={scrim.id}
+            className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5 py-2.5"
+          >
+            <span className="min-w-0 flex-1 basis-48">
+              <Link
+                href={`/scrims/${scrim.id}`}
+                className={textLink("font-medium [overflow-wrap:anywhere]")}
+              >
+                {opponent ? `vs ${opponent.name}` : "Your open time"}
+              </Link>
+              <span className="block text-xs text-muted">
+                <ScrimTime date={scrim.scheduledAt} /> · Best of {scrim.bestOf}
+                {opponent
+                  ? hosts
+                    ? " · your team hosts"
+                    : ` · ${scrim.hostTeam.name} hosts`
+                  : ""}
+              </span>
+            </span>
+            {scrim.status === SCRIM_STATUS.LIVE ? (
+              <Badge tone="accent">
+                Live · {ownScore}–{otherScore}
+              </Badge>
+            ) : scrim.status === SCRIM_STATUS.OPEN ? (
+              <Badge>Waiting for a team</Badge>
+            ) : (
+              <Badge tone="info">Booked</Badge>
+            )}
+            {booked ? (
+              <Link
+                href={`/scrims/${scrim.id}#lobby`}
+                className={textLink("text-sm")}
+              >
+                Lobby setup <LinkArrow />
+              </Link>
+            ) : null}
+            {canCancel && scrim.status !== SCRIM_STATUS.LIVE ? (
+              <ScrimCancelButton scrimId={scrim.id} booked={booked} />
+            ) : null}
+          </li>
+        );
+      })}
+    </ul>
   );
 }
 

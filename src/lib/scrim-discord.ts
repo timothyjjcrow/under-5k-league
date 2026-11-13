@@ -48,9 +48,11 @@ export function scrimPostedMessage(m: {
 }
 
 /**
- * To the POSTING captain: their time was claimed, who to talk to, and which
- * of their other open times within four hours were withdrawn by the booking
- * (joinScrim cancels them, and nothing else says so).
+ * To the POSTING captain: their time was claimed, that they host (the scrim
+ * page gives both teams the lobby's name, password and settings), that the
+ * season's league ticket is what records the games, and which of their other
+ * open times within four hours were withdrawn by the booking (joinScrim
+ * cancels them, and nothing else says so).
  */
 export function scrimClaimedMessage(m: {
   scrimId: string;
@@ -60,13 +62,18 @@ export function scrimClaimedMessage(m: {
   whenMs: number;
   bestOf: number;
   withdrawnHostOffersMs: number[];
+  /** The season has a Valve league ticket (`Season.dotaLeagueId`). */
+  hasLeagueTicket: boolean;
 }): string {
   const withdrawn = m.withdrawnHostOffersMs.length
     ? ` Your other open ${m.withdrawnHostOffersMs.length === 1 ? "time" : "times"} within four hours (${m.withdrawnHostOffersMs
         .map((ms) => stamp(ms, "f"))
         .join(", ")}) ${m.withdrawnHostOffersMs.length === 1 ? "was" : "were"} withdrawn.`
     : "";
-  return `✅ **${name(m.opponentTeamName)}** claimed your scrim time on ${stamp(m.whenMs)} (best of ${m.bestOf}). You host: make the lobby and send **${name(m.opponentCaptainName)}** the name and password on Discord.${withdrawn} ${scrimLink(m.scrimId)}`;
+  const ticket = m.hasLeagueTicket
+    ? " Set this season's league ticket in the lobby, or the games won't record."
+    : "";
+  return `✅ **${name(m.opponentTeamName)}** claimed your scrim time on ${stamp(m.whenMs)} (best of ${m.bestOf}). You host: **${name(m.opponentCaptainName)}** and both teams get the lobby's name, password and settings on the scrim page.${ticket}${withdrawn} ${scrimLink(m.scrimId)}`;
 }
 
 /** To the captain(s) who didn't cancel it: the booking is off. */

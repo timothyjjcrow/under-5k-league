@@ -41,12 +41,15 @@ export async function ScrimDesk({
   seasonId,
   team,
   seasonOpen,
+  hasLeagueTicket,
   nowMs,
 }: {
   seasonId: string;
   team: { id: string; name: string; withdrawn: boolean };
   /** The active season isn't complete (scrims post and claim). */
   seasonOpen: boolean;
+  /** The season has a Valve league ticket (`Season.dotaLeagueId`). */
+  hasLeagueTicket: boolean;
   nowMs: number;
 }) {
   const now = new Date(nowMs);
@@ -133,6 +136,7 @@ export async function ScrimDesk({
                     ? (s.opponentTeam?.name ?? null)
                     : s.hostTeam.name;
                 const canCancel = seasonOpen && s.status !== SCRIM_STATUS.LIVE;
+                const booked = s.status !== SCRIM_STATUS.OPEN;
                 return (
                   <li
                     key={s.id}
@@ -147,6 +151,11 @@ export async function ScrimDesk({
                       </Link>
                       <span className="block text-xs text-muted">
                         <When date={s.scheduledAt} /> · Best of {s.bestOf}
+                        {other
+                          ? s.hostTeamId === team.id
+                            ? " · you host"
+                            : ` · ${s.hostTeam.name} hosts`
+                          : ""}
                       </span>
                     </span>
                     {s.status === SCRIM_STATUS.LIVE ? (
@@ -158,17 +167,29 @@ export async function ScrimDesk({
                     ) : (
                       <Badge tone="info">Booked</Badge>
                     )}
+                    {booked ? (
+                      <Link
+                        href={`/scrims/${s.id}#lobby`}
+                        className={textLink("text-sm")}
+                      >
+                        Lobby setup <LinkArrow />
+                      </Link>
+                    ) : null}
                     {canCancel ? (
-                      <ScrimCancelButton
-                        scrimId={s.id}
-                        booked={s.status !== SCRIM_STATUS.OPEN}
-                      />
+                      <ScrimCancelButton scrimId={s.id} booked={booked} />
                     ) : null}
                   </li>
                 );
               })}
             </ul>
           )}
+          {mine.some((s) => s.status !== SCRIM_STATUS.OPEN) ? (
+            <p className="mt-2 text-xs text-muted">
+              {hasLeagueTicket
+                ? "Host with this season's league ticket set in the lobby, or the games won't record. Each scrim's Lobby setup has the ticket, name and password."
+                : "This season has no league ticket yet, so scrim games won't record. Each scrim's Lobby setup has the lobby's name and password."}
+            </p>
+          ) : null}
         </div>
         <div>
           <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-muted">

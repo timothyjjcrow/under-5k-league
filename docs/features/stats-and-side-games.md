@@ -377,11 +377,65 @@ match preview) and `season-schedule-playoffs.md` (the standings chip).
 
 ## Scrims
 
-Captains post an OPEN time, another captain claims it (SCHEDULED), games
-import by player IDs (LIVE, then COMPLETED); nothing touches league
-standings. `scrim-service.ts` (post, claim, cancel, end, guests, coaches),
-`scrim-result-service.ts` (imports); pure `scrim-view.ts`, `scrim-discord.ts`,
-`scrim-schedule-conflict.ts`, `scrim-window.ts`. Keep scrims (Tim's decision).
+Captains post an OPEN time, another captain claims it (SCHEDULED), and the
+games record from the season's league feed when the lobby had the ticket, or
+by match ID or a search of the players' matches (LIVE, then COMPLETED);
+nothing touches league standings. `scrim-service.ts` (post, claim, cancel,
+end, guests, coaches), `scrim-result-service.ts` (imports, the feed's scrim
+half); pure `scrim-view.ts`, `scrim-lobby.ts` (lobby setup, next steps),
+`scrim-discord.ts`, `scrim-schedule-conflict.ts`, `scrim-window.ts`; server
+only `scrim-lobby-password.ts`. Keep scrims (Tim's decision).
+
+- **The ticket is what records a scrim.** Valve publishes a private lobby's
+  game only when the lobby carries a league ticket: not one of US Season 2's
+  first five booked scrims was recorded, because none had it. A booked
+  scrim's page leads with the Lobby setup card (`ScrimLobbyCard`, its copy in
+  `scrim-lobby.ts`): the posting captain hosts and the other is backup (only
+  the league's ticket admins see a ticket in Dota's League list), the lobby's
+  name (`<LEAGUE_CONFIG.name> Scrim <scrimLobbyCode>`) and password, the
+  season's ticket to pick (`scrimTicketNote`: not the in-house one, when the
+  league has one), server, mode and lobby count, and how everyone joins.
+  Never call the ticket optional. Without a ticket the card and the claim
+  ping say the games won't record. /scrims says to use the ticket only for
+  scrims booked here: only a booking owns its games, and an unbooked game
+  under the ticket between two teams that meet in the league within three
+  days can be taken for that league match (its window opens 3 days before
+  kickoff, `league-result-window.ts`).
+- **The lobby password is for the two teams.** `scrimLobbyPassword` is an
+  HMAC of the scrim id under `AUTH_SECRET` with its own label: the id is
+  public, the secret isn't. The page renders it only for either team's
+  rostered players, captains, coaches and admins; everyone else reads that
+  the teams see it there (`e2e-mid/scrims.spec.ts` checks the page source).
+- **Ticketed games record themselves.** A scrim game hosted with the
+  season's ticket is in the league feed. `syncLeagueGames` never imports a
+  game a booked scrim may own: a complete pass returns them as
+  `scrimCandidates`, and every caller (the worker's `syncDueMatches`, the
+  admin's Sync league games) passes them to `recordScrimGamesFromFeed`. It
+  applies the manual import's own checks to each booked scrim, records a game
+  only when exactly one scrim claims it, and per scrim keeps the real session
+  (`pickSeriesGames`) and commits in play order through the manual import's
+  transaction, stopping at the first refusal. A partial pass hands nothing
+  over. Their evidence rows say `SCRIM_CANDIDATE`, not "no eligible fixture"
+  (which /admin counts as set aside). Tests: `scrim-feed-import.itest.ts`.
+- **A booked scrim wakes the worker.** `scrimFeedDueWhere`: SCHEDULED or LIVE
+  with an opponent, on a ticketed season, from 25 minutes to 8 hours after its
+  start (`scrimFeedWindow`, far shorter than the 36-hour result window, since
+  a scrim night reads the feed for the scrim alone). The gate wakes for the
+  same window (gate v17), and booking, cancelling, ending or importing
+  expires `AUTOMATION_GATE_TAG` (`refreshScrims(id, { feedWork: true })`).
+  Scrims get no automatic roster scan and don't make clients poll fast. A game
+  outside that is added by match ID or "Search the players' matches"
+  (captains, coaches, admins; folded under "Game missing?" while a ticketed
+  scrim hasn't started or is live).
+- **Each viewer gets their next step** (`scrimNextStep`, under the header):
+  the host captain, the other captain, a teammate or coach; nobody else.
+- **A team's players find their scrims where they look:** /scrims leads a
+  team member with "<Team> scrims" (the post form for its captain) before the
+  "How scrims work" strip; the team page's Scrims card (`team-scrims.tsx`:
+  coming up with its Lobby setup, recent results, practice record); the
+  Captains page's Lobby setup links and ticket reminder; and Home's Scrim line
+  in the player panel, 12 hours before a booked scrim to 4 hours after, in
+  every branch of `MyNextMatch`.
 
 - **League fixtures win.** Playoff builds call `yieldScrimsToOfficialFixture`:
   cancel booked scrims of those teams within four hours, keep LIVE ones but
@@ -393,8 +447,8 @@ standings. `scrim-service.ts` (post, claim, cancel, end, guests, coaches),
   tiebreakers, booking. Known gap: the automatic tiebreaker continuation
   (`advanceTiebreakerWeek`) is still blocked by a clash instead of yielding.
 - **Booked page**: both captains, `<DiscordTag>` behind
-  `canViewLeagueContact` (never public), and `scrimHostLine` (the poster
-  hosts, on `LEAGUE_CONFIG.gameServerRegion`). The signed-out "Sign in to
+  `canViewLeagueContact` (never public), and the Lobby setup card above. The
+  signed-out "Sign in to
   see the handles" prompt names who they are for (this season's signed-up
   players, active seasons only, or either team's captains and coaches):
   signing in alone unlocks nothing. **Open page**: a one-click Join
@@ -402,8 +456,9 @@ standings. `scrim-service.ts` (post, claim, cancel, end, guests, coaches),
   `SCRIM_PAST_GRACE_MS`, the service's own).
 - **Ping only captains who must act** (`mentionUsers`, post-commit,
   best-effort): new time, other captains (throttled per team by
-  `SCRIM_POST_PING_THROTTLE_SECONDS`); claim, the poster (who hosts, who to
-  message, which of their open times it withdrew); cancel, whoever didn't
+  `SCRIM_POST_PING_THROTTLE_SECONDS`); claim, the poster (they host, both
+  teams get the lobby's details on the scrim page, set the ticket when the
+  season has one, which of their open times it withdrew); cancel, whoever didn't
   cancel (both for an admin, nobody for your own unclaimed time). Names go
   through `escapeDiscordText`. `joinScrim` reads the offers its sweep
   withdraws with the SAME WHERE in the same snapshot; don't fold that into the

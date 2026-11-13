@@ -107,6 +107,7 @@ import {
   scrimConflictFix,
   type ScrimConflict,
 } from "@/lib/scrim-schedule-conflict";
+import { recordScrimGamesFromFeed } from "@/lib/scrim-result-service";
 import { isSerializationConflict } from "@/lib/prisma-errors";
 import { seedsFromFirstRound } from "@/lib/bracket-view";
 import { bracketSeedLabels } from "@/lib/season-groups";
@@ -2785,6 +2786,11 @@ export async function syncLeagueAction(
   if (!season) return { error: "No active season" };
   const res = await syncLeagueGames(season.id);
   if (res.error) return { error: res.error };
+  // Every feed caller records the pass's scrim games (scrimCandidates).
+  const scrims = res.scrimCandidates?.length
+    ? await recordScrimGamesFromFeed(season.id, res.scrimCandidates)
+    : null;
+  // Revalidates the whole layout: the scrim pages too.
   refreshGames();
   // Removed games stay removed here too; say how many, and the way back.
   const removed = res.removedSkipped ?? 0;
@@ -2793,6 +2799,10 @@ export async function syncLeagueAction(
   const waiting = res.pending ? (res.waitingOn ?? []) : [];
   return {
     message: `League sync · imported ${res.imported} of ${res.scanned} league games${
+      scrims && scrims.imported > 0
+        ? ` · recorded ${scrims.imported} scrim ${scrims.imported === 1 ? "game" : "games"} hosted with the league ticket`
+        : ""
+    }${
       waiting.length > 0
         ? ` · OpenDota didn't return details for ${waiting.length === 1 ? `game ${waiting[0]}` : `${waiting.length} games`}, so nothing from the league feed imports until ${waiting.length === 1 ? "it clears" : "they clear"}. ${waiting.length === 1 ? "It is" : "They are"} listed under Saved import progress`
         : ""

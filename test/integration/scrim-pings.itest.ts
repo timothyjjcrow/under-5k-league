@@ -204,7 +204,7 @@ describe("scrim pings (integration)", () => {
 
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe(
-      `Scrim booked. Captain 1 (${host.team.name}) hosts and will send you the lobby details on Discord. ` +
+      `Scrim booked. Captain 1 (${host.team.name}) hosts; the lobby's name, password and settings are on the scrim page. ` +
         "Your other open time within four hours of it was withdrawn. " +
         `${host.team.name}'s other open time within four hours of it was withdrawn.`,
     );
@@ -213,6 +213,9 @@ describe("scrim pings (integration)", () => {
     expect(content).toContain(`**${joiner.team.name}** claimed your scrim time`);
     expect(content).toContain("You host");
     expect(content).toContain("**Captain 2**");
+    expect(content).toContain(
+      "both teams get the lobby's name, password and settings on the scrim page",
+    );
     expect(content).toContain(
       `Your other open time within four hours (<t:${Math.floor(hostOther.getTime() / 1000)}:f>) was withdrawn.`,
     );

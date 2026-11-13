@@ -377,14 +377,20 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   captain posts an OPEN time; another captain claims it in one click from the
   list or the scrim's own page (`scrimJoinCheck` explains a refusal there),
   which books it and withdraws both teams' other open times within four
-  hours. Games import by player IDs (`scrim-result-service.ts`); either
-  captain or an admin can end a LIVE series at its current score through one
-  guarded claim that re-asserts status and score. A booking with no games
-  36 hours after kickoff is listed as "Not played" (display only, so a late
-  game can still be added). Posts, claims and cancels ping only the captains
-  who must act. League fixtures win: a playoff round build cancels booked
-  scrims within four hours of its night and reports LIVE ones, and every
-  schedule refusal names the scrim that caused it.
+  hours. The booked page's Lobby setup card says how to host so the games
+  record: the poster hosts, the lobby's name and a password only the two
+  teams see, and the season's league ticket. A game hosted with the ticket
+  records by itself from the league feed (`recordScrimGamesFromFeed`, for 8
+  hours after the start); otherwise by match ID or a search of the players'
+  matches (`scrim-result-service.ts`). Either captain or an admin can end a
+  LIVE series at its current score through one guarded claim that re-asserts
+  status and score. A booking with no games 36 hours after kickoff is listed
+  as "Not played" (display only, so a late game can still be added). Posts,
+  claims and cancels ping only the captains who must act. The team page,
+  the Captains page and Home point a team's players at their scrims. League
+  fixtures win: a playoff round build cancels booked scrims within four hours
+  of its night and reports LIVE ones, and every schedule refusal names the
+  scrim that caused it.
 
 **Playoffs.** `startPlayoffs` calls `createPlayoffBracket`
 (`src/lib/playoff-service.ts`). The rendered Start, Reset, and Return-to-regular
@@ -736,7 +742,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/players/[id]`    | Player profile: career stats, report card, achievements, seasons, inhouse card                 | Always                                                                                             | Indexed `getPlayerGameFacts` two-pass read; cached `getRecordWatchBook`                                       |
 | `/players/compare` | GET-form two-player career comparison with invalid/missing/same-player states                  | Always                                                                                             | Trusted `getAllGameScores`, `meetings`; metadata uses the same career eligibility                             |
 | `/teams`           | Teams index + power rankings + draft recap                                                     | Nav from DRAFT                                                                                     | Standings order post-results; `powerRankings`                                                                 |
-| `/teams/[id]`      | Team detail: scenario card, roster, hero pool, H2H, captain's name/logo form                   | Always (archived works)                                                                            | `seasonScenarioReport`, cached season scan                                                                    |
+| `/teams/[id]`      | Team detail: scenario card, roster, matches, scrims (coming up, recent results, practice record), hero pool, H2H, captain's name/logo form | Always (archived works)                                                                            | `seasonScenarioReport`, cached season scan                                                                    |
 | `/draft`           | Live auction room                                                                              | Active season; redirects to /teams after DRAFT unless the auction is live/paused                   | Polls `/api/draft/tick`                                                                                       |
 | `/schedule`        | Standings, weeks, bracket, season grid, playoff picture                                        | Nav once the auction is complete; phase-specific published/locked/read-only states                 | `computeStandings`, `crossTable`, `buildBracketRounds`, `matchCheckinOpen`                                    |
 | `/matches/[id]`    | Box scores or pre-match preview (scouting, stakes, RSVP, standins, reschedule, captain report) | Always                                                                                             | Game JSON, `scouting.ts`, `PlayoffOutlook`                                                                    |

@@ -125,6 +125,7 @@ export default async function CaptainsPage({
               seasonId={season.id}
               team={team}
               seasonOpen={seasonOpen}
+              hasLeagueTicket={!!season.dotaLeagueId}
               nowMs={nowMs}
             />
           </Suspense>

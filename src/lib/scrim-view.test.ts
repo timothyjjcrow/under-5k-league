@@ -5,7 +5,6 @@ import {
   scrimBookedToast,
   scrimEndConfirm,
   scrimEndedMessage,
-  scrimHostLine,
   scrimJoinCheck,
   scrimNotPlayedCutoff,
 } from "./scrim-view";
@@ -13,34 +12,6 @@ import {
   SCRIM_DETECT_WINDOW_AFTER_MS,
   SCRIM_PAST_GRACE_MS,
 } from "./scrim-window";
-
-describe("scrimHostLine", () => {
-  it("says the posting captain hosts and who gets the lobby details", () => {
-    expect(
-      scrimHostLine({
-        hostTeamName: "Radiant Raccoons",
-        hostCaptainName: "Raccoon Cap",
-        opponentCaptainName: "Straits Cap",
-        bestOf: 3,
-        region: "US East",
-      }),
-    ).toBe(
-      "Raccoon Cap (Radiant Raccoons) hosts: make the Dota lobby on US East and send Straits Cap the lobby name and password on Discord. Bo3 = one lobby per game, first to 2 wins.",
-    );
-  });
-
-  it("uses the region it is given and the series rule for the format", () => {
-    const line = scrimHostLine({
-      hostTeamName: "A",
-      hostCaptainName: "a",
-      opponentCaptainName: "b",
-      bestOf: 2,
-      region: "Europe West",
-    });
-    expect(line).toContain("on Europe West");
-    expect(line).toContain("Bo2 = two separate lobbies.");
-  });
-});
 
 describe("scrimJoinCheck", () => {
   const NOW = Date.UTC(2026, 9, 4, 3, 0);
@@ -120,7 +91,7 @@ describe("scrimBookedToast", () => {
 
   it("says who hosts", () => {
     expect(scrimBookedToast(base)).toBe(
-      "Scrim booked. Raccoon Cap (Radiant Raccoons) hosts and will send you the lobby details on Discord.",
+      "Scrim booked. Raccoon Cap (Radiant Raccoons) hosts; the lobby's name, password and settings are on the scrim page.",
     );
   });
 

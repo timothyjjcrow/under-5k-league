@@ -30,7 +30,11 @@ import {
   type SeriesCandidate,
 } from "./match-import";
 import { claimProviderCooldown } from "./settings";
-import { isWithinScrimResultWindow } from "./scrim-window";
+import {
+  isWithinScrimResultWindow,
+  SCRIM_FEED_CLOSES_AFTER_MS,
+  SCRIM_FEED_OPENS_AFTER_MS,
+} from "./scrim-window";
 import { parseAdminSteamIds, resolveSessionRole } from "./users";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 import { waitBeforeSerializableRetry } from "./serializable-retry";
@@ -569,8 +573,17 @@ async function canManageScrimInTransaction(
   }));
 }
 
+/**
+ * Who records a game. A captain, coach or admin acts through the scrim page
+ * and is re-authorized in the transaction. The league feed acts for nobody:
+ * its callers (the bearer-authenticated worker, an admin's feed sync) are
+ * authorized before they read the feed, and it records only what passes the
+ * same checks a person's import does, with no admin powers.
+ */
+type ScrimImportActor = { viewer: ScrimResultViewer } | { feed: true };
+
 async function commitFetchedScrimGame(
-  viewer: ScrimResultViewer,
+  actor: ScrimImportActor,
   scrimId: string,
   match: OpenDotaMatch,
 ): Promise<({ ok: true } & ScrimSeriesState) | { ok: false; error: string }> {
@@ -586,8 +599,12 @@ async function commitFetchedScrimGame(
             select: scrimReadSelect,
           });
           if (!fresh) throw new ScrimImportError("Scrim not found");
-          const admin = await assertedAdmin(tx, viewer);
-          if (!(await canManageScrimInTransaction(tx, viewer, fresh, admin))) {
+          const admin =
+            "viewer" in actor ? await assertedAdmin(tx, actor.viewer) : false;
+          if (
+            "viewer" in actor &&
+            !(await canManageScrimInTransaction(tx, actor.viewer, fresh, admin))
+          ) {
             throw new ScrimImportError(
               "You no longer captain or coach either team in this scrim",
             );
@@ -802,7 +819,7 @@ export async function importScrimGame(
       return { ok: false, error: "OpenDota returned a different match ID" };
     }
 
-    const committed = await commitFetchedScrimGame(viewer, scrimId, match);
+    const committed = await commitFetchedScrimGame({ viewer }, scrimId, match);
     if (!committed.ok) return committed;
     return {
       ...committed,
@@ -984,7 +1001,7 @@ export async function autoDetectScrimGames(
     for (const candidate of chosen) {
       const match = fetched.get(candidate.id);
       if (!match) continue;
-      const committed = await commitFetchedScrimGame(viewer, scrimId, match);
+      const committed = await commitFetchedScrimGame({ viewer }, scrimId, match);
       if (!committed.ok) {
         if (imported === 0) return committed;
         break;
@@ -1024,6 +1041,143 @@ export async function autoDetectScrimGames(
         "Couldn't scan for scrim games — add the Dota match ID or try again later",
     };
   }
+}
+
+/** What one feed pass recorded on scrims. */
+type FeedScrimImport = {
+  imported: number;
+  /** The scrims that got a game, for the caller's page refresh. */
+  scrimIds: string[];
+};
+
+/** The booked scrims a feed pass looks at. */
+function bookedScrimFeedWhere(seasonId: string) {
+  return {
+    seasonId,
+    status: { in: [SCRIM_STATUS.SCHEDULED, SCRIM_STATUS.LIVE] },
+    opponentTeamId: { not: null },
+  };
+}
+
+/**
+ * Booked scrims whose feed window is open (`scrimFeedWindow`): each makes
+ * the worker read the league feed on a night with no league match due. The
+ * automation gate wakes for the same window.
+ */
+export function scrimFeedDueWhere(seasonId: string, nowMs: number) {
+  return {
+    ...bookedScrimFeedWhere(seasonId),
+    scheduledAt: {
+      gte: new Date(nowMs - SCRIM_FEED_CLOSES_AFTER_MS),
+      lte: new Date(nowMs - SCRIM_FEED_OPENS_AFTER_MS),
+    },
+  };
+}
+
+/**
+ * The league feed's scrim half. A scrim hosted with the season's ticket is in
+ * the official feed, and `syncLeagueGames` hands every final game a booked
+ * scrim may own to this (`LeagueSyncResult.scrimCandidates`), which records
+ * it the way a captain's "Add game" would:
+ *
+ * - only booked scrims: SCHEDULED or LIVE, an opponent, room for a game;
+ * - a game must pass the manual import's own checks against EXACTLY one of
+ *   them (12 hours before to 36 hours after its start, the closest meeting
+ *   of those two teams, 3+ known players a side); two claimants fail closed;
+ * - per scrim, `pickSeriesGames` keeps the real session and stops at the
+ *   clinch, and its games commit in play order through the manual import's
+ *   Serializable transaction (which re-reads everything), stopping at the
+ *   first refusal so a later game never leapfrogs a missing earlier one.
+ *
+ * No provider calls: the feed already fetched and checked each payload.
+ * `canContinue` is the worker's budget; the admin's feed sync passes none.
+ */
+export async function recordScrimGamesFromFeed(
+  seasonId: string,
+  candidates: readonly OpenDotaMatch[],
+  options: { canContinue?: () => boolean } = {},
+): Promise<FeedScrimImport> {
+  const none: FeedScrimImport = { imported: 0, scrimIds: [] };
+  if (candidates.length === 0) return none;
+  const booked = (
+    await prisma.scrim.findMany({
+      where: bookedScrimFeedWhere(seasonId),
+      orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+      select: scrimReadSelect,
+    })
+  ).filter(
+    (scrim): scrim is typeof scrim & { opponentTeamId: string } =>
+      scrim.opponentTeamId != null && scrim.games.length < scrim.bestOf,
+  );
+  if (booked.length === 0) return none;
+
+  const identitiesOf = new Map<string, ScrimIdentitySnapshot>();
+  const meetingsOf = new Map<string, { scrims: number[]; league: number[] }>();
+  type FeedCandidate = SeriesCandidate & { match: OpenDotaMatch };
+  const byScrim = new Map<string, FeedCandidate[]>();
+  for (const match of candidates) {
+    const owners: { scrimId: string; candidate: FeedCandidate }[] = [];
+    for (const scrim of booked) {
+      if (!isWithinScrimResultWindow(match.start_time, scrim.scheduledAt.getTime())) {
+        continue;
+      }
+      let identities = identitiesOf.get(scrim.id);
+      if (!identities) {
+        identities = buildScrimIdentitySnapshot(
+          scrim.participants,
+          scrim.hostTeamId,
+          scrim.opponentTeamId,
+        );
+        identitiesOf.set(scrim.id, identities);
+      }
+      if (assertEnoughRecognizedPlayers(identities)) continue;
+      let meetings = meetingsOf.get(scrim.id);
+      if (!meetings) {
+        meetings = await loadOtherMeetingKickoffs(prisma, scrim);
+        meetingsOf.set(scrim.id, meetings);
+      }
+      const validation = validateFetchedGame(scrim, identities, match, meetings);
+      if (!validation.ok) continue;
+      owners.push({
+        scrimId: scrim.id,
+        candidate: {
+          id: Number(validation.value.dotaMatchId),
+          startTime: match.start_time,
+          winnerTeamId: validation.value.classification.winnerTeamId,
+          match,
+        },
+      });
+    }
+    if (owners.length !== 1) continue;
+    const [{ scrimId, candidate }] = owners as [(typeof owners)[number]];
+    const list = byScrim.get(scrimId) ?? [];
+    list.push(candidate);
+    byScrim.set(scrimId, list);
+  }
+
+  let imported = 0;
+  const scrimIds: string[] = [];
+  for (const scrim of booked) {
+    const list = byScrim.get(scrim.id);
+    if (!list) continue;
+    const chosen = pickSeriesGames(list, scrim.bestOf).sort(
+      (a, b) => a.startTime - b.startTime || a.id - b.id,
+    );
+    for (const candidate of chosen) {
+      if (options.canContinue && !options.canContinue()) {
+        return { imported, scrimIds };
+      }
+      const committed = await commitFetchedScrimGame(
+        { feed: true },
+        scrim.id,
+        candidate.match,
+      );
+      if (!committed.ok) break;
+      imported += 1;
+      if (!scrimIds.includes(scrim.id)) scrimIds.push(scrim.id);
+    }
+  }
+  return { imported, scrimIds };
 }
 
 export type ScrimGameRemovalResponse =

@@ -1927,7 +1927,20 @@ export type LeagueSyncResult = {
   deadlineReached?: boolean;
   /** Feed games left out because an admin removed them (not re-added since). */
   removedSkipped?: number;
+  /**
+   * Final feed games a booked scrim may own: a scrim hosted with the season's
+   * ticket is in this feed too. Only a complete pass returns them, and this
+   * function never imports them: EVERY caller passes them on to
+   * `recordScrimGamesFromFeed` (scrim-result-service.ts), which judges each
+   * against the booked scrims with the scrim importer's own rules. Returning
+   * them instead of importing here keeps match-import free of an import cycle
+   * with the scrim importer.
+   */
+  scrimCandidates?: OpenDotaMatch[];
 };
+
+/** The evidence row's reason for a feed game set aside for a scrim. */
+export const SCRIM_CANDIDATE_REASON = "SCRIM_CANDIDATE";
 
 // Stay below SQLite's conservative bind-parameter ceiling while also keeping
 // a typo'd league id from turning one lookup into an unbounded SQL statement.
@@ -2055,6 +2068,10 @@ export async function syncLeagueGames(
   };
   const newlySkipped: string[] = [];
   const evidenceById = new Map<string, ImportCandidateSnapshot>();
+  // Feed games a booked scrim may own (by id). This pass never imports them;
+  // a complete pass hands them to `recordScrimGamesFromFeed`, which judges
+  // each against the booked scrims with the scrim importer's own rules.
+  const scrimCandidates = new Map<string, OpenDotaMatch>();
 
   // Classification needs account sets, not per-player attribution. Read the
   // season's roster and fixture standins once when a candidate first needs
@@ -2315,9 +2332,10 @@ export async function syncLeagueGames(
       if (fits.length === 0) {
         // A booked scrim belongs to its own importer. Keep the fetched
         // evidence and decision, not a global administrator exclusion; the
-        // scrim importer remains free to claim it.
+        // scrim importer remains free to claim it, and a complete pass hands
+        // it over (scrimCandidates).
         if (scrimFits.length > 0) {
-          newlySkipped.push(idStr);
+          scrimCandidates.set(idStr, od);
           skip.add(idStr);
           continue;
         }
@@ -2355,8 +2373,10 @@ export async function syncLeagueGames(
       if (!claimsGame(gameMs, best.kickoffMs, competingKickoffs)) {
         // A historical game can share today's roster. Attribute by the same
         // meeting-window/nearest-kickoff rules as per-fixture detection, and
-        // fail closed on an exact tie.
-        newlySkipped.push(idStr);
+        // fail closed on an exact tie. A nearer scrim of the same two teams
+        // is one way to lose the claim, so it may be that scrim's game.
+        if (scrimFits.length > 0) scrimCandidates.set(idStr, od);
+        else newlySkipped.push(idStr);
         skip.add(idStr);
         continue;
       }
@@ -2366,7 +2386,7 @@ export async function syncLeagueGames(
           Math.abs(gameMs - scrim.scheduledAt.getTime()) <= officialDistance,
       );
       if (scrimOwnsCandidate) {
-        newlySkipped.push(idStr);
+        scrimCandidates.set(idStr, od);
         skip.add(idStr);
         continue;
       }
@@ -2388,6 +2408,11 @@ export async function syncLeagueGames(
     // pass; independent roster detection remains a safe fallback.
     for (const id of new Set(newlySkipped)) {
       await recordImportDecision(evidenceById.get(id), "NO_ELIGIBLE_FIXTURE");
+    }
+    // Scrim candidates wait for a complete pass too: the same partial buffer
+    // can't prove a scrim's play order either.
+    for (const id of scrimCandidates.keys()) {
+      await recordImportDecision(evidenceById.get(id), SCRIM_CANDIDATE_REASON);
     }
     return {
       imported: 0, scanned: leagueMatchIds.length, pending: true,
@@ -2450,11 +2475,19 @@ export async function syncLeagueGames(
     // as permanent exclusions or hide a newly eligible earlier game.
     await recordImportDecision(evidenceById.get(id), "NO_ELIGIBLE_FIXTURE_OR_SERIES_GAME");
   }
+  // Not "no eligible fixture": /admin counts those as games set aside, and a
+  // scrim's game isn't one. The caller records it on its scrim.
+  for (const id of scrimCandidates.keys()) {
+    await recordImportDecision(evidenceById.get(id), SCRIM_CANDIDATE_REASON);
+  }
   return {
     imported,
     scanned: leagueMatchIds.length,
     ...(!discoveryComplete ? { pending: true } : {}),
     ...(deadlineReached ? { deadlineReached: true } : {}),
     ...(await removedSkipped()),
+    ...(scrimCandidates.size > 0
+      ? { scrimCandidates: [...scrimCandidates.values()] }
+      : {}),
   };
 }

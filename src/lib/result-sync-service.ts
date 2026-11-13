@@ -73,6 +73,10 @@ import { syncInhouseBanRoles } from "./inhouse-ban-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
 import { recordLeagueFeedWait } from "./league-feed-wait-service";
+import {
+  recordScrimGamesFromFeed,
+  scrimFeedDueWhere,
+} from "./scrim-result-service";
 import { recoverableAnnouncementMarker } from "./announcement-marker";
 
 // Automatic result sync — the league updates itself instead of waiting on a
@@ -185,6 +189,12 @@ const claimSyncThrottle = claimThrottle;
  * seasons; a partial LIVE series falls back immediately so a wrong-ticket game
  * two is not stranded. Only ONE due match (stalest scan first) is roster-scanned
  * per run, keeping a full league night inside the API budget.
+ *
+ * A booked scrim in its feed window (`scrimFeedDueWhere`) is due too, with a
+ * ticket: a scrim hosted with the season's ticket is in the same feed, so a
+ * scrim night reads it on the same throttle and the pass's scrim candidates
+ * are recorded on their scrims (`recordScrimGamesFromFeed`). Scrims get no
+ * roster fallback and don't make clients poll fast.
  */
 async function syncDueMatches(
   nowMs: number,
@@ -225,7 +235,10 @@ async function syncDueMatches(
       scheduledAt: true,
     },
   });
-  if (due.length === 0) return { imported: 0, watch: false };
+  const scrimsDue = season.dotaLeagueId
+    ? await prisma.scrim.count({ where: scrimFeedDueWhere(season.id, nowMs) })
+    : 0;
+  if (due.length === 0 && scrimsDue === 0) return { imported: 0, watch: false };
 
   let leagueImported = 0;
   let fallbackDue = due;
@@ -245,6 +258,18 @@ async function syncDueMatches(
         signal: options.signal,
       });
       leagueImported = res.imported;
+      if (res.scrimCandidates?.length && canStartWork(options)) {
+        // Scrim games ride the official pass. Best-effort: a failure here
+        // must not cost this run its roster fallback, and the next pass hands
+        // the same candidates over again (they stay unrecorded until then).
+        try {
+          await recordScrimGamesFromFeed(season.id, res.scrimCandidates, {
+            canContinue: () => canStartWork(options),
+          });
+        } catch (error) {
+          logStepFailure("scrim feed import", error);
+        }
+      }
       if (
         res.unreachable ||
         res.deadlineReached ||
@@ -284,6 +309,10 @@ async function syncDueMatches(
         };
       }
     }
+
+    // Only scrims were due: they have no roster fallback, and a scrim night
+    // doesn't keep every open tab polling fast.
+    if (due.length === 0) return { imported: leagueImported, watch: false };
 
     if (leagueClaimed) {
       // The league feed may have moved a Bo2 from SCHEDULED to LIVE (or closed

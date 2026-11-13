@@ -178,6 +178,7 @@ type SeasonOverrides = Partial<{
   draftAt: Date | null;
   draftRevision: number;
   firstMatchNight: Date | null;
+  dotaLeagueId: string | null;
 }>;
 
 export async function makeSeason(overrides: SeasonOverrides = {}) {
