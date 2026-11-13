@@ -103,3 +103,59 @@ export function compareDefaults(o: {
   const b = o.bId ?? (!o.bParam && me && a && me !== a ? me : "");
   return { a, b };
 }
+
+/** One line of the comparison's tape: both figures, who has the edge, and
+ *  how long each side's bar is. */
+export type TapeRow = {
+  label: string;
+  a: string;
+  b: string;
+  /** 1 = A better, -1 = B better, 0 = level or not a contest. */
+  edge: number;
+  /** Each side's bar as a share (0–1) of the larger figure; 0 without one. */
+  aShare: number;
+  bShare: number;
+};
+
+/**
+ * A tape line from two figures. `contested: false` (one side has no games,
+ * or the line is context such as games played) and a missing figure both
+ * show the numbers with no edge: a player with no games isn't "better" at
+ * anything, and left unguarded 0 avg deaths read as the winning side.
+ * The bars always show size, so on a lower-is-better line the SHORTER bar
+ * has the edge; the highlight, not the length, says who leads.
+ */
+export function tapeRow(
+  label: string,
+  a: number | null,
+  b: number | null,
+  opts: {
+    lowerBetter?: boolean;
+    format?: (value: number) => string;
+    contested?: boolean;
+  } = {},
+): TapeRow {
+  const format = opts.format ?? ((value: number) => String(value));
+  const top = Math.max(a ?? 0, b ?? 0);
+  const share = (value: number | null) =>
+    value != null && top > 0 ? Math.max(0, value) / top : 0;
+  return {
+    label,
+    a: a == null ? "—" : format(a),
+    b: b == null ? "—" : format(b),
+    edge:
+      opts.contested === false || a == null || b == null
+        ? 0
+        : Math.sign(a - b) * (opts.lowerBetter ? -1 : 1),
+    aShare: share(a),
+    bShare: share(b),
+  };
+}
+
+/** How many tape lines each side leads: the "5–3" over the numbers. */
+export function tapeTally(rows: readonly TapeRow[]): { a: number; b: number } {
+  return {
+    a: rows.filter((row) => row.edge > 0).length,
+    b: rows.filter((row) => row.edge < 0).length,
+  };
+}

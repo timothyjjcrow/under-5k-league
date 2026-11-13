@@ -10,6 +10,8 @@ import {
   leagueRecords,
   recordBookView,
   recordGameMetricsValid,
+  recordLadders,
+  RECORD_LADDER_SIZE,
   recordWatchBook,
   recordWatchBookData,
   recordWatchBookFromData,
@@ -666,5 +668,75 @@ describe("cached record book forms", () => {
     expect(old.matchups.map((matchup) => matchup.matchId)).toEqual(["m1"]);
     expect(recordBookView(rows, "missing")).toMatchObject({ scopedGames: 0, eligibleGames: 0 });
     expect(JSON.parse(JSON.stringify(all))).toEqual(all);
+  });
+});
+
+describe("recordLadders", () => {
+  // Chronological, as the book is fed: g1 first.
+  const games: RecordGame[] = [
+    game({
+      matchId: "g1",
+      durationSecs: 2400,
+      radiantScore: 30,
+      direScore: 20,
+      lines: [line({ userId: "ann", kills: 14 }), line({ userId: "ben", kills: 9 })],
+    }),
+    game({
+      matchId: "g2",
+      durationSecs: 1500,
+      radiantScore: 12,
+      direScore: 40,
+      lines: [line({ userId: "ann", kills: 14 }), line({ userId: null, kills: 40 })],
+    }),
+    game({
+      matchId: "g3",
+      durationSecs: 3300,
+      radiantScore: 25,
+      direScore: 24,
+      lines: [line({ userId: "cat", kills: 16 }), line({ userId: "ann", kills: 11 })],
+    }),
+  ];
+
+  it("lists each record's best marks, with an equal mark behind the earlier game", () => {
+    const kills = recordLadders(games).players.find((ladder) => ladder.key === "kills")!;
+    // One entry per game line, so ann holds three places; the unlinked 40 is
+    // nobody's record.
+    expect(kills.entries.map((mark) => [mark.userId, mark.value, mark.matchId])).toEqual([
+      ["cat", 16, "g3"],
+      ["ann", 14, "g1"],
+      ["ann", 14, "g2"],
+      ["ann", 11, "g3"],
+      ["ben", 9, "g1"],
+    ]);
+  });
+
+  it("puts the record leagueRecords names first on every ladder", () => {
+    const book = leagueRecords(games);
+    const ladders = recordLadders(games);
+    expect(ladders.players.map((ladder) => ladder.entries[0])).toEqual(book.players);
+    expect(ladders.games.map((ladder) => ladder.entries[0])).toEqual(book.games);
+    // A tie for the record keeps its first achiever, as the book does.
+    const tied = recordLadders(games.slice(0, 2)).players.find((l) => l.key === "kills")!;
+    expect(tied.entries[0].matchId).toBe("g1");
+  });
+
+  it("orders an ascending match record smallest first, and caps every ladder", () => {
+    const ladders = recordLadders(games, 2);
+    const fastest = ladders.games.find((ladder) => ladder.key === "shortest")!;
+    expect(fastest.entries.map((mark) => mark.matchId)).toEqual(["g2", "g1"]);
+    const longest = ladders.games.find((ladder) => ladder.key === "longest")!;
+    expect(longest.entries.map((mark) => mark.matchId)).toEqual(["g3", "g1"]);
+    for (const ladder of [...ladders.players, ...ladders.games]) {
+      expect(ladder.entries.length).toBeLessThanOrEqual(2);
+    }
+    expect(RECORD_LADDER_SIZE).toBe(5);
+  });
+
+  it("has no ladder for a record nobody has a mark on", () => {
+    // These lines report no healing or damage: unreported is not a record.
+    const keys = recordLadders(games).players.map((ladder) => ladder.key);
+    expect(keys).not.toContain("heroHealing");
+    expect(keys).not.toContain("heroDamage");
+    expect(recordLadders([])).toEqual({ players: [], games: [] });
   });
 });

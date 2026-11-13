@@ -93,8 +93,8 @@ describe("all-history public cache entries at 500 games", () => {
     const sizes = entrySizes();
     expect(Object.keys(sizes).sort()).toEqual([
       "career-facts-v1:all",
-      "record-book-view-v1:all",
-      `record-book-view-v1:${history.seasons[2].id}`,
+      "record-book-view-v2:all",
+      `record-book-view-v2:${history.seasons[2].id}`,
       "record-watch-book-v1:all",
     ]);
     for (const [entry, bytes] of Object.entries(sizes)) {

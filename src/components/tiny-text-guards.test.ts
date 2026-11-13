@@ -75,6 +75,8 @@ const STATE_MARKERS: {
   { file: "src/components/tiebreaker-bracket.tsx", what: "tiebreaker game status", pattern: /statusLabels\[game\.status\]/g, min: 1 },
   { file: "src/app/matches/[id]/box-score-line.tsx", what: "report-card grades", pattern: /Report \{report\.overall\}\s*<|\{r\.grade\}\s*<\/b>/g, min: 2 },
   { file: "src/components/leader-board.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
+  { file: "src/components/leaders-explorer.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
+  { file: "src/components/record-list.tsx", what: "You chip", pattern: />\s*You\s*</g, min: 1 },
 ];
 
 describe("state markers are at least 12px", () => {

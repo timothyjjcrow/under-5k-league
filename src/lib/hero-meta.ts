@@ -183,12 +183,24 @@ export function heroMeta(games: MetaGame[]): HeroMeta {
  *  hero. The table still lists every picked hero's record. */
 export const META_HEADLINE_MIN_PICKS = 8;
 
+/** Games a player needs on one hero before /meta calls it a signature. */
+export const META_SIGNATURE_MIN_GAMES = 3;
+
+/** Picks a hero needs before sorting by win rate places it: below this a
+ *  1–0 hero would top the table at "100%". Such heroes keep their record
+ *  and list after the placed ones. */
+export const META_WIN_RATE_MIN_PICKS = 3;
+
 export type MetaHeadlines = {
   /** The most-picked hero (the first row of heroMeta's ordering). */
   mostPicked: HeroMetaRow | null;
   /** Best win rate among heroes with at least `minPicks`; more picks break
    *  an equal rate. Null until some hero has the sample. */
   bestWinRate: HeroMetaRow | null;
+  /** The league player with the most games on one hero, from
+   *  META_SIGNATURE_MIN_GAMES: more wins, then the more-picked hero, break
+   *  a tie. Null until someone has the games. */
+  signature: (HeroPlayerTally & { heroId: number }) | null;
 };
 
 export function metaHeadlines(
@@ -196,7 +208,20 @@ export function metaHeadlines(
   minPicks = META_HEADLINE_MIN_PICKS,
 ): MetaHeadlines {
   let bestWinRate: HeroMetaRow | null = null;
+  let signature: MetaHeadlines["signature"] = null;
   for (const row of rows) {
+    // Rows arrive most-picked first, so a strict ">" keeps the more-picked
+    // hero on a full tie.
+    const top = row.topPlayer;
+    if (
+      top &&
+      top.games >= META_SIGNATURE_MIN_GAMES &&
+      (!signature ||
+        top.games > signature.games ||
+        (top.games === signature.games && top.wins > signature.wins))
+    ) {
+      signature = { ...top, heroId: row.heroId };
+    }
     if (row.picks < minPicks) continue;
     // Compare wins/picks exactly (cross-multiplied), not the rounded percent.
     const diff = bestWinRate
@@ -206,5 +231,5 @@ export function metaHeadlines(
       bestWinRate = row;
     }
   }
-  return { mostPicked: rows[0] ?? null, bestWinRate };
+  return { mostPicked: rows[0] ?? null, bestWinRate, signature };
 }

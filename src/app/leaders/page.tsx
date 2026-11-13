@@ -1,5 +1,4 @@
 import { LEAGUE_CONFIG } from "@/lib/league-config";
-import { SectionNav } from "@/components/section-nav";
 import Link from "@/components/app-link";
 import type { Metadata } from "next";
 import { heroById } from "@/lib/heroes";
@@ -18,27 +17,19 @@ import {
   getPublicSeasonHonorReadiness,
   getSeasonGameLeaders,
 } from "@/lib/cached-queries";
-import { LeaderBoard, type LeaderBoardRow } from "@/components/leader-board";
 import {
-  summarizePlayerGames,
-  topBy,
-  type LeaderboardKey,
-  type LeaderEntry,
-  type LeaderRow,
-  type PlayerGameLine,
-  decodeGamePlayers,
-  trustedGamePlayers,
-  PER_GAME_MIN_GAMES,
-} from "@/lib/player-stats";
-import type { PlayerStat } from "@/lib/match-import";
-import { careerReportCard, percentLabel } from "@/lib/benchmarks";
+  LeadersExplorer,
+  type LeadersExplorerPlayer,
+} from "@/components/leaders-explorer";
+import { decodeGamePlayers, trustedGamePlayers } from "@/lib/player-stats";
+import { buildLeaderTable } from "@/lib/leader-table";
 import { weeklyHonors } from "@/lib/honors";
 import { impactPointsRule } from "@/lib/fantasy";
 import {
   HONOR_WEEK_STATE,
   isNoPerformanceHonorWeek,
 } from "@/lib/honors-readiness";
-import { cn, formatNetWorth } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import {
   TAP_SAFE,
   buttonClasses,
@@ -49,15 +40,19 @@ import {
   LinkArrow,
   PageTitle,
   PlayerLink,
+  SectionTitle,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
 import { singleSearchParam } from "@/lib/search-params";
-import {
-  killParticipationByPlayer,
-  leaderIdentity,
-} from "@/lib/leader-ranking";
+import { leaderIdentity } from "@/lib/leader-ranking";
 
-type LeadersSearchParams = { season?: string | string[] };
+type LeadersSearchParams = {
+  season?: string | string[];
+  stat?: string | string[];
+};
+
+/** Weeks of honors shown before the older ones fold away. */
+const HONOR_WEEKS_SHOWN = 3;
 
 export async function generateMetadata({
   searchParams,
@@ -81,38 +76,13 @@ type DisplayUser = {
   rankTier: number | null;
 };
 
-/**
- * Two boards to a row from lg, three from xl, and the last row never leaves
- * an empty cell (the count depends on the data: Team sustain is
- * conditional). From lg a lone last board takes the whole row. From xl the
- * grid has six tracks and a board takes two: a last row of two boards splits
- * the row in halves, and a lone last board takes all of it.
- */
-const BOARD_GRID =
-  "grid grid-cols-1 gap-4 lg:grid-cols-2 lg:[&>:last-child:nth-child(odd)]:col-span-2 xl:grid-cols-6 xl:[&>*]:col-span-2 xl:[&>:nth-child(3n+1):last-child]:col-span-6 xl:[&>:nth-child(3n+1):nth-last-child(2)]:col-span-3 xl:[&>:nth-child(3n+2):last-child]:col-span-3";
-
-function CategoryHeading({
-  category,
-}: {
-  category: { id: string; index: string; title: string; description: string };
-}) {
-  return (
-    <div className="flex items-start gap-4 border-b border-line-soft pb-3">
-      <span aria-hidden className="font-display text-3xl font-semibold text-accent/65">{category.index}</span>
-      <div>
-        <h2 id={`${category.id}-title`} className="font-display text-2xl font-semibold uppercase tracking-wide text-fg">{category.title}</h2>
-        <p className="mt-1 text-sm text-muted">{category.description}</p>
-      </div>
-    </div>
-  );
-}
-
 export default async function LeadersPage({
   searchParams,
 }: {
   searchParams: Promise<LeadersSearchParams>;
 }) {
-  const seasonParam = singleSearchParam((await searchParams).season);
+  const query = await searchParams;
+  const seasonParam = singleSearchParam(query.season);
   if (seasonParam === null) notFound();
   // ?season=<id> shows an archived season's boards; with no season running
   // the page opens on the most recent one (resolveSeasonScope).
@@ -175,35 +145,10 @@ export default async function LeadersPage({
   );
   const noPerformanceWeeks = honorReadiness.filter(isNoPerformanceHonorWeek);
 
-  // Accumulate each mapped player's per-game lines across the whole season —
-  // and the raw stored lines too, which carry the benchmark percentiles the
-  // report-card board grades on.
-  const linesByUser = new Map<string, PlayerGameLine[]>();
-  const rawByUser = new Map<string, PlayerStat[]>();
-  for (const g of games) {
-    for (const p of g.lines) {
-      if (!p.userId) continue;
-      const arr = linesByUser.get(p.userId) ?? [];
-      arr.push({
-        isRadiant: p.isRadiant,
-        radiantWin: g.radiantWin,
-        kills: p.kills,
-        deaths: p.deaths,
-        assists: p.assists,
-        heroId: p.heroId,
-        netWorth: p.netWorth,
-        gpm: p.gpm,
-      });
-      linesByUser.set(p.userId, arr);
-      const raw = rawByUser.get(p.userId) ?? [];
-      raw.push(p);
-      rawByUser.set(p.userId, raw);
-    }
-  }
-
-  const entries: LeaderEntry[] = [...linesByUser.entries()].map(
-    ([id, lines]) => ({ id, summary: summarizePlayerGames(lines) }),
-  );
+  // Every player's season line under every stat, with each stat's minimum
+  // (leader-table.ts). The explorer below only sorts and filters it.
+  const table = buildLeaderTable(games);
+  const entries = table.rows;
 
   if (entries.length === 0) {
     return (
@@ -283,223 +228,97 @@ export default async function LeadersPage({
       honors: weeklyHonors(row.games, teamOf),
     }));
 
-  // Early in a season everyone has few games; don't let the rate floor empty
-  // the other average boards. Cap their floor at the most-played count.
-  // Kills and assists per game don't follow it: the league set their minimum
-  // at a flat 3 games, so they stay empty until someone has played 3.
-  const maxGames = Math.max(1, ...entries.map((e) => e.summary.games));
-  const rateFloor = Math.min(PER_GAME_MIN_GAMES, maxGames);
-
-  // Every board ranks what the PLAYER did. Total wins and win rate are gone
-  // on purpose (they followed the team's record, so the top of each was the
-  // best team's regulars — standings and Team of the Week already show it),
-  // and kills/assists are per game so a player whose team played extra series
-  // can't outrank a better one on volume. "Most games" stays as the one board
-  // that recognises showing up.
-  const boards: {
-    title: string;
-    description: string;
-    valueUnit: string;
-    category: "teamfights" | "economy";
-    key: LeaderboardKey;
-    minGames?: number;
-    format: (r: LeaderRow) => string;
-    rankValue?: (r: LeaderRow) => number;
-    hint: (r: LeaderRow) => string;
-  }[] = [
-    {
-      title: "Best KDA",
-      description: "Kills plus assists for each death.",
-      valueUnit: "KDA ratio",
-      category: "teamfights",
-      key: "kda",
-      minGames: rateFloor,
-      format: (r) => r.value.toFixed(1),
-      hint: (r) =>
-        `${r.summary.avgKills}/${r.summary.avgDeaths}/${r.summary.avgAssists}`,
-    },
-    {
-      title: "Kills per game",
-      description: "Enemy heroes taken down, averaged over games played.",
-      valueUnit: "kills / game",
-      category: "teamfights",
-      key: "killsPerGame",
-      minGames: PER_GAME_MIN_GAMES,
-      format: (r) => r.value.toFixed(1),
-      hint: (r) =>
-        `${r.summary.kills} kills in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
-    },
-    {
-      title: "Assists per game",
-      description: "Kills set up for teammates, averaged over games played.",
-      valueUnit: "assists / game",
-      category: "teamfights",
-      key: "assistsPerGame",
-      minGames: PER_GAME_MIN_GAMES,
-      format: (r) => r.value.toFixed(1),
-      hint: (r) =>
-        `${r.summary.assists} assists in ${r.summary.games} game${r.summary.games === 1 ? "" : "s"}`,
-    },
-    {
-      title: "Most games",
-      description: "Players who showed up most often.",
-      valueUnit: "games played",
-      category: "economy",
-      key: "games",
-      format: (r) => `${r.value}`,
-      hint: (r) =>
-        `${r.summary.wins} win${r.summary.wins === 1 ? "" : "s"}, ${r.summary.losses} loss${r.summary.losses === 1 ? "" : "es"}`,
-    },
-    {
-      title: "Best avg GPM",
-      description: "Gold earned per minute, averaged over reported games.",
-      valueUnit: "gold / min",
-      category: "economy",
-      key: "gpm",
-      minGames: rateFloor,
-      format: (r) => `${r.value}`,
-      hint: (r) =>
-        `${r.summary.gpmGames} reported game${r.summary.gpmGames === 1 ? "" : "s"}`,
-    },
-    {
-      title: "Richest (avg net worth)",
-      description: "Final net worth averaged over reported games.",
-      valueUnit: "avg net worth",
-      category: "economy",
-      key: "netWorth",
-      minGames: rateFloor,
-      format: (r) => formatNetWorth(r.value),
-      rankValue: (r) => Math.round(r.value / 100),
-      hint: (r) =>
-        `${r.summary.netWorthGames} reported game${r.summary.netWorthGames === 1 ? "" : "s"}`,
-    },
-  ];
-
-  // "Best report card": ranked by average benchmark percentile — the learn
-  // league's own honor roll. Only graded lines count; the shared rate floor
-  // keeps one lucky game off the top.
-  const reportRows: LeaderBoardRow[] = [...rawByUser.entries()]
-    .map(([id, lines]) => ({ id, report: careerReportCard(lines) }))
-    .filter((r) => r.report.avgPct != null && r.report.graded >= rateFloor)
-    .sort(
-      (a, b) =>
-        b.report.avgPct! - a.report.avgPct! ||
-        b.report.graded - a.report.graded ||
-        a.id.localeCompare(b.id),
-    )
-    .map(({ id, report }) => {
-      const u = userMap.get(id);
-      const identity = leaderIdentity(u);
-      return {
-        id,
-        ...identity,
-        value: report.avgPct!,
-        rankValue: Math.round(report.avgPct! * 100),
-        valueLabel: percentLabel(report.avgPct!).replace(" percentile", ""),
-        hint: `${report.graded} graded game${report.graded === 1 ? "" : "s"}${report.best ? ` · best: ${report.best.label.toLowerCase()}` : ""}`,
-        isViewer: viewer?.id === id,
-        team: teamNameFor(id),
-      };
-    });
-
-  const participationRows: LeaderBoardRow[] = [
-    ...killParticipationByPlayer(games).entries(),
-  ]
-    .filter(([, stat]) => stat.scoredGames >= rateFloor)
-    .sort(
-      ([idA, a], [idB, b]) =>
-        b.rate - a.rate ||
-        b.scoredGames - a.scoredGames ||
-        idA.localeCompare(idB),
-    )
-    .map(([id, stat]) => ({
-      id,
-      ...leaderIdentity(userMap.get(id)),
-      value: stat.rate,
-      rankValue: Math.round(stat.rate),
-      valueLabel: `${Math.round(stat.rate)}%`,
-      hint: `${stat.involved} of ${stat.teamKills} team kills · ${stat.scoredGames} scored game${stat.scoredGames === 1 ? "" : "s"}`,
-      isViewer: viewer?.id === id,
-      team: teamNameFor(id),
-    }));
-
-  // Healing is an optional provider field. Show a sustain board only when
-  // enough reported games exist; missing values must never count as zeroes.
-  const healingRows: LeaderBoardRow[] = [...rawByUser.entries()]
-    .map(([id, lines]) => {
-      const reported = lines.flatMap((line) =>
-        line.heroHealing == null ? [] : [line.heroHealing],
-      );
-      const total = reported.reduce((sum, value) => sum + value, 0);
-      return {
-        id,
-        games: reported.length,
-        total,
-        average: reported.length ? total / reported.length : 0,
-      };
-    })
-    .filter((row) => row.games >= rateFloor && row.total > 0)
-    .sort(
-      (a, b) =>
-        b.average - a.average ||
-        b.games - a.games ||
-        a.id.localeCompare(b.id),
-    )
-    .map((row) => ({
-      id: row.id,
-      ...leaderIdentity(userMap.get(row.id)),
-      value: row.average,
-      rankValue: Math.round(row.average),
-      valueLabel: Math.round(row.average).toLocaleString("en-US"),
-      hint: `${Math.round(row.total).toLocaleString("en-US")} total · ${row.games} reported game${row.games === 1 ? "" : "s"}`,
-      isViewer: viewer?.id === row.id,
-      team: teamNameFor(row.id),
-    }));
-
-  const boardRows = new Map(
-    boards.map((board) => [
-      board.key,
-      topBy(entries, board.key, {
-        minGames: board.minGames,
-        limit: Number.POSITIVE_INFINITY,
-      }).map((row): LeaderBoardRow => ({
-        id: row.id,
-        ...leaderIdentity(userMap.get(row.id)),
-        value: row.value,
-        rankValue: board.rankValue?.(row),
-        valueLabel: board.format(row),
-        hint: board.hint(row),
-        isViewer: viewer?.id === row.id,
-        team: teamNameFor(row.id),
-      })),
-    ]),
+  const heroOf = (heroId: number) => heroById(heroId);
+  const players: LeadersExplorerPlayer[] = entries.map((entry) => ({
+    id: entry.id,
+    ...leaderIdentity(userMap.get(entry.id)),
+    // null for unrostered players (free agents, standins).
+    team: teamNameFor(entry.id),
+    isViewer: viewer?.id === entry.id,
+    cells: table.stats.map((stat) => entry.cells[stat.key] ?? null),
+    heroes: entry.heroes.flatMap(({ heroId, games: played, wins }) => {
+      const hero = heroOf(heroId);
+      return hero ? [{ hero, games: played, wins }] : [];
+    }),
+  }));
+  // ?stat=<key> opens on that ranking, so one can be linked; anything else
+  // opens on the first.
+  const statParam = singleSearchParam(query.stat);
+  const initialStat = Math.max(
+    0,
+    table.stats.findIndex((stat) => stat.key === statParam),
   );
   const hasHonors =
     honorsByWeek.length > 0 ||
     inProgressWeeks.length > 0 ||
     awaitingBoxScoreWeeks.length > 0;
-  const categories = [
-    {
-      id: "teamfights",
-      index: "01",
-      title: "Teamfights",
-      description: "Who finishes fights, creates chances, joins kills and sustains teammates.",
-    },
-    {
-      id: "economy",
-      index: "02",
-      title: "Resources & presence",
-      description: "Gold, net worth and the players who put in the most games.",
-    },
-  ] as const;
-  // The report card is a peer of the two categories (the section nav lists it
-  // beside them), so it carries the next display index and the same heading.
-  const reportCategory = {
-    id: "report-card",
-    index: "03",
-    title: "League report card",
-    description: "A broader view of each performance, graded against worldwide Dota benchmarks when those measurements are available.",
-  } as const;
+  const honorWeek = ({ week, honors }: (typeof honorsByWeek)[number]) =>
+    !honors.player && !honors.team ? (
+      <p key={week} className="px-4 py-2.5 text-sm text-muted">
+        Week {week} is final with no played games, so no performance honors
+        were awarded.
+      </p>
+    ) : (
+      <div
+        key={week}
+        // gap-y-2.5, not a margin on the team entry: a margin shifted Team of
+        // the Week ~3px below Player of the Week whenever the two sat on one
+        // line. Wrapped, the rows keep the 10px the stacked links need.
+        className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-2.5 text-sm"
+      >
+        {/* The week label opens that week's wrap. */}
+        <Link
+          href={weekWrapPath(season.id, week)}
+          className={cn(TAP_SAFE, "w-16 shrink-0 text-xs uppercase tracking-wide text-muted hover:text-info")}
+        >
+          Week {week}
+        </Link>
+        {/* flex-wrap: on a phone the points-and-hero line drops under the
+            name. As two shrinking siblings, the NAME broke across lines
+            instead ("Pudge / Player4"). */}
+        {honors.player ? (
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span aria-hidden>⭐</span>
+              {userMap.has(honors.player.userId) ? (
+                <PlayerLink userId={honors.player.userId} className="font-medium">
+                  {userMap.get(honors.player.userId)!.name}
+                </PlayerLink>
+              ) : (
+                <span className="font-medium text-muted">Former player</span>
+              )}
+            </span>
+            <span className="text-xs text-muted">
+              {honors.player.points} impact points
+              {honors.player.heroId != null
+                ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
+                : ""}
+            </span>
+          </span>
+        ) : null}
+        {honors.team ? (
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span aria-hidden>🛡️</span>
+              <Link
+                href={`/teams/${honors.team.teamId}`}
+                className="py-1 -my-1 font-medium hover:text-info"
+              >
+                {teamNameOf.get(honors.team.teamId) ?? "?"}
+              </Link>
+            </span>
+            <span className="text-xs text-muted">
+              {honors.team.gameWins} game win
+              {honors.team.gameWins === 1 ? "" : "s"}
+            </span>
+          </span>
+        ) : null}
+      </div>
+    );
+  // Newest first. The latest weeks stay open; a long season's older ones
+  // fold, so the rankings stay within reach on a phone.
+  const recentHonors = honorsByWeek.slice(0, HONOR_WEEKS_SHOWN);
+  const earlierHonors = honorsByWeek.slice(HONOR_WEEKS_SHOWN);
 
   const honorsCard = hasHonors ? (
     <Card id="weekly-honors" className="scroll-mt-24">
@@ -549,90 +368,45 @@ export default async function LeadersPage({
             from every played series.
           </p>
         ) : null}
-        {honorsByWeek.map(({ week, honors }) =>
-          !honors.player && !honors.team ? (
-            <p key={week} className="px-4 py-2.5 text-sm text-muted">
-              Week {week} is final with no played games, so no performance
-              honors were awarded.
-            </p>
-          ) : (
-            <div
-              key={week}
-              // gap-y-2.5, not a margin on the team entry: a margin shifted
-              // Team of the Week ~3px below Player of the Week whenever the
-              // two sat on one line. Wrapped, the rows keep the 10px the
-              // stacked links need.
-              className="flex flex-wrap items-center gap-x-4 gap-y-2.5 px-4 py-2.5 text-sm"
-            >
-              {/* The week label opens that week's wrap. */}
-              <Link
-                href={weekWrapPath(season.id, week)}
-                className={cn(TAP_SAFE, "w-16 shrink-0 text-xs uppercase tracking-wide text-muted hover:text-info")}
+        {recentHonors.map(honorWeek)}
+        {earlierHonors.length > 0 ? (
+          <details className="group/earlier">
+            <summary className="flex min-h-11 cursor-pointer list-none items-center gap-1.5 px-4 text-sm text-muted hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-info/60 [&::-webkit-details-marker]:hidden">
+              {`Earlier weeks (${earlierHonors.length})`}
+              <svg
+                aria-hidden
+                viewBox="0 0 16 16"
+                fill="none"
+                className="h-4 w-4 shrink-0 transition-transform group-open/earlier:rotate-180 motion-reduce:transition-none"
               >
-                Week {week}
-              </Link>
-              {/* flex-wrap: on a phone the points-and-hero line drops
-                  under the name. As two shrinking siblings, the NAME broke
-                  across lines instead ("Pudge / Player4"). */}
-              {honors.player ? (
-                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span aria-hidden>⭐</span>
-                    {userMap.has(honors.player.userId) ? (
-                      <PlayerLink
-                        userId={honors.player.userId}
-                        className="font-medium"
-                      >
-                        {userMap.get(honors.player.userId)!.name}
-                      </PlayerLink>
-                    ) : (
-                      <span className="font-medium text-muted">
-                        Former player
-                      </span>
-                    )}
-                  </span>
-                  <span className="text-xs text-muted">
-                    {honors.player.points} impact points
-                    {honors.player.heroId != null
-                      ? ` · ${heroById(honors.player.heroId)?.name ?? `Hero #${honors.player.heroId}`}`
-                      : ""}
-                  </span>
-                </span>
-              ) : null}
-              {honors.team ? (
-                <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5">
-                  <span className="flex min-w-0 items-center gap-1.5">
-                    <span aria-hidden>🛡️</span>
-                    <Link
-                      href={`/teams/${honors.team.teamId}`}
-                      className="py-1 -my-1 font-medium hover:text-info"
-                    >
-                      {teamNameOf.get(honors.team.teamId) ?? "?"}
-                    </Link>
-                  </span>
-                  <span className="text-xs text-muted">
-                    {honors.team.gameWins} game win
-                    {honors.team.gameWins === 1 ? "" : "s"}
-                  </span>
-                </span>
-              ) : null}
+                <path
+                  d="m4 6 4 4 4-4"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </summary>
+            <div className="divide-y divide-line/60 border-t border-line/60">
+              {earlierHonors.map(honorWeek)}
             </div>
-          ),
-        )}
+          </details>
+        ) : null}
       </CardBody>
     </Card>
   ) : null;
 
   return (
     <div className="space-y-6">
-      {/* The page opens on Weekly honors — the part that changes every week
-          and the part the Discord honors post links here for — then the
-          boards. There is no banner, no "#1 on each board" highlight cards
-          and no tile strip any more: on a phone they pushed the first board
-          ~1,500px down and honors to the bottom of a ~9,500px page. */}
+      {/* The page opens on Weekly honors, the part that changes every week
+          and the part the Discord honors post links here for, then one
+          ranking of every player that any stat can sort. The nine separate
+          boards it replaces showed three rows each and repeated the same
+          players; on a phone they ran about 6,000px. */}
       <PageTitle
         title="Leaders"
-        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · From complete 5v5 box scores. Each average board names its minimum games; equal values share a rank.`}
+        subtitle={`${season.name}${season.isActive ? "" : " · archived"} · Weekly honors, and every player ranked by the stat you pick.`}
         action={titleAction}
       />
       <StatsNav
@@ -651,70 +425,22 @@ export default async function LeadersPage({
         unusableGames={unusableGames}
         unmappedLines={unmappedLines}
       />
-      <SectionNav
-        label="Leaderboard sections"
-        items={[
-          ...(hasHonors ? [{ id: "weekly-honors", label: "Weekly honors" }] : []),
-          ...categories.map((category) => ({ id: category.id, label: category.title })),
-          ...(reportRows.length ? [{ id: "report-card", label: "Report card" }] : []),
-        ]}
-      />
       {honorsCard}
-      {categories.map((category) => (
-        <section key={category.id} id={category.id} aria-labelledby={`${category.id}-title`} className="scroll-mt-24 space-y-4">
-          <CategoryHeading category={category} />
-          <div className={BOARD_GRID}>
-            {boards.filter((board) => board.category === category.id).map((board) => (
-              <LeaderBoard
-                key={board.key}
-                id={`metric-${board.key}`}
-                title={board.title}
-                subtitle={`${board.description}${board.minGames ? ` Min ${board.minGames} eligible game${board.minGames === 1 ? "" : "s"}.` : ""}`}
-                rows={boardRows.get(board.key) ?? []}
-                valueUnit={board.valueUnit}
-                previewCount={3}
-              />
-            ))}
-            {category.id === "teamfights" && participationRows.length > 0 ? (
-              <LeaderBoard
-                id="metric-participation"
-                title="Kill involvement"
-                subtitle={`The share of team kills each player scored or assisted. Min ${rateFloor} scored game${rateFloor === 1 ? "" : "s"}.`}
-                rows={participationRows}
-                valueUnit="of team kills"
-                previewCount={3}
-                scaleMax={100}
-              />
-            ) : null}
-            {category.id === "teamfights" && healingRows.length > 0 ? (
-              <LeaderBoard
-                id="metric-healing"
-                title="Team sustain"
-                subtitle={`Hero healing per reported game. Min ${rateFloor} reported game${rateFloor === 1 ? "" : "s"}; unavailable box scores are excluded.`}
-                rows={healingRows}
-                valueUnit="healing / game"
-                previewCount={3}
-              />
-            ) : null}
-          </div>
-        </section>
-      ))}
-      {reportRows.length > 0 ? (
-        <section id={reportCategory.id} aria-labelledby={`${reportCategory.id}-title`} className="scroll-mt-24 space-y-4">
-          <CategoryHeading category={reportCategory} />
-          <div className={BOARD_GRID}>
-            <LeaderBoard
-              id="metric-report"
-              title="Best report card"
-              subtitle={`Average benchmark percentile · min ${rateFloor} graded game${rateFloor === 1 ? "" : "s"}.`}
-              rows={reportRows}
-              valueUnit="percentile"
-              previewCount={3}
-              scaleMax={1}
-            />
-          </div>
-        </section>
-      ) : null}
+      <section
+        id="rankings"
+        aria-labelledby="rankings-title"
+        className="scroll-mt-24 space-y-3"
+      >
+        <SectionTitle>
+          <span id="rankings-title">Player rankings</span>
+        </SectionTitle>
+        <LeadersExplorer
+          stats={table.stats}
+          players={players}
+          initialStat={initialStat}
+          compareWith={viewer && userMap.has(viewer.id) ? viewer.id : null}
+        />
+      </section>
     </div>
   );
 }

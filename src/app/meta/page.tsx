@@ -25,13 +25,20 @@ import {
   META_HEADLINE_MIN_PICKS,
   type MetaGame,
 } from "@/lib/hero-meta";
-import { HEROES, heroById, heroPagePath, type Hero } from "@/lib/heroes";
+import {
+  HEROES,
+  heroById,
+  heroPagePath,
+  heroPortrait,
+  type Hero,
+} from "@/lib/heroes";
 import {
   EmptyState,
-  HeroIcon,
   LinkArrow,
   PageTitle,
+  PlayerLink,
   buttonClasses,
+  textLink,
 } from "@/components/ui";
 import { StatsDataNotice, StatsNav } from "@/components/stats-nav";
 import { HeroSearch } from "@/components/hero-search";
@@ -194,6 +201,7 @@ export default async function MetaPage({
     );
   }
 
+  const { mostPicked, bestWinRate, signature } = metaHeadlines(meta.rows);
   const topIds = [
     ...new Set(
       meta.rows.flatMap((row) =>
@@ -234,42 +242,63 @@ export default async function MetaPage({
   const neverPicked = HEROES.filter((hero) => !pickedIds.has(hero.id))
     .map((hero) => hero.name)
     .sort((a, b) => a.localeCompare(b));
-  const { mostPicked, bestWinRate } = metaHeadlines(meta.rows);
-  const heroName = (heroId: number) => heroOf.get(heroId)?.name ?? "";
+  const archivedId = season.isActive ? undefined : season.id;
+  const signatureHero = signature ? heroOf.get(signature.heroId) : undefined;
 
   return (
     <div className="space-y-6">
       {pageTitle}
-      <StatsNav
-        active="meta"
-        seasonId={season.isActive ? undefined : season.id}
-      />
+      <StatsNav active="meta" seasonId={archivedId} />
       {switcher}
       {dataNotice}
-      <div className="rounded-xl border border-line bg-surface px-4 py-3 text-sm">
-        <p id="meta-sample" className="text-muted">
+      <section aria-labelledby="meta-sample" className="space-y-3">
+        <p id="meta-sample" className="text-sm text-muted">
           {`${meta.rows.length} of ${HEROES.length} heroes picked across ${meta.games} complete ${meta.games === 1 ? "game" : "games"}.`}
         </p>
-        {mostPicked || bestWinRate ? (
-          // Side by side from sm: two headlines, one line.
-          <div className="mt-2 grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
-            {mostPicked ? (
-              <Headline
-                label="Most picked"
-                hero={heroOf.get(mostPicked.heroId)}
-                text={`${heroName(mostPicked.heroId)}, ${mostPicked.picks} ${mostPicked.picks === 1 ? "pick" : "picks"} (in ${mostPicked.pickRate}% of games)`}
-              />
-            ) : null}
-            {bestWinRate ? (
-              <Headline
-                label={`Best win rate, ${META_HEADLINE_MIN_PICKS}+ picks`}
-                hero={heroOf.get(bestWinRate.heroId)}
-                text={`${heroName(bestWinRate.heroId)}, ${bestWinRate.winRate}% (${bestWinRate.wins}–${bestWinRate.losses})`}
-              />
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+        {/* The season's headlines over each hero's art. An auto-fit band:
+            the count depends on the sample (a win-rate headline needs
+            eight picks, a signature three games). */}
+        <div className="grid gap-3 [grid-template-columns:repeat(auto-fit,minmax(min(16rem,100%),1fr))]">
+          {mostPicked ? (
+            <Headline
+              label="Most picked"
+              hero={heroOf.get(mostPicked.heroId)}
+              href={heroOf.has(mostPicked.heroId) ? heroPagePath(heroOf.get(mostPicked.heroId)!, archivedId) : undefined}
+              value={`${mostPicked.picks} ${mostPicked.picks === 1 ? "pick" : "picks"}`}
+              detail={`In ${mostPicked.pickRate}% of games · ${mostPicked.wins}–${mostPicked.losses}`}
+            />
+          ) : null}
+          {bestWinRate ? (
+            <Headline
+              label={`Best win rate, ${META_HEADLINE_MIN_PICKS}+ picks`}
+              hero={heroOf.get(bestWinRate.heroId)}
+              href={heroOf.has(bestWinRate.heroId) ? heroPagePath(heroOf.get(bestWinRate.heroId)!, archivedId) : undefined}
+              value={`${bestWinRate.winRate}%`}
+              detail={`${bestWinRate.wins}–${bestWinRate.losses} over ${bestWinRate.picks} picks`}
+            />
+          ) : null}
+          {signature && signatureHero ? (
+            <Headline
+              label="Signature pick"
+              hero={signatureHero}
+              href={heroPagePath(signatureHero, archivedId)}
+              value={`${signature.games} games`}
+              detail={
+                <>
+                  {nameOf.has(signature.userId) ? (
+                    <PlayerLink userId={signature.userId} className="font-medium text-fg">
+                      {nameOf.get(signature.userId)}
+                    </PlayerLink>
+                  ) : (
+                    "Former player"
+                  )}
+                  {` · ${signature.wins}–${signature.games - signature.wins}`}
+                </>
+              }
+            />
+          ) : null}
+        </div>
+      </section>
       <HeroMetaTable rows={tableRows} />
       {neverPicked.length > 0 ? (
         <details className="rounded-xl border border-line-soft bg-surface/60 px-4 py-3 text-sm">
@@ -291,28 +320,61 @@ export default async function MetaPage({
   );
 }
 
+/**
+ * One headline over its hero's portrait, which fades in from the right
+ * behind the text. The art is decoration: the hero is named in the text.
+ */
 function Headline({
   label,
   hero,
-  text,
+  href,
+  value,
+  detail,
 }: {
   label: string;
   hero: Hero | undefined;
-  text: string;
+  /** The hero's page. */
+  href: string | undefined;
+  value: string;
+  detail: React.ReactNode;
 }) {
   return (
-    <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
-      <span className="text-xs font-semibold uppercase tracking-wide text-accent">
-        {label}
-      </span>
-      <span className="flex min-w-0 items-center gap-2 font-medium text-fg">
-        {hero ? (
-          <span aria-hidden="true" className="flex shrink-0">
-            <HeroIcon hero={hero} size={24} className="rounded" />
+    <div className="relative min-w-0 overflow-hidden rounded-xl border border-line bg-surface">
+      {hero ? (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none absolute inset-y-0 right-0 w-3/5"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={heroPortrait(hero)}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="profile-hero-bg h-full w-full object-cover object-top opacity-45"
+          />
+        </div>
+      ) : null}
+      <div className="relative min-w-0 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wide text-accent">
+          {label}
+        </p>
+        <p className="mt-1 flex min-w-0 flex-wrap items-baseline gap-x-2.5">
+          <span className="min-w-0 font-display text-2xl font-semibold leading-tight text-fg [overflow-wrap:anywhere]">
+            {hero && href ? (
+              <Link href={href} prefetch={false} className={textLink("text-fg")}>
+                {hero.name}
+              </Link>
+            ) : (
+              (hero?.name ?? "Unknown hero")
+            )}
           </span>
-        ) : null}
-        <span className="min-w-0">{text}</span>
-      </span>
-    </p>
+          <span className="font-display text-lg font-semibold tabular-nums text-accent">
+            {value}
+          </span>
+        </p>
+        <p className="mt-0.5 text-sm text-muted">{detail}</p>
+      </div>
+    </div>
   );
 }

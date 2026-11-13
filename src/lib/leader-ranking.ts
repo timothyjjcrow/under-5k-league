@@ -87,3 +87,39 @@ export function leaderIdentity(
         hasProfile: false,
       };
 }
+
+/** What a ranking reads from one player's stat (leader-table.ts's cells). */
+export type RankableCell = {
+  value: number;
+  /** The value at the precision shown: equal ones share a rank. */
+  rankValue: number;
+  /** Breaks equal values: the bigger sample first. */
+  sample: number;
+  /** False below the stat's minimum: listed nowhere in the ranking. */
+  ranked: boolean;
+};
+
+/**
+ * One stat's ranking: the players who meet its minimum, best first (then the
+ * bigger sample, then id), with competition ranks on the shown value. The
+ * leaders explorer calls it for the table's order and for each player's place
+ * in every other stat, so the two can never disagree.
+ */
+export function rankByCell<T extends { id: string }>(
+  rows: readonly T[],
+  cellOf: (row: T) => RankableCell | null | undefined,
+): { row: T; rank: number }[] {
+  const ranked = rows
+    .flatMap((row) => {
+      const cell = cellOf(row);
+      return cell?.ranked ? [{ row, cell }] : [];
+    })
+    .sort(
+      (a, b) =>
+        b.cell.value - a.cell.value ||
+        b.cell.sample - a.cell.sample ||
+        a.row.id.localeCompare(b.row.id),
+    );
+  const ranks = competitionRanks(ranked.map(({ cell }) => cell.rankValue));
+  return ranked.map(({ row }, index) => ({ row, rank: ranks[index] }));
+}
