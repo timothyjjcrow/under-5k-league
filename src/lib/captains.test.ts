@@ -5,7 +5,7 @@ import {
   sourceFile,
   stripLineComments,
 } from "../../test/support/source-files";
-import { captainsMatchHref, captainsPageOpen } from "./captains";
+import { captainsHref, captainsMatchHref, captainsPageOpen } from "./captains";
 
 describe("captainsPageOpen", () => {
   const active = (status: string) => ({ isActive: true, status });
@@ -34,6 +34,21 @@ describe("captainsMatchHref", () => {
     expect(captainsMatchHref("m1")).toBe("/captains?match=m1");
     expect(captainsMatchHref("m 2", "match-standins")).toBe(
       "/captains?match=m%202#match-standins",
+    );
+  });
+});
+
+describe("captainsHref", () => {
+  it("keeps the open fixture and the open scrim in one link", () => {
+    expect(captainsHref()).toBe("/captains");
+    expect(captainsHref({ match: "m1", scrim: "s1" }, "scrim-desk")).toBe(
+      "/captains?match=m1&scrim=s1#scrim-desk",
+    );
+    expect(captainsHref({ match: null, scrim: "s 1" })).toBe(
+      "/captains?scrim=s%201",
+    );
+    expect(captainsHref({ match: "m1", scrim: null }, "matches")).toBe(
+      "/captains?match=m1#matches",
     );
   });
 });
@@ -97,6 +112,16 @@ describe("the Captains page reuses the site's own controls", () => {
     expect(PAGE).toContain("<LiveSeriesCheckin match={match} viewer={viewer} />");
   });
 
+  it("points at standins, the reschedule and reporting with the match page's shortcuts", () => {
+    // One rule (captainJumps) for the scoreboard and the fixture header here,
+    // each jump gated like the card it lands on.
+    expect(PAGE).toMatch(
+      /captainJumps\(\{[\s\S]*?\.\.\.captainCardsOpen\(match, draftStatus\),/,
+    );
+    expect(read("src/app/matches/[id]/scoreboard.tsx")).toContain("captainJumps({");
+    expect(PAGE).toContain('aria-label="Captain shortcuts"');
+  });
+
   it("asks check-ins and the Remind button the match page's questions", () => {
     expect(PAGE).toContain("<CheckinBanner");
     expect(PAGE).toMatch(/matchCheckinOpen\(\s*match\.season\.status,/);
@@ -116,6 +141,49 @@ describe("the Captains page reuses the site's own controls", () => {
     expect(PAGE).toContain("scrimJoinCheck({");
     // A live scrim can't be cancelled (cancelScrim refuses it).
     expect(PAGE).toContain("seasonOpen && s.status !== SCRIM_STATUS.LIVE");
+  });
+
+  it("manages a booked scrim with the scrim page's controls and its one rule", () => {
+    const scrimPage = read("src/app/scrims/[id]/page.tsx");
+    for (const control of [
+      "<ScrimLobbyCard",
+      "<ScrimLineups",
+      "<ScrimResultTools scrimId={scrim.id} />",
+      "<ScrimEndSeriesForm",
+    ]) {
+      expect(PAGE).toContain(control);
+      expect(scrimPage).toContain(control);
+    }
+    // Who gets which control is decided once, for both pages.
+    expect(PAGE).toContain("scrimManageView({");
+    expect(scrimPage).toContain("scrimManageView({");
+    expect(scrimPage).not.toMatch(/const (canCancel|canEndSeries|mutable) =/);
+    expect(PAGE).toContain("scrimNextStep({");
+    // The password goes only where the rule allows it.
+    expect(PAGE).toMatch(
+      /view\.seesPassword \? scrimLobbyPassword\(scrim\.id\) : null/,
+    );
+    expect(scrimPage).toMatch(/manage\.seesPassword\s*\?/);
+    // Only the team's own booking opens: the page checks the side itself.
+    expect(PAGE).toContain("host.id !== teamId && away.id !== teamId");
+    // Picking a scrim keeps the fixture open, and picking a fixture the scrim.
+    expect(PAGE).toContain("{ match: matchId, scrim: s.id }");
+    expect(PAGE).toContain("{ match: m.id, scrim: scrimId }");
+  });
+
+  it("keeps a captain on the page for cover, and reads ?scrim= safely", () => {
+    expect(PAGE).toContain("coverHref={`#${MATCH_ANCHOR.standins}`}");
+    expect(read("src/components/checkin-banner.tsx")).toContain(
+      "coverHref ?? matchAnchorPath(matchId, MATCH_ANCHOR.standins)",
+    );
+    expect(PAGE).toContain("singleSearchParam(query.scrim)");
+  });
+
+  it("shows the draft budget the team page shows", () => {
+    expect(PAGE).toContain("draftBudgetsForDisplay({");
+    expect(read("src/app/teams/[id]/page.tsx")).toContain(
+      "draftBudgetsForDisplay({",
+    );
   });
 
   it("edits the team with the team page's form and rule, and its coaches", () => {

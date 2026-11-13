@@ -466,7 +466,9 @@ only `scrim-lobby-password.ts`. Keep scrims (Tim's decision).
   team member with "<Team> scrims" (the post form for its captain) before the
   "How scrims work" strip; the team page's Scrims card (`team-scrims.tsx`:
   coming up with its Lobby setup, recent results, practice record); the
-  Captains page's Lobby setup links and ticket reminder; and Home's Scrim line
+  Captains page, which draws a booked scrim's Lobby setup, lineups and
+  result tools itself (`scrimManageView` decides the controls for both
+  pages), with the ticket reminder; and Home's Scrim line
   in the player panel, 12 hours before a booked scrim to 4 hours after, in
   every branch of `MyNextMatch`.
 

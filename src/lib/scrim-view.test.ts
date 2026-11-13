@@ -6,7 +6,9 @@ import {
   scrimEndConfirm,
   scrimEndedMessage,
   scrimJoinCheck,
+  scrimManageView,
   scrimNotPlayedCutoff,
+  type ScrimViewerFacts,
 } from "./scrim-view";
 import {
   SCRIM_DETECT_WINDOW_AFTER_MS,
@@ -159,5 +161,164 @@ describe("ending a series at its current score", () => {
     expect(scrimEndedMessage(level)).toBe(
       "Series ended level at 1–1, with no winner.",
     );
+  });
+});
+
+describe("scrimManageView", () => {
+  const nobody: ScrimViewerFacts = {
+    isAdmin: false,
+    captainsHost: false,
+    captainsAway: false,
+    coachesHost: false,
+    coachesAway: false,
+    rostered: false,
+  };
+  const booked = {
+    status: SCRIM_STATUS.SCHEDULED as string,
+    hasOpponent: true,
+    seasonOpen: true,
+    notPlayed: false,
+    hasTicket: true,
+    kickoffPassed: false,
+  };
+  const view = (
+    viewer: Partial<ScrimViewerFacts> | null,
+    scrim: Partial<typeof booked> = {},
+  ) =>
+    scrimManageView({
+      ...booked,
+      ...scrim,
+      viewer: viewer ? { ...nobody, ...viewer } : null,
+    });
+
+  it("gives either captain a booked scrim's guests, results, cancel and password", () => {
+    for (const side of ["captainsHost", "captainsAway"] as const) {
+      const v = view({ [side]: true });
+      expect(v.role).toBe(side === "captainsHost" ? "host-captain" : "away-captain");
+      expect(v.managesHost).toBe(side === "captainsHost");
+      expect(v.managesAway).toBe(side === "captainsAway");
+      expect(v).toMatchObject({
+        booked: true,
+        mutable: true,
+        showCancel: true,
+        canEndSeries: false,
+        showResultTools: true,
+        seesPassword: true,
+      });
+    }
+  });
+
+  it("lets a coach manage guests and results, never cancel or end", () => {
+    const v = view({ coachesAway: true });
+    expect(v).toMatchObject({
+      role: "member",
+      managesAway: true,
+      managesHost: false,
+      showResultTools: true,
+      showCancel: false,
+      canEndSeries: false,
+      seesPassword: true,
+    });
+    expect(view({ coachesHost: true }, { status: SCRIM_STATUS.LIVE }).canEndSeries).toBe(false);
+  });
+
+  it("ends a live series instead of cancelling it", () => {
+    const v = view({ captainsHost: true }, { status: SCRIM_STATUS.LIVE });
+    expect(v).toMatchObject({
+      booked: true,
+      mutable: true,
+      showCancel: false,
+      canEndSeries: true,
+      showResultTools: true,
+    });
+  });
+
+  it("gives a rostered player the password and nothing to change", () => {
+    expect(view({ rostered: true })).toMatchObject({
+      role: "member",
+      managesHost: false,
+      managesAway: false,
+      showCancel: false,
+      showResultTools: false,
+      seesPassword: true,
+    });
+  });
+
+  it("gives a visitor or a signed-out viewer nothing", () => {
+    for (const v of [view({}), view(null)]) {
+      expect(v).toMatchObject({
+        role: "other",
+        managesHost: false,
+        managesAway: false,
+        showCancel: false,
+        canEndSeries: false,
+        showResultTools: false,
+        seesPassword: false,
+      });
+    }
+  });
+
+  it("gives an admin cancel, results and the password on any scrim", () => {
+    expect(view({ isAdmin: true })).toMatchObject({
+      role: "other",
+      managesHost: false,
+      showCancel: true,
+      showResultTools: true,
+      seesPassword: true,
+    });
+    // Results stay open to an admin after the season, to nobody else.
+    expect(view({ isAdmin: true }, { seasonOpen: false }).showResultTools).toBe(true);
+    expect(view({ captainsHost: true }, { seasonOpen: false })).toMatchObject({
+      mutable: false,
+      showCancel: false,
+      showResultTools: false,
+    });
+  });
+
+  it("offers an open time's host only Cancel, and no away side to manage", () => {
+    const v = view(
+      { captainsHost: true, captainsAway: true, coachesAway: true },
+      { status: SCRIM_STATUS.OPEN, hasOpponent: false },
+    );
+    expect(v).toMatchObject({
+      role: "host-captain",
+      managesAway: false,
+      booked: false,
+      mutable: true,
+      showCancel: true,
+      canEndSeries: false,
+      showResultTools: false,
+    });
+  });
+
+  it("stops listing a booking as booked once it reads as not played", () => {
+    expect(view({ captainsHost: true }, { notPlayed: true })).toMatchObject({
+      booked: false,
+      // The captain who did play can still add the game by its match ID.
+      showResultTools: true,
+      foldTools: false,
+    });
+  });
+
+  it("takes nothing on a finished or cancelled scrim", () => {
+    for (const status of [SCRIM_STATUS.COMPLETED, SCRIM_STATUS.CANCELLED]) {
+      expect(view({ captainsHost: true }, { status })).toMatchObject({
+        booked: false,
+        mutable: false,
+        showCancel: false,
+        canEndSeries: false,
+        showResultTools: false,
+      });
+    }
+  });
+
+  it("folds the result tools away only while games record by themselves", () => {
+    const captain = { captainsHost: true };
+    expect(view(captain).foldTools).toBe(true);
+    expect(view(captain, { kickoffPassed: true }).foldTools).toBe(false);
+    expect(
+      view(captain, { kickoffPassed: true, status: SCRIM_STATUS.LIVE }).foldTools,
+    ).toBe(true);
+    expect(view(captain, { hasTicket: false }).foldTools).toBe(false);
   });
 });

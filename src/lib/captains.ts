@@ -25,10 +25,43 @@ export function captainsPageOpen(
   );
 }
 
+/** What the Captains page has open: one fixture's and one scrim's controls. */
+export type CaptainsSelection = {
+  match?: string | null;
+  scrim?: string | null;
+};
+
 /**
- * Where a to-do or a match chip lands on the Captains page: that match's
- * controls, scrolled to one card when `anchor` is given.
+ * A link within the Captains page that keeps what is open: picking a scrim
+ * must not close the fixture the captain was working on, nor the other way
+ * round. `anchor` scrolls to one card.
+ */
+export function captainsHref(
+  selection: CaptainsSelection = {},
+  anchor?: string,
+): string {
+  const query = [
+    selection.match ? `match=${encodeURIComponent(selection.match)}` : null,
+    selection.scrim ? `scrim=${encodeURIComponent(selection.scrim)}` : null,
+  ]
+    .filter((part) => part !== null)
+    .join("&");
+  return `${CAPTAINS_HREF}${query ? `?${query}` : ""}${anchor ? `#${anchor}` : ""}`;
+}
+
+/** The Captains page's own anchors (the match cards keep `MATCH_ANCHOR`). */
+export const CAPTAINS_ANCHOR = {
+  needsYou: "needs-you",
+  matches: "matches",
+  scrims: "scrims",
+  scrimDesk: "scrim-desk",
+  team: "team",
+} as const;
+
+/**
+ * Where a to-do lands on the Captains page: that match's controls, scrolled
+ * to one card when `anchor` is given.
  */
 export function captainsMatchHref(matchId: string, anchor?: string): string {
-  return `${CAPTAINS_HREF}?match=${encodeURIComponent(matchId)}${anchor ? `#${anchor}` : ""}`;
+  return captainsHref({ match: matchId }, anchor);
 }

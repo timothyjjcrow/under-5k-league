@@ -21,11 +21,14 @@ import {
   textLink,
 } from "@/components/ui";
 import type { SessionUser } from "@/lib/auth";
-import { captainsMatchHref } from "@/lib/captains";
+import { CAPTAINS_ANCHOR, captainsHref } from "@/lib/captains";
+import { captainTodoCountLine } from "@/lib/captain-todos";
 import { loadCaptainNudge } from "@/lib/captains-service";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { MATCH_STATUS } from "@/lib/constants";
-import { matchCheckinOpen } from "@/lib/league-lifecycle";
+import { matchCheckinOpen, matchResultsOpen } from "@/lib/league-lifecycle";
+import { MATCH_ANCHOR } from "@/lib/match-anchors";
+import { captainCardsOpen, captainJumps } from "@/lib/match-captain-jumps";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -56,7 +59,9 @@ export function openFixtures(matches: readonly Match[], teamId: string): Match[]
  * the same cards the match page draws (so the same rules and the same server
  * checks): their own check-in, the side's check-ins and the Remind button,
  * then Captain tools (the ready check to move the match, standins, lobby
- * setup and reporting). A row of chips picks the fixture (`?match=`).
+ * setup and reporting). A row of tiles picks the fixture (`?match=`), each
+ * with its kickoff and how many things there wait on the captain, so the
+ * whole run of open matches reads at a glance.
  */
 export async function MatchDesk({
   fixtures,
@@ -66,6 +71,8 @@ export async function MatchDesk({
   rounds,
   viewer,
   nowMs,
+  todoCounts,
+  scrimId,
 }: {
   /** `openFixtures`, never empty. */
   fixtures: Match[];
@@ -76,6 +83,10 @@ export async function MatchDesk({
   rounds: number;
   viewer: SessionUser;
   nowMs: number;
+  /** How many "Needs you" lines each open match has (`loadCaptainTodoRows`). */
+  todoCounts: ReadonlyMap<string, number>;
+  /** The scrim open further down (`?scrim=`), kept in the tiles' links. */
+  scrimId: string | null;
 }) {
   const nameOf = (id: string) => teams.find((t) => t.id === id)?.name ?? "TBD";
   const opponentOf = (m: Match) =>
@@ -118,6 +129,17 @@ export async function MatchDesk({
   const opponent = teams.find((t) => t.id === opponentId);
   const roundLabel = matchRoundLabel(match, rounds, { bestOf: true });
   const live = match.status === MATCH_STATUS.LIVE;
+  // The match page's own shortcuts (`captainJumps`), each shown only while
+  // its card would take the action: book a standin, move the match, set the
+  // lobby up and report. The cards are further down this page, and a captain
+  // shouldn't have to scroll to learn they are here.
+  const jumps = captainJumps({
+    resultsOpen: matchResultsOpen(match.season.status, match.phase),
+    seriesStarted: live || games.length > 0,
+    kickoffMs: match.scheduledAt?.getTime() ?? null,
+    nowMs,
+    ...captainCardsOpen(match, draftStatus),
+  });
 
   return (
     <section
@@ -129,25 +151,57 @@ export async function MatchDesk({
         Your matches
       </h2>
       {fixtures.length > 1 ? (
-        <nav aria-label="Pick a match" className="flex flex-wrap gap-2">
+        <nav
+          aria-label="Pick a match"
+          className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(min(13rem,100%),1fr))]"
+        >
           {fixtures.map((m) => {
             const current = m.id === match.id;
+            const waiting = todoCounts.get(m.id) ?? 0;
             return (
               <Link
                 key={m.id}
-                href={`${captainsMatchHref(m.id)}#matches`}
+                href={captainsHref(
+                  { match: m.id, scrim: scrimId },
+                  CAPTAINS_ANCHOR.matches,
+                )}
                 aria-current={current ? "page" : undefined}
                 className={cn(
-                  "inline-flex min-h-10 max-w-full items-center gap-1.5 rounded-full border px-3 text-sm [overflow-wrap:anywhere]",
+                  "flex min-h-11 min-w-0 flex-col justify-center rounded-lg border px-3 py-2 text-sm",
                   current
-                    ? "border-accent/50 bg-accent/15 font-medium text-fg"
-                    : "border-line text-muted hover:text-fg",
+                    ? "border-accent/50 bg-accent/15 text-fg"
+                    : "border-line text-muted hover:border-muted/60 hover:text-fg",
                 )}
               >
-                {m.status === MATCH_STATUS.LIVE ? (
-                  <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
-                ) : null}
-                {matchRoundLabel(m, rounds)} · vs {nameOf(opponentOf(m))}
+                <span
+                  className={cn(
+                    "flex min-w-0 items-center gap-1.5 [overflow-wrap:anywhere]",
+                    current && "font-medium",
+                  )}
+                >
+                  {m.status === MATCH_STATUS.LIVE ? (
+                    <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
+                  ) : null}
+                  {matchRoundLabel(m, rounds)} · vs {nameOf(opponentOf(m))}
+                </span>
+                <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted">
+                  {m.status === MATCH_STATUS.LIVE ? (
+                    <span>Live now</span>
+                  ) : m.scheduledAt ? (
+                    <LocalTime
+                      ts={m.scheduledAt.getTime()}
+                      variant="short"
+                      initial={formatLeagueMatchTime(m.scheduledAt, "short")}
+                    />
+                  ) : (
+                    <span>No kickoff yet</span>
+                  )}
+                  {waiting > 0 ? (
+                    <span className="font-medium text-accent">
+                      {captainTodoCountLine(waiting)}
+                    </span>
+                  ) : null}
+                </span>
               </Link>
             );
           })}
@@ -189,11 +243,28 @@ export async function MatchDesk({
           </div>
           <Link
             href={`/matches/${match.id}`}
-            className={buttonClasses("secondary", "sm")}
+            className={textLink("text-sm")}
           >
             Match page <LinkArrow />
           </Link>
         </CardBody>
+        <nav
+          aria-label="Captain shortcuts"
+          className="flex flex-wrap items-center gap-2 border-t border-line-soft px-4 py-3"
+        >
+          <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted">
+            On this page
+          </span>
+          {jumps.map((jump) => (
+            <a
+              key={jump.anchor}
+              href={`#${jump.anchor}`}
+              className={buttonClasses(jump.variant, "sm")}
+            >
+              {jump.label} <span aria-hidden>↓</span>
+            </a>
+          ))}
+        </nav>
       </Card>
 
       {/* The captain's own answer, with the side's names behind the count
@@ -216,6 +287,8 @@ export async function MatchDesk({
           }
           viewerIsCaptain
           side={side}
+          // The Standins card is on this page, a few cards down.
+          coverHref={`#${MATCH_ANCHOR.standins}`}
         />
       ) : null}
       {nudge ? (
