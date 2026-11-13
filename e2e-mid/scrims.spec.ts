@@ -51,7 +51,7 @@ async function withScrim(
   // captains), then one signed-up player on neither team.
   const users: User[] = Array.from({ length: size * 2 + 1 }, (_, i) => ({
     id: `${prefix}-user-${i}`,
-    steamId: `76561190000994${String(i).padStart(3, "0")}`,
+    steamId: `76561190000997${String(i).padStart(3, "0")}`,
     name: `Scrims ${label} player ${i + 1}`,
   }));
   try {
