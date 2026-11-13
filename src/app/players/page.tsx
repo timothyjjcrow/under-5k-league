@@ -18,10 +18,10 @@ import {
   type PoolScoutInfo,
 } from "@/lib/player-pool";
 import { poolPubRecord } from "@/lib/pub-stats";
-import { REGISTRATION_STATUS, SEASON_STATUS } from "@/lib/constants";
+import { REGISTRATION_STATUS } from "@/lib/constants";
 import {
   playerDirectoryPresentation,
-  poolDetailsByDefault,
+  poolSubtitle,
 } from "@/lib/player-directory-lifecycle";
 import {
   canViewLeagueContact,
@@ -31,10 +31,7 @@ import {
   EmptyState,
   LinkArrow,
   PageTitle,
-  SectionTitle,
   Skeleton,
-  StatCell,
-  StatStrip,
   buttonClasses,
   textLink,
 } from "@/components/ui";
@@ -127,8 +124,6 @@ export default async function PlayersPage() {
     draft?.status,
     standins.length > 0,
   );
-  // After the final nobody is "on call" any more.
-  const seasonOver = season.status === SEASON_STATUS.COMPLETE;
   const draftedUserIds = new Set(
     teams.flatMap((t) => t.members.map((m) => m.userId)),
   );
@@ -190,9 +185,10 @@ export default async function PlayersPage() {
         viewerHasActiveRegistration,
       ) && !!p.user.discordId,
   }));
-  const captainHopefuls = players.filter((p) => p.wantsCaptain);
-  const freeAgents = players.filter((p) => !draftedUserIds.has(p.userId));
-  const avgMmr = averageMmr(players);
+  // For "Sort: Newest signups".
+  const signedUpAt = Object.fromEntries(
+    poolRegistrations.map((p) => [p.userId, p.createdAt.getTime()]),
+  );
 
   // Scouting extras, one parallel record per pool player (the PoolDraftInfo
   // precedent — PoolPlayer stays frozen). Everything is data-presence gated:
@@ -226,10 +222,17 @@ export default async function PlayersPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <PageTitle
         title="Players"
-        subtitle={`${season.name} · every signup and standin in one place`}
+        // The shape of the pool in one line, so the list starts high on a
+        // phone; the chips carry their own counts and the sidebar the rest.
+        subtitle={poolSubtitle({
+          seasonName: season.name,
+          players: players.length,
+          standins: standins.length,
+          averageMmr: averageMmr(players),
+        })}
         action={
           <span className="flex flex-wrap items-center gap-3">
             {signupRemoved ? (
@@ -258,71 +261,34 @@ export default async function PlayersPage() {
         }
       />
 
-      {/* The shape of the pool in one line: only the figures a visitor or a
-          captain acts on, so the list itself starts on the first phone
-          screen. Rosters live on /teams (linked under the pool), and the
-          scouting detail rides on each row. */}
-      {players.length > 0 || standins.length > 0 ? (
-        <StatStrip>
-          <StatCell label="Signed up" value={players.length} hint="players" />
-          {avgMmr > 0 ? (
-            <StatCell label="Average MMR" value={avgMmr} />
-          ) : null}
-          {directory.captainSelectionOpen ? (
-            <StatCell
-              label={directory.availabilityLabel}
-              value={captainHopefuls.length}
-              tone={captainHopefuls.length > 0 ? "accent" : "muted"}
-            />
-          ) : (
-            <StatCell
-              label={directory.availabilityLabel}
-              value={freeAgents.length}
-              tone={freeAgents.length > 0 ? "accent" : "muted"}
-              hint={directory.availabilityHint}
-            />
-          )}
-          <StatCell
-            label="Standins"
-            value={standins.length}
-            tone={standins.length > 0 ? "default" : "muted"}
-            hint={seasonOver ? undefined : "on call"}
-          />
-        </StatStrip>
-      ) : null}
-
       {/* The pool is the page: this page is named Players, and post-draft
           "who is still available" is the question that brings a captain
           here. Rosters are /teams' job — each row already chips its team. */}
-      <section className="space-y-3">
-        <SectionTitle aside={directory.poolAside}>
-          {directory.poolTitle}
-        </SectionTitle>
-        {poolRegistrations.length === 0 ? (
-          <EmptyState
-            title="No players yet"
-            description={directory.emptyDescription}
+      {poolRegistrations.length === 0 ? (
+        <EmptyState
+          title="No players yet"
+          description={directory.emptyDescription}
+        />
+      ) : (
+        // Suspense: PlayerPool seeds its filters from useSearchParams, which
+        // Next requires a boundary around.
+        <Suspense
+          fallback={<Skeleton className="h-96 w-full rounded-[var(--radius)]" />}
+        >
+          <PlayerPool
+            players={poolPlayers}
+            standinIds={standins.map((s) => s.userId)}
+            showDraftStatus={directory.showDraftStatus}
+            captainSelectionOpen={directory.captainSelectionOpen}
+            draftInfo={draftInfo}
+            scout={scout}
+            now={nowMs}
+            showContact={viewerCanViewLeagueDirectory}
+            signedUpAt={signedUpAt}
+            listTitle={directory.poolTitle}
           />
-        ) : (
-          // Suspense: PlayerPool seeds its filters from useSearchParams, which
-          // Next requires a boundary around.
-          <Suspense
-            fallback={<Skeleton className="h-96 w-full rounded-[var(--radius)]" />}
-          >
-            <PlayerPool
-              players={poolPlayers}
-              standinIds={standins.map((s) => s.userId)}
-              showDraftStatus={directory.showDraftStatus}
-              captainSelectionOpen={directory.captainSelectionOpen}
-              draftInfo={draftInfo}
-              scout={scout}
-              now={nowMs}
-              showContact={viewerCanViewLeagueDirectory}
-              detailsByDefault={poolDetailsByDefault(directory.stage)}
-            />
-          </Suspense>
-        )}
-      </section>
+        </Suspense>
+      )}
 
       {/* One line instead of a second copy of every roster. During captain
           selection it names who has been picked so far (they also wear the

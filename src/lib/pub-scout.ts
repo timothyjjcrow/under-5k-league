@@ -1004,6 +1004,54 @@ export function scoutingRowParts(
   return parts;
 }
 
+/** The /players row's Pubs cell: the side they play in a word or two and
+ *  the medal of their games, each tinted when the row's scouting line would
+ *  tint it. Null when neither read has enough games. */
+export type PubColumn = {
+  /** "Pos 2", "Core", "Support" or "Both"; the hover has the finding. */
+  role: { text: string; title: string; warn: boolean } | null;
+  /** The medal their games average, with "In Legend 4 games" for its name. */
+  level: { rankTier: number; title: string; warn: boolean } | null;
+};
+
+export function pubColumn(scout: PubScout, ctx: ScoutContext): PubColumn | null {
+  const facts = new Map(scoutingFacts(scout, ctx).map((f) => [f.key, f]));
+  const sentence = (key: ScoutFact["key"]) => {
+    const f = facts.get(key);
+    return f ? `${f.label}: ${f.lead}${f.detail ? ` (${f.detail})` : ""}` : "";
+  };
+  const role = pubRoleRead(scout);
+  const positions = pubPositionRead(scout);
+  let roleCell: PubColumn["role"] = null;
+  if (role) {
+    const total = positions?.reduce((s, p) => s + p.games, 0) ?? 0;
+    const top = positions?.[0];
+    const text =
+      top && top.games / total >= 0.6
+        ? positionName(top.position)
+        : role.lean === "both"
+          ? "Both"
+          : role.lean === "core"
+            ? "Core"
+            : "Support";
+    roleCell = {
+      text,
+      title: sentence("role"),
+      warn: facts.get("role")?.tone === "warn",
+    };
+  }
+  const lobby = pubLobbyRead(scout);
+  const levelCell: PubColumn["level"] = lobby
+    ? {
+        rankTier: lobby.rankTier,
+        title:
+          sentence("level") || `In ${rankMedalName(lobby.rankTier)} games`,
+        warn: facts.get("level")?.tone === "warn",
+      }
+    : null;
+  return roleCell || levelCell ? { role: roleCell, level: levelCell } : null;
+}
+
 /** Every fact as a sentence: "Role: Core in 79 of 92 games (…)". The row's
  *  hover and the draft room's "More scouting" list, where a phone with no
  *  hover reads a tile's full finding. */

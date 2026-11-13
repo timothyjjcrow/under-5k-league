@@ -6,6 +6,7 @@ import {
   pubHeroRows,
   pubLobbyRead,
   pubModeRead,
+  pubColumn,
   pubPositionRead,
   pubRegionRead,
   pubRoleRead,
@@ -421,6 +422,33 @@ describe("the pool row", () => {
       "Their last 100 public games",
       ...sentences,
     ]);
+  });
+
+  it("the Pubs column says the side in a word and the medal of their games", () => {
+    expect(pubColumn(scout(), ctx())).toEqual({
+      role: {
+        text: "Support",
+        title: expect.stringContaining("Role: Support in 100 of 100 games"),
+        warn: false,
+      },
+      level: {
+        rankTier: 63,
+        title: expect.stringMatching(/^Plays at: Ancient 3 games \(≈4,250\)/),
+        warn: false,
+      },
+    });
+    expect(
+      pubColumn(scout({ positions: [0, 0, 0, 8, 1] }), ctx())?.role?.text,
+    ).toBe("Pos 4");
+    // The same tints as the row's line: a Pos 1 signup who plays support,
+    // in games far below their signup MMR.
+    const c = pubColumn(scout(), ctx({ roles: "1", signupMmr: 5000 }));
+    expect(c?.role?.warn).toBe(true);
+    expect(c?.level?.warn).toBe(true);
+  });
+
+  it("the Pubs column is empty without enough games for either read", () => {
+    expect(pubColumn(summarizePubMatches(times(3)), ctx())).toBeNull();
   });
 
   it("the caption names the window, and the snapshot age when known", () => {

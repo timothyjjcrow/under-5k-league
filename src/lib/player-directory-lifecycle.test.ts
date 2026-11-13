@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import {
   playerDirectoryPresentation,
-  poolDetailsByDefault,
+  poolSubtitle,
   profileWantsCaptain,
 } from "./player-directory-lifecycle";
 
@@ -20,7 +20,6 @@ describe("playerDirectoryPresentation", () => {
         showDraftStatus: false,
         poolTitle: "Signed up to play",
         emptyDescription: "Player signups will appear here.",
-        availabilityLabel: "Want to captain",
       });
     }
   });
@@ -39,7 +38,6 @@ describe("playerDirectoryPresentation", () => {
         poolTitle: "Draft pool",
         emptyDescription:
           "No active full-player registrations are available for this auction.",
-        availabilityLabel: "Available to draft",
       });
     }
   });
@@ -76,7 +74,6 @@ describe("playerDirectoryPresentation", () => {
     ).toMatchObject({
       stage: "DRAFT_COMPLETE",
       poolTitle: "Player pool",
-      availabilityLabel: "Free agents",
     });
 
     for (const seasonStatus of [
@@ -89,7 +86,6 @@ describe("playerDirectoryPresentation", () => {
         stage: "SEASON",
         captainSelectionOpen: false,
         poolTitle: "Player pool",
-        availabilityLabel: "Free agents",
       });
     }
 
@@ -101,7 +97,6 @@ describe("playerDirectoryPresentation", () => {
     ).toMatchObject({
       stage: "FINAL",
       poolTitle: "Final player field",
-      availabilityLabel: "Undrafted",
     });
   });
 
@@ -168,33 +163,23 @@ describe("profileWantsCaptain", () => {
   });
 });
 
-describe("poolDetailsByDefault", () => {
-  it("opens the scouting line until the auction ends, one line a player after", () => {
-    const stageOf = (
-      seasonStatus: string,
-      draftStatus: string | null,
-    ) => playerDirectoryPresentation(seasonStatus, draftStatus).stage;
-    expect(poolDetailsByDefault(stageOf(SEASON_STATUS.SIGNUPS, null))).toBe(
-      true,
-    );
+describe("poolSubtitle", () => {
+  it("says the season and the pool's shape in one line", () => {
     expect(
-      poolDetailsByDefault(
-        stageOf(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS),
-      ),
-    ).toBe(true);
+      poolSubtitle({
+        seasonName: "Season 7",
+        players: 37,
+        standins: 3,
+        averageMmr: 2580,
+      }),
+    ).toBe("Season 7 · 37 players and 3 standins · average 2,580 MMR");
+  });
+  it("counts in the singular, and leaves out standins and an unknown average", () => {
     expect(
-      poolDetailsByDefault(stageOf(SEASON_STATUS.DRAFT, DRAFT_STATUS.PAUSED)),
-    ).toBe(true);
-    for (const [seasonStatus, draftStatus] of [
-      [SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE],
-      [SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE],
-      [SEASON_STATUS.PLAYOFFS, DRAFT_STATUS.COMPLETE],
-      [SEASON_STATUS.COMPLETE, DRAFT_STATUS.COMPLETE],
-    ] as const) {
-      expect(
-        poolDetailsByDefault(stageOf(seasonStatus, draftStatus)),
-        `${seasonStatus}/${draftStatus}`,
-      ).toBe(false);
-    }
+      poolSubtitle({ seasonName: "S1", players: 1, standins: 0, averageMmr: 0 }),
+    ).toBe("S1 · 1 player");
+    expect(
+      poolSubtitle({ seasonName: "S1", players: 0, standins: 1, averageMmr: 0 }),
+    ).toBe("S1 · 0 players and 1 standin");
   });
 });

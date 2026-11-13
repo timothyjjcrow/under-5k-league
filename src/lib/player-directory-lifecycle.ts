@@ -17,11 +17,9 @@ export type PlayerDirectoryPresentation = {
   stage: PlayerDirectoryStage;
   captainSelectionOpen: boolean;
   showDraftStatus: boolean;
+  /** The list's heading, above the rows. */
   poolTitle: string;
-  poolAside?: string;
   emptyDescription: string;
-  availabilityLabel: string;
-  availabilityHint?: string;
 };
 
 /**
@@ -48,7 +46,6 @@ export function playerDirectoryPresentation(
       showDraftStatus: false,
       poolTitle: "Signed up to play",
       emptyDescription: "Player signups will appear here.",
-      availabilityLabel: "Want to captain",
     };
   }
 
@@ -62,11 +59,8 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: hasStandins ? "Draft pool and standins" : "Draft pool",
-      poolAside: "Track drafted players and who remains",
       emptyDescription:
         "No active full-player registrations are available for this auction.",
-      availabilityLabel: "Available to draft",
-      availabilityHint: "in the auction pool",
     };
   }
 
@@ -79,11 +73,8 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: "Player pool",
-      poolAside: "Review rosters and remaining free agents",
       emptyDescription:
         "No active full-player registrations are on record for this season.",
-      availabilityLabel: "Free agents",
-      availabilityHint: "undrafted",
     };
   }
 
@@ -93,11 +84,8 @@ export function playerDirectoryPresentation(
       captainSelectionOpen: false,
       showDraftStatus: true,
       poolTitle: "Final player field",
-      poolAside: "Season rosters and undrafted registrations",
       emptyDescription:
         "No full-player registrations are on record for this completed season.",
-      availabilityLabel: "Undrafted",
-      availabilityHint: "not on a final roster",
     };
   }
 
@@ -106,22 +94,38 @@ export function playerDirectoryPresentation(
     captainSelectionOpen: false,
     showDraftStatus: true,
     poolTitle: "Player pool",
-    poolAside: "Sort, filter and scout the field",
     emptyDescription:
       "No active full-player registrations are on record for this season.",
-    availabilityLabel: "Free agents",
-    availabilityHint: "undrafted",
   };
 }
 
+const COUNT = new Intl.NumberFormat("en-US");
+
 /**
- * Whether /players opens its rows with the scouting line (last season, pubs,
- * Discord) and the player's own words. Until the auction ends the pool is a
- * scouting board; after it the question is "who is where", one line a player.
- * The viewer's "Scouting details" toggle overrides this on their device.
+ * The page title's subtitle: the season and the shape of the pool in one
+ * line ("Season 7 · 37 players and 3 standins · average 2,580 MMR"), so the
+ * list starts high on a phone. An average with no known MMR is left out,
+ * never "0".
  */
-export function poolDetailsByDefault(stage: PlayerDirectoryStage): boolean {
-  return stage === "CAPTAIN_SELECTION" || stage === "AUCTION";
+export function poolSubtitle(input: {
+  seasonName: string;
+  players: number;
+  standins: number;
+  averageMmr: number;
+}): string {
+  const count = (n: number, one: string, many: string) =>
+    `${COUNT.format(n)} ${n === 1 ? one : many}`;
+  const who =
+    input.standins > 0
+      ? `${count(input.players, "player", "players")} and ${count(input.standins, "standin", "standins")}`
+      : count(input.players, "player", "players");
+  return [
+    input.seasonName,
+    who,
+    input.averageMmr > 0 ? `average ${COUNT.format(input.averageMmr)} MMR` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 /**

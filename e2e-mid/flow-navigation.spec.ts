@@ -152,7 +152,7 @@ test("player return keeps the searched directory and direct visits retain a safe
     await page.goto("/players?sort=name");
     const name = member.user.name;
     const href = `/players/${member.userId}`;
-    await page.getByPlaceholder("Search players…").fill(name);
+    await page.getByPlaceholder("Search players or heroes…").fill(name);
     // Click before the 250ms URL debounce: the return link must still retain
     // the visible search, not the earlier unfiltered directory.
     await page
@@ -167,7 +167,7 @@ test("player return keeps the searched directory and direct visits retain a safe
     expect(returnUrl.searchParams.get("q")).toBe(name);
     expect(returnUrl.searchParams.get("sort")).toBe("name");
     await back.click();
-    await expect(page.getByPlaceholder("Search players…")).toHaveValue(name);
+    await expect(page.getByPlaceholder("Search players or heroes…")).toHaveValue(name);
     await page.evaluate(() => sessionStorage.clear());
     await page.goto(href);
     await expect(back).toHaveAttribute("href", "/players");
