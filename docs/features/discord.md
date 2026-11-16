@@ -130,7 +130,10 @@ actions: `src/app/actions/admin-discord.ts`.
   the 100-MMR allowance, `standinApprovalRequestedMessage`): the other captain
   only; agreed (the booking post, with `agreedBy`): the standin plus the asking
   captain; declined (`standinRequestDeclinedMessage`): the asking captain;
-  withdrawn: nobody. Reschedule proposed (a ready
+  withdrawn: nobody. A standin's "I can play" (`standinOfferedMessage`): that
+  side's captain alone, for the first offer and then at most once per
+  `STANDIN_OFFER_PING_THROTTLE_SECONDS`; the standin hears nothing until
+  they are booked. Reschedule proposed (a ready
   check): the other captain, then every other seat on both sides, since each
   must answer, but only for a kickoff's first proposal in
   `READY_CHECK_ROSTER_PING_SECONDS` (6h, `readyCheckRosterPingKey`, keyed by

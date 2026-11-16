@@ -3,8 +3,10 @@
 Permanent roster changes (sign, release, promote, withdraw a signup), one-match
 standin cover, and match-night check-ins. Main files:
 `src/app/actions/admin-roster.ts`, `src/lib/standin-service.ts` + `standin.ts`,
-`src/app/actions/standins.ts`, `src/lib/registration.ts`, `src/lib/availability.ts`
-+ `availability-service.ts`, and the match-page cards in `src/app/matches/[id]/`.
+`src/app/actions/standins.ts`, `src/lib/standin-offer.ts` +
+`standin-offer-service.ts` (standin offers, `/standins`), `src/lib/registration.ts`,
+`src/lib/availability.ts` + `availability-service.ts`, and the match-page cards
+in `src/app/matches/[id]/`.
 
 ## Rules for the whole area
 
@@ -207,6 +209,121 @@ standin cover, and match-night check-ins. Main files:
 - **Deliberately not built:** a mid-series swap tool (only if a real season needs
   it twice), auto-cancelling partial-refill surplus bookings (surplus waiting
   requests are closed: a request is not cover, so nobody was told to show up).
+
+## Standin offers ("I can play")
+
+Tim's call (2026-11-15, [DECISIONS](../DECISIONS.md#product-decisions)): a
+game that needs a standin lists itself, any standin taps "I can play", and
+that team's captain picks from everyone who did, so no captain messages
+standins one by one. Pure rules in `standin-offer.ts`, reads and the two
+writes in `standin-offer-service.ts`, actions in
+`src/app/actions/standin-offers.ts`, the page `src/app/standins/page.tsx`,
+the rows in `StandinOffer`.
+
+- **An offer is not cover and not a request.** It holds no seat, pings no
+  standin and is read by nothing that reads cover. The side's own captain
+  always picks; the pick is `captainAssignStandin`, so the MMR rule and every
+  booking check decide exactly as they do for a pick from the pool. Don't
+  make an offer book by itself: a link that books can be disguised, and a
+  preview bot opens every link posted in Discord.
+- **A game opens on its own.** A side needs someone when a rostered player
+  is OUT for the current `scheduleRevision` with neither a booking nor a
+  waiting request, or the roster has an empty seat neither has taken
+  (`standinSideNeed`, the same seats `judgeCover` would book). Nobody opens
+  or closes anything: the need is derived on every read, so a booking, a
+  request, an "I can make it after all" or a signing takes the game off the
+  board by itself.
+- **The board is `/standins`:** unplayed fixtures of the active season
+  kicking off from `STANDIN_BOARD_BEHIND_HOURS` ago to
+  `STANDIN_BOARD_AHEAD_DAYS` ahead (`loadStandinBoard`), soonest first, and
+  nothing while booking is closed (`standinAssignmentOpen`'s phase half). An
+  unscheduled fixture isn't listed: there is no night to promise. A
+  withdrawn team's side never is.
+- **It never says who is out.** Named check-in answers are for captains and
+  admins (`canViewNamedMatchAvailability`), so the board, its link preview
+  and the captain's ping carry the team, the count ("needs 2 standins") and
+  the MMR the seat is judged against, never a covered player's name
+  (`standins-page-guards.test.ts`). With several open seats the MMR shown is
+  the highest baseline among them: the seat that suits a standin best.
+- **Offer only where a booking could follow** (`standinOfferStanding`, fed by
+  `loadStandinOfferViewer`): an ACTIVE signup of either type, no roster seat,
+  no booking or waiting request in this match, no decline for this team in
+  this match, no booking on another fixture the same night
+  (`standinConflict`). Over the MMR allowance, or with an unknown MMR, the
+  offer is taken and the card says the other captain also has to agree.
+  `offerToStandIn` re-runs all of it and refuses a side that needs nobody.
+- **The standin sees what a pick would do before they tap,** in words that
+  never say "booked" (`standinOfferOutcomeLine`): an offer books nothing, and
+  "books straight away" read as if it did (Tim, 2026-11-15).
+- **Offers need no guarded claim.** The unique key (match, team, user) makes
+  a second tap "already on the list"; taking it back is a `deleteMany` and
+  never an error. Every reader drops offers a booking would refuse (signup
+  gone, rostered since, booked or asked for in this match, booked elsewhere
+  that night: `needsFor` over `loadOfferers`), so a stale row shows nowhere.
+- **A booking answers the standin's offers in that match.** Both
+  transactions that create a `StandinAssignment` (`assignStandinGuarded`,
+  `approveStandinRequest`) delete that standin's offers there, for both
+  sides, so a booking removed later doesn't list them as still offering. A
+  waiting request leaves the offer alone: it is not a booking. A new write
+  that creates a booking must do the same.
+- **The captain's card leads with "Said they can play"**
+  (`src/app/matches/[id]/standins.tsx`): this side's offers from standins the
+  form could still pick, first come first, each with their MMR, roles and
+  Discord handle and one button. The button is the form's own submit for the
+  seat that needs cover first (an uncovered OUT player, else an empty seat)
+  and says which of the two it does ("Book <name>" or "Ask the other
+  captain", `standinPickOutcome`). The form still picks anyone for any seat,
+  marks who offered and sorts them first in their group
+  (`standinPickerGroups`' `offered`).
+- **The shared link is the game on the board**
+  (`standinOfferPath`: `/standins?match=&team=&play=1`), copied from the
+  captain's card or the game itself. Anyone may post it: it grants nothing.
+  Opening it puts a signed-in standin who may offer on the list once
+  (`standinArrivalAction`, `StandinOfferOnArrival`, which scrubs `play`
+  first, as the inhouse night's `?imin=1` does); a signed-out visitor's
+  "Sign in with Steam to play" comes back to the same link, so their first
+  click ends on the list. It unfurls as "<team> needs a standin" with the
+  opponent and the kickoff on the league's clock.
+- **Ping the captain once, not once per name.** A new offer returns a post
+  for that side's captain alone (`standinOfferedMessage`); the action claims
+  `standinOfferPing:<match>:<team>:<scheduleRevision>` for
+  `STANDIN_OFFER_PING_THROTTLE_SECONDS` after the write and sends only on a
+  win, so a list filling up is one ping and a retime gets a fresh window. A
+  standin hears nothing until the usual booking post.
+- **Where a standin finds it:** Home's panel for a signup with no booking
+  coming up counts the games (`standinHomeLine`; a free agent too, since any
+  ACTIVE unrostered signup can cover), and the menus list Standins while
+  cover can be booked (`site-nav.ts`).
+- **A visitor with no team and no signup sees the open games first** (Tim,
+  2026-11-15): `StandinGamesCallout` (`src/components/home/standin-games.tsx`)
+  leads the season hero's actions, signed out or in, with the count, the
+  soonest game and "Play as a standin". With no game needing anyone it
+  renders the plain "Register as a standin" button instead (`whenNone`), so
+  the hero never shows two standin buttons. It renders on every signed-out
+  view of Home, so it reads `loadStandinBoardSummary`: the board as a count,
+  reused per process for 30 seconds (Rule P). The page and every write read
+  the board itself.
+- **One signup registers a new standin and joins the game they came for.**
+  "Register as a standin to play" on a game (`RegisterForStandinGame`) sets
+  `STANDIN_GAME_COOKIE` (two public ids, two hours; `standin-game.ts`) and
+  goes to `/me`, where the signup card says which game and its button reads
+  "Register and say I can play" (`peekStandinGame`, `loadStandinNeed`). A
+  cookie, not a query value, because the Discord step leaves the site and
+  comes back to `/me`. `saveRegistration` takes it on any STANDIN save, after
+  the signup has committed and best-effort (`takeStandinGame`, then
+  `offerToStandIn` and `sendStandinOfferPost`), and puts the answer in the
+  toast, a refusal included ("… has its cover for this match now"). It never
+  fails a signup, and a later edit never offers again. The cookie grants
+  nothing: the offer is checked like any other.
+- **Tests:** `standin-offer.test.ts`, `standin-offers.itest.ts` (the board,
+  the refusals, what a booking does to the list), `standin-game.test.ts`,
+  the "lists who said they can play" guard in `match-page-guards.test.ts`
+  and `src/app/standins/standins-page-guards.test.ts` (the page, the
+  actions, Home's callout and the signup that joins a game).
+- **Not built yet:** a booked standin's own "I can't make it", a captain
+  to-do for a waiting list, "needs a standin" lines on the #schedule card, a
+  weekly "free this week", and a browser spec for the flow (it was driven by
+  hand with Playwright against the regular fixture, 2026-11-15).
 
 ## The standin MMR rule
 

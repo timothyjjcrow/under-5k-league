@@ -276,7 +276,10 @@ persisted `Match.createdAt` DTSTAMP values and strict active-team filters.
   and remove both Discord-mention the standin. Past the 100-MMR allowance a
   captain's booking is a `StandinRequest` the other captain answers;
   `cancelPendingStandinRequests` closes the ones a roster or schedule change
-  makes impossible. Free-agent signings follow the same allowance against the
+  makes impossible. Standins find games on `/standins`: a side with an
+  uncovered seat lists itself, a standin's "I can play" is a `StandinOffer`
+  (`src/lib/standin-offer.ts`, `standin-offer-service.ts`), and the captain
+  books from that list with the same guarded booking. Free-agent signings follow the same allowance against the
   player they replace (`src/lib/free-agent-rule.ts`,
   `src/lib/free-agent-rule-service.ts`).
 - _Reschedules_: a ready check. `src/lib/reschedule-service.ts` (one PENDING
@@ -751,6 +754,7 @@ phone tab bar and the footer); most pages still render if visited directly.
 | `/meta/[hero]`     | One hero's season: /meta's numbers for it, most-built shop and neutral items, every game with final items, who plays it | Linked from /meta's table and the "Find a hero" box; `/meta/find` is the box's no-script redirect | `getSeasonHeroGames`, `heroPageView`, bundled hero and item catalogues |
 | `/fantasy`         | Fantasy-five picker (sticky Save bar), standings, player scores, impact-points explainer       | Nav while picks are open, then for entrants; COMPLETE/archive read-only                            | `fantasyPrices`, `fantasyPoints`, durable `Season.fantasyLockedAt`                                            |
 | `/pickem`          | Match predictions, one "Your picks" history, and oracle board (shared places)                  | Nav once the auction is complete; picks until each kickoff; COMPLETE/archive read-only             | `partitionPickemMatches`, `predictionOpen`, `pickemStandings`                                                 |
+| `/standins`        | Games that need a standin this week; a standin says "I can play" and that team's captain picks from the list. A game's link (`?match=&team=&play=1`) opens on it and adds a signed-in standin | Nav from the completed auction until COMPLETE; the address works in every phase, and lists nothing while booking is closed | `loadStandinBoard`, `loadStandinOfferViewer` (`standin-offer-service.ts`) |
 | `/records`         | Compact trusted single-game record book (no Most deaths), first-achiever tie policy; a record opens its next-best marks | Nav (Statistics, Explore) once a game exists                                                       | Cached `getRecordBookView` per scope (`recordBookView`, deterministic chronology)                             |
 | `/hall-of-fame`    | Short note until a champion exists; then champions first and shared-place career boards        | Nav once a season has an official champion (`hasOfficialChampion`)                                 | Cached `getCareerFacts`, `careersFromFacts` over fresh results                                                |
 | `/recap`           | Redirect only: to a finished season's page, or Leaders while the season runs                   | Old links and Discord posts; `?season=`                                                            | `recapDestination`                                                                                            |

@@ -945,6 +945,12 @@ export async function assignStandinGuarded(opts: {
             replacingUserId,
           },
         });
+        // Booked: their "I can play" in this match is answered, for either
+        // side. Left behind, a removed booking would list them as still
+        // offering for a seat they were just taken off.
+        await tx.standinOffer.deleteMany({
+          where: { matchId, userId: standinUserId },
+        });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -1254,6 +1260,11 @@ export async function approveStandinRequest(
             standinUserId: request.standinUserId,
             replacingUserId: request.replacingUserId,
           },
+        });
+        // Booked, so their offers in this match are answered (as in
+        // assignStandinGuarded).
+        await tx.standinOffer.deleteMany({
+          where: { matchId: request.matchId, userId: request.standinUserId },
         });
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },

@@ -59,6 +59,9 @@ import {
   storedDotaAccountId,
 } from "@/lib/dota-account";
 import { pendingCoverWhere } from "@/lib/standin";
+import { peekStandinGame } from "@/lib/standin-game-cookie";
+import { standinNeedLabel } from "@/lib/standin-offer";
+import { loadStandinNeed } from "@/lib/standin-offer-service";
 import { DRAFT_PASSED_LABEL, MATCH_NIGHT_POLL_LABEL } from "@/lib/season-copy";
 import {
   AUTO_SYNC,
@@ -126,6 +129,14 @@ export default async function MePage({
     getActiveSeason(),
     prisma.user.findUnique({ where: { id: user.id } }),
   ]);
+  // The game they came to stand in for, when "Register as a standin to
+  // play" on the Standins page remembered one and its side still needs
+  // someone: the signup form says so, and its submit offers for it.
+  const wantedGame = season ? await peekStandinGame() : null;
+  const standinGame =
+    season && wantedGame
+      ? await loadStandinNeed(season, wantedGame.matchId, wantedGame.teamId)
+      : null;
   const [reg, member, draft] = await Promise.all([
     season
       ? prisma.registration.findUnique({
@@ -870,6 +881,32 @@ export default async function MePage({
                         : undefined
                   }
                 >
+                {standinGame && !isRegistered ? (
+                  // They came from a game on the Standins page: say what
+                  // this signup will also do (saveRegistration reads the
+                  // same cookie and puts them on that game's list).
+                  <p className="rounded-lg border border-accent/40 bg-accent/10 px-3 py-2 text-sm">
+                    <strong>
+                      {standinGame.teamName} {standinNeedLabel(standinGame.seats)}
+                    </strong>{" "}
+                    vs {standinGame.opponentName}
+                    {standinGame.scheduledAt ? (
+                      <>
+                        {" · "}
+                        <LocalTime
+                          ts={standinGame.scheduledAt.getTime()}
+                          variant="short"
+                          initial={formatLeagueMatchTime(
+                            standinGame.scheduledAt,
+                            "short",
+                          )}
+                        />
+                      </>
+                    ) : null}
+                    . Finish this signup and you&apos;re on their list: their
+                    captain picks from everyone who said they can play.
+                  </p>
+                ) : null}
                 <ActionForm
                   action={saveRegistration}
                   trackChanges
@@ -1082,7 +1119,9 @@ export default async function MePage({
                       {isRegistered
                         ? "Update signup"
                         : playerLocked
-                          ? "Register as a standin"
+                          ? standinGame
+                            ? "Register and say I can play"
+                            : "Register as a standin"
                           : "Join the season"}
                     </SubmitButton>
                   </div>

@@ -111,6 +111,11 @@ const afterAuction = ({
   phase === SEASON_STATUS.PLAYOFFS ||
   phase === SEASON_STATUS.COMPLETE;
 
+// Standin cover is booked from the completed auction to the last match
+// (postAuctionWorkOpen): a finished season has nothing left to cover.
+const standinsOpen = (state: Pick<NavState, "phase" | "draftStatus">) =>
+  afterAuction(state) && state.phase !== SEASON_STATUS.COMPLETE;
+
 const resultsPhase = ({ phase }: Pick<NavState, "phase">) =>
   phase === SEASON_STATUS.REGULAR_SEASON ||
   phase === SEASON_STATUS.PLAYOFFS ||
@@ -212,6 +217,10 @@ const NAV_PAGES: readonly NavPage[] = [
     visible: always,
     footer: true,
   },
+  // Games that need a standin, and the "I can play" that puts a standin on a
+  // captain's list. Listed while cover can be booked: once the auction has
+  // sold the rosters, until the season is over.
+  { href: "/standins", label: "Standins", group: "play", visible: standinsOpen },
   { href: "/fantasy", label: "Fantasy", group: "play", visible: fantasyListed },
   { href: "/pickem", label: "Pick'em", group: "play", visible: afterAuction },
   { href: "/leaders", label: "Leaders", group: "stats", visible: seasonStatsListed },

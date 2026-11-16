@@ -28,7 +28,7 @@ note before changing that area: it is required reading, not background.
 | --- | --- |
 | [concurrency-and-testing](docs/features/concurrency-and-testing.md) | any guarded write, race test, race-hook seam, or the mutation ratchet |
 | [draft](docs/features/draft.md) | the auction engine, the draft admin controls, `/draft` or the draft room |
-| [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover and the standin MMR rule's requests, check-ins, the week reminder |
+| [rosters-and-standins](docs/features/rosters-and-standins.md) | signings, releases, promotions, withdrawals, standin cover and the standin MMR rule's requests, standin offers and `/standins`, check-ins, the week reminder |
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
 | [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal and inhouse bans (`/admin/inhouse-players`) |
 | [inhouse-duels](docs/features/inhouse-duels.md) | the 1v1 mid queue and duels: pairing, their bot lobbies, results and clocks, the 1v1 card on `/inhouse`, the 1v1 leaderboard |
