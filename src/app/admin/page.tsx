@@ -224,6 +224,10 @@ import {
   type LeagueStatusCardStatus,
 } from "@/lib/league-status-service";
 import {
+  getStandinRoleStatus,
+  type StandinRoleStatus,
+} from "@/lib/standin-role-service";
+import {
   getDiscordReachFunnel,
   getGuildConfig,
   getPingHealth,
@@ -331,6 +335,7 @@ import {
   StartDraftControl,
   StartDraftForm,
 } from "@/components/admin-start-draft";
+import { AdminStandinRole } from "@/components/admin-standin-role";
 import { StartDraftConfirmLine } from "@/components/start-draft-submit";
 import { missingCaptainsConfirmLine } from "@/lib/draft-presence";
 import { readCaptainPresence } from "@/lib/draft-presence-service";
@@ -6611,12 +6616,14 @@ async function DiscordSection() {
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, statusCard, pingHealth, delivery] = await Promise.all([
-    getInhouseBoardStatus(),
-    getLeagueStatusCardStatus(),
-    getPingHealth(),
-    loadLeagueDeliveryHealth().catch(() => null),
-  ]);
+  const [board, statusCard, pingHealth, delivery, standinRole] =
+    await Promise.all([
+      getInhouseBoardStatus(),
+      getLeagueStatusCardStatus(),
+      getPingHealth(),
+      loadLeagueDeliveryHealth().catch(() => null),
+      getStandinRoleStatus(),
+    ]);
   return (
     <DiscordControls
       delivery={delivery}
@@ -6630,6 +6637,7 @@ async function DiscordSection() {
       board={board}
       statusCard={statusCard}
       pingHealth={pingHealth}
+      standinRole={standinRole}
       mutationsAllowed={discordMutationsAllowed()}
     />
   );
@@ -6712,6 +6720,7 @@ function DiscordControls({
   board,
   statusCard,
   pingHealth,
+  standinRole,
   mutationsAllowed,
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
@@ -6719,6 +6728,7 @@ function DiscordControls({
   board: InhouseBoardStatus;
   statusCard: LeagueStatusCardStatus;
   pingHealth: PingHealth;
+  standinRole: StandinRoleStatus;
   mutationsAllowed: boolean;
 }) {
   const { configured, masked, envManaged } = status;
@@ -6727,7 +6737,7 @@ function DiscordControls({
     <AdminSection
       id="adm-discord"
       title="Discord notifications"
-      subtitle="Configure league announcements plus the year-round inhouse queue board, alerts, and ping role."
+      subtitle="Configure league announcements and the Standin role, plus the year-round inhouse queue board, alerts, and ping role."
       // Opens itself when league posts are stuck: in the offseason there is
       // no Needs attention card to say so. A post Discord refused does not
       // open it; the queue already dropped that post, and the card lists it
@@ -6832,6 +6842,11 @@ function DiscordControls({
           champions. League posts never ping a role or everyone, and only
           players who linked Discord on their profile can be pinged.
         </p>
+
+        <AdminStandinRole
+          status={standinRole}
+          mutationsAllowed={mutationsAllowed}
+        />
 
         <div className="space-y-3 border-t border-line pt-3">
           <div className="flex flex-wrap items-center gap-2 text-sm">

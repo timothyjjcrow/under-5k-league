@@ -56,6 +56,8 @@ describe("security and league configuration audit trail", () => {
     "clearInhouseAlertWebhook",
     "setInhousePingRole",
     "saveInhouseBanRole",
+    "saveStandinRole",
+    "syncStandinRoleNow",
     "banFromInhouse",
     "liftBanFromInhouse",
     "renameTeam",

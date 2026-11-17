@@ -3,6 +3,7 @@
 import { revalidatePath, updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { refreshLeagueStatus } from "@/lib/league-status-service";
+import { refreshStandinRole } from "@/lib/standin-role-service";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/prisma";
 import { requireUser, type SessionUser } from "@/lib/auth";
@@ -88,6 +89,9 @@ function refresh() {
   revalidatePath("/", "layout");
   // The #schedule status card counts signups, standins and captain offers.
   void refreshLeagueStatus();
+  // A signup, a withdrawal or a Discord unlink can change who holds the
+  // Discord Standin role (standin-role-service: the difference only).
+  void refreshStandinRole();
 }
 
 const clearedDraftConfirmation = {

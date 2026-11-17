@@ -25,6 +25,7 @@ import {
   primeMembershipMemo,
   reachabilityNote,
   setPingRole,
+  setStandinRole,
   sweepGuildMemberships,
   type DiscordReachFunnel,
   type RoleConfig,
@@ -216,6 +217,52 @@ describe("setPingRole", () => {
     expect(await setPingRole(MEMBER, true, cfg())).toBe("failed");
     expect(await setPingRole(MEMBER, false, cfg())).toBe("failed");
     expect(recorded).toHaveLength(0);
+  });
+});
+
+// Role writes are paced like the member route: the Standin role sync makes
+// several in a row (standin-role-service.ts), and every role shares one
+// bucket per guild.
+describe("role write rate pacing", () => {
+  it("honors retry_after on a 429 and completes on the single retry", async () => {
+    let calls = 0;
+    respond = () =>
+      ++calls === 1
+        ? { status: 429, body: { retry_after: 0.05, global: false } }
+        : { status: 204 };
+    expect(await setStandinRole(MEMBER, true, cfg())).toBe("ok");
+    expect(recorded).toHaveLength(2);
+    expect(recorded.every((r) => r.method === "PUT")).toBe(true);
+  });
+
+  it("fails now, with one request, when Discord asks for a longer wait than the cap", async () => {
+    respond = () => ({ status: 429, body: { retry_after: 30 } });
+    expect(await setStandinRole(MEMBER, false, cfg())).toBe("failed");
+    expect(recorded).toHaveLength(1);
+  });
+
+  it("paces the NEXT write off the rate headers instead of burning it into a 429", async () => {
+    // As for member lookups: the stand-in 429s a request before the refill
+    // it announced, so exactly two requests proves the pacing.
+    let notBefore = 0;
+    respond = () => {
+      if (notBefore === 0) {
+        notBefore = Date.now() + 60;
+        return {
+          status: 204,
+          headers: {
+            "x-ratelimit-remaining": "0",
+            "x-ratelimit-reset-after": "0.06",
+          },
+        };
+      }
+      return Date.now() < notBefore
+        ? { status: 429, body: { retry_after: 0.06 } }
+        : { status: 204 };
+    };
+    expect(await setStandinRole("800000000000000041", true, cfg())).toBe("ok");
+    expect(await setStandinRole("800000000000000042", true, cfg())).toBe("ok");
+    expect(recorded).toHaveLength(2);
   });
 });
 

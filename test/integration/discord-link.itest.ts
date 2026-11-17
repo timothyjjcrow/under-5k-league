@@ -183,6 +183,47 @@ describe("re-linking strips the ping role from the REPLACED account", () => {
   });
 });
 
+// The Discord Standin role (standin-role-service.ts): a standin who links
+// gets it at once, after the join, and a replaced account loses it. The pass
+// itself is tested in standin-role.itest.ts; this pins that the callback
+// asks for it with the new account, and that it can't cost the link.
+describe("the Standin role after a link", () => {
+  it("syncs the role for the newly linked account, after the join", async () => {
+    const user = await makeUser("StandinLinks");
+    const order: string[] = [];
+    const sync = vi.fn(async () => {
+      order.push("sync");
+    });
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({
+        joinGuild: vi.fn(async () => {
+          order.push("join");
+          return "joined" as const;
+        }),
+        syncStandinRole: sync,
+      }),
+    );
+    expect(redirect).toBe("/me?discord=joined");
+    expect(sync).toHaveBeenCalledWith(PROFILE.discordId);
+    expect(order).toEqual(["join", "sync"]);
+  });
+
+  it("a failed sync NEVER fails the link", async () => {
+    const user = await makeUser("StandinSyncFails");
+    const { redirect } = await handleDiscordCallback(
+      prisma,
+      callbackInput(user.id),
+      happyDeps({
+        syncStandinRole: vi.fn().mockRejectedValue(new Error("discord down")),
+      }),
+    );
+    expect(redirect).toBe("/me?discord=linked");
+    expect(await discordOf(user.id)).toEqual(PROFILE);
+  });
+});
+
 describe("the return path — where a link lands", () => {
   // Linking is a full-page round-trip that used to always dump the player on
   // /me — wrong for everyone who clicked from the dashboard join nag. Only a

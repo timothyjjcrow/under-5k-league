@@ -106,6 +106,22 @@ export const SETTING_KEYS = {
   // inhouse channels: Discord's own channel permissions for it. Unset = bans
   // leave Discord alone.
   INHOUSE_BAN_ROLE_ID: "inhouseBanRoleId",
+  // Discord role id the bot keeps on every standin and free agent of the
+  // active season ("Standin", Tim's call 2026-11-17; set on /admin's Discord
+  // card). Unset = the site leaves the role alone.
+  STANDIN_ROLE_ID: "standinRoleId",
+  // JSON ledger of who the site last made sure holds the Standin role
+  // (standin-role.ts): `{roleId, held: discordId[], away: {discordId: ms}}`.
+  // Automatic passes write only the difference from it; the admin's "Sync
+  // Standin role now" rewrites it from a live read. Only
+  // standin-role-service.ts writes it.
+  STANDIN_ROLE_STATE: "standinRoleState",
+  // ISO timestamp: the spam floor between automatic Standin role passes
+  // that write to Discord (claimThrottle).
+  STANDIN_ROLE_AT: "standinRoleAt",
+  // ISO timestamp of the worker's last look at the Standin role in a pass
+  // that changed nothing (claimThrottle), like LEAGUE_STATUS_CHECK_AT.
+  STANDIN_ROLE_CHECK_AT: "standinRoleCheckAt",
   // ISO timestamp claimed by the automation worker's hourly player data
   // refresh (medals, scouting stats, Steam names, report-card backfill). A
   // failed OpenDota call writes a FUTURE timestamp here, which is the

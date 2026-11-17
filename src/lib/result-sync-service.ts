@@ -45,6 +45,7 @@ import { announcePlayoffRoundOnce } from "./playoff-round-announcement";
 import { advanceTiebreakerWeek } from "./tiebreaker-service";
 import { syncInhouseBoard } from "./inhouse-board-service";
 import { syncLeagueStatusFromWorker } from "./league-status-service";
+import { syncStandinRoleFromWorker } from "./standin-role-service";
 import {
   deliverInhouseAnnouncements,
   reconcileMissingInhouseResultAnnouncements,
@@ -1418,6 +1419,31 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
       logStepFailure("status-card", error);
+    }
+  }
+
+  // The Discord Standin role (standin-role-service.ts), after the import
+  // that may have crowned a champion (the season's end takes it off) and the
+  // lot that may have finished the draft (free agents get it). Otherwise it
+  // looks at most every STANDIN_ROLE_IDLE_CHECK_SECONDS, which also retries
+  // absentees and a pass an after-response task lost. Writes only the
+  // difference; a Discord surface, so it shares the notification codes.
+  if (!canStartWork(options, MIN_DISCORD_STEP_MS)) {
+    skipped.push(RESULT_SYNC_SKIPPED.NOTIFICATIONS);
+  } else {
+    try {
+      await syncStandinRoleFromWorker(
+        league.imported > 0 || draft.advanced || playoff,
+        {
+          deadlineAtMs:
+            options.deadlineMs === undefined
+              ? undefined
+              : options.deadlineMs - MIN_DB_STEP_MS,
+        },
+      );
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
+      logStepFailure("standin-role", error);
     }
   }
 

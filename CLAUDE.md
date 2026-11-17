@@ -32,7 +32,7 @@ note before changing that area: it is required reading, not background.
 | [results-and-opendota](docs/features/results-and-opendota.md) | OpenDota calls, game imports, the league feed, the automation worker, player data refreshes, report cards |
 | [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal and inhouse bans (`/admin/inhouse-players`) |
 | [inhouse-duels](docs/features/inhouse-duels.md) | the 1v1 mid queue and duels: pairing, their bot lobbies, results and clocks, the 1v1 card on `/inhouse`, the 1v1 leaderboard |
-| [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, account linking, the queue board, the #schedule status card |
+| [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, the Standin role, account linking, the queue board, the #schedule status card |
 | [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, the Captains page (`/captains`), `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
 | [players-and-registration](docs/features/players-and-registration.md) | signup and MMR rules, the Discord a signup needs, the player pool and scouting, profiles, compare, team names, logos and jerseys |
@@ -105,7 +105,8 @@ note before changing that area: it is required reading, not background.
 - **Discord:** transport in `discord.ts`, the outbox in
   `league-announcement-outbox.ts`, the queue board in
   `inhouse-board-service.ts`, the #schedule status card in
-  `league-status-service.ts`, bot-token calls only in `discord-roles.ts`.
+  `league-status-service.ts`, the Standin role in `standin-role-service.ts`,
+  bot-token calls only in `discord-roles.ts`.
 - **Lobby bot:** `ops/dota-lobby-bot`, on the box as `ggd2l-bot.service`
   since 2026-10-18; the sites call it over loopback (`http://127.0.0.1:8090`),
   `ops/dota-lobby-relay` is the rollback path, and `dota-lobby-service.ts`
