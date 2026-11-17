@@ -52,6 +52,7 @@ import {
 } from "./draft-history";
 import { isSerializationConflict, isUniqueViolation } from "./prisma-errors";
 import { publishDraftRoomChange } from "./draft-room-version";
+import { refreshStandinRole } from "./standin-role-service";
 
 export type DraftActionResult = { ok: true } | { ok: false; error: string };
 
@@ -298,6 +299,9 @@ async function announceDraftComplete(
 ): Promise<void> {
   const pingKey = draftTeamsPingKey(seasonId, season.runId);
   let unqueuedClaim = false;
+  // The auction is done: unsold players are free agents now, who hold the
+  // Discord Standin role (standin-role.ts). After the response; never throws.
+  void refreshStandinRole();
   // The draft is over: live-draft posts still waiting (a webhook outage) are
   // stale, and must not land after the teams post as if the auction were on.
   await expireLeagueAnnouncementGroup(

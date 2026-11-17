@@ -20,6 +20,7 @@ import {
   type GuildJoin,
 } from "./discord-roles";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
+import { refreshStandinRole } from "./standin-role-service";
 import { isUniqueViolation } from "./prisma-errors";
 
 type Db = Pick<PrismaClient, "user">;
@@ -133,6 +134,13 @@ export type CallbackDeps = {
    * abandoned must never cost them the link.
    */
   stripPingRole: (discordId: string) => Promise<void>;
+  /**
+   * Bring the Standin role in line after the link commits: a standin who
+   * just linked gets it at once (`retryNow`, even if an earlier try found
+   * the account outside the server), and an account this link replaced
+   * loses it. Best-effort and after the response (standin-role-service.ts).
+   */
+  syncStandinRole?: (discordId: string) => Promise<void>;
 };
 
 const DEFAULT_DEPS: CallbackDeps = {
@@ -150,6 +158,8 @@ const DEFAULT_DEPS: CallbackDeps = {
     if (!cfg) return; // no ping role configured — nothing to strip
     await setPingRole(discordId, false, cfg);
   },
+  syncStandinRole: (discordId) =>
+    refreshStandinRole({ retryNow: [discordId] }),
 };
 
 /**
@@ -243,6 +253,12 @@ export async function handleDiscordCallback(
     primeMembershipMemo(profile.discordId, "member");
   } else if (join === "joined-pending") {
     primeMembershipMemo(profile.discordId, "pending");
+  }
+  // After the join, so a standin who just joined the server can be given it.
+  try {
+    await deps.syncStandinRole?.(profile.discordId);
+  } catch {
+    /* best-effort by contract */
   }
   return {
     redirect: oauthLandingPath(join ? JOIN_CODES[join] : "linked", packed.next),

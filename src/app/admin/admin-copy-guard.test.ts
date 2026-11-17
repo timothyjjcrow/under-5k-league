@@ -130,6 +130,10 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   // sends the admin to the builder's danger button (its JSX text line; the
   // lock line's string literal can't satisfy it).
   { quoted: "Regenerate schedule", rendered: "Regenerate schedule\n" },
+  // saveStandinRole's toast and the Standin role card's own note send the
+  // admin to the sync button (its JSX text line, which the toast's string
+  // literal can't satisfy).
+  { quoted: "Sync Standin role now", rendered: "Sync Standin role now\n" },
 ];
 
 describe("admin copy names only controls that exist", () => {

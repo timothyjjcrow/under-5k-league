@@ -1,7 +1,8 @@
 "use server";
 
 // Admin actions for the Discord integration: the league, inhouse board,
-// inhouse alert and status card webhooks, the inhouse ping role, test posts,
+// inhouse alert and status card webhooks, the inhouse ping role, the Standin
+// role and its sync, test posts,
 // the pinned inhouse queue board, the league status card, and discarding
 // waiting league posts.
 
@@ -32,6 +33,8 @@ import {
 import { getSetting, setSetting, SETTING_KEYS } from "@/lib/settings";
 import type { ActionResult } from "@/lib/action-result";
 import { normalizeDiscordWebhookUrl } from "@/lib/discord-webhook.mjs";
+import { reconcileStandinRole } from "@/lib/standin-role-service";
+import { standinRoleSyncMessage } from "@/lib/standin-role";
 import { adminOrError, refresh } from "./admin-shared";
 
 /** Save the Discord webhook used for league announcements. */
@@ -338,6 +341,65 @@ export async function setInhousePingRole(
     message:
       "Role saved — the queue-filling and match-found messages will ping it. Make sure members can self-assign it.",
   };
+}
+
+/**
+ * Save the Discord role the bot keeps on the season's standins and free
+ * agents ("Standin", Tim's call 2026-11-17; who holds it is
+ * holdsStandinRole in standin-role.ts). Blank turns it off: the site then
+ * leaves the role alone. Saving gives it to everyone who should hold it,
+ * after the response, through the refresh below.
+ */
+export async function saveStandinRole(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  // A raw snowflake or a pasted <@&id> mention, as for the other roles.
+  const id = str(formData, "standinRoleId").trim().replace(/^<@&(\d+)>$/, "$1");
+  if (id && !/^\d{15,25}$/.test(id)) {
+    return {
+      error:
+        "That doesn't look like a role id. In Discord: Server Settings → Roles → right-click the role → Copy Role ID (needs Developer Mode).",
+    };
+  }
+  await setSetting(SETTING_KEYS.STANDIN_ROLE_ID, id);
+  await logAdminAction({
+    action: "saveStandinRole",
+    summary: id
+      ? `Set the Standin Discord role to ${id}`
+      : "Turned off the Standin Discord role",
+  });
+  refresh();
+  return {
+    message: id
+      ? "Standin role saved: the site gives it to the season's standins and free agents in the next few seconds, and keeps it right as they sign up, withdraw or get signed. Press \u201cSync Standin role now\u201d to check everyone in the server against the list."
+      : "Standin role off: the site leaves that role alone now.",
+  };
+}
+
+/**
+ * Read every member the Standin role rule is about, live, and fix whoever
+ * differs (standin-role-service.ts reconcileStandinRole). The toast gives
+ * the counts.
+ */
+export async function syncStandinRoleNow(
+  _prev: ActionResult,
+  _formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  const result = await reconcileStandinRole();
+  if (!result.ok) return { error: result.error };
+  const { counts } = result;
+  await logAdminAction({
+    action: "syncStandinRoleNow",
+    summary: `Synced the Standin Discord role: ${counts.holders} should hold it, gave ${counts.given}, took off ${counts.taken}, ${counts.notInServer} not in the server, ${counts.failed} unanswered`,
+  });
+  refresh();
+  const message = standinRoleSyncMessage(counts);
+  return counts.forbidden ? { error: message } : { message };
 }
 
 /** Post a test message to whichever channel inhouse currently uses. */

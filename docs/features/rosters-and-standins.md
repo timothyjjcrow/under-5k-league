@@ -50,6 +50,21 @@ in `src/app/matches/[id]/`.
   remove, and agreeing to or declining a standin request send from BOTH the
   captain action (`standins.ts`) and the admin action (`admin-roster.ts`); miss
   one and that path stops notifying.
+- **Every roster move keeps the Discord Standin role right by itself**
+  (Tim's call, 2026-11-17; [discord](discord.md#the-standin-role)). The role
+  is on every ACTIVE unrostered STANDIN signup of the active season and,
+  once the auction is done, every ACTIVE unrostered PLAYER signup (a free
+  agent): `holdsStandinRole` (`standin-role.ts`). No move calls Discord
+  itself: the admin actions' `refresh()`, `registration.ts`'s `refresh()`
+  (signups, `leaveLeague`) and the auction's completion run a pass after the
+  response that writes only what changed. So a signing (`signFreeAgent`) or
+  a removal (`withdrawSignup`, `leaveLeague`) takes it off, a release gives a
+  released player it back (a free agent), `promoteStandinToPlayer` keeps it
+  after the auction until the signing and takes it off before (the draft
+  pool), and the season's end takes it off everyone. A new move that
+  changes who signed up or who holds a seat needs no role code, only a
+  `refresh()` after its commit. Bookings don't touch it: a booked standin is
+  still a standin.
 
 ## Permanent roster moves
 

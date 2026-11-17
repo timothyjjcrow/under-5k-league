@@ -1,6 +1,10 @@
 import { prisma } from "./prisma";
 import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "./constants";
-import { getInhouseBanRoleId, getInhousePingRoleId } from "./discord";
+import {
+  getInhouseBanRoleId,
+  getInhousePingRoleId,
+  getStandinRoleId,
+} from "./discord";
 import type { DiscordReachFunnel, ReachPlayer } from "./discord-reach";
 import { discordMutationsAllowed } from "./discord-mutation-policy";
 import { discordLinkingConfigured } from "./discord-oauth";
@@ -18,7 +22,8 @@ import {
 // ticks a box on /me and we add the role over the REST API.
 //
 // This is the ONE place the app uses a bot token, and it stays deliberately
-// tiny: role add and remove, the inhouse night's server event (create, edit,
+// tiny: role add and remove (the inhouse ping, inhouse ban and Standin
+// roles), the inhouse night's server event (create, edit,
 // delete, interested count) and reads; no gateway connection, no background
 // process, no slash commands. The token is a bearer credential
 // under the same rule as the webhook URL — server-only, never rendered, never
@@ -79,6 +84,20 @@ export async function getInhouseBanRoleConfig(): Promise<RoleConfig | null> {
   const guild = getGuildConfig();
   if (!guild) return null;
   const roleId = await getInhouseBanRoleId();
+  if (!roleId) return null;
+  return { ...guild, roleId };
+}
+
+/**
+ * Token, guild and the Standin role (standin-role.ts), or null. Null also
+ * where Discord writes are off (a preview, staging), like the ban role, so
+ * nothing there claims a role was given.
+ */
+export async function getStandinRoleConfig(): Promise<RoleConfig | null> {
+  if (!discordMutationsAllowed()) return null;
+  const guild = getGuildConfig();
+  if (!guild) return null;
+  const roleId = await getStandinRoleId();
   if (!roleId) return null;
   return { ...guild, roleId };
 }
@@ -174,15 +193,21 @@ const RATE_WAIT_MAX_MS = 2_500;
 const RATE_GATE_SLOP_MS = 20;
 /** guildId → epoch-ms until which the member bucket is known to be empty. */
 const memberRouteBlocked = new Map<string, number>();
+/** The same for role writes (add or remove a member's role), which the
+ *  Standin role sync spends several of in a row. */
+const roleRouteBlocked = new Map<string, number>();
 
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 /** Wait out a known-empty bucket. False = the total wait exceeds the cap — don't
  *  spend a request on a guaranteed 429. */
-async function memberGateWait(guildId: string): Promise<boolean> {
+async function routeGateWait(
+  blocked: Map<string, number>,
+  guildId: string,
+): Promise<boolean> {
   const deadline = Date.now() + RATE_WAIT_MAX_MS;
   for (;;) {
-    const blockedUntil = memberRouteBlocked.get(guildId) ?? 0;
+    const blockedUntil = blocked.get(guildId) ?? 0;
     const wait = blockedUntil - Date.now();
     if (wait <= 0) return true;
     if (blockedUntil > deadline) return false;
@@ -192,19 +217,42 @@ async function memberGateWait(guildId: string): Promise<boolean> {
   }
 }
 
-function noteMemberRoute(guildId: string, blockedForSec: number): void {
+function noteRoute(
+  blocked: Map<string, number>,
+  guildId: string,
+  blockedForSec: number,
+): void {
   if (!Number.isFinite(blockedForSec) || blockedForSec < 0) return;
-  memberRouteBlocked.set(
+  blocked.set(
     guildId,
-    Math.max(
-      memberRouteBlocked.get(guildId) ?? 0,
-      Date.now() + blockedForSec * 1000,
-    ),
+    Math.max(blocked.get(guildId) ?? 0, Date.now() + blockedForSec * 1000),
   );
+}
+
+async function memberGateWait(guildId: string): Promise<boolean> {
+  return routeGateWait(memberRouteBlocked, guildId);
+}
+
+function noteMemberRoute(guildId: string, blockedForSec: number): void {
+  noteRoute(memberRouteBlocked, guildId, blockedForSec);
+}
+
+/** A 429's wait in seconds: the body's precise retry_after, else the
+ *  whole-second Retry-After header, else 1 (never a free-spinning retry). */
+async function retryAfterSeconds(res: Response): Promise<number> {
+  let retryAfter = Number(res.headers.get("retry-after"));
+  try {
+    const body = (await res.json()) as { retry_after?: unknown };
+    if (typeof body?.retry_after === "number") retryAfter = body.retry_after;
+  } catch {
+    /* headers-only is fine */
+  }
+  return Number.isFinite(retryAfter) ? retryAfter : 1;
 }
 
 export function _clearMemberRouteGateForTests(): void {
   memberRouteBlocked.clear();
+  roleRouteBlocked.clear();
 }
 
 /**
@@ -233,14 +281,7 @@ export async function fetchGuildMember(
       // Retry-After header is the whole-second fallback. No parseable value
       // still blocks the route briefly — a free-spinning retry loop against a
       // 429 is the one thing this must never become.
-      let retryAfter = Number(res.headers.get("retry-after"));
-      try {
-        const body = (await res.json()) as { retry_after?: unknown };
-        if (typeof body?.retry_after === "number") retryAfter = body.retry_after;
-      } catch {
-        /* headers-only is fine */
-      }
-      noteMemberRoute(cfg.guildId, Number.isFinite(retryAfter) ? retryAfter : 1);
+      noteMemberRoute(cfg.guildId, await retryAfterSeconds(res));
       continue; // second pass re-enters the gate: waits if capped, else null
     }
     // Proactive half: when this response spent the bucket's last request,
@@ -515,20 +556,53 @@ export async function setInhouseBanRole(
   return setMemberRole(discordId, on, cfg);
 }
 
+/**
+ * Add or remove the Standin role (getStandinRoleConfig;
+ * standin-role-service.ts decides who). The same idempotent call again.
+ */
+export async function setStandinRole(
+  discordId: string,
+  on: boolean,
+  cfg: RoleConfig,
+): Promise<RoleChange> {
+  return setMemberRole(discordId, on, cfg);
+}
+
+/**
+ * The one role write behind all three roles, paced like the member route:
+ * the Standin role sync makes several in a row, so wait out a bucket the
+ * last answer said was empty, and on a 429 honour retry_after once. A wait
+ * past the cap is "failed" now, which every caller retries later.
+ */
 async function setMemberRole(
   discordId: string,
   on: boolean,
   cfg: RoleConfig,
 ): Promise<RoleChange> {
-  const res = await call(
-    cfg,
-    `/guilds/${cfg.guildId}/members/${discordId}/roles/${cfg.roleId}`,
-    on ? "PUT" : "DELETE",
-  );
-  if (!res) return "failed";
-  if (res.ok || res.status === 204) return "ok";
-  if (res.status === 404) return "not-a-member";
-  if (res.status === 403) return "forbidden";
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!(await routeGateWait(roleRouteBlocked, cfg.guildId))) return "failed";
+    const res = await call(
+      cfg,
+      `/guilds/${cfg.guildId}/members/${discordId}/roles/${cfg.roleId}`,
+      on ? "PUT" : "DELETE",
+    );
+    if (!res) return "failed";
+    if (res.status === 429) {
+      noteRoute(roleRouteBlocked, cfg.guildId, await retryAfterSeconds(res));
+      continue;
+    }
+    if (Number(res.headers.get("x-ratelimit-remaining")) === 0) {
+      noteRoute(
+        roleRouteBlocked,
+        cfg.guildId,
+        Number(res.headers.get("x-ratelimit-reset-after")),
+      );
+    }
+    if (res.ok || res.status === 204) return "ok";
+    if (res.status === 404) return "not-a-member";
+    if (res.status === 403) return "forbidden";
+    return "failed";
+  }
   return "failed";
 }
 

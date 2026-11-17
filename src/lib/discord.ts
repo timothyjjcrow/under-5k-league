@@ -2178,6 +2178,14 @@ export async function getInhouseBanRoleId(): Promise<string | null> {
 }
 
 /**
+ * The role the bot keeps on the active season's standins and free agents
+ * ("Standin", standin-role.ts), or null: the site then leaves it alone.
+ */
+export async function getStandinRoleId(): Promise<string | null> {
+  return (await getSetting(SETTING_KEYS.STANDIN_ROLE_ID)) || null;
+}
+
+/**
  * Where the persistent INHOUSE BOARD goes. Alerts have their own resolver
  * (`getInhouseAlertWebhookUrl`) and fall back here when no alert channel is
  * configured. A Discord webhook is bound to the channel it was created in, so

@@ -14,6 +14,7 @@ import { revalidatePath, updateTag } from "next/cache";
 import { requireAdmin, type SessionUser } from "@/lib/auth";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";
 import { refreshLeagueStatus } from "@/lib/league-status-service";
+import { refreshStandinRole } from "@/lib/standin-role-service";
 
 /**
  * The signed-in admin, or the refusal every admin action returns as it is.
@@ -52,6 +53,10 @@ export function refresh() {
   // Every admin write may move the #schedule status card. It repaints after
   // the response and only when what it says changed (league-status-service).
   void refreshLeagueStatus();
+  // And who holds the Discord Standin role (a signing, a release, a removed
+  // signup, a phase change): after the response, writing only the difference
+  // (standin-role-service).
+  void refreshStandinRole();
 }
 
 // Game imports/edits also invalidate the cached all-games stat scans
@@ -66,4 +71,6 @@ export function refreshGames() {
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
   void refreshLeagueStatus();
+  // A recorded final can end the season, which takes the Standin role off.
+  void refreshStandinRole();
 }

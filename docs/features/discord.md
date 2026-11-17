@@ -2,12 +2,13 @@
 
 League announcements (webhook plus a durable outbox), inhouse alerts, the
 pinned inhouse queue board and the league status card, the small bot behind
-the ping role and membership checks, and Discord account linking. Main files:
+the ping role, the Standin role and membership checks, and Discord account
+linking. Main files:
 `src/lib/discord.ts` (formatters, transport), `league-announcement-outbox.ts` +
 `league-delivery.ts`, `discord-payload.ts`, `discord-escape.ts`,
 `discord-mentions.ts`, `inhouse-board.ts` + `inhouse-board-service.ts`,
 `league-status.ts` + `league-status-snapshot.ts` + `league-status-service.ts`,
-`discord-roles.ts` (bot),
+`discord-roles.ts` (bot), `standin-role.ts` + `standin-role-service.ts`,
 `discord-reach.ts`, `discord-oauth.ts` + `discord-link-service.ts`. Admin
 actions: `src/app/actions/admin-discord.ts`.
 
@@ -44,7 +45,10 @@ actions: `src/app/actions/admin-discord.ts`.
 - **Read Discord state live; never mirror it into a column** (it drifts the
   moment someone changes it in Discord). Memo hot reads instead. Don't mirror
   rosters into per-team roles: mentioning who owes an answer does the same
-  targeting with no reconcile debt.
+  targeting with no reconcile debt. The one role the site keeps in step with
+  the league is Standin (Tim's call, 2026-11-17;
+  [below](#the-standin-role)): its ledger records the site's own writes so
+  a quiet pass asks Discord nothing, and the admin's Sync reads live.
 - **Return the announcement; let the action send it after commit.** Services
   return `announcement` + `mentions` (or `notifyUserId`). Sends return a boolean
   and never throw, so a webhook failure can't touch the write.
@@ -264,8 +268,8 @@ actions: `src/app/actions/admin-discord.ts`.
 ## The ping role and the bot
 
 - **Keep the bot tiny.** `discord-roles.ts` is the only bot-token user: REST
-  only, no gateway, process or slash commands. Besides the ping role and the
-  inhouse ban role (below) it creates,
+  only, no gateway, process or slash commands. Besides the ping role, the
+  inhouse ban role and the Standin role (below) it creates,
   edits and deletes the inhouse night's server event (`createGuildEvent`,
   `updateGuildEvent`, `deleteGuildEvent`; `forbidden` means the bot lacks
   Create Events, `gone` that someone deleted the event) and reads who marked
@@ -293,6 +297,12 @@ actions: `src/app/actions/admin-discord.ts`.
   role and be denied the inhouse channels (🎯 INHOUSES) by its own channel
   permissions, and no other role of the player's may explicitly allow them
   there, since a role's allow beats another role's deny.
+- **Role writes are paced like the member route.** `setMemberRole` (behind
+  `setPingRole`, `setInhouseBanRole` and `setStandinRole`) reads
+  `X-RateLimit-Remaining`/`Reset-After` and waits out an empty bucket, and on
+  a 429 honours `retry_after` once, under the same `RATE_WAIT_MAX_MS` cap; a
+  longer wait is `failed`, which each caller retries later. The Standin sync
+  is the caller that makes several writes in a row.
 - **`hasPingRole` returns `boolean | null`;** null is unknown (an unticked box
   for an opted-in player invites a click that changes nothing). **`forbidden`
   (403) is its own outcome:** the bot's role sits below the ping role, retrying
@@ -312,6 +322,80 @@ actions: `src/app/actions/admin-discord.ts`.
   Re-linking a DIFFERENT account: `linkDiscordAccount` returns
   `previousDiscordId`, and the callback's `stripPingRole` dep strips it after
   the link commits. Same-account re-links strip nothing.
+
+## The Standin role
+
+Tim's call (2026-11-17, [DECISIONS](../DECISIONS.md#product-decisions)): each
+league Discord marks who a captain can call on to cover a seat, and the site
+keeps that role right by itself. It was first given by hand that day (a
+one-off bot script: 39 US members, 5 Europe). Rule and bookkeeping:
+`standin-role.ts` (pure, `standin-role.test.ts`); reads and passes:
+`standin-role-service.ts` (`standin-role.itest.ts`); call sites pinned by
+`standin-role-hooks.test.ts`.
+
+- **Who holds it is one rule, `holdsStandinRole`:** in the active season,
+  not COMPLETE, an ACTIVE signup with no roster seat (a `TeamMember` row or a
+  team's `captainId`) that is a STANDIN signup, in every phase from signups
+  on, or a PLAYER signup once the auction is done (`postAuctionWorkOpen`: a
+  free agent, who can cover). Before the auction an unrostered player is in
+  the draft pool, so a purchase never touches the role; the auction's
+  completion gives it to the unsold. A withdrawal, a removal, a signing and a
+  draft seat take it off, and the season's end takes it off everyone. A
+  promotion (STANDIN to PLAYER) takes it off before the auction and keeps it
+  after (a free agent until signed). It needs the OAuth-proven `discordId`.
+- **The id is the `standinRoleId` Setting,** set on /admin's Discord card
+  ("Standin role": a raw id or a pasted `<@&id>`; blank turns it off and the
+  site leaves the role alone). `getStandinRoleConfig` needs it, the bot token
+  and guild, and Discord writes allowed here, like the ban role. In each
+  server the bot's role must sit above Standin.
+- **Automatic passes write only the difference.** `syncStandinRole` compares
+  the rule's answer with the `standinRoleState` ledger (who the site last
+  made sure holds it, and who wasn't in the server, with when) and writes
+  only what differs: with nothing to change a pass is six small reads (the
+  role id, the season, its signups, rosters and teams, the ledger) and no
+  Discord request. A
+  holder whose give answered `not-a-member` waits
+  `STANDIN_ROLE_AWAY_RETRY_MS` (6h) before a pass tries again, except for
+  the Discord link callback's `retryNow`. A
+  failed or forbidden write leaves the ledger alone, so the next pass
+  retries; a `forbidden` stops the pass (it applies to every write). The
+  ledger is written last-write-wins: overlapping passes (the 5s
+  `standinRoleAt` floor keeps that rare) at worst repeat an idempotent
+  write. A new role id starts an empty ledger and leaves the old role where
+  it is.
+- **Who runs a pass** (`refreshStandinRole`, after the response, a second
+  look if it lost the floor): admin-shared `refresh()` and `refreshGames()`
+  (every admin action: signings, releases, promotions, removals, captain
+  changes, phase moves, a recorded final), `registration.ts`'s `refresh()`
+  (signups, withdrawals, the Discord unlink), the OAuth callback after the
+  join (`syncStandinRole` dep, the new account with `retryNow`; a replaced
+  account falls out of the rule and loses it), `announceDraftComplete` (the
+  auction's last sale, from whichever request closed it), and the worker
+  (`syncStandinRoleFromWorker`: after a pass that imported a game, sold a lot
+  or built a playoff round, else every `STANDIN_ROLE_IDLE_CHECK_SECONDS`).
+  No automation-gate wake of its own, like the status card. At most
+  `STANDIN_ROLE_MAX_WRITES` (60) writes and `STANDIN_ROLE_PASS_MS` per pass;
+  the rest wait for the next.
+- **"Sync Standin role now" reads every member live** (`reconcileStandinRole`,
+  admin `syncStandinRoleNow`): this season's linked signups of any status,
+  plus everyone the ledger lists (a past season's standins, an unlinked
+  account), four at a time through `fetchGuildMember` within
+  `STANDIN_ROLE_SYNC_MS`. Each gets `standinRoleLiveStep`: give, take, keep
+  or absent (not in the server); an unknown read writes anyway (both writes
+  are idempotent and the write's answer is the truth). It rewrites the
+  ledger from what it saw and its toast counts who should hold it (standins
+  and free agents), what it gave and took, who isn't in the server, who has
+  no linked Discord, and what Discord didn't answer
+  (`standinRoleSyncMessage`); a hierarchy refusal is an error toast naming
+  the fix. This is how a role changed by hand in Discord comes back in line:
+  automatic passes trust the ledger.
+- **The card reads only the database** (`getStandinRoleStatus`): who should
+  hold it, standins and free agents, the names with no linked Discord, and
+  how many the site last gave it to. Sync is disabled where writes are off
+  or the bot isn't configured.
+- **Not built:** a periodic live sweep (a hand edit in Discord waits for the
+  admin's Sync), removing the old role when the id changes, and a role for
+  captains or per-team roles (see the mirror rule above).
 
 ## Account linking (OAuth)
 
