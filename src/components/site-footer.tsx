@@ -1,3 +1,4 @@
+import { Fragment } from "react";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "@/components/app-link";
 import { Badge, DiscordButton } from "@/components/ui";
@@ -122,18 +123,22 @@ export function SiteFooter({
             <span aria-hidden="true" className="text-line">
               •
             </span>
-            <a
-              href={LEAGUE_CONFIG.merchUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Merch — GGD2L shop (opens in a new tab)"
-              className="-my-1 inline-flex items-center gap-1 rounded py-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
-            >
-              Merch <span aria-hidden="true">↗</span>
-            </a>
-            <span aria-hidden="true" className="text-line">
-              •
-            </span>
+            {LEAGUE_CONFIG.merch.shops.map((shop) => (
+              <Fragment key={shop.group}>
+                <a
+                  href={shop.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  aria-label={`Merch — ${shop.label} (opens in a new tab)`}
+                  className="-my-1 inline-flex items-center gap-1 rounded py-1 transition-colors hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60"
+                >
+                  {shop.label} <span aria-hidden="true">↗</span>
+                </a>
+                <span aria-hidden="true" className="text-line">
+                  •
+                </span>
+              </Fragment>
+            ))}
             <a
               href="https://buymeacoffee.com/vgedota"
               target="_blank"

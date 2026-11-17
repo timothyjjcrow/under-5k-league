@@ -462,9 +462,10 @@ test("phones get one menu: the tab bar's sheet, plus the avatar's account menu",
   for (const label of ["Hall of Fame", "Record book", "Compare players"]) {
     await expect(sheet.getByRole("link", { name: label })).toHaveCount(0);
   }
-  // How it works lives in Explore's League group, listed once; Merch once too.
+  // How it works lives in Explore's League group, listed once; Merch is one
+  // link per shop (Group A, Group B).
   await expect(sheet.getByRole("link", { name: "How it works" })).toHaveCount(1);
-  await expect(sheet.getByRole("link", { name: /Merch/ })).toHaveCount(1);
+  await expect(sheet.getByRole("link", { name: /Merch/ })).toHaveCount(2);
   // No page is both a tab and an entry in the sheet.
   for (const label of await dock.getByRole("link").allTextContents()) {
     await expect(

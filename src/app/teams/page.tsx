@@ -240,7 +240,7 @@ export default async function TeamsPage() {
             (a, b) => (rankOf.get(a.id) ?? 99) - (rankOf.get(b.id) ?? 99),
           )
         : teams;
-  // Teams with a Fourthwall jersey link to its preview on their own page.
+  // Teams with Fourthwall jerseys link to them on their own page.
   const withJersey = new Set(
     teams
       .filter((team) =>
@@ -522,7 +522,7 @@ export default async function TeamsPage() {
                         href={`/teams/${t.id}#team-jersey`}
                         className={textLink("text-xs")}
                       >
-                        Team jersey
+                        Team jerseys
                         <span className="sr-only"> for {t.name}</span>{" "}
                         <LinkArrow />
                       </Link>

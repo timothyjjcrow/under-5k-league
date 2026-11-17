@@ -438,4 +438,7 @@ Grid, filter and URL rules: `pages-and-ui.md`.
 - **Jerseys follow the team id, never the name** (`getTeamJersey`), since
   renames are open all season. Fixtures fall back to `JERSEY_ROSTER_MATCH_MIN`
   of the set's five players by Steam name (a majority, so no two teams match).
-  US league only.
+  US league only. A set is the team's five Season 2 products in its group's
+  shop (`MERCH_SHOP_URLS`); the product addresses are listed in
+  `team-jerseys.ts`, so a renamed or replaced product needs its address
+  changed there ([TEAM-JERSEYS](../TEAM-JERSEYS.md)).

@@ -74,7 +74,8 @@ test("phone dock opens league tools in one tap and keeps feedback clear", async 
   expect(sheetBounds.y + sheetBounds.height).toBeLessThanOrEqual(
     (await dock.boundingBox())!.y,
   );
-  const merch = explore.getByRole("link", { name: /Merch/ });
+  // The last shop link is the sheet's last row.
+  const merch = explore.getByRole("link", { name: /Merch/ }).last();
   await merch.scrollIntoViewIfNeeded();
   await expect(merch).toBeInViewport();
   noErrors();

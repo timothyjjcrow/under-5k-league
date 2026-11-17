@@ -14,6 +14,16 @@ type LeagueEnvironment = {
 
 const US_DISCORD_INVITE = "https://discord.gg/H7PJ4VxUGh";
 
+/** The league's Fourthwall shops: one per regular-season group of the US
+ * league's Season 2, each holding its six teams' player jerseys
+ * (`src/lib/team-jerseys.ts` links every team to its own five). */
+export const MERCH_SHOP_URLS = {
+  A: "https://ggd2l-shop.fourthwall.com/",
+  B: "https://ggd2l-group-b-shop.fourthwall.com/",
+} as const;
+
+export type MerchShopGroup = keyof typeof MERCH_SHOP_URLS;
+
 /** Public deployment identity. Each region still owns a separate database,
  * Discord server, and bot; changing this setting never partitions shared data. */
 export function createLeagueConfig(env: LeagueEnvironment) {
@@ -63,7 +73,26 @@ export function createLeagueConfig(env: LeagueEnvironment) {
     // or each subscriber gets a duplicate of every event. Links in the events
     // still use the site URL.
     calendarUidHost: europe ? "ggd2l-europe.vercel.app" : "ggd2l.vercel.app",
-    merchUrl: "https://ggd2l-shop.fourthwall.com/",
+    // Every Merch link on the site lists these, in this order. Both leagues
+    // link the same shops; Europe's labels say whose jerseys they are, since
+    // its own season has groups too.
+    merch: {
+      note: europe
+        ? "The US league's Season 2 player jerseys, in one shop per group."
+        : "Season 2 player jerseys, in one shop per group.",
+      shops: [
+        {
+          group: "A",
+          label: europe ? "US Group A jerseys" : "Group A jerseys",
+          url: MERCH_SHOP_URLS.A,
+        },
+        {
+          group: "B",
+          label: europe ? "US Group B jerseys" : "Group B jerseys",
+          url: MERCH_SHOP_URLS.B,
+        },
+      ],
+    },
     branding: {
       blendMode: europe ? "lighten" : "normal",
       // Full-size master. Only the Discord queue board uses it, as its author

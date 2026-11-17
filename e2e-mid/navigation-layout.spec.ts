@@ -260,9 +260,17 @@ test("switching layouts clears hidden panels and keeps phone navigation reachabl
       .getByRole("button", { name: "Explore league", exact: true })
       .click();
     const sheet = page.locator("#mobile-discovery");
+    // One full-width link per shop, each a 44px target, 8px apart.
     const merch = sheet.getByRole("link", { name: /Merch/ });
-    await expect(merch).toBeVisible();
-    await expect(merch).toHaveCSS("min-height", "44px");
+    await expect(merch).toHaveCount(2);
+    for (const shopLink of await merch.all()) {
+      await expect(shopLink).toBeVisible();
+      await expect(shopLink).toHaveCSS("min-height", "44px");
+    }
+    const [groupA, groupB] = await Promise.all(
+      (await merch.all()).map((shopLink) => shopLink.boundingBox()),
+    );
+    expect(groupB!.y - (groupA!.y + groupA!.height)).toBeGreaterThanOrEqual(8);
     await sheet.getByRole("link", { name: "Players", exact: true }).click();
     await expect(sheet).toHaveCount(0);
     await expect(page).toHaveURL(/\/players$/);
@@ -324,16 +332,42 @@ test("signed-out desktop and merch stay usable at the laptop breakpoint", async 
   await page.keyboard.press("Escape");
 
   // Assert the new-tab flow without making CI depend on Fourthwall uptime.
-  await context.route("https://ggd2l-shop.fourthwall.com/**", (route) =>
-    route.fulfill({
-      contentType: "text/html",
-      body: "<title>GGD2L shop</title>",
-    }),
-  );
-  const popupReady = page.waitForEvent("popup");
-  await page.locator("header").getByRole("link", { name: /Merch/ }).click();
-  const shop = await popupReady;
-  await expect(shop).toHaveURL("https://ggd2l-shop.fourthwall.com/");
-  await expect(page).toHaveURL("http://localhost:3212/");
-  await shop.close();
+  for (const shopHost of [
+    "https://ggd2l-shop.fourthwall.com/**",
+    "https://ggd2l-group-b-shop.fourthwall.com/**",
+  ]) {
+    await context.route(shopHost, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<title>GGD2L shop</title>",
+      }),
+    );
+  }
+  // Merch is one button and a menu with a link per shop; each opens its own
+  // shop in a new tab and closes the menu.
+  const merchButton = page
+    .locator("header")
+    .getByRole("button", { name: "Merch", exact: true });
+  const merchMenu = page.locator("#merch-nav");
+  for (const [label, url] of [
+    ["Group A jerseys", "https://ggd2l-shop.fourthwall.com/"],
+    ["Group B jerseys", "https://ggd2l-group-b-shop.fourthwall.com/"],
+  ] as const) {
+    await merchButton.click();
+    await expect(merchButton).toHaveAttribute("aria-expanded", "true");
+    await expectPanelFits(merchMenu);
+    await expect(merchMenu.getByRole("link")).toHaveCount(2);
+    const popupReady = page.waitForEvent("popup");
+    await merchMenu.getByRole("link", { name: new RegExp(label) }).click();
+    const shop = await popupReady;
+    await expect(shop).toHaveURL(url);
+    await expect(page).toHaveURL("http://localhost:3212/");
+    await expect(merchMenu).toHaveCount(0);
+    await shop.close();
+  }
+  // Escape closes the menu and hands focus back to its button.
+  await merchButton.click();
+  await page.keyboard.press("Escape");
+  await expect(merchMenu).toHaveCount(0);
+  await expect(merchButton).toBeFocused();
 });
