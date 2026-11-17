@@ -30,6 +30,9 @@ import {
   withdrawGateError,
 } from "@/lib/registration";
 import { pendingCoverWhere } from "@/lib/standin";
+import { takeStandinGame } from "@/lib/standin-game-cookie";
+import { sendStandinOfferPost } from "@/lib/standin-offer-post";
+import { offerToStandIn } from "@/lib/standin-offer-service";
 import {
   cancelPendingStandinRequests,
   standinRequestCancellations,
@@ -832,6 +835,29 @@ export async function saveRegistration(
     );
   }
 
+  // A standin signup that came from a game on the Standins page ("Register
+  // as a standin to play" remembers it in a cookie): the same submit puts
+  // them on that game's list, so nobody signs up and then has to go back and
+  // tap again. Consumed by any standin save, taken or not, so a later edit
+  // never offers again. After the commit and best-effort, like the invite
+  // tag: it must never fail a signup. offerToStandIn re-checks everything
+  // (the side still needs someone, the night is free), and its refusal is
+  // said in the toast instead of a silent nothing.
+  let standinGameNote = "";
+  if (type === REGISTRATION_TYPE.STANDIN) {
+    const game = await takeStandinGame();
+    if (game) {
+      try {
+        const offer = await offerToStandIn({ ...game, userId: user.id });
+        await sendStandinOfferPost(offer);
+        standinGameNote = ` · ${offer.ok ? offer.message : offer.error}`;
+      } catch {
+        standinGameNote =
+          " · we couldn't add you to that game's list; say you can play on the Standins page";
+      }
+    }
+  }
+
   // Tell the player what the medal check did to their number — a silent
   // rewrite of a form value they typed would read as a bug.
   let mmrNote = "";
@@ -858,7 +884,8 @@ export async function saveRegistration(
           (mmrNote ? "" : medalLabel)) +
       mmrNote +
       lockedMmrNote +
-      (confirmedDraft ? " · you're down as ready for draft night" : ""),
+      (confirmedDraft ? " · you're down as ready for draft night" : "") +
+      standinGameNote,
   };
 }
 

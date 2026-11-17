@@ -42,6 +42,7 @@ const INHOUSE_DUEL_MIGRATION = "20261028120000_inhouse_duel";
 const DRAFT_CLOCKS_MIGRATION = "20261028130000_draft_clocks";
 const INHOUSE_DUEL_ACCEPT_MIGRATION = "20261029120000_inhouse_duel_accept";
 const INHOUSE_BAN_MIGRATION = "20261102120000_inhouse_ban";
+const STANDIN_OFFER_MIGRATION = "20261115120000_standin_offer";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -187,6 +188,7 @@ async function rehearseFreshDatabase(url) {
           DRAFT_CLOCKS_MIGRATION,
           INHOUSE_DUEL_ACCEPT_MIGRATION,
           INHOUSE_BAN_MIGRATION,
+          STANDIN_OFFER_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -457,6 +459,7 @@ async function rehearseExistingLegacyDatabase(url) {
           DRAFT_CLOCKS_MIGRATION,
           INHOUSE_DUEL_ACCEPT_MIGRATION,
           INHOUSE_BAN_MIGRATION,
+          STANDIN_OFFER_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

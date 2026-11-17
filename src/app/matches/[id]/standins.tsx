@@ -8,9 +8,11 @@ import {
   STANDIN_MMR_ALLOWANCE,
   standinApprovalReason,
   standinMmrLabel,
+  standinPickOutcome,
   standinPickerBlock,
   type StandinBooking,
 } from "@/lib/standin";
+import { sortStandinOffers } from "@/lib/standin-offer";
 import { roleShort } from "@/lib/roles";
 import { standinAssignmentOpen } from "@/lib/league-lifecycle";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
@@ -25,6 +27,7 @@ import { canViewLeagueContact } from "@/lib/visibility";
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import Link from "@/components/app-link";
 import { DiscordTag } from "@/components/discord-tag";
+import { CopyStandinLink } from "@/components/standin-offer-link";
 import {
   StandinPicker,
   type StandinPickerCoverOption,
@@ -48,6 +51,9 @@ import {
 // The assign form says which of the two a pick does before it is sent
 // (StandinPicker over standinPickOutcome), and a booked standin's row carries
 // what the captain needs to reach them: profile, MMR, roles, Discord handle.
+// Standins who said "I can play" for this side (StandinOffer) are listed
+// above the form, each with one button that books them for the first seat
+// that needs cover; the form still picks anyone, for any seat.
 export async function StandinSection({
   match,
   viewer,
@@ -96,7 +102,7 @@ export async function StandinSection({
     myTeamId === match.homeTeamId ? match.awayTeamId : match.homeTeamId;
   const teamNameOf = (teamId: string) =>
     teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
-  const [members, registrations, rostered, outIds, declinedIds] =
+  const [members, registrations, rostered, outIds, declinedIds, offerRows] =
     await Promise.all([
       loadRosters(match),
       prisma.registration.findMany({
@@ -130,6 +136,11 @@ export async function StandinSection({
       // Standins the other captain declined for my team here: asking again
       // is refused, so the picker greys them out.
       loadDeclinedStandinIds(match, myTeamId),
+      // Standins who said they can play for my side, first come first.
+      prisma.standinOffer.findMany({
+        where: { matchId: match.id, teamId: myTeamId },
+        select: { userId: true, createdAt: true },
+      }),
     ]);
   const roster = members.filter((m) => m.teamId === myTeamId);
   const rosteredIds = new Set(rostered.map((m) => m.userId));
@@ -311,6 +322,7 @@ export async function StandinSection({
   // link nor a typed handle. Someone the server would refuse (already in
   // this match, booked the same night, declined) stays listed but can't be
   // picked, and says why.
+  const offeredIds = new Set(offerRows.map((o) => o.userId));
   const standinOptions: StandinPickerStandinOption[] = poolChoices.map(
     ({ reg: r, blocked }) => {
       const roles = roleShort(r.roles).join("/");
@@ -319,6 +331,7 @@ export async function StandinSection({
         userId: r.userId,
         name: r.user.name,
         mmr: r.mmr,
+        offered: offeredIds.has(r.userId),
         blocked,
         detail: `${standinMmrLabel(r.mmr)}${roles ? ` · ${roles}` : ""}${
           unreachable ? " · no Discord" : ""
@@ -336,6 +349,32 @@ export async function StandinSection({
     return `${standinMmrLabel(reg.mmr)}${roles ? ` · ${roles}` : ""}`;
   };
 
+  // "Said they can play": this side's offers from standins the form could
+  // still pick (in the pool, not blocked), first come first. One tap books
+  // each for the seat that needs cover first (an uncovered OUT player, else
+  // an empty seat), the same order the Covers list leads with; with no such
+  // seat there is nothing to tap for, and they stay marked in the form.
+  const needSeat =
+    coverOptions.find(
+      (c) => c.emptySeat || uncoveredOut.some((m) => m.userId === c.value),
+    ) ?? null;
+  const pickable = new Map(
+    poolChoices.filter((c) => !c.blocked).map((c) => [c.reg.userId, c.reg]),
+  );
+  const offers =
+    assignOpen && needSeat
+      ? sortStandinOffers(offerRows).flatMap((o) => {
+          const reg = pickable.get(o.userId);
+          return reg ? [reg] : [];
+        })
+      : [];
+  const needSeatName = needSeat
+    ? needSeat.emptySeat
+      ? "the open seat"
+      : (uncoveredOut.find((m) => m.userId === needSeat.value)?.user.name ??
+        "the open seat")
+    : "";
+
   // A phase where assignment is closed and nothing is booked or asked has
   // nothing to say — don't render an empty card with a disabled story.
   if (!assignOpen && assignments.length === 0 && requests.length === 0)
@@ -345,7 +384,7 @@ export async function StandinSection({
     <Card id={MATCH_ANCHOR.standins} className="scroll-mt-24">
       <CardHeader
         title="Standins"
-        subtitle="Someone can't make it? Line up cover from the standin pool yourself — the assignment announces to Discord."
+        subtitle="Someone can't make it? Pick from the standins who said they can play, or line up anyone from the pool — the assignment announces to Discord."
       />
       <CardBody className="space-y-3">
         {uncoveredOut.length > 0 ? (
@@ -537,6 +576,70 @@ export async function StandinSection({
             })}
           </ul>
         ) : null}
+        {offers.length > 0 && needSeat ? (
+          <section aria-labelledby="standin-offers-heading" className="space-y-1.5">
+            <h3
+              id="standin-offers-heading"
+              className="text-xs font-semibold uppercase tracking-wide text-muted"
+            >
+              Said they can play
+            </h3>
+            <ul className="space-y-1.5 text-sm">
+              {offers.map((reg) => {
+                const outcome = standinPickOutcome(reg.mmr, needSeat);
+                const descId = `standin-offer-${reg.userId}`;
+                return (
+                  <li
+                    key={reg.userId}
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1.5 rounded-lg border border-success/40 bg-success/10 px-3 py-2"
+                  >
+                    <span
+                      id={descId}
+                      className="min-w-[12rem] flex-1 [overflow-wrap:anywhere]"
+                    >
+                      <span aria-hidden>✋ </span>
+                      <PlayerLink userId={reg.userId} className="font-semibold">
+                        {reg.user.name}
+                      </PlayerLink>{" "}
+                      <span className="text-muted">
+                        · {standinFacts(reg.userId)} · for {needSeatName}
+                        {outcome.kind === "ask"
+                          ? ` · needs the ${teamNameOf(otherTeamId)} captain's OK, since ${outcome.reason}`
+                          : ""}
+                      </span>
+                    </span>
+                    {canViewLeagueContact(viewer, reg.userId, true) &&
+                    reg.user.discordName ? (
+                      <DiscordTag
+                        name={reg.user.discordName}
+                        verified={!!reg.user.discordId}
+                      />
+                    ) : null}
+                    <ActionForm
+                      action={captainAssignStandin}
+                      hidden={{
+                        matchId: match.id,
+                        standinUserId: reg.userId,
+                        replacingUserId: needSeat.value,
+                      }}
+                      className="ml-auto"
+                    >
+                      <SubmitButton
+                        variant={outcome.kind === "ask" ? "secondary" : "accent"}
+                        size="sm"
+                        aria-describedby={descId}
+                      >
+                        {outcome.kind === "ask"
+                          ? "Ask the other captain"
+                          : `Book ${reg.user.name}`}
+                      </SubmitButton>
+                    </ActionForm>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ) : null}
         {!assignOpen ? (
           <p className="text-sm text-muted">
             {season.status === "COMPLETE"
@@ -545,17 +648,24 @@ export async function StandinSection({
           </p>
         ) : pool.length === 0 ? (
           <p className="text-sm text-muted">
-            Nobody is in the standin pool right now — ask around the Discord;
-            late joiners can still sign up as standins.
+            Nobody is in the standin pool right now — share the standin link
+            below in Discord; late joiners can still sign up as standins.
           </p>
         ) : poolChoices.every((c) => c.blocked) ? (
           <p className="text-sm text-muted">
             Everyone in the standin pool is already booked for this match or
-            another one that night, or was declined for this one — ask around
-            the Discord; late joiners can still sign up as standins.
+            another one that night, or was declined for this one — share the
+            standin link below in Discord; late joiners can still sign up as
+            standins.
           </p>
         ) : (
           <ActionForm action={captainAssignStandin} hidden={{ matchId: match.id }}>
+            {/* The list above is the fast path; say the form is the other. */}
+            {offers.length > 0 ? (
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+                Or pick anyone from the pool
+              </p>
+            ) : null}
             {/* Keyed on the pre-selection: the picker keeps its first
                 choice, so a new "can't make it" needs a remount. */}
             <StandinPicker
@@ -583,6 +693,25 @@ export async function StandinSection({
               Browse the standin pool
             </Link>
           </p>
+        ) : null}
+        {assignOpen && needSeat ? (
+          // The game is on the Standins page while a seat needs cover; the
+          // link puts whoever opens it on the list above.
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line-soft pt-3">
+            <CopyStandinLink
+              matchId={match.id}
+              teamId={myTeamId}
+              variant="secondary"
+            />
+            <p className="min-w-[12rem] flex-1 text-xs text-muted">
+              This game is on the{" "}
+              <Link href="/standins" className={textLink("whitespace-nowrap")}>
+                Standins page
+              </Link>{" "}
+              while a seat needs cover. Share the link: any standin who opens
+              it is added to your list, and you pick.
+            </p>
+          </div>
         ) : null}
       </CardBody>
     </Card>

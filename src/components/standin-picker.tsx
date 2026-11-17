@@ -60,7 +60,11 @@ export function StandinPicker({
     cover && standin ? standinPickOutcome(standin.mmr, cover) : null;
   const option = (s: StandinPickerStandinOption) => (
     <option key={s.userId} value={s.userId} disabled={!!s.blocked}>
-      {s.blocked ? `${s.name} (${s.blocked})` : `${s.name} · ${s.detail}`}
+      {s.blocked
+        ? `${s.name} (${s.blocked})`
+        : `${s.offered ? "✋ " : ""}${s.name} · ${s.detail}${
+            s.offered ? " · said they can play" : ""
+          }`}
     </option>
   );
 

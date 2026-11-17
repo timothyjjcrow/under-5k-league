@@ -98,6 +98,7 @@ import {
 import { HeroStat, type HeroParts, type HomeViewer } from "./hero";
 import { InhouseStrip } from "./inhouse-strip";
 import { MyNextMatch } from "./my-next-match";
+import { StandinGamesCallout } from "./standin-games";
 import { ThisWeek } from "./this-week";
 import {
   UpsetChip,
@@ -132,8 +133,16 @@ export function seasonHero(
         Play an inhouse <LinkArrow />
       </Link>
     );
+    // Leads the slot: a game short a player is the fastest way in, and it
+    // renders nothing when no game needs anyone (StandinGamesCallout).
+    const standinGames = (
+      <Suspense fallback={null}>
+        <StandinGamesCallout season={season} />
+      </Suspense>
+    );
     action = !user ? (
       <>
+        {standinGames}
         <SignInHereButton variant="primary" />
         {inhouse}
         <NewcomerStandinLine />
@@ -143,6 +152,7 @@ export function seasonHero(
       // Two or three matches are left, so the standin signup has almost no
       // use: the playoffs lead, and the signup is a line.
       <>
+        {standinGames}
         <Link
           href="/schedule#playoff-bracket"
           className={buttonClasses("primary", "lg")}
@@ -158,8 +168,15 @@ export function seasonHero(
         </p>
       </>
     ) : (
+      // One standin button, never two: the callout when a game needs
+      // someone (it leads to the same signup), else the plain signup link.
       <>
-        <StandinSignupLink variant="primary" />
+        <Suspense fallback={<StandinSignupLink variant="primary" />}>
+          <StandinGamesCallout
+            season={season}
+            whenNone={<StandinSignupLink variant="primary" />}
+          />
+        </Suspense>
         {inhouse}
       </>
     );

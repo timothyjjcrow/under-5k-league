@@ -338,6 +338,12 @@ export type StandinPickerStandin = {
   mmr: number;
   /** `standinPickerBlock`'s reason; null when they can be picked. */
   blocked: string | null;
+  /**
+   * They said "I can play" for this side (a StandinOffer). They lead their
+   * group: a captain picks from people who already said yes before anyone
+   * who has to be asked.
+   */
+  offered?: boolean;
 };
 
 /**
@@ -368,9 +374,10 @@ export function standinPickOutcome(
  * The picker's standin list for the chosen seat, in the order a captain
  * wants it: who books straight away (strongest first: the best cover they
  * can lock in on their own), then who needs the other captain's OK (smallest
- * gap first, unknown MMRs last), then who can't be picked at all. With no
- * seat chosen yet nothing can be judged, so everyone pickable is `unsorted`,
- * in the order given.
+ * gap first, unknown MMRs last), then who can't be picked at all. Within the
+ * first two, standins who said they can play (`offered`) come first. With no
+ * seat chosen yet nothing can be judged, so everyone pickable is `unsorted`:
+ * those who offered, then the rest, each in the order given.
  */
 export function standinPickerGroups<T extends StandinPickerStandin>(
   standins: readonly T[],
@@ -381,18 +388,32 @@ export function standinPickerGroups<T extends StandinPickerStandin>(
 ): { unsorted: T[]; book: T[]; ask: T[]; blocked: T[] } {
   const open = standins.filter((s) => !s.blocked);
   const blocked = standins.filter((s) => s.blocked);
-  if (!cover) return { unsorted: open, book: [], ask: [], blocked };
+  // 0 for someone who offered, 1 otherwise: offers sort to the front.
+  const asked = (s: T) => Number(!s.offered);
+  if (!cover) {
+    return {
+      unsorted: [...open.filter((s) => s.offered), ...open.filter((s) => !s.offered)],
+      book: [],
+      ask: [],
+      blocked,
+    };
+  }
   const books = (s: T) => standinPickOutcome(s.mmr, cover).kind === "book";
   // Exact stored keys, the id last: the same order every render.
   const byId = (a: T, b: T) => a.userId.localeCompare(b.userId);
   return {
     unsorted: [],
-    book: open.filter(books).sort((a, b) => b.mmr - a.mmr || byId(a, b)),
+    book: open
+      .filter(books)
+      .sort((a, b) => asked(a) - asked(b) || b.mmr - a.mmr || byId(a, b)),
     ask: open
       .filter((s) => !books(s))
       .sort(
         (a, b) =>
-          Number(a.mmr <= 0) - Number(b.mmr <= 0) || a.mmr - b.mmr || byId(a, b),
+          asked(a) - asked(b) ||
+          Number(a.mmr <= 0) - Number(b.mmr <= 0) ||
+          a.mmr - b.mmr ||
+          byId(a, b),
       ),
     blocked,
   };

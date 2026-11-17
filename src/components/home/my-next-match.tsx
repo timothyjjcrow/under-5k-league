@@ -8,6 +8,8 @@ import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import { prisma } from "@/lib/prisma";
 import { readyCheckLive } from "@/lib/reschedule-ready-check";
+import { standinHomeLine } from "@/lib/standin-offer";
+import { loadStandinBoardSummary } from "@/lib/standin-offer-service";
 import { loadReadyCheckView } from "@/lib/reschedule-ready-check-service";
 import type { SeasonSnapshot } from "@/lib/queries";
 import {
@@ -268,7 +270,20 @@ export async function MyNextMatch({
     const onlyFinalLeft =
       matches.some((m) => m.phase === "FINAL" && m.status !== "COMPLETED") &&
       !matches.some((m) => m.phase === "PLAYOFF" && m.status !== "COMPLETED");
-    const copy = idleCopy(idle, onlyFinalLeft);
+    // A player in the standin pool with nothing booked: how many games need
+    // someone right now. Any ACTIVE unrostered signup can cover, so a free
+    // agent gets it too; nobody else pays for the read.
+    const standinGames =
+      idle === "standin-list" ||
+      (idle === "no-team" && viewerHasActiveRegistration)
+        ? (
+            await loadStandinBoardSummary(
+              { id: seasonId, status: seasonStatus, teamSize },
+              nowMs,
+            )
+          ).count
+        : null;
+    const copy = idleCopy(idle, onlyFinalLeft, standinGames);
     const idleCard = (
       <Card className="p-4 text-sm">
         <div className="font-medium">{copy.title}</div>
@@ -394,6 +409,8 @@ export async function MyNextMatch({
 function idleCopy(
   idle: PanelIdle,
   onlyFinalLeft: boolean,
+  /** Games that need a standin now; null when the viewer couldn't cover. */
+  standinGames: number | null,
 ): { title: string; text: string; href: string; cta: string } {
   const schedule = { href: "/schedule#fixtures", cta: "See the schedule" };
   const bracket = { href: "/schedule#playoff-bracket", cta: "See the bracket" };
@@ -458,11 +475,18 @@ function idleCopy(
     case "standin-list":
       return {
         title: "You're on the standin list",
-        text: "No booking yet. Captains book standins from a match page when they need cover.",
-        href: "/schedule#fixtures",
-        cta: "See this week's schedule",
+        href: "/standins",
+        ...standinHomeLine(standinGames ?? 0),
       };
     default:
+      // A free agent can stand in too: say so when a game needs someone.
+      if (standinGames) {
+        return {
+          title: "No match of your own coming up",
+          href: "/standins",
+          ...standinHomeLine(standinGames),
+        };
+      }
       return {
         title: "No match of your own coming up",
         text: "You're not on a team this season. The week's games are still worth watching.",

@@ -1122,6 +1122,37 @@ export function standinAssignedMessage(m: {
 }
 
 /**
+ * A standin said "I can play" for a side that needs someone (a StandinOffer).
+ * Meant for that side's captain alone, who is the one mentioned: the standin
+ * just pressed the button, and nobody else has anything to do. It is sent for
+ * the first offer and then at most once per throttle window
+ * (`STANDIN_OFFER_PING_THROTTLE_SECONDS`), so a list filling up is one ping,
+ * not one per name.
+ */
+export function standinOfferedMessage(m: {
+  standinName: string;
+  /** Signup MMR; 0 = unknown. */
+  standinMmr: number;
+  teamName: string;
+  homeName: string;
+  awayName: string;
+  week: number;
+  isPlayoff: boolean;
+  isTiebreaker?: boolean;
+  roundLabel?: string | null;
+  /** Epoch ms of the scheduled kickoff; null = unscheduled (line omitted). */
+  whenMs: number | null;
+  /** Deep link target: the match page's Standins card lists who offered. */
+  matchId: string;
+}): string {
+  const label = fixtureLabel(m);
+  const when =
+    m.whenMs != null ? ` (<t:${Math.floor(m.whenMs / 1000)}:F>)` : "";
+  const link = `<${resolveSiteUrl()}${matchAnchorPath(m.matchId, MATCH_ANCHOR.standins)}>`;
+  return `✋ **${name(m.standinName)}** (${standinMmrLabel(m.standinMmr)}) can stand in for **${name(m.teamName)}** — ${label} **${name(m.homeName)}** vs **${name(m.awayName)}**${when}. Pick from everyone who said they can play on the match page: ${link}`;
+}
+
+/**
  * A captain asked for a standin the other captain has to agree to: more than
  * STANDIN_MMR_ALLOWANCE above the seat, or an MMR the site doesn't know.
  * Meant for the OTHER captain, the one who must act (the action mentions only

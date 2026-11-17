@@ -52,6 +52,7 @@ import {
   rescheduleProposedMessage,
   standinApprovalRequestedMessage,
   standinAssignedMessage,
+  standinOfferedMessage,
   standinRemovedMessage,
   standinRequestCancelledMessage,
   standinRequestDeclinedMessage,
@@ -3657,5 +3658,47 @@ describe("fantasy's pick window on Discord", () => {
       "Fantasy",
     );
     expect(regularSeasonStartedMessage("Season 2")).not.toContain("Fantasy");
+  });
+});
+
+describe("standinOfferedMessage", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("tells the captain who can play, their MMR, the fixture and where to pick", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    const msg = standinOfferedMessage({
+      standinName: "Sub Sam",
+      standinMmr: 3100,
+      teamName: "Roshan's Rejects",
+      homeName: "Roshan's Rejects",
+      awayName: "Dire Straits",
+      week: 4,
+      isPlayoff: false,
+      whenMs: 1_760_000_000_000,
+      matchId: "m1",
+    });
+    expect(msg).toContain("**Sub Sam** (3,100 MMR) can stand in for **Roshan's Rejects**");
+    expect(msg).toContain("**Roshan's Rejects** vs **Dire Straits**");
+    expect(msg).toContain("<t:1760000000:F>");
+    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+    // It names no covered player: who is out is the captains' to see.
+    expect(msg).not.toMatch(/for \*\*[^*]+\*\* \(/);
+  });
+
+  it("escapes a player-chosen name and says when an MMR is unknown", () => {
+    const msg = standinOfferedMessage({
+      standinName: "[free skins](https://evil.example)",
+      standinMmr: 0,
+      teamName: "A",
+      homeName: "A",
+      awayName: "B",
+      week: 1,
+      isPlayoff: false,
+      whenMs: null,
+      matchId: "m1",
+    });
+    expect(msg).not.toContain("[free skins](https://evil.example)");
+    expect(msg).toContain("(MMR unknown)");
+    expect(msg).not.toContain("<t:");
   });
 });

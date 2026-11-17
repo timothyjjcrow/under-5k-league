@@ -533,4 +533,25 @@ describe("standinPickerGroups", () => {
     ];
     expect(ids(standinPickerGroups(tie, seat).book)).toEqual(["a", "b"]);
   });
+
+  // A StandinOffer: they said "I can play" for this side, so they lead the
+  // group their MMR puts them in. It never moves them between groups.
+  it("puts standins who said they can play first in their group", () => {
+    const offered = pool.map((s) =>
+      s.userId === "low" || s.userId === "high" || s.userId === "busy"
+        ? { ...s, offered: true }
+        : s,
+    );
+    const groups = standinPickerGroups(offered, seat);
+    expect(ids(groups.book)).toEqual(["low", "near"]);
+    expect(ids(groups.ask)).toEqual(["high", "mid", "unknown"]);
+    expect(ids(groups.blocked)).toEqual(["busy"]);
+    expect(ids(standinPickerGroups(offered, null).unsorted)).toEqual([
+      "high",
+      "low",
+      "unknown",
+      "near",
+      "mid",
+    ]);
+  });
 });

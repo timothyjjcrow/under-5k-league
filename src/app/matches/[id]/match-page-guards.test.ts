@@ -87,6 +87,42 @@ describe("match page standins card", () => {
     expect(STANDIN_PICKER).toContain("{groups.blocked.map(option)}");
   });
 
+  // Standin offers ("I can play"): the list above the form books through the
+  // captain's own action, for a seat that needs cover, and only standins the
+  // form could still pick.
+  it("lists who said they can play, and books them the way the form does", () => {
+    const card = CARD("standins.tsx");
+    // My side's offers only.
+    expect(card).toMatch(
+      /prisma\.standinOffer\.findMany\(\{\s*where: \{ matchId: match\.id, teamId: myTeamId \},/,
+    );
+    // Only while booking is open and a seat needs cover, and only standins
+    // the picker hasn't blocked (booked here or that night, declined).
+    expect(card).toMatch(
+      /const pickable = new Map\(\s*poolChoices\.filter\(\(c\) => !c\.blocked\)/,
+    );
+    expect(card).toMatch(
+      /const offers =\s*assignOpen && needSeat\s*\? sortStandinOffers\(offerRows\)/,
+    );
+    // One tap is the form's own submit: same action, same three fields, so
+    // the MMR rule and every booking check decide.
+    expect(card).toMatch(
+      /action=\{captainAssignStandin\}\s*hidden=\{\{\s*matchId: match\.id,\s*standinUserId: reg\.userId,\s*replacingUserId: needSeat\.value,\s*\}\}/,
+    );
+    // The button says which of the two a tap does, from the server's rule.
+    expect(card).toContain(
+      "const outcome = standinPickOutcome(reg.mmr, needSeat);",
+    );
+    expect(card).toMatch(
+      /outcome\.kind === "ask"\s*\? "Ask the other captain"\s*: `Book \$\{reg\.user\.name\}`/,
+    );
+    // The form marks them too, and sorts them first (standinPickerGroups).
+    expect(card).toContain("offered: offeredIds.has(r.userId),");
+    expect(STANDIN_PICKER).toContain('s.offered ? " · said they can play" : ""');
+    // The share link renders where an offer could be taken.
+    expect(card).toMatch(/\{assignOpen && needSeat \? \([\s\S]*?<CopyStandinLink/);
+  });
+
   // Finding out from the toast which kind of pick it was is too late: the
   // form says it first, from the server's own rule.
   it("says what a pick does before it is sent, from the server's rule", () => {
@@ -212,10 +248,14 @@ describe("match page captain tools order and anchors", () => {
 
 describe("match page captain contact", () => {
   it("shows Discord handles only through the shared contact policy", () => {
-    // Three chips: the Matchup card's captain line, Captain tools'
-    // "Opposing captain" line and the Standins card's booked standin (its
-    // own test above). Each is gated by canViewLeagueContact.
-    expect(PAGE.match(/<DiscordTag\b/g)).toHaveLength(3);
+    // Four chips: the Matchup card's captain line, Captain tools'
+    // "Opposing captain" line, and on the Standins card the booked standin
+    // (its own test above) and each standin who said they can play. Each is
+    // gated by canViewLeagueContact.
+    expect(PAGE.match(/<DiscordTag\b/g)).toHaveLength(4);
+    expect(PAGE).toMatch(
+      /canViewLeagueContact\(viewer, reg\.userId, true\) &&\s*reg\.user\.discordName \? \(\s*<DiscordTag/,
+    );
     expect(PAGE).toMatch(
       /const captainContact = \(captainId: string\) =>\s*canViewLeagueContact\(/,
     );

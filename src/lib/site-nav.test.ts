@@ -121,7 +121,7 @@ describe("site navigation", () => {
       "League",
     ]);
     expect(full.map((section) => section.links.map((l) => l.label))).toEqual([
-      ["Scrims", "Fantasy", "Pick'em"],
+      ["Scrims", "Standins", "Fantasy", "Pick'em"],
       ["Leaders", "Hero meta", "Record book", "Compare players"],
       [
         "League news",
@@ -131,6 +131,20 @@ describe("site navigation", () => {
         "Season history",
       ],
     ]);
+  });
+
+  // The Standins page lists games that need cover, so the menus offer it
+  // only while cover can be booked: from the completed auction to the last
+  // match. Its address works in every phase.
+  it("offers Standins from the completed auction until the season is over", () => {
+    const listed = (phase: string, draftStatus: string | null) =>
+      everyHref(state(phase, draftStatus)).includes("/standins");
+    expect(listed(SEASON_STATUS.SIGNUPS, null)).toBe(false);
+    expect(listed(SEASON_STATUS.DRAFT, DRAFT_STATUS.IN_PROGRESS)).toBe(false);
+    expect(listed(SEASON_STATUS.DRAFT, DRAFT_STATUS.COMPLETE)).toBe(true);
+    expect(listed(SEASON_STATUS.REGULAR_SEASON, DRAFT_STATUS.COMPLETE)).toBe(true);
+    expect(listed(SEASON_STATUS.PLAYOFFS, DRAFT_STATUS.COMPLETE)).toBe(true);
+    expect(listed(SEASON_STATUS.COMPLETE, DRAFT_STATUS.COMPLETE)).toBe(false);
   });
 
   // During the live auction these three open onto "opens after the draft"
