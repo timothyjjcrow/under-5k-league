@@ -6,7 +6,7 @@ import Link from "@/components/app-link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 import { Avatar, Badge } from "@/components/ui";
-import { MerchLink } from "@/components/merch-link";
+import { MerchIcon, MerchShopLinks } from "@/components/merch-link";
 import { seasonPhaseTone } from "@/lib/season-copy";
 import {
   exploreNav,
@@ -92,15 +92,19 @@ export function SiteHeader({
   const status = headerStatus({ phase, draftStatus, seriesLive });
   const statusPath = status?.href.split("#")[0];
   const myTeamHref = myTeamId ? `/teams/${myTeamId}` : null;
-  // Three disclosures: the desktop Explore dropdown, the account menu (every
-  // width) and the phone tab bar's sheet. Phones used to add a ☰ menu and an
-  // Explore section inside it, which listed the same pages again.
+  // Four disclosures: the desktop Explore dropdown, the desktop Merch menu
+  // (one link per shop), the account menu (every width) and the phone tab
+  // bar's sheet. Phones used to add a ☰ menu and an Explore section inside
+  // it, which listed the same pages again.
   const [sheetOpen, setSheetOpen] = useState(false);
   const [desktopExploreOpen, setDesktopExploreOpen] = useState(false);
+  const [merchOpen, setMerchOpen] = useState(false);
   const [accountOpen, setAccountOpen] = useState(false);
   const exploreButtonRef = useRef<HTMLButtonElement>(null);
+  const merchButtonRef = useRef<HTMLButtonElement>(null);
   const accountButtonRef = useRef<HTMLButtonElement>(null);
   const desktopExploreRef = useRef<HTMLDivElement>(null);
+  const merchRef = useRef<HTMLDivElement>(null);
   const accountRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLElement>(null);
   const sheetRef = useRef<HTMLElement>(null);
@@ -115,6 +119,7 @@ export function SiteHeader({
     setMenuPath(pathname);
     setSheetOpen(false);
     setDesktopExploreOpen(false);
+    setMerchOpen(false);
     setAccountOpen(false);
   }
 
@@ -125,6 +130,7 @@ export function SiteHeader({
     function closePanels() {
       setSheetOpen(false);
       setDesktopExploreOpen(false);
+      setMerchOpen(false);
       setAccountOpen(false);
     }
     desktop.addEventListener("change", closePanels);
@@ -134,16 +140,19 @@ export function SiteHeader({
   // Escape returns focus to the open menu's own trigger. A press anywhere
   // outside a menu (and outside the tab bar, for the sheet) closes it.
   useEffect(() => {
-    if (!sheetOpen && !desktopExploreOpen && !accountOpen) return;
+    if (!sheetOpen && !desktopExploreOpen && !merchOpen && !accountOpen) return;
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== "Escape") return;
       const returnTo = accountOpen
         ? accountButtonRef.current
-        : sheetOpen
-          ? dockExploreRef.current
-          : exploreButtonRef.current;
+        : merchOpen
+          ? merchButtonRef.current
+          : sheetOpen
+            ? dockExploreRef.current
+            : exploreButtonRef.current;
       setSheetOpen(false);
       setDesktopExploreOpen(false);
+      setMerchOpen(false);
       setAccountOpen(false);
       returnTo?.focus();
     }
@@ -151,6 +160,9 @@ export function SiteHeader({
       const target = e.target as Node;
       if (!desktopExploreRef.current?.contains(target)) {
         setDesktopExploreOpen(false);
+      }
+      if (!merchRef.current?.contains(target)) {
+        setMerchOpen(false);
       }
       if (!accountRef.current?.contains(target)) {
         setAccountOpen(false);
@@ -168,7 +180,7 @@ export function SiteHeader({
       document.removeEventListener("keydown", onKeyDown);
       document.removeEventListener("pointerdown", onPointerDown);
     };
-  }, [sheetOpen, desktopExploreOpen, accountOpen]);
+  }, [sheetOpen, desktopExploreOpen, merchOpen, accountOpen]);
 
   const adminActive = pathname.startsWith("/admin");
 
@@ -280,6 +292,7 @@ export function SiteHeader({
                 aria-controls="desktop-explore-nav"
                 onClick={() => {
                   setDesktopExploreOpen((value) => !value);
+                  setMerchOpen(false);
                   setAccountOpen(false);
                 }}
                 className={cn(
@@ -318,7 +331,46 @@ export function SiteHeader({
               {headerJoin.label}
             </Link>
           ) : (
-            <MerchLink className="hidden lg:inline-flex" />
+            <div ref={merchRef} className="relative hidden shrink-0 lg:block">
+              {/* One button, however many shops: the row has no room for a
+                link per shop at 1024px. */}
+              <button
+                ref={merchButtonRef}
+                type="button"
+                aria-expanded={merchOpen}
+                aria-controls="merch-nav"
+                onClick={() => {
+                  setMerchOpen((value) => !value);
+                  setDesktopExploreOpen(false);
+                  setAccountOpen(false);
+                }}
+                className={cn(
+                  "inline-flex min-h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition-colors hover:border-accent/40 hover:bg-accent/5 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60",
+                  merchOpen
+                    ? "border-accent/40 bg-accent/5 text-fg"
+                    : "border-line bg-surface/40 text-muted",
+                )}
+              >
+                <MerchIcon />
+                Merch
+                <ChevronIcon open={merchOpen} />
+              </button>
+              {merchOpen ? (
+                <nav
+                  id="merch-nav"
+                  aria-label="Merch"
+                  className="absolute right-0 top-full z-40 mt-3 w-64 max-w-[calc(100vw-2rem)] rounded-xl border border-line bg-surface p-2 shadow-xl shadow-black/30"
+                >
+                  <p className="mb-1 border-b border-line-soft px-3 pb-3 pt-2 text-xs leading-relaxed text-muted">
+                    {LEAGUE_CONFIG.merch.note}
+                  </p>
+                  <MerchShopLinks
+                    variant="menu"
+                    onNavigate={() => setMerchOpen(false)}
+                  />
+                </nav>
+              ) : null}
+            </div>
           )}
 
           <div className="flex shrink-0 items-center gap-2 sm:gap-3">
@@ -336,6 +388,7 @@ export function SiteHeader({
                   onClick={() => {
                     setAccountOpen((value) => !value);
                     setDesktopExploreOpen(false);
+                    setMerchOpen(false);
                     setSheetOpen(false);
                   }}
                   className={cn(
@@ -547,7 +600,9 @@ export function SiteHeader({
             onNavigate={() => setSheetOpen(false)}
             compact
           />
-          <MerchLink className="mt-3 w-full" />
+          <div className="mt-3 space-y-2">
+            <MerchShopLinks variant="button" />
+          </div>
         </nav>
       ) : null}
     </>

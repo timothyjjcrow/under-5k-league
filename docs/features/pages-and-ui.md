@@ -30,6 +30,14 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   the phone tab bar and the footer: one label, one group, one visibility rule
   per page. It is pure so client, server and tests share it. Never add a second
   list in a component.
+- **Merch is a list of shops, read from `LEAGUE_CONFIG.merch.shops`:** one
+  Fourthwall shop per group of the US league's Season 2 (Group A, Group B).
+  The desktop header shows one Merch button whose menu has a link per shop
+  (the row has no room for a link each at 1024px); the phone menu ends with
+  one full-width link per shop and the footer lists them too
+  (`MerchShopLinks` in `merch-link.tsx`). Every shop link opens a new tab.
+  Add or change a shop only in `league-config.ts`. Europe links the same
+  shops, labelled "US Group A jerseys".
 - **Offer a page only once it has something to show** (each `NAV_PAGES`
   entry's `visible`); hidden pages stay reachable by URL. Schedule and Pick'em
   wait for the COMPLETED auction (`afterAuction` reads the auction, not just
@@ -847,7 +855,9 @@ the league is already draftable and many visitors have joined. Write for both.
   24rem from `xl`) holds the hero pool, rematches and the playoff outlook.
   A phone reads them in that order, so the overview, roster and matches
   still lead. With nothing for the rail the page stays one column. The
-  jersey keeps the full width below.
+  jerseys keep the full width below: five links, one per player's jersey in
+  the shop of the team's group, then "All Group A jerseys"
+  (`TeamJerseyLinks`). There are no jersey pictures on the page.
 - **Both columns are `@container`s:** the roster goes two across and the
   draft-phase overview splits at `@2xl` of the main column, and the hero
   pool (`HeroPool columns="container"`) steps two, three, four across with

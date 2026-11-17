@@ -53,7 +53,7 @@ import { resolveChampionPresentation } from "@/lib/champion-presentation";
 import { championFinalLine } from "@/lib/champion-moment";
 import { ChampionStrip } from "@/components/champion-moment";
 import { getTeamJersey } from "@/lib/team-jerseys";
-import { TeamJerseyPreview } from "@/components/team-jersey-preview";
+import { TeamJerseyLinks } from "@/components/team-jersey-links";
 import { TeamIdentityForm } from "@/components/team-identity-form";
 import { MatchPrep } from "./match-prep";
 import { editTeamIdentity } from "@/app/actions/teams";
@@ -421,7 +421,7 @@ export default async function TeamPage({
     ...(showOutlookCard
       ? [{ id: "team-outlook", label: "Playoff outlook" }]
       : []),
-    ...(jersey ? [{ id: "team-jersey", label: "Jersey" }] : []),
+    ...(jersey ? [{ id: "team-jersey", label: "Jerseys" }] : []),
   ];
   const hasRail =
     teamHeroes.length > 0 || h2h.length > 0 || (showOutlookCard && !!myScenario);
@@ -698,7 +698,7 @@ export default async function TeamPage({
       {/* From lg, two columns: what the team is and plays (the next
           series, the roster, every fixture) and a rail of its numbers (hero
           pool, rematches, playoff outlook). A phone reads them in that
-          order. The jersey keeps the full width below. */}
+          order. The jerseys keep the full width below. */}
       <div
         className={cn(
           "grid grid-cols-1 items-start gap-5",
@@ -1169,14 +1169,15 @@ export default async function TeamPage({
         >
           <div>
             <h2 id="team-jersey-title" className="text-lg font-semibold">
-              Team jersey
+              Team jerseys
             </h2>
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted">
-              Explore the Fourthwall front and back previews, then choose your
-              player. Each jersey has a personalized name and position.
+              Each player&apos;s jersey has their name and position on the
+              back. Pick a player to open it in the league&apos;s Fourthwall
+              shop.
             </p>
           </div>
-          <TeamJerseyPreview jersey={jersey} featured />
+          <TeamJerseyLinks jersey={jersey} />
         </section>
       ) : null}
     </div>

@@ -75,8 +75,8 @@ Read the note for an area before changing it.
   operation.
 - [DOTA-BOT-HOSTING.md](DOTA-BOT-HOSTING.md) — hosting options and prices for
   the lobby bot.
-- [JERSEY-PREVIEW-ASSETS.md](JERSEY-PREVIEW-ASSETS.md) — the team jersey preview
-  images and how a team gets its jersey.
+- [TEAM-JERSEYS.md](TEAM-JERSEYS.md) — the two jersey shops, how a team gets
+  its jersey links, and the Season 1 preview images the release smoke uses.
 
 ## Archive
 

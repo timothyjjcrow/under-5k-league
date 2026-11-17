@@ -87,6 +87,27 @@ describe("regional league configuration", () => {
     ).toMatch(/^GGD2L Europe is run by volunteers\..*message a league admin on Discord\.$/);
   });
 
+  it("links both jersey shops, and Europe says whose jerseys they are", () => {
+    expect(createLeagueConfig({}).merch).toEqual({
+      note: "Season 2 player jerseys, in one shop per group.",
+      shops: [
+        { group: "A", label: "Group A jerseys", url: "https://ggd2l-shop.fourthwall.com/" },
+        { group: "B", label: "Group B jerseys", url: "https://ggd2l-group-b-shop.fourthwall.com/" },
+      ],
+    });
+    const europe = createLeagueConfig({ NEXT_PUBLIC_LEAGUE_REGION: "eu" }).merch;
+    expect(europe.note).toBe(
+      "The US league's Season 2 player jerseys, in one shop per group.",
+    );
+    expect(europe.shops.map((shop) => shop.label)).toEqual([
+      "US Group A jerseys",
+      "US Group B jerseys",
+    ]);
+    expect(europe.shops.map((shop) => shop.url)).toEqual(
+      createLeagueConfig({}).merch.shops.map((shop) => shop.url),
+    );
+  });
+
   it("names an overridden US zone the way players say it", () => {
     expect(createLeagueConfig({
       NEXT_PUBLIC_LEAGUE_TIMEZONE: "America/New_York",
