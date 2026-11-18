@@ -308,13 +308,49 @@ export async function loadStandinNeed(
   return needs.find((n) => n.teamId === teamId) ?? null;
 }
 
+/**
+ * Every side's need among `matchIds` (the season's, unplayed or not), keyed
+ * `${matchId}:${teamId}`: the board's own judgement, for the captain's
+ * to-dos, so "needs cover" means the same seats on every page. Sides that
+ * need nobody are absent; so is every side while booking is closed.
+ */
+export async function loadSideNeeds(
+  season: { id: string; status: string; teamSize: number },
+  matchIds: readonly string[],
+): Promise<Map<string, StandinBoardNeed>> {
+  if (matchIds.length === 0) return new Map();
+  const draftStatus = await getSeasonDraftStatus(season.id);
+  const matches = (
+    await prisma.match.findMany({
+      where: { seasonId: season.id, id: { in: [...matchIds] } },
+      select: BOARD_MATCH_SELECT,
+      orderBy: [{ scheduledAt: "asc" }, { id: "asc" }],
+    })
+  ).filter((m) => standinAssignmentOpen(season.status, draftStatus, m.status));
+  const needs = await needsFor(season, matches);
+  return new Map(needs.map((n) => [offerKey(n.matchId, n.teamId), n]));
+}
+
+/** One game on the board, as the callouts name it. */
+export type StandinBoardSummaryNeed = Pick<
+  StandinBoardNeed,
+  | "matchId"
+  | "teamId"
+  | "teamName"
+  | "opponentName"
+  | "scheduledAt"
+  | "seats"
+>;
+
 /** How many games need a standin, and the soonest, for a one-line callout. */
 export type StandinBoardSummary = {
   count: number;
-  first: Pick<
-    StandinBoardNeed,
-    "teamName" | "opponentName" | "scheduledAt" | "seats"
-  > | null;
+  first: StandinBoardSummaryNeed | null;
+  /**
+   * Every game, soonest first. Home matches the viewer's own offers (read
+   * fresh, never from this cache) against it.
+   */
+  needs: StandinBoardSummaryNeed[];
 };
 
 const SUMMARY_TTL_MS = 30_000;
@@ -339,17 +375,17 @@ export function loadStandinBoardSummary(
   const hit = summaryMemo.get(key);
   if (hit && nowMs - hit.atMs < SUMMARY_TTL_MS) return hit.summary;
   const summary = loadStandinBoard(season, nowMs).then(
-    (needs): StandinBoardSummary => ({
-      count: needs.length,
-      first: needs[0]
-        ? {
-            teamName: needs[0].teamName,
-            opponentName: needs[0].opponentName,
-            scheduledAt: needs[0].scheduledAt,
-            seats: needs[0].seats,
-          }
-        : null,
-    }),
+    (all): StandinBoardSummary => {
+      const needs = all.map((n) => ({
+        matchId: n.matchId,
+        teamId: n.teamId,
+        teamName: n.teamName,
+        opponentName: n.opponentName,
+        scheduledAt: n.scheduledAt,
+        seats: n.seats,
+      }));
+      return { count: needs.length, first: needs[0] ?? null, needs };
+    },
   );
   summaryMemo.set(key, { atMs: nowMs, summary });
   // A failed read must not be served for the rest of the window.

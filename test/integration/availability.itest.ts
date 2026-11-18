@@ -257,8 +257,12 @@ describe("setAvailability — assigned standins", () => {
     });
   }
 
-  // Pins: standinSeat (match.standins) satisfies the participation guard.
-  it("lets a named-cover standin RSVP IN and flip to OUT", async () => {
+  // Pins: standinSeat (match.standins) satisfies the participation guard,
+  // and a booked standin's OUT before the night gives the seat back
+  // (releaseOwnStandinBooking): the booking and their answers go, so the
+  // seat is open again on the Standins page with nothing for the captain to
+  // remove first.
+  it("lets a named-cover standin RSVP IN, and an OUT gives the seat back", async () => {
     const { match, home, player } = await setupMatch();
     const standin = await makeUser("Named Cover");
     await assign(match.id, home.id, standin.id, player.id);
@@ -266,17 +270,82 @@ describe("setAvailability — assigned standins", () => {
 
     const res = await setAvailability({}, rsvpForm(match, "IN"));
     expect(res?.message).toMatch(/confirmed/i);
-    let row = await prisma.matchAvailability.findUnique({
+    const row = await prisma.matchAvailability.findUnique({
       where: { matchId_userId: { matchId: match.id, userId: standin.id } },
     });
     expect(row?.status).toBe("IN");
 
     const out = await setAvailability({}, rsvpForm(match, "OUT"));
-    expect(out?.message).toMatch(/unavailable/i);
-    row = await prisma.matchAvailability.findUnique({
-      where: { matchId_userId: { matchId: match.id, userId: standin.id } },
+    expect(out?.message).toBe(
+      "You're off this match. The Home captain is told, and the seat is back on the Standins page for someone else.",
+    );
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(0);
+    expect(
+      await prisma.matchAvailability.count({
+        where: { matchId: match.id, userId: standin.id },
+      }),
+    ).toBe(0);
+    // They hold no seat now: a second press is refused, never a second post.
+    expect((await setAvailability({}, rsvpForm(match, "OUT")))?.error).toMatch(
+      /not playing/i,
+    );
+  });
+
+  // The release's WHERE is its one guard (nothing reads it first), so these
+  // pin each predicate: delete `status: SCHEDULED` and the live series loses
+  // its standin; delete `games: { none: {} }` and an imported game does.
+  it("keeps the booking and records the OUT once the series is under way", async () => {
+    const { match, home, player } = await setupMatch();
+    const standin = await makeUser("Live Cover");
+    await assign(match.id, home.id, standin.id, player.id);
+    await prisma.match.update({
+      where: { id: match.id },
+      data: { status: MATCH_STATUS.LIVE },
     });
-    expect(row?.status).toBe("OUT");
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+
+    const out = await setAvailability({}, rsvpForm(match, "OUT"));
+    expect(out?.message).toMatch(/unavailable/i);
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(1);
+    expect(
+      (
+        await prisma.matchAvailability.findUnique({
+          where: { matchId_userId: { matchId: match.id, userId: standin.id } },
+        })
+      )?.status,
+    ).toBe("OUT");
+  });
+
+  it("keeps the booking once a game is imported, even before the status moves", async () => {
+    const { match, home, player } = await setupMatch();
+    const standin = await makeUser("Imported Cover");
+    await assign(match.id, home.id, standin.id, player.id);
+    // A game can land before anything moves the fixture to LIVE: the
+    // auto-import runs from any page view.
+    await prisma.game.create({
+      data: {
+        matchId: match.id,
+        dotaMatchId: "8800012345",
+        radiantWin: true,
+        durationSecs: 2000,
+        startTime: Math.floor(Date.now() / 1000),
+        radiantTeamId: home.id,
+        direTeamId: match.awayTeamId,
+        winnerTeamId: home.id,
+        players: "[]",
+      },
+    });
+    vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+
+    const out = await setAvailability({}, rsvpForm(match, "OUT"));
+    expect(out?.message).toMatch(/unavailable/i);
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+    ).toBe(1);
   });
 
   // Pins: an EMPTY-SEAT booking (replacingUserId null — a short roster) is a
@@ -347,20 +416,21 @@ describe("setAvailability — assigned standins", () => {
     vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
 
     const res = await setAvailability({}, rsvpForm(match, "OUT"));
-    expect(res?.message).toMatch(/unavailable/i);
+    expect(res?.message).toMatch(/off this match/i);
 
     const call = mockSend.mock.calls.find(([msg]) =>
-      String(msg).includes("line up a standin"),
+      String(msg).includes("can't stand in"),
     );
-    expect(call, "a standin's first OUT must announce").toBeTruthy();
-    expect(String(call![0])).toContain("Bailing Cover");
+    expect(call, "a standin's drop-out must announce").toBeTruthy();
+    expect(String(call![0])).toContain("**Bailing Cover** can't stand in for **Home** after all");
+    expect(String(call![0])).toContain(`The seat for **${player.name}** is open again.`);
     // …and PING the captain, not just state it into the channel.
     expect(call![1]).toEqual({ users: ["555666777888999000"] });
   });
 
-  // Pins: the OUT ping deep-links the match page — the mentioned captain is by
-  // definition NOT on the site, and that page holds the Standins card.
-  it("the OUT announcement links the match page", async () => {
+  // Pins: the drop-out post ends with the game's share link: the mentioned
+  // captain lands on their team's cover, a standin who opens it offers.
+  it("the drop-out announcement links the game on the Standins page", async () => {
     const { match, home, player } = await setupMatch();
     const standin = await makeUser("Linked-To Cover");
     await assign(match.id, home.id, standin.id, player.id);
@@ -369,10 +439,12 @@ describe("setAvailability — assigned standins", () => {
     await setAvailability({}, rsvpForm(match, "OUT"));
 
     const call = mockSend.mock.calls.find(([msg]) =>
-      String(msg).includes("line up a standin"),
+      String(msg).includes("can't stand in"),
     );
-    expect(call, "a standin's first OUT must announce").toBeTruthy();
-    expect(String(call![0])).toContain(`/matches/${match.id}`);
+    expect(call, "a standin's drop-out must announce").toBeTruthy();
+    expect(String(call![0])).toContain(
+      `/standins?match=${match.id}&team=${home.id}&play=1>`,
+    );
   });
 });
 
@@ -584,7 +656,7 @@ describe("setAvailability — closing the OUT loop", () => {
   const backIns = () =>
     mockSend.mock.calls.filter(([msg]) => String(msg).includes("after all"));
   const outs = () =>
-    mockSend.mock.calls.filter(([msg]) => String(msg).includes("line up a standin"));
+    mockSend.mock.calls.filter(([msg]) => String(msg).includes("Standins who can play"));
 
   it("tells the same captain when a player who said OUT can make it after all", async () => {
     const { match, home, player } = await setupMatch();
@@ -602,7 +674,7 @@ describe("setAvailability — closing the OUT loop", () => {
     expect(backIns()).toHaveLength(1);
     const [content, mentions] = backIns()[0]!;
     expect(content).toContain("**Roster Player** can make the week 1 match after all");
-    expect(content).toContain(`/matches/${match.id}#match-standins>`);
+    expect(content).toContain(`/standins?match=${match.id}>`);
     expect(mentions).toEqual({ users: ["555666777888999001"] });
   });
 

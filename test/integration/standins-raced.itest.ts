@@ -28,7 +28,9 @@ import {
   assignStandinGuarded,
   cancelStandinRequest,
   declineStandinRequest,
+  removeStandinGuarded,
 } from "@/lib/standin-service";
+import { setAvailability } from "@/app/actions/availability";
 import { releasePlayer } from "@/app/actions/admin-roster";
 import { leaveLeague } from "@/app/actions/registration";
 import { requireUser } from "@/lib/auth";
@@ -402,5 +404,60 @@ describe("standin requests under contention (raced — meaningful on Postgres on
       }),
     ).toBe(1);
     expect(await prisma.standinAssignment.count()).toBe(0);
+  });
+});
+
+describe("a standin giving their seat back, raced (meaningful on Postgres only)", () => {
+  beforeEach(() => {
+    vi.mocked(requireUser).mockReset();
+  });
+
+  // The standin's "Can't make it" (releaseOwnStandinBooking, inside
+  // setAvailability's Serializable transaction) and the captain's Remove
+  // (removeStandinGuarded) delete the same booking. Whoever wins, the seat is
+  // free once, nothing throws, and no answer is left for a standin who holds
+  // no seat: a later booking must start from no answer. Looped, since the
+  // losing order is the rare one.
+  it("frees the seat once against the captain's Remove, leaving no stray answer", async () => {
+    const { season, home, match, rostered } = await midSeasonMatch();
+    const kickoff = await prisma.match.update({
+      where: { id: match.id },
+      data: { scheduledAt: new Date(Date.now() + 2 * 86_400_000) },
+    });
+    for (let round = 0; round < 4; round++) {
+      const standin = await makeStandin(season.id, `Racing cover ${round}`);
+      const booking = await prisma.standinAssignment.create({
+        data: {
+          matchId: match.id,
+          teamId: home.id,
+          standinUserId: standin.id,
+          replacingUserId: rostered[1].id,
+        },
+      });
+      vi.mocked(requireUser).mockResolvedValue(sessionFor(standin));
+      const out = fd({
+        matchId: match.id,
+        status: "OUT",
+        expectedScheduleRevision: String(kickoff.scheduleRevision),
+      });
+      const [dropped, removed] = await raceAll<unknown>([
+        () => setAvailability({}, out),
+        () =>
+          removeStandinGuarded({
+            assignmentId: booking.id,
+            actingCaptainId: home.captainId,
+          }),
+      ]);
+      expect(dropped).toBeTruthy();
+      expect(removed).toBeTruthy();
+      expect(
+        await prisma.standinAssignment.count({ where: { matchId: match.id } }),
+      ).toBe(0);
+      expect(
+        await prisma.matchAvailability.count({
+          where: { matchId: match.id, userId: standin.id },
+        }),
+      ).toBe(0);
+    }
   });
 });

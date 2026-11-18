@@ -36,13 +36,15 @@ describe("team page match prep", () => {
     expect(SERVICE).toContain("notes: teamWeekNotes({");
   });
 
-  it("links each line and jump to the match page's own cards and gates", () => {
+  it("links each line and jump where it is answered, gated like the cards", () => {
     expect(CARD).toContain(
       "captainCardsOpen({ status: match.status, season }, draftStatus)",
     );
     expect(CARD).toMatch(/const jumps = captain\s*\? captainJumps\(\{/);
-    expect(CARD).toContain("href={matchAnchorPath(match.id, note.link.anchor)}");
-    expect(CARD).toContain("href={matchAnchorPath(match.id, jump.anchor)}");
+    // Standin lines and the Standins jump go to the game on the Standins
+    // page; the rest to the match page's own cards (captainCardHref).
+    expect(CARD).toContain("href={captainCardHref(match.id, note.link.anchor, false)}");
+    expect(CARD).toContain("href={captainCardHref(match.id, jump.anchor, false)}");
     // Named answers only where the loader gave them (captains and admins).
     expect(CARD).toMatch(/const names = side\.names\s*\?/);
   });

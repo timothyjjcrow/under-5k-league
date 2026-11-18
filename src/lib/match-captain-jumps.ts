@@ -1,7 +1,8 @@
 // Pure: which shortcuts a captain gets in the match page's scoreboard.
 
 import { matchLogisticsOpen, standinAssignmentOpen } from "./league-lifecycle";
-import { MATCH_ANCHOR } from "./match-anchors";
+import { MATCH_ANCHOR, matchAnchorPath } from "./match-anchors";
+import { standinHubPath } from "./standin-offer";
 
 /**
  * From this long before kickoff the night is on: hosting the lobby and
@@ -89,4 +90,21 @@ export function captainCardsOpen(
       season.isActive &&
       matchLogisticsOpen(season.status, draftStatus, match.status),
   };
+}
+
+/**
+ * Where a captain's jump (or a note naming a card) goes. Standin work lives
+ * on the Standins page, so the Standins jump always leaves for the game
+ * there; every other card is on the match page, which is this page when
+ * `onPage` (the match page itself, or the Captains page that draws the same
+ * cards), and the match's own page otherwise. Renderers draw an in-page
+ * `#anchor` as a jump down (↓) and anything else as a link away (→).
+ */
+export function captainCardHref(
+  matchId: string,
+  anchor: CaptainJump["anchor"],
+  onPage: boolean,
+): string {
+  if (anchor === MATCH_ANCHOR.standins) return standinHubPath(matchId);
+  return onPage ? `#${anchor}` : matchAnchorPath(matchId, anchor);
 }

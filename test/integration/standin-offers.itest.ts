@@ -189,7 +189,7 @@ describe("offering to stand in (integration)", () => {
     expect(first.message).toContain("the list for Home");
     expect(first.post?.announcement).toContain("Sub Sam");
     expect(first.post?.announcement).toContain("3,200 MMR");
-    expect(first.post?.announcement).toContain(`/matches/${match.id}`);
+    expect(first.post?.announcement).toContain(`/standins?match=${match.id}`);
     // Only the captain who picks is mentioned.
     expect(first.post?.mentions).toEqual({ users: ["111"] });
     expect(first.post?.throttleKey).toBe(

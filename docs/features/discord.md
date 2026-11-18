@@ -134,7 +134,9 @@ actions: `src/app/actions/admin-discord.ts`.
   the 100-MMR allowance, `standinApprovalRequestedMessage`): the other captain
   only; agreed (the booking post, with `agreedBy`): the standin plus the asking
   captain; declined (`standinRequestDeclinedMessage`): the asking captain;
-  withdrawn: nobody. A standin's "I can play" (`standinOfferedMessage`): that
+  withdrawn: nobody. A booked standin who gave their seat back
+  (`standinDroppedOutMessage`, sent by `setAvailability` or an away range
+  under the OUT ping's throttle key): the covered team's captain only. A standin's "I can play" (`standinOfferedMessage`): that
   side's captain alone, for the first offer and then at most once per
   `STANDIN_OFFER_PING_THROTTLE_SECONDS`; the standin hears nothing until
   they are booked. Reschedule proposed (a ready
@@ -177,6 +179,15 @@ actions: `src/app/actions/admin-discord.ts`.
   the same text as before (`{ users: [undefined] }` fails silently).
   `mentionUsers` costs a query: mutation paths only. Only the OAuth-proven
   `discordId` is mentionable, never the typed `discordName`.
+- **Every standin post links the game on the Standins page,** the one place
+  standins are coordinated (Tim, 2026-11-17): `standinHubPath`
+  (`/standins?match=`) for the captain's posts, where they land on their
+  team's cover. A post that says a seat is open (`playerOutMessage`, the
+  away range's lines, `standinDroppedOutMessage`) ends with
+  `standinCallLine`: "Standins who can play: say so here, and the captain
+  picks" over the game's share link (`standinOfferPath`), so the standins
+  reading the channel can offer straight from it. That adds a link, never a
+  mention.
 - **Send standin posts from every site that writes the change:** assign and
   remove from `standins.ts` and `admin-roster.ts` (twice each), agree and
   decline from both files too, and the request-cancellation posts from the

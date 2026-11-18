@@ -2443,10 +2443,10 @@ describe("seat-taken swap wording", () => {
 });
 
 describe("assignment announcement deep link", () => {
-  // Pins the match-page link in standinAssignedMessage: the check-in banner
-  // lives on /matches/[id], and a standin arriving from a phone ping needs
-  // the page, not a scavenger hunt.
-  it("the announcement links the match page", async () => {
+  // Pins the link in standinAssignedMessage: the game on the Standins page,
+  // where the standin checks in or gives the seat back. A standin arriving
+  // from a phone ping needs the page, not a scavenger hunt.
+  it("the announcement links the game on the Standins page", async () => {
     const { home, homePlayer, sub, match } = await setup();
     const res = await assignStandinGuarded({
       matchId: match.id,
@@ -2455,7 +2455,7 @@ describe("assignment announcement deep link", () => {
       actingCaptainId: home.captainId,
     });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.announcement).toContain(`/matches/${match.id}`);
+    if (res.ok) expect(res.announcement).toContain(`/standins?match=${match.id}`);
   });
 });
 

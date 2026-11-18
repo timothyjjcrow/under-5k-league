@@ -4,7 +4,8 @@ Permanent roster changes (sign, release, promote, withdraw a signup), one-match
 standin cover, and match-night check-ins. Main files:
 `src/app/actions/admin-roster.ts`, `src/lib/standin-service.ts` + `standin.ts`,
 `src/app/actions/standins.ts`, `src/lib/standin-offer.ts` +
-`standin-offer-service.ts` (standin offers, `/standins`), `src/lib/registration.ts`,
+`standin-offer-service.ts` (standin offers), the Standins page
+`src/app/standins/` (where every standin control lives), `src/lib/registration.ts`,
 `src/lib/availability.ts` + `availability-service.ts`, and the match-page cards
 in `src/app/matches/[id]/`.
 
@@ -39,7 +40,9 @@ in `src/app/matches/[id]/`.
   Post-commit, best-effort: `standinRemovedMessage` with a `STAND_DOWN_REASON` and
   `mentionsOf([standin.discordId])`. `grep -rn "standinRemovedMessage(" src`
   lists the paths; one without it leaves an @-mentioned instruction for a dead
-  fixture. Send only when the delete took every row it meant to. `withdrawTeam`
+  fixture. The one exception is a standin giving their own seat back
+  (`releaseOwnStandinBooking`, below): they chose it, so the post goes to the
+  captain instead (`standinDroppedOutMessage`). Send only when the delete took every row it meant to. `withdrawTeam`
   stands down only fixtures whose forfeit claim won, and deletes the bookings on
   those with zero games in the same claim (a kept row credits "Stood in" for a
   series nobody played, and Reopen would revive it); `recordResult` only a forfeit
@@ -188,11 +191,19 @@ in `src/app/matches/[id]/`.
   mentions booked standins (`AcceptedReschedule.standinUserIds`): their ping
   quoted the old time. Standins answer the ready check for the seat they cover;
   the player they cover doesn't.
+- **Every standin control lives on the Standins page** (Tim, 2026-11-17:
+  standins coordinated in one place; [below](#the-standins-page-standins)).
+  The captain's card is `StandinCoverCard` (`src/app/standins/cover-card.tsx`),
+  one per open fixture of their team. The match page's Standins card is a
+  summary for its captains (who is booked, what needs cover, what waits on an
+  OK) with one button to the game there; it keeps `#match-standins` so links
+  in older posts still land. Admins keep their any-team tools on /admin and
+  in the match page's Admin tools.
 - **Make the picker mirror the server.** `standinPickerBlock` lists standins booked
   here or that night, or with a request waiting in this match, last, disabled,
   with why; `coverChoices` puts uncovered OUT players first, and a seat with a
   waiting request leaves the Covers list. Pinned by
-  `src/app/matches/[id]/match-page-guards.test.ts`.
+  `src/app/standins/cover-card-guards.test.ts`.
 - **The picker says what a pick does before it is sent.** The form is
   `<StandinPicker>` (`src/components/standin-picker.tsx`, a client component
   inside the card's `<ActionForm>`): "Player they cover" first, then "Standin
@@ -215,12 +226,31 @@ in `src/app/matches/[id]/`.
   double-bookings live (`standinClashes`; any retime can create one, and
   `clashesAfterRetime` reports it in that toast) and lists uncovered OUTs and
   booked standins who said OUT (`matchCoverIssues`). The captain's card opens with
-  "✗ Out and uncovered" and shows roles and "no Discord" in the picker. The
-  team's own page says the same in its Match prep card
-  ([pages-and-ui](pages-and-ui.md#teams-teams-teamsid)). /me shows
-  bookings to any ACTIVE unrostered signup (the empty card only to STANDINs).
-  Profiles credit "Stood in for N matches" from COMPLETED matches. /schedule lists
-  standins.
+  "✗ Out and uncovered", then "✗ N empty roster seats have nobody lined up",
+  then (only once a series is under way) a booked standin who said they can't
+  make it, and shows roles and "no Discord" in the picker. The captain's
+  to-dos say the same, empty seats included (`captainTodos`' `cover`, from
+  `loadSideNeeds`, the board's own judgement), with how many standins said
+  they can play ("Pick a standin"). The team's own page says the same in its
+  Match prep card ([pages-and-ui](pages-and-ui.md#teams-teams-teamsid)). /me
+  says how many games a signup is booked for and links the Standins page (the
+  empty line only to STANDINs). Profiles credit "Stood in for N matches" from
+  COMPLETED matches. /schedule lists standins.
+- **A booked standin's "Can't make it" gives the seat back** (Tim,
+  2026-11-17). Before the night, `setAvailability` and `markAwayRange` call
+  `releaseOwnStandinBooking` in their Serializable transaction instead of
+  recording the OUT: the booking and the standin's answers for the fixture go,
+  so the seat is open again on the Standins page, in the to-dos and for the
+  standins who offered, with nothing for the captain to remove first. Its
+  `deleteMany` WHERE (`status: SCHEDULED`, `games: none`) is the one guard,
+  nothing reads it first; a zero count records the OUT as for anyone, so a
+  series under way keeps its standin (the remaining games record whoever
+  plays) and the captain's card flags them. The banner asks first
+  (`standinGiveUpConfirm`); the toast is `standinReleasedToast`; the captain
+  gets `standinDroppedOutMessage` under the OUT ping's throttle key, ending
+  with the game's share link. Tests: `availability.itest.ts` (both WHERE
+  predicates, sabotage-checked), `away-dates.itest.ts`, and the race against
+  the captain's Remove in `standins-raced.itest.ts`.
 - **Deliberately not built:** a mid-series swap tool (only if a real season needs
   it twice), auto-cancelling partial-refill surplus bookings (surplus waiting
   requests are closed: a request is not cover, so nobody was told to show up).
@@ -282,9 +312,13 @@ the rows in `StandinOffer`.
   waiting request leaves the offer alone: it is not a booking. A new write
   that creates a booking must do the same.
 - **The captain's card leads with "Said they can play"**
-  (`src/app/matches/[id]/standins.tsx`): this side's offers from standins the
-  form could still pick, first come first, each with their MMR, roles and
-  Discord handle and one button. The button is the form's own submit for the
+  (`StandinCoverCard`, `src/app/standins/cover-card.tsx`), right under what
+  needs cover: this side's offers from standins the form could still pick,
+  first come first, each with their MMR, roles and Discord handle and one
+  button. While nobody has offered, the share link sits there instead
+  ("Nobody has said they can play yet"); the full form folds behind "Pick
+  someone else from the pool" once someone has, and behind "Book a standin"
+  when no seat needs anyone. The button is the form's own submit for the
   seat that needs cover first (an uncovered OUT player, else an empty seat)
   and says which of the two it does ("Book <name>" or "Ask the other
   captain", `standinPickOutcome`). The form still picks anyone for any seat,
@@ -307,8 +341,10 @@ the rows in `StandinOffer`.
   standin hears nothing until the usual booking post.
 - **Where a standin finds it:** Home's panel for a signup with no booking
   coming up counts the games (`standinHomeLine`; a free agent too, since any
-  ACTIVE unrostered signup can cover), and the menus list Standins while
-  cover can be booked (`site-nav.ts`).
+  ACTIVE unrostered signup can cover), and once they're on a game's list it
+  says so ("You said you can play") instead of asking again: their offers are
+  read fresh and matched against the board summary's games. The menus list
+  Standins while cover can be booked (`site-nav.ts`).
 - **A visitor with no team and no signup sees the open games first** (Tim,
   2026-11-15): `StandinGamesCallout` (`src/components/home/standin-games.tsx`)
   leads the season hero's actions, signed out or in, with the count, the
@@ -335,10 +371,43 @@ the rows in `StandinOffer`.
   the "lists who said they can play" guard in `match-page-guards.test.ts`
   and `src/app/standins/standins-page-guards.test.ts` (the page, the
   actions, Home's callout and the signup that joins a game).
-- **Not built yet:** a booked standin's own "I can't make it", a captain
-  to-do for a waiting list, "needs a standin" lines on the #schedule card, a
-  weekly "free this week", and a browser spec for the flow (it was driven by
-  hand with Playwright against the regular fixture, 2026-11-15).
+- **Not built yet:** "needs a standin" lines on the #schedule card, a weekly
+  "free this week", and a time limit on a request the other captain never
+  answers (each is Tim's call). Built 2026-11-17: a booked standin's own
+  "Can't make it", the to-do's offer count, and the browser spec
+  (`e2e-mid/standins-hub.spec.ts`).
+
+## The Standins page (/standins)
+
+Tim's call (2026-11-17, [DECISIONS](../DECISIONS.md#product-decisions)):
+standins are coordinated in one place. Every standin control is on
+`/standins`; every other page and every standin post on Discord links the
+game there (`standinHubPath`: `/standins?match=`, or the share link
+`standinOfferPath` where standins should offer).
+
+- **What a viewer gets, top to bottom:** a captain's "Your team's cover"
+  (`TeamCover`, `team-cover.tsx`): one `StandinCoverCard` per open fixture of
+  their team, the next one always (to book ahead for a player who told them),
+  later ones once they have a need, a booking or a request, or a link opened
+  them. A standin's "Your games" (`MyStandinGames`, `my-games.tsx`): each
+  booking with its check-in banner, where "Can't make it" gives the seat
+  back, and each game a captain asked for them while the other captain has
+  yet to agree. Then the games that need a standin, minus the captain's own
+  sides (never listed twice), with "I can play". Admins get a link to /admin.
+- **A link to one game opens on it.** `?match=` puts that fixture in the
+  captain's section and highlights it; `ScrollToStandinGame` scrolls to the
+  captain's card or the game on the list, whichever the viewer has (the
+  captain's section streams, so it watches for a few seconds). A shared link
+  opened by a rostered viewer (that side's captain, a teammate) is never an
+  offer and never a "you can't stand in" toast.
+- **Other pages summarise and link:** the match page's Standins card,
+  Captain to-dos (`captainTodoHref`), the scoreboard's and Captains page's
+  "Find a standin" (`captainCardHref`), the check-in banner's "Line up
+  cover", the team page's Match prep lines, and /me.
+- **Tests:** `src/app/standins/cover-card-guards.test.ts` (the card and the
+  page's sections), `standins-page-guards.test.ts` (the list),
+  `match-page-guards.test.ts` (the summary keeps no controls),
+  `captains.test.ts` and `e2e-mid/standins-hub.spec.ts`.
 
 ## The standin MMR rule
 
@@ -434,7 +503,8 @@ the rows in `StandinRequest`.
   standin and the asking captain. Decline mentions the asking captain
   (`standinRequestDeclinedMessage`). `reachUserId` tells the action whose
   Discord reach to report in the toast.
-- **Show it where the answer happens.** The Standins card lists requests:
+- **Show it where the answer happens.** The captain's card on the Standins
+  page lists requests (the match page's summary says one waits and links it):
   Withdraw for the asking captain; Agree (only while booking is open) and
   Decline for the other. Captain to-dos tells the other captain an answer is
   waiting, and an OUT player whose cover is waiting isn't listed as uncovered.

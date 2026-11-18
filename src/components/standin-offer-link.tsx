@@ -164,3 +164,46 @@ export function RegisterForStandinGame({
     </a>
   );
 }
+
+/**
+ * A link to one game (`/standins?match=`) opens on it: the captain's cover
+ * card when they have one, else the game on the list, whichever of `ids`
+ * is on the page first. The captain's section streams in, so it watches the
+ * page for a few seconds rather than looking once; it scrolls at most once
+ * and stops at the first scroll the reader makes themselves.
+ */
+export function ScrollToStandinGame({ ids }: { ids: string[] }) {
+  const key = ids.join(" ");
+  useEffect(() => {
+    const wanted = key.split(" ");
+    let done = false;
+    const find = () =>
+      wanted.map((id) => document.getElementById(id)).find(Boolean) ?? null;
+    const go = () => {
+      if (done) return;
+      const el = find();
+      if (!el) return;
+      done = true;
+      el.scrollIntoView({ block: "start" });
+      stop();
+    };
+    const observer = new MutationObserver(go);
+    const quit = () => {
+      done = true;
+      stop();
+    };
+    const timer = window.setTimeout(quit, 5000);
+    function stop() {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      window.removeEventListener("wheel", quit);
+      window.removeEventListener("touchmove", quit);
+    }
+    window.addEventListener("wheel", quit, { passive: true });
+    window.addEventListener("touchmove", quit, { passive: true });
+    observer.observe(document.body, { childList: true, subtree: true });
+    go();
+    return stop;
+  }, [key]);
+  return null;
+}

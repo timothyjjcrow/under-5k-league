@@ -870,8 +870,9 @@ the league is already draftable and many visitors have joined. Write for both.
   (`match-prep.tsx` over `loadTeamWeek`, `team-week-service.ts`, and the pure
   `teamWeekNotes`, `team-week.ts`): the side's check-in count (named answers
   for the captain, through the check-in banner's own `loadCheckinSide`), then
-  one line per thing waiting, each linking to the match-page card that deals
-  with it: a player out with no cover, an open seat, the other captain's
+  one line per thing waiting, each linking to where it is dealt with (standin
+  lines to the game on the Standins page, the rest to the match-page card,
+  `captainCardHref`): a player out with no cover, an open seat, the other captain's
   standin request, a ready check, the captain's own request waiting, and who
   is standing in. A captain gets the scoreboard's jumps (`captainJumps`); a
   player gets "Open the match to check in". It renders only for the team's
@@ -1307,7 +1308,9 @@ the filter rules are pure in `src/lib/player-pool.ts`
   aria-label="Captain shortcuts">` over `captainJumps`,
   `src/lib/match-captain-jumps.ts`): "Find a standin", "Change the time" and
   "Set up & report" (or "Record next game", or "Captain tools" while results
-  are closed). Captain tools sit below the preview and every box score, and
+  are closed). "Find a standin" goes to the game on the Standins page, where
+  every standin control lives (`captainCardHref`); Captain tools keeps a
+  Standins summary card at `#match-standins` that links there. Captain tools sit below the preview and every box score, and
   the one button used to read "Set up & report" three days before kickoff, so
   nothing said the page could find cover or move the match (audit,
   2026-11-10). Days out, cover and the time lead and nothing is primary; from
@@ -1589,10 +1592,13 @@ check (`src/lib/captains.test.ts` pins every one of them):
   gets "This page is for team captains"; a signed-out visitor goes to
   `/login?next=/captains`.
 - **Needs you** is `captainTodos` over every open match
-  (`loadCaptainTodoRows`, `captains-service.ts`): an OUT player with no
-  cover, the other captain's standin request, the other captain's ready
-  check, a time to lock in. Each line opens that match's controls here
-  (`captainsMatchHref`: `/captains?match=<id>#<card>`). The match page's
+  (`loadCaptainTodoRows`, `captains-service.ts`): a seat with nobody lined
+  up (an OUT player with no cover, or an empty roster seat, with how many
+  standins said they can play), the other captain's standin request, the
+  other captain's ready check, a time to lock in. A standin line opens the
+  game on the Standins page, where every standin control lives
+  (`captainTodoHref`, Tim, 2026-11-17); a time change opens that match's
+  controls here (`captainsMatchHref`: `/captains?match=<id>#<card>`). The match page's
   "Waiting on you" list is the same function over one match, and both render
   through `<CaptainTodoItem>`. Before the auction is done it reads nothing
   and the page shows the draft card instead.
@@ -1605,15 +1611,19 @@ check (`src/lib/captains.test.ts` pins every one of them):
   a standin", "Change the time", "Set up & report"), each shown only while
   its card would take the action, because those cards sit below the
   check-in and a captain shouldn't have to scroll to learn they are here.
+  "Find a standin" leaves for the game on the Standins page
+  (`captainCardHref`); the rest jump down this page.
   For the open fixture the page draws the captain's own `<CheckinBanner>` (with the side's names;
-  its "Line up cover" goes to this page's Standins card through the
-  banner's `coverHref`), the Remind button (`<CheckinNudgeControl>`, shown
+  its "Line up cover" goes to the game on the Standins page), the Remind
+  button (`<CheckinNudgeControl>`, shown
   by `loadCaptainNudge`, the match preview's rule), `<LiveSeriesCheckin>`
   while the series is live, the "moved by ready check" card, and the match
   page's whole `<CaptainTools>`: the ready check to move the match (propose,
-  answer, lock in, withdraw), standins (book, ask, agree, decline, withdraw,
-  remove) and lobby setup and reporting. Only one fixture's tools render at
-  a time, so the match page's card ids stay unique.
+  answer, lock in, withdraw), the standins summary that links the Standins
+  page, and lobby setup and reporting. Only one fixture's tools render at
+  a time, so the match page's card ids stay unique. Standins were drawn here
+  until 2026-11-17, when Tim asked that standins be coordinated in one place:
+  the Standins page ([rosters-and-standins](rosters-and-standins.md#the-standins-page-standins)).
 - **Scrims** (`scrim-desk.tsx`) draws `/scrims`' own controls from
   `src/components/scrims/scrim-controls.tsx`: Post availability, Cancel on
   the team's open or booked scrims (not once live, as the scrim page), and

@@ -253,7 +253,7 @@ describe("markAwayDates", () => {
     expect(msg).toContain("3 matches");
     for (const m of mine) {
       expect(msg).toContain(`<t:${Math.floor(m.scheduledAt!.getTime() / 1000)}:F>`);
-      expect(msg).toContain(`/matches/${m.id}`);
+      expect(msg).toContain(`/standins?match=${m.id}`);
     }
     expect(mentions).toEqual({ users: [CAPTAIN_DISCORD] });
   });
@@ -330,7 +330,7 @@ describe("markAwayDates", () => {
     const byMatch = new Map((await rows(player.id)).map((r) => [r.matchId, r]));
     expect(byMatch.get(mine[0].id)).toMatchObject({ status: "OUT", scheduleRevision: 1 });
     expect(byMatch.get(mine[1].id)).toMatchObject({ status: "OUT", scheduleRevision: 0 });
-    expect(mockSend.mock.calls[0][0]).toContain(`/matches/${mine[0].id}`);
+    expect(mockSend.mock.calls[0][0]).toContain(`/standins?match=${mine[0].id}`);
   });
 
   it("only answers for the kickoff the page showed", async () => {
@@ -505,7 +505,7 @@ describe("markAwayDates", () => {
     expect(mockSend).not.toHaveBeenCalled();
   });
 
-  it("marks a standin's booked cover and pings the covered team's captain", async () => {
+  it("gives back a standin's booked seat and pings the covered team's captain", async () => {
     const { season, alpha, player, mine, opponentOf, days } = await setupSeason();
     await prisma.user.update({
       where: { id: alpha.captainId },
@@ -535,11 +535,20 @@ describe("markAwayDates", () => {
       awayForm(season.id, days(1), days(20), view!.fixtures),
     );
     expect(res).toHaveProperty("message");
-    expect((await rows(cover.id)).map((r) => [r.matchId, r.status])).toEqual([
-      [mine[1].id, "OUT"],
-    ]);
-    // One fixture reads exactly like a one-match OUT.
-    expect(mockSend.mock.calls[0][0]).toContain("line up a standin");
+    // Before the night, a standin's "away" gives the seat back, as a single
+    // "Can't make it" does: the booking goes, with their answers for it.
+    expect(
+      await prisma.standinAssignment.count({ where: { matchId: mine[1].id } }),
+    ).toBe(0);
+    expect(await rows(cover.id)).toEqual([]);
+    // One fixture reads exactly like a one-match drop-out: the captain is
+    // told the seat is open, and the standins get the game's link.
+    const post = String(mockSend.mock.calls[0][0]);
+    expect(post).toContain("**Booked Cover** can't stand in for **");
+    expect(post).toContain(`The seat for **${player.name}** is open again.`);
+    expect(post).toContain(
+      `/standins?match=${mine[1].id}&team=${alpha.id}&play=1`,
+    );
     expect(mockSend.mock.calls[0][1]).toEqual({ users: [CAPTAIN_DISCORD] });
   });
 });
@@ -565,8 +574,8 @@ describe("markAwayDates + setAvailability share one OUT ping per match", () => {
     expect(res?.message).toMatch(/^Marked you out for 2 fixtures/);
     expect(mockSend).toHaveBeenCalledTimes(4);
     const msg = String(mockSend.mock.calls[3][0]);
-    expect(msg).toContain(`/matches/${mine[1].id}`);
-    expect(msg).not.toContain(`/matches/${mine[0].id}`);
+    expect(msg).toContain(`/standins?match=${mine[1].id}`);
+    expect(msg).not.toContain(`/standins?match=${mine[0].id}`);
   });
 
   it("a range re-announces a match the captain was told the player could make", async () => {
@@ -582,8 +591,8 @@ describe("markAwayDates + setAvailability share one OUT ping per match", () => {
     await markAwayDates({}, awayForm(season.id, days(1), days(10), view!.fixtures));
     expect(mockSend).toHaveBeenCalledTimes(3);
     const msg = String(mockSend.mock.calls[2][0]);
-    expect(msg).toContain(`/matches/${mine[0].id}`);
-    expect(msg).toContain(`/matches/${mine[1].id}`);
+    expect(msg).toContain(`/standins?match=${mine[0].id}`);
+    expect(msg).toContain(`/standins?match=${mine[1].id}`);
   });
 
   it("a one-match IN answers a range's OUT, and flapping after it stays bounded", async () => {

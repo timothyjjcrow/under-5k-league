@@ -12,6 +12,13 @@ const ACTION: Record<CaptainTodo["kind"], string> = {
   "lock-in": "Lock it in",
 };
 
+/** The link's words: "Pick a standin" once someone said they can play. */
+function actionLabel(todo: CaptainTodo): string {
+  return todo.kind === "uncovered" && todo.offers > 0
+    ? "Pick a standin"
+    : ACTION[todo.kind];
+}
+
 function When({ ts }: { ts: number }) {
   return (
     <strong>
@@ -52,11 +59,11 @@ export function CaptainTodoItem({
       </span>
       {inPage ? (
         <a href={href} className={textLink("shrink-0 font-medium")}>
-          {ACTION[todo.kind]} <span aria-hidden>↓</span>
+          {actionLabel(todo)} <span aria-hidden>↓</span>
         </a>
       ) : (
         <Link href={href} className={textLink("shrink-0 font-medium")}>
-          {ACTION[todo.kind]} <span aria-hidden>→</span>
+          {actionLabel(todo)} <span aria-hidden>→</span>
         </Link>
       )}
     </li>
@@ -69,10 +76,26 @@ function TodoText({ todo }: { todo: CaptainTodo }) {
       return (
         <>
           <span aria-hidden>✗ </span>
-          <strong>{todo.names.join(", ")}</strong>{" "}
-          {todo.names.length === 1
-            ? "can't make it and has no cover yet."
-            : "can't make it and have no cover yet."}
+          {todo.names.length > 0 ? (
+            <>
+              <strong>{todo.names.join(", ")}</strong>{" "}
+              {todo.names.length === 1
+                ? "can't make it and has no cover yet."
+                : "can't make it and have no cover yet."}
+            </>
+          ) : null}
+          {todo.emptySeats > 0 ? (
+            <>
+              {todo.names.length > 0 ? " " : ""}
+              {emptySeatLine(todo.emptySeats)}
+            </>
+          ) : null}
+          {todo.offers > 0 ? (
+            <>
+              {" "}
+              <strong>{offersLine(todo.offers)}</strong>
+            </>
+          ) : null}
         </>
       );
     case "standin-request":
@@ -113,4 +136,18 @@ function TodoText({ todo }: { todo: CaptainTodo }) {
         </>
       );
   }
+}
+
+/** "1 empty roster seat has nobody lined up." */
+function emptySeatLine(seats: number): string {
+  return seats === 1
+    ? "1 empty roster seat has nobody lined up."
+    : `${seats} empty roster seats have nobody lined up.`;
+}
+
+/** "1 standin said they can play." */
+function offersLine(offers: number): string {
+  return offers === 1
+    ? "1 standin said they can play."
+    : `${offers} standins said they can play.`;
 }

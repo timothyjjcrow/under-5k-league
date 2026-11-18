@@ -1,11 +1,12 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import Link from "@/components/app-link";
 import { getSessionUser, type SessionUser } from "@/lib/auth";
 import { formatLeagueMatchTime } from "@/lib/match-time";
-import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { prisma } from "@/lib/prisma";
 import { singleSearchParam } from "@/lib/search-params";
 import { getActiveSeason } from "@/lib/season";
+import { getCaptainTeam } from "@/lib/captains-service";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   standinArrivalAction,
@@ -31,6 +32,7 @@ import { LocalTime } from "@/components/local-time";
 import {
   CopyStandinLink,
   RegisterForStandinGame,
+  ScrollToStandinGame,
   StandinOfferOnArrival,
 } from "@/components/standin-offer-link";
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
@@ -40,14 +42,26 @@ import {
   Card,
   CardBody,
   EmptyState,
-  LinkArrow,
+  CardSkeleton,
   PageTitle,
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { coverCardId } from "./cover-card";
+import { MyStandinGames } from "./my-games";
+import { TeamCover } from "./team-cover";
 
 const DESCRIPTION =
   "Games that need a standin this week. Say you can play, and that team's captain picks from everyone who did.";
+
+/**
+ * The Standins page is the one place standins are coordinated (Tim,
+ * 2026-11-17): a captain lines up their team's cover here (`TeamCover`), a
+ * standin sees and answers for their own games here (`MyStandinGames`), and
+ * everyone sees the games that need someone and says "I can play". Every
+ * other page and every standin post on Discord links here
+ * (`standinHubPath`, `standinOfferPath`).
+ */
 
 type StandinsSearch = {
   match?: string | string[];
@@ -62,6 +76,12 @@ function linkedGame(params: StandinsSearch) {
   return typeof matchId === "string" && typeof teamId === "string"
     ? { matchId, teamId }
     : null;
+}
+
+/** The match a link opened (`standinHubPath`, or a share link's). */
+function focusedMatch(params: StandinsSearch): string | null {
+  const matchId = singleSearchParam(params.match);
+  return typeof matchId === "string" && matchId ? matchId : null;
 }
 
 /**
@@ -117,6 +137,7 @@ export default async function StandinsPage({
 }) {
   const params = await searchParams;
   const linked = linkedGame(params);
+  const focus = focusedMatch(params);
   const play = singleSearchParam(params.play) === "1";
   const [viewer, season] = await Promise.all([
     getSessionUser(),
@@ -125,29 +146,59 @@ export default async function StandinsPage({
   // Async server component: Date.now is request-time state, not render replay.
   // eslint-disable-next-line react-hooks/purity
   const nowMs = Date.now();
-  const [needs, offerViewer] = await Promise.all([
+  const [needs, offerViewer, captainTeam] = await Promise.all([
     season ? loadStandinBoard(season, nowMs) : Promise.resolve([]),
     season && viewer
       ? loadStandinOfferViewer(season.id, viewer.id)
       : Promise.resolve(null),
+    season && viewer
+      ? getCaptainTeam(season.id, viewer.id)
+      : Promise.resolve(null),
   ]);
+  // A withdrawn team has no fixtures left to cover.
+  const myTeam = captainTeam && !captainTeam.withdrawn ? captainTeam : null;
+  // A standin's own games: any ACTIVE unrostered signup can be booked.
+  const standinViewer =
+    !!offerViewer && offerViewer.activeSignup && !offerViewer.rostered;
 
   const isLinked = (n: StandinBoardNeed) =>
     !!linked && n.matchId === linked.matchId && n.teamId === linked.teamId;
   const linkedNeed = needs.find(isLinked) ?? null;
+  // A captain's own sides are in their team's section above, never twice.
+  const others = needs.filter((n) => n.teamId !== myTeam?.id);
   // The game the link names leads the list; the rest stay soonest first.
-  const ordered = linkedNeed
-    ? [linkedNeed, ...needs.filter((n) => n !== linkedNeed)]
-    : needs;
+  const ordered =
+    linkedNeed && linkedNeed.teamId !== myTeam?.id
+      ? [linkedNeed, ...others.filter((n) => n !== linkedNeed)]
+      : others;
   const arrivalStanding = linkedNeed ? standingOn(linkedNeed, offerViewer) : null;
-  const arrival = standinArrivalAction(play, arrivalStanding);
+  // A rostered viewer (that side's captain or a teammate) opening a shared
+  // link is never told they can't stand in: the captain lands on their
+  // team's cover, and the link was never an offer for a teammate.
+  const arrival = offerViewer?.rostered
+    ? "none"
+    : standinArrivalAction(play, arrivalStanding);
+  const yourTeamsGame =
+    !!linked && !!myTeam && linked.teamId === myTeam.id;
+  const sectionsAbove = !!myTeam || standinViewer;
 
   return (
     <div className="mx-auto max-w-3xl">
       <PageTitle
         title="Standins"
-        subtitle="Games that need a player. Say you can play, and that team's captain picks from everyone who did."
+        subtitle={
+          myTeam
+            ? "Line up your team's cover, and see every game that needs a player. Standins say they can play; each team's captain picks."
+            : "Games that need a player. Say you can play, and that team's captain picks from everyone who did."
+        }
       />
+      {focus ? (
+        <ScrollToStandinGame
+          ids={[coverCardId(focus), ...needs
+            .filter((n) => n.matchId === focus)
+            .map((n) => `need-${n.matchId}-${n.teamId}`)]}
+        />
+      ) : null}
       {linked && linkedNeed ? (
         <StandinOfferOnArrival
           matchId={linked.matchId}
@@ -160,23 +211,50 @@ export default async function StandinsPage({
           }
         />
       ) : null}
-      <div className="space-y-4">
-        {linked && !linkedNeed ? (
+      <div className="space-y-6">
+        {season && viewer && myTeam ? (
+          <Suspense fallback={<CardSkeleton rows={4} />}>
+            <TeamCover
+              season={season}
+              team={myTeam}
+              viewer={viewer}
+              focusMatchId={focus}
+            />
+          </Suspense>
+        ) : null}
+        {season && viewer && standinViewer ? (
+          <Suspense fallback={<CardSkeleton rows={2} />}>
+            <MyStandinGames season={season} viewer={viewer} nowMs={nowMs} />
+          </Suspense>
+        ) : null}
+        <section aria-labelledby={sectionsAbove ? "board-title" : undefined} className="space-y-4">
+        {sectionsAbove ? (
+          <h2 id="board-title" className="font-display text-xl font-semibold">
+            {myTeam ? "Other games that need a standin" : "Games that need a standin"}
+          </h2>
+        ) : null}
+        {linked && !linkedNeed && !yourTeamsGame ? (
           <p className="rounded-lg border border-line bg-surface-2/40 px-3 py-2 text-sm text-muted">
             That game has its standin now, or isn&apos;t coming up any more.
             {needs.length > 0 ? " These games still need someone:" : ""}
           </p>
         ) : null}
         {ordered.length === 0 ? (
-          <EmptyState
-            title="No game needs a standin right now"
-            description="A game shows here as soon as a player says they can't make it, or a team is a player short. Captains are told when you say you can play."
-            action={
-              viewer && offerViewer?.activeSignup ? undefined : (
-                <SignupStep viewer={viewer} next="/standins" />
-              )
-            }
-          />
+          myTeam ? (
+            <p className="text-sm text-muted">
+              No other team needs a standin right now.
+            </p>
+          ) : (
+            <EmptyState
+              title="No game needs a standin right now"
+              description="A game shows here as soon as a player says they can't make it, or a team is a player short. Captains are told when you say you can play."
+              action={
+                viewer && offerViewer?.activeSignup ? undefined : (
+                  <SignupStep viewer={viewer} next="/standins" />
+                )
+              }
+            />
+          )
         ) : (
           <ul className="space-y-3">
             {ordered.map((need, index) => (
@@ -192,6 +270,7 @@ export default async function StandinsPage({
             ))}
           </ul>
         )}
+        </section>
         <p className="text-sm text-muted">
           A standin plays one match for a team that is a player down. Your own
           captain always picks; up to 100 MMR above the seat that pick is
@@ -206,6 +285,14 @@ export default async function StandinsPage({
           >
             The standin pool
           </Link>
+          {viewer?.role === "ADMIN" ? (
+            <>
+              {" · "}
+              <Link href="/admin" className={textLink("whitespace-nowrap")}>
+                Admins: book any team&apos;s cover on /admin
+              </Link>
+            </>
+          ) : null}
         </p>
       </div>
     </div>
@@ -277,8 +364,8 @@ function NeedCard({
   first: boolean;
 }) {
   const hidden = { matchId: need.matchId, teamId: need.teamId };
+  // A captain's own sides are in their team's section, never here.
   const offers = standinOfferCountLabel(need.offerCount);
-  const isCaptain = viewer?.id === need.captainId;
   return (
     <Card
       tone={highlighted ? "feature" : "default"}
@@ -324,19 +411,7 @@ function NeedCard({
             </>
           ) : null}
         </p>
-        {isCaptain ? (
-          // The side's own captain: this is their list to pick from.
-          <div className="flex flex-wrap items-center gap-2">
-            <Link
-              href={matchAnchorPath(need.matchId, MATCH_ANCHOR.standins)}
-              className={buttonClasses("accent", "sm")}
-            >
-              {need.offerCount > 0 ? "Pick your standin" : "Find a standin"}
-              <LinkArrow />
-            </Link>
-            <CopyStandinLink matchId={need.matchId} teamId={need.teamId} />
-          </div>
-        ) : standing.kind === "open" ? (
+        {standing.kind === "open" ? (
           <div className="space-y-2">
             <p className="text-sm">
               {standinOfferOutcomeLine(standing.outcome, need.opponentName)}

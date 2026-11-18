@@ -50,6 +50,8 @@ export type CheckinSeat =
        *  team a standin covers. Its captain is who has to find cover. */
       teamId: string;
       captainId: string;
+      /** They answer as a booked standin, not from a roster seat. */
+      standin: boolean;
     }
   | { refusal: CheckinRefusal };
 
@@ -140,7 +142,51 @@ export async function resolveCheckinSeat(
   if (!(await loadSidePlayerIds(tx, match, teamId)).has(userId)) {
     return { refusal: CHECKIN_REFUSAL.INELIGIBLE };
   }
-  return { teamId, captainId: team.captainId };
+  return { teamId, captainId: team.captainId, standin: !onRoster };
+}
+
+/**
+ * A booked standin who says they can't make it before the night starts
+ * gives the seat back (Tim's call, 2026-11-17): the booking goes, with their
+ * answers for the fixture, so the seat is open again on the Standins page,
+ * the captain's to-dos and the list of standins who offered, with nothing
+ * for the captain to remove first. They chose it, so no stand-down post
+ * goes to them; the action tells the captain.
+ *
+ * The WHERE is the one guard (nothing reads it first): only a fixture that
+ * is still SCHEDULED with no game imported, as `removeStandinGuarded` judges
+ * a removal. Once the series is under way the booking is part of the record
+ * and the caller records the OUT instead. Null when nothing was released;
+ * otherwise the name of the player they covered (null for an empty seat).
+ * Call it inside the caller's SERIALIZABLE transaction, first: a zero count
+ * has written nothing.
+ */
+export async function releaseOwnStandinBooking(
+  tx: Tx,
+  match: { id: string },
+  userId: string,
+  teamId: string,
+): Promise<{ replacedName: string | null } | null> {
+  const booking = await tx.standinAssignment.findFirst({
+    where: { matchId: match.id, standinUserId: userId, teamId },
+    select: { replaced: { select: { name: true } } },
+  });
+  if (!booking) return null;
+  const released = await tx.standinAssignment.deleteMany({
+    where: {
+      matchId: match.id,
+      standinUserId: userId,
+      teamId,
+      match: { status: MATCH_STATUS.SCHEDULED, games: { none: {} } },
+    },
+  });
+  if (released.count === 0) return null;
+  // Their answers were for the seat they no longer hold; a later booking
+  // must start from no answer, never this one.
+  await tx.matchAvailability.deleteMany({
+    where: { matchId: match.id, userId },
+  });
+  return { replacedName: booking.replaced?.name ?? null };
 }
 
 /**
@@ -271,6 +317,15 @@ export type AwayMarkedFixture = AwayFixtureRef & {
   /** The kickoff this OUT answers, which keys the captain's OUT ping. */
   scheduleRevision: number;
   captainId: string;
+  /** The side losing a player: their seat's team, or the team they cover. */
+  teamId: string;
+  teamName: string;
+  /**
+   * Set when they were a booked standin and gave the seat back
+   * (`releaseOwnStandinBooking`): who they were covering, null for an
+   * empty seat.
+   */
+  released: { replacedName: string | null } | null;
 };
 
 export type AwayRangeOutcome = Omit<AwayRangeReport, "marked"> & {
@@ -383,7 +438,11 @@ export async function markAwayRange(opts: {
           inAwayRange(seen.get(id)!.kickoffMs, range),
       ).length;
 
-      const toMark: { match: (typeof matches)[number]; ref: AwayMarkedFixture }[] = [];
+      const toMark: {
+        match: (typeof matches)[number];
+        standin: boolean;
+        ref: AwayMarkedFixture;
+      }[] = [];
       const alreadyOut: AwayFixtureRef[] = [];
       const skipped: (AwayFixtureRef & { reason: AwaySkip })[] = [];
       for (const match of matches) {
@@ -433,6 +492,7 @@ export async function markAwayRange(opts: {
         else if (outcome.kind === "mark" && seat && "teamId" in seat) {
           toMark.push({
             match,
+            standin: seat.standin,
             ref: {
               ...ref,
               week: match.week,
@@ -443,14 +503,26 @@ export async function markAwayRange(opts: {
               whenMs: kickoffMs!,
               scheduleRevision: match.scheduleRevision,
               captainId: seat.captainId,
+              teamId: seat.teamId,
+              teamName:
+                seat.teamId === match.homeTeamId
+                  ? match.homeTeam.name
+                  : match.awayTeam.name,
+              released: null,
             },
           });
         }
       }
 
-      // Every fixture is judged; now write. Nothing below can refuse.
-      for (const { match } of toMark) {
-        await recordCheckin(tx, match, userId, AVAILABILITY.OUT);
+      // Every fixture is judged; now write. Nothing below can refuse: a
+      // booked standin's seat goes back (setAvailability's rule), and where
+      // the series is under way the OUT is recorded as for anyone.
+      for (const item of toMark) {
+        const released = item.standin
+          ? await releaseOwnStandinBooking(tx, item.match, userId, item.ref.teamId)
+          : null;
+        if (released) item.ref.released = released;
+        else await recordCheckin(tx, item.match, userId, AVAILABILITY.OUT);
       }
       return {
         marked: toMark.map((m) => m.ref),

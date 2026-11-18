@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   CAPTAIN_TODO_CARD,
   captainTodoCountLine,
+  captainTodoHref,
   captainTodos,
   type CaptainTodoInput,
 } from "./captain-todos";
@@ -25,6 +26,7 @@ function input(over: Partial<CaptainTodoInput> = {}): CaptainTodoInput {
       { userId: "c", name: "Cy" },
     ],
     outUserIds: new Set(),
+    cover: null,
     readyCheck: null,
     ...over,
   };
@@ -58,7 +60,39 @@ function readyCheck(
 describe("captainTodos", () => {
   it("lists roster players who are out with no cover, out first in roster order", () => {
     const todos = captainTodos(input({ outUserIds: new Set(["c", "a"]) }));
-    expect(todos).toEqual([{ kind: "uncovered", names: ["Ana", "Cy"] }]);
+    expect(todos).toEqual([
+      { kind: "uncovered", names: ["Ana", "Cy"], emptySeats: 0, offers: 0 },
+    ]);
+  });
+
+  it("asks for cover for an empty roster seat, which the Standins page lists", () => {
+    // Nobody is out, but the side is a player short: the board advertises
+    // the game, so its captain must hear it too.
+    expect(captainTodos(input({ cover: { emptySeats: 1, offers: 0 } }))).toEqual([
+      { kind: "uncovered", names: [], emptySeats: 1, offers: 0 },
+    ]);
+    expect(
+      captainTodos(
+        input({
+          outUserIds: new Set(["b"]),
+          cover: { emptySeats: 2, offers: 3 },
+        }),
+      ),
+    ).toEqual([{ kind: "uncovered", names: ["Bo"], emptySeats: 2, offers: 3 }]);
+    // Booking closed: no to-do, empty seat or not.
+    expect(
+      captainTodos(
+        input({ seasonStatus: "COMPLETE", cover: { emptySeats: 1, offers: 0 } }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("says how many standins said they can play", () => {
+    expect(
+      captainTodos(
+        input({ outUserIds: new Set(["a"]), cover: { emptySeats: 0, offers: 2 } }),
+      ),
+    ).toEqual([{ kind: "uncovered", names: ["Ana"], emptySeats: 0, offers: 2 }]);
   });
 
   it("drops a player a standin covers, or one a pending request would cover", () => {
@@ -183,6 +217,21 @@ describe("captainTodos", () => {
       "answer-ready-check": "reschedule",
       "lock-in": "reschedule",
     });
+  });
+
+  it("sends standin work to the Standins page and time changes to the Reschedule card", () => {
+    expect(captainTodoHref("uncovered", "m1", "#match-reschedule")).toBe(
+      "/standins?match=m1",
+    );
+    expect(captainTodoHref("standin-request", "m1", "#match-reschedule")).toBe(
+      "/standins?match=m1",
+    );
+    expect(captainTodoHref("answer-ready-check", "m1", "#match-reschedule")).toBe(
+      "#match-reschedule",
+    );
+    expect(captainTodoHref("lock-in", "m1", "/captains?match=m1#match-reschedule")).toBe(
+      "/captains?match=m1#match-reschedule",
+    );
   });
 });
 

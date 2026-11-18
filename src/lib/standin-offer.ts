@@ -39,6 +39,8 @@ export function standinBoardWindow(nowMs: number): { from: Date; to: Date } {
 export type StandinSideNeed = {
   /** Seats without cover: players who are out, plus empty roster seats. */
   seats: number;
+  /** Of those, the empty roster seats (the rest are players who are out). */
+  emptySeats: number;
   /**
    * The MMR a standin is judged against on the seat that suits them best
    * (the highest baseline among the open seats); null when no open seat has
@@ -97,6 +99,7 @@ export function standinSideNeed(side: {
   const known = baselines.filter((b): b is number => b !== null);
   return {
     seats: uncoveredOut.length + emptySeats,
+    emptySeats,
     baselineMmr: known.length > 0 ? Math.max(...known) : null,
   };
 }
@@ -231,11 +234,40 @@ export function standinOfferOutcomeLine(
   return offered ? next : `You can offer. ${next}`;
 }
 
+/** A game the viewer said they can play, as Home names it. */
+export type StandinOfferedGame = {
+  teamName: string;
+  opponentName: string;
+};
+
 /**
  * Home's line for a player in the standin pool with no booking coming up:
- * how many games need someone now, and the way to the Standins page.
+ * the games they already said they can play (so Home never asks them to say
+ * it again), how many others need someone now, and the way to the Standins
+ * page.
  */
-export function standinHomeLine(games: number): { text: string; cta: string } {
+export function standinHomeLine(
+  games: number,
+  /** Games still needing someone that the viewer is on the list for. */
+  offered: readonly StandinOfferedGame[] = [],
+): { title?: string; text: string; cta: string } {
+  if (offered.length > 0) {
+    const [first] = offered;
+    const others = games - offered.length;
+    const named =
+      offered.length === 1
+        ? `${first.teamName} vs ${first.opponentName}`
+        : `${offered.length} games`;
+    return {
+      title: "You said you can play",
+      text: `You're on the list for ${named}. The captain picks, and you're pinged on Discord if it's you.${
+        others > 0
+          ? ` ${others === 1 ? "1 more game needs" : `${others} more games need`} a standin.`
+          : ""
+      }`,
+      cta: "Open the Standins page",
+    };
+  }
   if (games === 0) {
     return {
       text: "No game needs a standin right now. One shows on the Standins page as soon as a team is a player down.",
@@ -250,10 +282,29 @@ export function standinHomeLine(games: number): { text: string; cta: string } {
   };
 }
 
+/**
+ * The toast after a booked standin said they can't make it and the seat went
+ * back (`releaseOwnStandinBooking`): what happened, and that nobody else has
+ * to be told.
+ */
+export function standinReleasedToast(teamName: string): string {
+  return `You're off this match. The ${teamName} captain is told, and the seat is back on the Standins page for someone else.`;
+}
+
 /** The toast after "I can play". */
 export function standinOfferedToast(teamName: string): string {
   // "the list for X", never "X's list": team names end in anything.
   return `You're on the list for ${teamName}. Their captain picks, and you're pinged on Discord if it's you.`;
+}
+
+/**
+ * The Standins page on one game. Every standin control lives on that page,
+ * so this is where every other page and Discord post sends a captain: they
+ * land on their team's cover for this game, and anyone else on the game
+ * itself. It books and offers nothing.
+ */
+export function standinHubPath(matchId: string): string {
+  return `/standins?match=${encodeURIComponent(matchId)}`;
 }
 
 /**

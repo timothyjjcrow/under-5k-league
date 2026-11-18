@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { MATCH_ANCHOR } from "./match-anchors";
 import {
   MATCH_NIGHT_LEAD_MS,
+  captainCardHref,
   captainCardsOpen,
   captainJumps,
 } from "./match-captain-jumps";
@@ -108,5 +109,25 @@ describe("captainCardsOpen", () => {
         "LIVE",
       ),
     ).toEqual({ standinsOpen: false, rescheduleOpen: false });
+  });
+});
+
+describe("captainCardHref", () => {
+  it("sends the Standins jump to the game on the Standins page, wherever it is drawn", () => {
+    expect(captainCardHref("m1", MATCH_ANCHOR.standins, true)).toBe(
+      "/standins?match=m1",
+    );
+    expect(captainCardHref("m1", MATCH_ANCHOR.standins, false)).toBe(
+      "/standins?match=m1",
+    );
+  });
+
+  it("keeps every other card on the match page", () => {
+    expect(captainCardHref("m1", MATCH_ANCHOR.reschedule, true)).toBe(
+      "#match-reschedule",
+    );
+    expect(captainCardHref("m1", MATCH_ANCHOR.report, false)).toBe(
+      "/matches/m1#match-report",
+    );
   });
 });
