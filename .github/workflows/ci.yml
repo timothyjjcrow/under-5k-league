@@ -112,14 +112,19 @@ jobs:
           node-version: "22.x"
           cache: npm
       - run: npm ci
-      # Shipped dependencies block on ANY advisory. Dev-only tools (test,
-      # lint, build helpers) block only on high/critical here, so a fresh
-      # low/moderate advisory in a linter plugin cannot hold a match-night
-      # hotfix; dependency-audit.yml reports those weekly instead.
+      # Shipped dependencies block on ANY advisory, with no exceptions.
+      # Dev-only tools (test, lint, build helpers) block only on
+      # high/critical here, so a fresh low/moderate advisory in a linter
+      # plugin cannot hold a match-night hotfix; dependency-audit.yml reports
+      # those weekly instead. The full audit is scripts/dev-audit.mjs: npm
+      # audit at high, except the dev-only advisories with no patched release
+      # listed in its DEV_AUDIT_EXCEPTIONS (each with a docs/DECISIONS.md
+      # row). It fails once a listed advisory stops being reported, so an
+      # exception can't outlive its advisory.
       - name: Production dependency audit
         run: npm audit --omit=dev --audit-level=low
       - name: Full dependency audit (high and critical)
-        run: npm audit --audit-level=high
+        run: node scripts/dev-audit.mjs
       - name: Validate committed SQLite schema
         run: npx prisma validate
       - run: npx prisma generate
