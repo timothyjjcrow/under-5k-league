@@ -16,7 +16,7 @@ import { runWithProcessLock } from "./process-lock.mjs";
 import { gameServerRegions } from "./region.mjs";
 import { earlyLeaveKinds } from "./lobby-kind.mjs";
 import { lobbyHealth } from "./health.mjs";
-import { offlineWatchdog, OFFLINE_RESTART_MS } from "./watchdog.mjs";
+import { offlineWatchdog, OFFLINE_RESTART_MS, signInWatchdog, SIGN_IN_RESTART_MS } from "./watchdog.mjs";
 import { accountIdOf, lobbyChannelName, LOBBY_CHANNEL_TYPE, markWireTeams, readMessage } from "./lobby-wire.mjs";
 
 // Timestamped, secret-free lines (event-log.mjs). launchd's log files carry
@@ -189,6 +189,10 @@ const relay = new RelayClient({
 const { ESOMsg, EGCBaseClientMsg, EGCBaseMsg, EDOTAGCMsg, CSODOTALobby } = protos;
 const LOBBY_TYPE_ID = 2004;
 let steamStopped = false;
+// For the startup watchdog (signInWatchdog): a live Steam session, and whether
+// steam-user has asked for an operator (an error, or a Steam Guard code).
+let steamSignedIn = false;
+let steamNeedsOperator = false;
 let pendingRefreshToken;
 function stopSteam(message) {
   steamStopped = true;
@@ -329,15 +333,19 @@ dota.on("disconnectedFromGC", () => {
 });
 user.on("disconnected", (eresult) => {
   controller.online = false;
+  steamSignedIn = false;
   say(`[dota-bot] Steam disconnected (result ${eresult}); waiting for automatic reconnect`);
 });
 user.on("error", () => {
   controller.online = false;
+  steamSignedIn = false;
+  steamNeedsOperator = true;
   warn(
     "[dota-bot] Steam login/connection failed; check the bot account and Steam Guard.",
   );
 });
 user.on("loggedOn", () => {
+  steamSignedIn = true;
   if (steamStopped) return user.logOff();
   const steamId = user.steamID?.getSteamID64();
   if (savedAuth && steamId !== savedAuth.steamId)
@@ -367,6 +375,7 @@ user.on("playingState", (blocked) => {
     stopSteam("[dota-bot] This Steam account is playing a game in another session. Close that game or use a dedicated bot account, then restart the worker.");
 });
 user.on("steamGuard", (_domain, callback, lastCodeWrong) => {
+  steamNeedsOperator = true;
   if (!process.stdin.isTTY) {
     warn(
       "[dota-bot] Steam Guard required. Run interactively once with the same persistent state directory.",
@@ -465,6 +474,21 @@ const offlineTooLong = offlineWatchdog();
 setInterval(() => {
   if (!offlineTooLong({ online: controller.online, stopped: steamStopped })) return;
   warn(`[dota-bot] Offline for ${OFFLINE_RESTART_MS / 60_000} minutes after losing Steam; exiting so the service restarts.`);
+  exitForRestart();
+}, 30_000).unref();
+// Before the first connection, steam-user's connect retries can stop with no
+// event at all (2026-11-17, during Steam's weekly maintenance), and the rule
+// above never arms. A process with no Steam session for 15 minutes exits too,
+// unless steam-user reported an error or asked for Steam Guard (watchdog.mjs).
+const neverSignedIn = signInWatchdog();
+setInterval(() => {
+  if (!neverSignedIn({
+    online: controller.online,
+    signedIn: steamSignedIn,
+    stopped: steamStopped,
+    needsOperator: steamNeedsOperator,
+  })) return;
+  warn(`[dota-bot] Not signed in to Steam for ${SIGN_IN_RESTART_MS / 60_000} minutes and never connected; exiting so the service restarts.`);
   exitForRestart();
 }, 30_000).unref();
 user.logOn(savedAuth ? {
