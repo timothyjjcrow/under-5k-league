@@ -2,8 +2,11 @@ import Link from "@/components/app-link";
 import { Badge, Card, CardBody, CardHeader, LinkArrow, buttonClasses, textLink } from "@/components/ui";
 import { checkinCountsText } from "@/lib/checkin-side";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
-import { matchAnchorPath } from "@/lib/match-anchors";
-import { captainCardsOpen, captainJumps } from "@/lib/match-captain-jumps";
+import {
+  captainCardHref,
+  captainCardsOpen,
+  captainJumps,
+} from "@/lib/match-captain-jumps";
 import { loadTeamWeek } from "@/lib/team-week-service";
 import { cn } from "@/lib/utils";
 
@@ -131,7 +134,7 @@ export async function MatchPrep({
                 </span>
                 {note.link ? (
                   <Link
-                    href={matchAnchorPath(match.id, note.link.anchor)}
+                    href={captainCardHref(match.id, note.link.anchor, false)}
                     className={textLink("shrink-0 font-medium")}
                   >
                     {note.link.label} <LinkArrow />
@@ -145,7 +148,7 @@ export async function MatchPrep({
           {jumps.map((jump) => (
             <Link
               key={jump.anchor}
-              href={matchAnchorPath(match.id, jump.anchor)}
+              href={captainCardHref(match.id, jump.anchor, false)}
               className={buttonClasses(jump.variant, "sm")}
             >
               {jump.label}

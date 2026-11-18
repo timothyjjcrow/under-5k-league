@@ -40,10 +40,12 @@ describe("standins page", () => {
     expect(PAGE).toMatch(
       /standing\.kind === "offered" \? \([\s\S]*?action=\{withdrawStandinOfferAction\}/,
     );
-    // The side's own captain picks; they don't offer for their own team.
-    expect(PAGE).toMatch(
-      /\{isCaptain \? \([\s\S]*?matchAnchorPath\(need\.matchId, MATCH_ANCHOR\.standins\)/,
+    // The side's own captain picks: their sides are in their team's cover
+    // above (TeamCover), never on the list, where they could only offer.
+    expect(PAGE).toContain(
+      "const others = needs.filter((n) => n.teamId !== myTeam?.id);",
     );
+    expect(PAGE).not.toContain("isCaptain");
   });
 
   // A signed-out visitor's sign-in comes back to the game's own link, so
@@ -60,12 +62,15 @@ describe("standins page", () => {
   });
 
   it("answers a shared link once, from the server's rule", () => {
-    expect(PAGE).toContain(
-      "const arrival = standinArrivalAction(play, arrivalStanding);",
+    // A rostered viewer (that side's captain, a teammate) is never told they
+    // can't stand in: the link lands the captain on their team's cover.
+    expect(PAGE).toMatch(
+      /const arrival = offerViewer\?\.rostered\s*\? "none"\s*: standinArrivalAction\(play, arrivalStanding\);/,
     );
-    // Only for a game the board lists: a filled seat gets the note instead.
+    // Only for a game the board lists: a filled seat gets the note instead,
+    // except on the captain's own game, which their section shows.
     expect(PAGE).toMatch(/\{linked && linkedNeed \? \(\s*<StandinOfferOnArrival/);
-    expect(PAGE).toMatch(/\{linked && !linkedNeed \? \(/);
+    expect(PAGE).toMatch(/\{linked && !linkedNeed && !yourTeamsGame \? \(/);
     // The address loses `play` before anything is sent, so a refresh or a
     // copied tab never offers again.
     const scrub = LINK.indexOf('url.searchParams.delete("play")');
@@ -162,6 +167,9 @@ describe("home standin line", () => {
     expect(home).toMatch(
       /idle === "standin-list" \|\|\s*\(idle === "no-team" && viewerHasActiveRegistration\)/,
     );
-    expect(home).toContain("...standinHomeLine(standinGames ?? 0),");
+    // The games they already said they can play are read fresh (never from
+    // the board's 30-second cache), so Home never asks them to say it again.
+    expect(home).toContain("prisma.standinOffer.findMany({");
+    expect(home).toContain("standinHomeLine(standinGames ?? 0, offered)");
   });
 });

@@ -5018,7 +5018,7 @@ function StandinControls({
       <CardHeader
         headingLevel={2}
         title="Standin assignments"
-        subtitle="Captains book their own standins from the match page. This card shows cover problems and lets you book for any team."
+        subtitle="Captains book their own standins on the Standins page. This card shows cover problems and lets you book for any team."
       />
       <CardBody className="space-y-3">
         {clashLines.length > 0 ? (

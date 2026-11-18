@@ -463,7 +463,10 @@ describe("leagueRules", () => {
       "A standin can be at most 100 MMR above the player they cover, by signup MMR.",
     );
     expect(section(rules, "rosters")).toContain(
-      "A standin more than 100 MMR above needs the other captain to agree on the match page.",
+      "A standin more than 100 MMR above needs the other captain to agree on the Standins page.",
+    );
+    expect(section(rules, "rosters")).toContain(
+      "A booked standin who says they can't make it before the match gives the seat back",
     );
     expect(section(rules, "results")).toContain(
       "it started between 3 days before and 6 days after the scheduled kickoff",

@@ -13,7 +13,11 @@ import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
 import { teamTint } from "@/lib/team-tint";
-import { captainCardsOpen, captainJumps } from "@/lib/match-captain-jumps";
+import {
+  captainCardHref,
+  captainCardsOpen,
+  captainJumps,
+} from "@/lib/match-captain-jumps";
 import { KickoffCountdown } from "@/components/kickoff-countdown";
 import { LocalTime } from "@/components/local-time";
 import { PickemTray } from "@/components/pickem-pick-form";
@@ -298,15 +302,27 @@ export async function MatchScoreboard({
               aria-label="Captain shortcuts"
               className="flex basis-full flex-wrap items-center justify-center gap-2"
             >
-              {captainLinks.map((jump) => (
-                <a
-                  key={jump.anchor}
-                  href={`#${jump.anchor}`}
-                  className={buttonClasses(jump.variant, "sm")}
-                >
-                  {jump.label} <span aria-hidden>↓</span>
-                </a>
-              ))}
+              {captainLinks.map((jump) => {
+                const href = captainCardHref(match.id, jump.anchor, true);
+                return href.startsWith("#") ? (
+                  <a
+                    key={jump.anchor}
+                    href={href}
+                    className={buttonClasses(jump.variant, "sm")}
+                  >
+                    {jump.label} <span aria-hidden>↓</span>
+                  </a>
+                ) : (
+                  // Standins: every standin control is on the Standins page.
+                  <Link
+                    key={jump.anchor}
+                    href={href}
+                    className={buttonClasses(jump.variant, "sm")}
+                  >
+                    {jump.label} <LinkArrow />
+                  </Link>
+                );
+              })}
             </nav>
           ) : null}
         </div>

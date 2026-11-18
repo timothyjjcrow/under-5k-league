@@ -125,13 +125,17 @@ test("captains can report an open series and get a clear correction handoff once
   await page.goto(openHref!);
   // The scoreboard says what the page can do for a captain. This fixture
   // kicks off within three hours, so it is match night: lobby setup and
-  // reporting lead, then finding cover and moving the time.
+  // reporting lead, then finding cover and moving the time. Cover is found
+  // on the Standins page, so that one leaves the page (→).
   const shortcuts = page.getByRole("navigation", { name: "Captain shortcuts" });
   await expect(shortcuts.getByRole("link")).toHaveText([
     "Set up & report ↓",
-    "Find a standin ↓",
+    "Find a standin →",
     "Change the time ↓",
   ]);
+  await expect(
+    shortcuts.getByRole("link", { name: /Find a standin/ }),
+  ).toHaveAttribute("href", `/standins?match=${openHref!.split("/").pop()}`);
   const captainJump = shortcuts.getByRole("link", { name: "Set up & report" });
   await expect(captainJump).toBeInViewport();
   // "Change the time" lands on the Reschedule card and opens its picker.

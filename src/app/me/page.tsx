@@ -103,9 +103,11 @@ import { listAwayFixtures } from "@/lib/availability-service";
 import {
   Avatar,
   Badge,
+  buttonClasses,
   Card,
   CardBody,
   CardHeader,
+  LinkArrow,
   PageTitle,
   RankMedal,
   ScheduleCallout,
@@ -710,71 +712,26 @@ export default async function MePage({
               !member &&
               standinAssignments &&
               (reg?.type === "STANDIN" || standinAssignments.length > 0) ? (
+              // The games themselves (check-in, "can't make it") are on the
+              // Standins page, the one place standins are coordinated; this
+              // says how many and links there.
               <div className="rounded-lg border border-line bg-surface-2/40 px-3 py-2.5">
                 <div className="text-xs uppercase tracking-wide text-muted">
-                  Your standin assignments
+                  Your standin games
                 </div>
-                {standinAssignments.length === 0 ? (
-                  <p className="mt-1 text-sm text-muted">
-                    No assignments yet — captains grab cover from the standin
-                    pool on each match page as their players drop out. Keep your
-                    Discord linked so their ping reaches you.
-                  </p>
-                ) : (
-                  <ul className="mt-2 space-y-2">
-                    {standinAssignments.map((a) => {
-                      const fillFor =
-                        a.match.homeTeamId === a.teamId
-                          ? a.match.homeTeam
-                          : a.match.awayTeam;
-                      const opponent =
-                        a.match.homeTeamId === a.teamId
-                          ? a.match.awayTeam
-                          : a.match.homeTeam;
-                      return (
-                        <li key={a.id}>
-                          <Link
-                            href={`/matches/${a.match.id}`}
-                            className="block rounded-md border border-line bg-surface/60 px-3 py-2 transition-colors hover:border-muted/60"
-                          >
-                            <div className="flex flex-wrap items-center gap-2 text-sm">
-                              <Badge tone="info">
-                                {matchRoundLabel(
-                                  a.match,
-                                  playoffRounds.get(a.match.seasonId) ?? 0,
-                                )}
-                              </Badge>
-                              <span className="min-w-0">
-                                Filling in for{" "}
-                                <span className="font-medium text-fg">
-                                  {fillFor.name}
-                                </span>{" "}
-                                vs{" "}
-                                <span className="font-medium text-fg">
-                                  {opponent.name}
-                                </span>
-                              </span>
-                            </div>
-                            <div className="mt-1 text-xs text-muted">
-                              {a.match.scheduledAt ? (
-                                <LocalTime
-                                  ts={a.match.scheduledAt.getTime()}
-                                  variant="short"
-                                  initial={formatLeagueMatchTime(
-                                    a.match.scheduledAt,
-                                    "short",
-                                  )}
-                                />
-                              ) : (
-                                "Time TBD"
-                              )}
-                            </div>
-                          </Link>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                )}
+                <p className="mt-1 text-sm text-muted">
+                  {standinAssignments.length === 0
+                    ? "No games booked yet. Games that need a standin are on the Standins page: say you can play, and that team's captain picks from everyone who did. Keep your Discord linked so their ping reaches you."
+                    : `You're booked for ${standinAssignments.length} ${
+                        standinAssignments.length === 1 ? "game" : "games"
+                      }. Check in, or say you can't make it, on the Standins page.`}
+                </p>
+                <Link
+                  href="/standins"
+                  className={buttonClasses("secondary", "sm", "mt-2")}
+                >
+                  Open the Standins page <LinkArrow />
+                </Link>
               </div>
             ) : null}
 

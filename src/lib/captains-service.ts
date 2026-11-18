@@ -17,6 +17,7 @@ import { postAuctionWorkOpen } from "./league-lifecycle";
 import { prisma } from "./prisma";
 import { getSeasonMatches } from "./queries";
 import { loadReadyCheckView } from "./reschedule-ready-check-service";
+import { loadSideNeeds } from "./standin-offer-service";
 import { matchRoundLabel, playoffTotalRounds } from "./schedule";
 
 /**
@@ -121,7 +122,7 @@ export async function loadCaptainTodoRows({
     getSeasonMatches(season.id),
   ]);
   if (open.length === 0) return [];
-  const [outRows, readyChecks] = await Promise.all([
+  const [outRows, readyChecks, sideNeeds] = await Promise.all([
     prisma.matchAvailability.findMany({
       where: {
         matchId: { in: open.map((m) => m.id) },
@@ -140,6 +141,12 @@ export async function loadCaptainTodoRows({
             )
           : Promise.resolve(null),
       ),
+    ),
+    // The Standins page's own judgement of each side: empty seats and who
+    // said they can play.
+    loadSideNeeds(
+      season,
+      open.map((m) => m.id),
     ),
   ]);
   const revision = new Map(open.map((m) => [m.id, m.scheduleRevision]));
@@ -175,6 +182,7 @@ export async function loadCaptainTodoRows({
       },
       roster: members,
       outUserIds: outByMatch.get(match.id) ?? new Set(),
+      cover: sideCover(sideNeeds.get(`${match.id}:${teamId}`)),
       readyCheck: readyChecks[i],
     }).map((todo) => ({ matchId: match.id, roundLabel, opponentName, todo }));
   });
@@ -241,4 +249,11 @@ export async function loadCaptainNudge({
       nowMs,
     ),
   };
+}
+
+/** A side's need as the captain's to-dos read it (`captainTodos`' `cover`). */
+export function sideCover(
+  need: { emptySeats: number; offerCount: number } | undefined,
+): { emptySeats: number; offers: number } | null {
+  return need ? { emptySeats: need.emptySeats, offers: need.offerCount } : null;
 }

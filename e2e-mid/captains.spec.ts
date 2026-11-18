@@ -183,31 +183,31 @@ test("a captain runs their team from the Captains page", async ({ page, request 
       main.getByRole("heading", { level: 1, name: "Captains", exact: true }),
     ).toBeVisible();
 
-    // The open fixture says what the page does for it: standins and moving
-    // the match are a tap away, on this page.
+    // The open fixture says what the page does for it: moving the match is
+    // on this page, and standins on the Standins page, the one place they
+    // are coordinated.
+    const hub = `/standins?match=${f.matchId}`;
     const shortcuts = main.getByRole("navigation", { name: "Captain shortcuts" });
     await expect(
       shortcuts.getByRole("link", { name: /Find a standin/ }),
-    ).toHaveAttribute("href", "#match-standins");
+    ).toHaveAttribute("href", hub);
     await expect(
       shortcuts.getByRole("link", { name: /Change the time/ }),
     ).toHaveAttribute("href", "#match-reschedule");
-
-    // "Line up cover" under the check-in stays on this page.
     await expect(
       main.getByRole("link", { name: /Line up cover/ }),
-    ).toHaveAttribute("href", "#match-standins");
+    ).toHaveAttribute("href", hub);
 
-    // Needs you → the Standins card on this page → book cover there.
+    // Needs you → the game on the Standins page → book cover there.
     const needs = main.getByRole("list", { name: "Needs you" });
     const line = needs.getByRole("listitem").filter({ hasText: f.out.name });
     await expect(line).toContainText("can't make it");
     await line.getByRole("link", { name: /Find a standin/ }).click();
-    await expect(page).toHaveURL(
-      new RegExp(`/captains\\?match=${f.matchId}#match-standins$`),
-    );
-    const standins = page.locator("#match-standins");
+    await expect(page).toHaveURL(new RegExp(`/standins\\?match=${f.matchId}$`));
+    const standins = page.locator(`#cover-${f.matchId}`);
     await untilHydrated(page, standins);
+    // Nobody has offered yet: the card says to share the game.
+    await expect(standins).toContainText("Nobody has said they can play yet.");
     await standins
       .getByRole("combobox", { name: "Standin to bring in", exact: true })
       .selectOption(f.standin.id);
@@ -228,6 +228,8 @@ test("a captain runs their team from the Captains page", async ({ page, request 
         }),
       )
       .toBe(1);
+    await expect(standins).toContainText(`${f.standin.name} in for ${f.out.name}`);
+    await page.goto("/captains");
     await expect(main).toContainText("Nothing needs you right now");
 
     // The captain's own check-in.

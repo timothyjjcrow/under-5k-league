@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { MID_DB_URL } from "../playwright.midseason.config";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "./helpers";
 
 const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
 const CHANGE_KEYS = ["resultChangedAt", "publicGameRevision"];
@@ -149,17 +149,29 @@ test("players check in and captains bring in standins without any lineup confirm
     const readyTop = (await page.locator("#match-live-checkin").boundingBox())!.y;
     const gameTop = (await page.getByRole("heading", { name: "Game 1", exact: true }).boundingBox())!.y;
     expect(readyTop).toBeLessThan(gameTop);
-    await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
-    await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
-    await expect(page.locator("#match-standins")).toContainText("Books straight away.");
-    await page.getByRole("button", { name: "Assign standin", exact: true }).click();
+    // Standins are booked on the Standins page: the match page's card says
+    // so and links the game there.
+    const summary = page.locator("#match-standins");
+    await expect(summary.getByRole("link", { name: /Manage standins/ })).toHaveAttribute(
+      "href", `/standins?match=${f.matchId}`,
+    );
+    await page.goto(`/standins?match=${f.matchId}`);
+    const cover = page.locator(`#cover-${f.matchId}`);
+    await untilHydrated(page, cover);
+    // Nobody is out, so the form waits behind "Book a standin".
+    await cover.getByText("Book a standin", { exact: true }).click();
+    await cover.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(f.users[f.teamSize * 2].id);
+    await cover.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
+    await expect(cover).toContainText("Books straight away.");
+    await cover.getByRole("button", { name: "Assign standin", exact: true }).click();
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: f.users[f.teamSize * 2].id, replacingUserId: f.users[1].id,
     } })).toBe(1);
     // Game 1 is in, so the server refuses removing that cover: the card says
     // it is locked instead of offering a Remove that can only fail.
-    await expect(page.getByText("Locked: series already started", { exact: true })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
+    await expect(cover.getByText("Locked: series already started", { exact: true })).toBeVisible();
+    await expect(cover.getByRole("button", { name: "Remove", exact: true })).toHaveCount(0);
+    await page.goto(path);
     await noLineupCard(page);
 
     await login(page, f.users[f.teamSize * 2], path);
@@ -183,8 +195,8 @@ test("players check in and captains bring in standins without any lineup confirm
 });
 
 // The standin MMR rule: a standin more than 100 MMR above the player they
-// cover waits for the other captain, who agrees from their own match page.
-test("a standin over the MMR allowance waits for the other captain, who agrees on the match page", async ({ page, request }) => {
+// cover waits for the other captain, who agrees on the Standins page.
+test("a standin over the MMR allowance waits for the other captain, who agrees on the Standins page", async ({ page, request }) => {
   test.setTimeout(90_000);
   await withFixture(request, false, async (f) => {
     const noErrors = trackPageErrors(page);
@@ -193,33 +205,46 @@ test("a standin over the MMR allowance waits for the other captain, who agrees o
     // Everyone signed up at 2800: 3000 is 200 above the covered player.
     await db.registration.update({ where: { seasonId_userId: { seasonId: f.seasonId, userId: standin.id } }, data: { mmr: 3000 } });
 
-    await login(page, f.users[0], path);
+    const hub = `/standins?match=${f.matchId}`;
+    await login(page, f.users[0], hub);
+    const cover = page.locator(`#cover-${f.matchId}`);
+    await untilHydrated(page, cover);
+    await cover.getByText("Book a standin", { exact: true }).click();
     // Covers first: once a seat is chosen the form says what the pick does,
     // before anything is sent, and the button says it too.
-    await page.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
-    await page.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(standin.id);
-    await expect(page.locator("#match-standins")).toContainText(
+    await cover.getByRole("combobox", { name: "Player they cover", exact: true }).selectOption(f.users[1].id);
+    await cover.getByRole("combobox", { name: "Standin to bring in", exact: true }).selectOption(standin.id);
+    await expect(cover).toContainText(
       `Needs the ${f.awayName} captain's OK first, since the standin is 200 MMR above the player they cover.`,
     );
-    await page.getByRole("button", { name: "Ask the other captain", exact: true }).click();
-    const waiting = page.locator("#match-standins li").filter({ hasText: `waiting for the ${f.awayName} captain to agree` });
+    await cover.getByRole("button", { name: "Ask the other captain", exact: true }).click();
+    const waiting = cover.locator("li").filter({ hasText: `waiting for the ${f.awayName} captain to agree` });
     await expect(waiting).toContainText("200 MMR above the player they cover");
     await expect(waiting.getByRole("button", { name: "Withdraw", exact: true })).toBeVisible();
     expect(await db.standinRequest.count({ where: { matchId: f.matchId, status: "PENDING" } })).toBe(1);
     expect(await db.standinAssignment.count({ where: { matchId: f.matchId } })).toBe(0);
 
+    // The other captain's match page says it waits on them and links the
+    // Standins page, where they answer.
     await login(page, f.users[f.teamSize], path);
-    await expect(page.getByRole("list", { name: "Waiting on you" })).toContainText(`wants ${standin.name} to stand in and needs your OK.`);
-    const ask = page.locator("#match-standins li").filter({ hasText: "Your OK is needed" });
+    const todo = page.getByRole("list", { name: "Waiting on you" });
+    await expect(todo).toContainText(`wants ${standin.name} to stand in and needs your OK.`);
+    await expect(todo.getByRole("link", { name: /Answer the standin request/ })).toHaveAttribute("href", hub);
+    await page.goto(hub);
+    const theirs = page.locator(`#cover-${f.matchId}`);
+    await untilHydrated(page, theirs);
+    const ask = theirs.locator("li").filter({ hasText: "Your OK is needed" });
     await ask.getByRole("button", { name: "Agree", exact: true }).click();
     await expect.poll(() => db.standinAssignment.count({ where: {
       matchId: f.matchId, teamId: f.homeId, standinUserId: standin.id, replacingUserId: f.users[1].id,
     } })).toBe(1);
     expect((await db.standinRequest.findFirstOrThrow({ where: { matchId: f.matchId } })).status).toBe("APPROVED");
+    await expect(theirs).toContainText(`${standin.name} in for ${f.users[1].name}`);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expectNoHorizontalOverflow(page, "standins page at 390px");
+    await page.goto(path);
     await expect(page.locator("#match-standins")).toContainText(`${standin.name} in for ${f.users[1].name}`);
     await expect(page.getByRole("list", { name: "Waiting on you" })).toHaveCount(0);
-    await page.setViewportSize({ width: 390, height: 900 });
-    await expectNoHorizontalOverflow(page, "standins card at 390px");
     noErrors();
   });
 });

@@ -2,13 +2,14 @@ import { CaptainTodoItem } from "@/components/captain-todo-item";
 import { Card, CardBody, CardHeader } from "@/components/ui";
 import { captainsMatchHref } from "@/lib/captains";
 import type { CaptainTodoRow } from "@/lib/captains-service";
-import { CAPTAIN_TODO_CARD, captainTodoCountLine } from "@/lib/captain-todos";
+import { captainTodoCountLine, captainTodoHref } from "@/lib/captain-todos";
 import { MATCH_ANCHOR } from "@/lib/match-anchors";
 
 /**
  * Everything waiting on the captain across their team's open matches
- * (`loadCaptainTodoRows`, the match page's own rule). Each line opens that
- * match's controls on this page, scrolled to the card that answers it.
+ * (`loadCaptainTodoRows`, the match page's own rule). A standin line opens
+ * the game on the Standins page, where every standin control lives; a time
+ * change opens that match's controls on this page, at its Reschedule card.
  */
 export function NeedsYou({ todos }: { todos: CaptainTodoRow[] }) {
   return (
@@ -33,9 +34,10 @@ export function NeedsYou({ todos }: { todos: CaptainTodoRow[] }) {
               <CaptainTodoItem
                 key={`${row.matchId}-${row.todo.kind}`}
                 todo={row.todo}
-                href={captainsMatchHref(
+                href={captainTodoHref(
+                  row.todo.kind,
                   row.matchId,
-                  MATCH_ANCHOR[CAPTAIN_TODO_CARD[row.todo.kind]],
+                  captainsMatchHref(row.matchId, MATCH_ANCHOR.reschedule),
                 )}
                 context={`${row.roundLabel} vs ${row.opponentName}:`}
               />

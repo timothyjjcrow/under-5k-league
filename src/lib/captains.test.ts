@@ -74,12 +74,18 @@ describe("captain surfaces share their rules", () => {
       "loadCaptainTodoRows({",
     );
     expect(PAGE).toContain("loadCaptainTodoRows({");
-    // The lines render through one component, and on the Captains page they
-    // open that match's controls here.
+    // The lines render through one component and one link rule: standin
+    // work on the Standins page, a time change on the Reschedule card (here,
+    // that match's controls on this page).
     expect(read("src/app/matches/[id]/captain-todos.tsx")).toContain(
       "<CaptainTodoItem",
     );
-    expect(PAGE).toMatch(/<CaptainTodoItem[\s\S]*?href=\{captainsMatchHref\(/);
+    expect(PAGE).toMatch(
+      /<CaptainTodoItem[\s\S]*?href=\{captainTodoHref\([\s\S]*?captainsMatchHref\(row\.matchId, MATCH_ANCHOR\.reschedule\)/,
+    );
+    expect(read("src/app/matches/[id]/captain-todos.tsx")).toContain(
+      "captainTodoHref(todo.kind, match.id,",
+    );
   });
 
   it("offers the page by captainsPageOpen on the header, Home and the page", () => {
@@ -171,11 +177,14 @@ describe("the Captains page reuses the site's own controls", () => {
     expect(PAGE).toContain("{ match: m.id, scrim: scrimId }");
   });
 
-  it("keeps a captain on the page for cover, and reads ?scrim= safely", () => {
-    expect(PAGE).toContain("coverHref={`#${MATCH_ANCHOR.standins}`}");
+  it("sends a captain to the Standins page for cover, and reads ?scrim= safely", () => {
+    // Standins are coordinated in one place (Tim, 2026-11-17): every cover
+    // link and the Standins jump go to the game there.
+    expect(PAGE).not.toContain("coverHref=");
     expect(read("src/components/checkin-banner.tsx")).toContain(
-      "coverHref ?? matchAnchorPath(matchId, MATCH_ANCHOR.standins)",
+      "coverHref ?? standinHubPath(matchId)",
     );
+    expect(PAGE).toMatch(/captainCardHref\(match\.id, jump\.anchor, true\)/);
     expect(PAGE).toContain("singleSearchParam(query.scrim)");
   });
 

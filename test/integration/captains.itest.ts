@@ -14,7 +14,9 @@ import { makeCaptain, makeSeason, makeUser, resetDb } from "./factories";
 // other captain's requests, and fixture order.
 
 async function setup() {
-  const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON });
+  // Two-a-side and every roster full, so an empty seat (a need of its own)
+  // shows only where a test makes one.
+  const season = await makeSeason({ status: SEASON_STATUS.REGULAR_SEASON, teamSize: 2 });
   const home = await makeCaptain(season.id, "Home", 100, 1);
   const away = await makeCaptain(season.id, "Away", 100, 2);
   const other = await makeCaptain(season.id, "Other", 100, 3);
@@ -22,6 +24,12 @@ async function setup() {
   await prisma.teamMember.create({
     data: { seasonId: season.id, teamId: home.team.id, userId: player.id, price: 10 },
   });
+  for (const team of [away.team, other.team]) {
+    const mate = await makeUser(`${team.name} mate`);
+    await prisma.teamMember.create({
+      data: { seasonId: season.id, teamId: team.id, userId: mate.id, price: 10 },
+    });
+  }
   const sub = await makeUser("Sub");
   const match = (week: number, data: Record<string, unknown> = {}) =>
     prisma.match.create({
@@ -79,7 +87,7 @@ describe("loadCaptainTodoRows", () => {
         matchId: week1.id,
         roundLabel: "Week 1",
         opponentName: away.team.name,
-        todo: { kind: "uncovered", names: ["Paz"] },
+        todo: { kind: "uncovered", names: ["Paz"], emptySeats: 0, offers: 0 },
       },
       {
         matchId: week2.id,
@@ -95,6 +103,27 @@ describe("loadCaptainTodoRows", () => {
     ]);
     // The asking captain owes nothing on their own request.
     expect(await load(season, away.team.id, away.user.id)).toEqual([]);
+  });
+
+  it("asks for an empty roster seat and counts who said they can play", async () => {
+    const { season, home, player, sub, match } = await setup();
+    const week1 = await match(1);
+    // Paz is released: the seat is empty, and the Standins page lists it.
+    await prisma.teamMember.deleteMany({ where: { userId: player.id } });
+    await prisma.registration.create({
+      data: { seasonId: season.id, userId: sub.id, type: "STANDIN", mmr: 2900 },
+    });
+    await prisma.standinOffer.create({
+      data: { matchId: week1.id, teamId: home.team.id, userId: sub.id },
+    });
+    expect(await load(season, home.team.id, home.user.id)).toEqual([
+      {
+        matchId: week1.id,
+        roundLabel: "Week 1",
+        opponentName: expect.any(String),
+        todo: { kind: "uncovered", names: [], emptySeats: 1, offers: 1 },
+      },
+    ]);
   });
 
   it("ignores a check-in from an older kickoff, a played match and other teams' matches", async () => {

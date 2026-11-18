@@ -27,8 +27,11 @@ import { loadCaptainNudge } from "@/lib/captains-service";
 import { loadCheckinSide } from "@/lib/checkin-side-service";
 import { MATCH_STATUS } from "@/lib/constants";
 import { matchCheckinOpen, matchResultsOpen } from "@/lib/league-lifecycle";
-import { MATCH_ANCHOR } from "@/lib/match-anchors";
-import { captainCardsOpen, captainJumps } from "@/lib/match-captain-jumps";
+import {
+  captainCardHref,
+  captainCardsOpen,
+  captainJumps,
+} from "@/lib/match-captain-jumps";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -255,15 +258,27 @@ export async function MatchDesk({
           <span className="mr-1 text-xs font-semibold uppercase tracking-wider text-muted">
             On this page
           </span>
-          {jumps.map((jump) => (
-            <a
-              key={jump.anchor}
-              href={`#${jump.anchor}`}
-              className={buttonClasses(jump.variant, "sm")}
-            >
-              {jump.label} <span aria-hidden>↓</span>
-            </a>
-          ))}
+          {jumps.map((jump) => {
+            const href = captainCardHref(match.id, jump.anchor, true);
+            return href.startsWith("#") ? (
+              <a
+                key={jump.anchor}
+                href={href}
+                className={buttonClasses(jump.variant, "sm")}
+              >
+                {jump.label} <span aria-hidden>↓</span>
+              </a>
+            ) : (
+              // Standins: every standin control is on the Standins page.
+              <Link
+                key={jump.anchor}
+                href={href}
+                className={buttonClasses(jump.variant, "sm")}
+              >
+                {jump.label} <LinkArrow />
+              </Link>
+            );
+          })}
         </nav>
       </Card>
 
@@ -287,8 +302,6 @@ export async function MatchDesk({
           }
           viewerIsCaptain
           side={side}
-          // The Standins card is on this page, a few cards down.
-          coverHref={`#${MATCH_ANCHOR.standins}`}
         />
       ) : null}
       {nudge ? (
@@ -301,7 +314,6 @@ export async function MatchDesk({
       <CaptainTools
         match={match}
         viewer={viewer}
-        seriesStarted={games.length > 0}
         renderedAt={nowMs}
       />
     </section>

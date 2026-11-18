@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getGuildConfig, memoGuildMembership } from "@/lib/discord-roles";
-import { REGISTRATION_STATUS } from "@/lib/constants";
+import { REGISTRATION_STATUS, REGISTRATION_TYPE } from "@/lib/constants";
 import { Card, CardBody, DiscordButton, buttonClasses } from "@/components/ui";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
 import { discordConsentText } from "@/lib/account-page";
@@ -37,6 +37,7 @@ export function DiscordSetupCard({
   autoJoins,
   next,
   isCaptain = false,
+  unrostered = false,
 }: {
   linkAvailable: boolean;
   autoJoins: boolean;
@@ -44,6 +45,9 @@ export function DiscordSetupCard({
   /** Captain copy addresses the team they lead instead of inventing a
    * different captain who supposedly needs to reach them. */
   isCaptain?: boolean;
+  /** A standin signup with no roster seat: no captain of theirs yet, so
+   *  the copy names the captains who would book them. */
+  unrostered?: boolean;
 }) {
   // Nothing configured at all: the invite still works, so still worth asking.
   const oneClick = linkAvailable && autoJoins;
@@ -68,7 +72,9 @@ export function DiscordSetupCard({
             standin scrambles all happen there.{" "}
             {isCaptain
               ? "As a captain, you coordinate the whole team there; right now your players and league admins have no reliable way to reach you."
-              : "Right now your captain has no way to reach you."}
+              : unrostered
+                ? "Right now a captain who books you as a standin has no way to reach you."
+                : "Right now your captain has no way to reach you."}
           </p>
         </div>
 
@@ -202,7 +208,7 @@ export async function DiscordSetupPrompt({
   const [reg, user, member] = await Promise.all([
     prisma.registration.findUnique({
       where: { seasonId_userId: { seasonId, userId } },
-      select: { status: true },
+      select: { status: true, type: true },
     }),
     prisma.user.findUnique({
       where: { id: userId },
@@ -229,6 +235,7 @@ export async function DiscordSetupPrompt({
         autoJoins={autoJoins}
         next="/"
         isCaptain={!!member?.isCaptain}
+        unrostered={!member && reg.type === REGISTRATION_TYPE.STANDIN}
       />
     );
   }

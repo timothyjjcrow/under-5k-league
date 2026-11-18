@@ -6,6 +6,8 @@ import {
   standinArrivalAction,
   standinBoardWindow,
   standinHomeLine,
+  standinHubPath,
+  standinReleasedToast,
   standinNeedLabel,
   standinOfferCountLabel,
   standinOfferOutcomeLine,
@@ -35,7 +37,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 0, baselineMmr: null });
+    ).toEqual({ seats: 0, emptySeats: 0, baselineMmr: null });
   });
 
   it("counts a player who is out and judges the seat by their MMR", () => {
@@ -48,7 +50,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, baselineMmr: 2800 });
+    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: 2800 });
   });
 
   it("judges every out seat by the lowest absentee, as the booking does", () => {
@@ -62,7 +64,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 2, baselineMmr: 2400 });
+    ).toEqual({ seats: 2, emptySeats: 0, baselineMmr: 2400 });
   });
 
   it("leaves out a seat a booking or a waiting request already holds", () => {
@@ -89,7 +91,7 @@ describe("standinSideNeed", () => {
         askedUserIds: new Set(["p4"]),
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, baselineMmr: 2400 });
+    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: 2400 });
   });
 
   it("counts empty roster seats against the team's lowest MMR", () => {
@@ -102,7 +104,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 1,
       }),
-    ).toEqual({ seats: 1, baselineMmr: 2600 });
+    ).toEqual({ seats: 1, emptySeats: 1, baselineMmr: 2600 });
   });
 
   it("takes the seat that suits a standin best when seats differ", () => {
@@ -116,7 +118,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 2, baselineMmr: 3000 });
+    ).toEqual({ seats: 2, emptySeats: 1, baselineMmr: 3000 });
   });
 
   it("keeps an unknown seat unknown", () => {
@@ -129,7 +131,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, baselineMmr: null });
+    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: null });
   });
 });
 
@@ -359,6 +361,35 @@ describe("board window and copy", () => {
     });
     expect(standinHomeLine(3).text).toMatch(/^3 games need a standin/);
     expect(standinHomeLine(3).cta).toBe("See the games");
+  });
+
+  it("never asks a standin to offer again for a game they're on the list for", () => {
+    const raccoons = { teamName: "Raccoons", opponentName: "Straits" };
+    expect(standinHomeLine(1, [raccoons])).toEqual({
+      title: "You said you can play",
+      text: "You're on the list for Raccoons vs Straits. The captain picks, and you're pinged on Discord if it's you.",
+      cta: "Open the Standins page",
+    });
+    expect(standinHomeLine(3, [raccoons]).text).toMatch(
+      /Raccoons vs Straits\..* 2 more games need a standin\.$/,
+    );
+    expect(standinHomeLine(2, [raccoons, raccoons]).text).toMatch(
+      /^You're on the list for 2 games\./,
+    );
+    for (const line of [standinHomeLine(1, [raccoons]), standinHomeLine(4, [raccoons])]) {
+      expect(line.text).not.toMatch(/Say you can play/);
+    }
+  });
+
+  it("links a game on the Standins page, which books nothing", () => {
+    expect(standinHubPath("m 1")).toBe("/standins?match=m%201");
+    expect(standinHubPath("m1")).not.toContain("play=");
+  });
+
+  it("tells a standin who gave their seat back that the captain knows", () => {
+    expect(standinReleasedToast("Raccoons")).toBe(
+      "You're off this match. The Raccoons captain is told, and the seat is back on the Standins page for someone else.",
+    );
   });
 
   it("builds the shared link", () => {

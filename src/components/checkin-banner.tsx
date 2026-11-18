@@ -12,7 +12,7 @@ import {
   standinSeatText,
   type CheckinSideView,
 } from "@/lib/checkin-side";
-import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
+import { standinHubPath } from "@/lib/standin-offer";
 import { cn } from "@/lib/utils";
 
 /**
@@ -62,9 +62,8 @@ export function CheckinBanner({
   side?: CheckinSideView | null;
   detailsHref?: string;
   /**
-   * Where a captain's "Line up cover" goes. The default is the match page's
-   * Standins card; the Captains page draws that card itself and passes its
-   * in-page anchor.
+   * Where a captain's "Line up cover" goes. The default is the game on the
+   * Standins page, where every standin control lives.
    */
   coverHref?: string;
   /**
@@ -214,6 +213,13 @@ export function CheckinBanner({
           <SubmitButton
             variant={myRsvp === "OUT" ? "primary" : "secondary"}
             size={panel ? "md" : "sm"}
+            // A booked standin's "Can't make it" before the night gives the
+            // seat back (releaseOwnStandinBooking), so it asks first.
+            confirm={
+              side?.role === "standin" && !remainingGames && myRsvp !== "OUT"
+                ? standinGiveUpConfirm(side.teamName)
+                : undefined
+            }
           >
             ✗ Can&apos;t make it
           </SubmitButton>
@@ -232,11 +238,16 @@ export function CheckinBanner({
   );
 }
 
+/** What a booked standin is asked before "Can't make it" gives the seat back. */
+export function standinGiveUpConfirm(teamName: string): string {
+  return `Give up your standin spot on ${teamName}? The captain is told and the seat goes back on the Standins page for someone else.`;
+}
+
 /**
  * The viewer's side under the buttons: the count for every participant, and
  * for captains and admins the names behind it. Display only: a captain's
- * cover link jumps to the match page's Captain tools, where the Standins card
- * they already use lives.
+ * cover link goes to the game on the Standins page, where every standin
+ * control lives.
  */
 function SideSummary({
   side,
@@ -275,7 +286,7 @@ function SideSummary({
         </span>
         {side.role === "captain" && sideNeedsCover(side.counts) ? (
           <Link
-            href={coverHref ?? matchAnchorPath(matchId, MATCH_ANCHOR.standins)}
+            href={coverHref ?? standinHubPath(matchId)}
             className={textLink("whitespace-nowrap")}
           >
             Line up cover <LinkArrow />

@@ -23,6 +23,7 @@ import {
   currentCheckinStatus,
   markAwayRange,
   recordCheckin,
+  releaseOwnStandinBooking,
   resolveCheckinSeat,
 } from "@/lib/availability-service";
 import {
@@ -30,7 +31,9 @@ import {
   playerBackInMessage,
   playerOutMessage,
   sendDiscordMessage,
+  standinDroppedOutMessage,
 } from "@/lib/discord";
+import { standinReleasedToast } from "@/lib/standin-offer";
 import { mentionsOf, mentionUsers } from "@/lib/discord-mentions";
 import { claimThrottle, claimThrottleAnswer } from "@/lib/settings";
 import { MATCH_STATUS, RSVP_OUT_PING_THROTTLE_SECONDS } from "@/lib/constants";
@@ -138,13 +141,26 @@ export async function setAvailability(
           throw new UserFacingError(CHECKIN_REFUSAL_MESSAGE[seat.refusal]);
         }
 
-        if (priorStatus !== status) {
+        // A booked standin who can't make it before the night gives the seat
+        // back, so it is open again everywhere cover is found. Once the
+        // series is under way the booking stays and the OUT is recorded.
+        const released =
+          status === "OUT" && seat.standin
+            ? await releaseOwnStandinBooking(tx, match, user.id, seat.teamId)
+            : null;
+        if (!released && priorStatus !== status) {
           await recordCheckin(tx, match, user.id, status);
         }
 
         // Which side loses a player — the roster seat, or the team a standin
         // was covering for. This is who has to go find replacement cover.
-        return { match, priorStatus, affectedCaptainId: seat.captainId };
+        return {
+          match,
+          priorStatus,
+          affectedCaptainId: seat.captainId,
+          teamId: seat.teamId,
+          released,
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
     );
@@ -163,7 +179,7 @@ export async function setAvailability(
     };
   }
 
-  const { match, priorStatus, affectedCaptainId } = committed;
+  const { match, priorStatus, affectedCaptainId, teamId, released } = committed;
 
   // An OUT demands a human response (standin hunt) — announce it the moment
   // it's declared instead of letting it hide until match night. Best-effort:
@@ -194,11 +210,12 @@ export async function setAvailability(
         ? (await roundLabelsForPost([match])).get(match.id)
         : null,
       whenMs: match.scheduledAt?.getTime() ?? null,
-      // Deep link — the mentioned captain lands on the page that holds the
-      // Standins card, not on the front door.
+      // The game on the Standins page: the mentioned captain lands on their
+      // team's cover for it, and a standin who opens it offers to play.
       matchId: match.id,
+      teamId,
     };
-    const goingOut = status === "OUT" && priorStatus !== "OUT";
+    const goingOut = status === "OUT" && (priorStatus !== "OUT" || !!released);
     const comingBack = status === "IN" && priorStatus === "OUT";
     // Both messages are for the captain who has to find (or stop finding)
     // cover, so they go to that captain rather than to a channel and hope.
@@ -216,6 +233,24 @@ export async function setAvailability(
     const revision = match.scheduleRevision;
     let content: string | null = null;
     if (
+      released &&
+      (await claimThrottle(
+        outPingThrottleKey(matchId, revision, user.id),
+        RSVP_OUT_PING_THROTTLE_SECONDS,
+        Date.now(),
+      ))
+    ) {
+      // A standin gave their seat back: the captain hears the seat is open
+      // again, and the standins in the channel get the game's link.
+      content = standinDroppedOutMessage({
+        ...fixture,
+        standinName: user.name,
+        teamName:
+          teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name,
+        replacedName: released.replacedName,
+      });
+    } else if (
+      !released &&
       goingOut &&
       (await claimThrottle(
         outPingThrottleKey(matchId, revision, user.id),
@@ -251,6 +286,9 @@ export async function setAvailability(
 
   updateTag(AUTOMATION_GATE_TAG);
   revalidatePath("/", "layout");
+  if (released) {
+    return { message: standinReleasedToast(affectedTeamName(match, teamId)) };
+  }
   return {
     message:
       status === "IN"
@@ -360,6 +398,11 @@ export async function markAwayDates(
             roundLabel: f.roundLabel,
             whenMs: f.whenMs,
             matchId: f.matchId,
+            // The game's share link: the seat is on the Standins page now.
+            teamId: f.teamId,
+            released: f.released
+              ? { teamName: f.teamName, replacedName: f.released.replacedName }
+              : null,
           })),
         ),
         mentionsOf(announce.map((f) => discordIdOf.get(f.captainId))),
@@ -412,4 +455,16 @@ export async function remindUnansweredCheckins(
   // The match page swaps the button for "Reminder sent".
   revalidatePath("/", "layout");
   return { message: checkinNudgeToast(res.reminded, res.pinged) };
+}
+
+/** The side's name, for a toast about the team a check-in answered for. */
+function affectedTeamName(
+  match: {
+    homeTeamId: string;
+    homeTeam: { name: string };
+    awayTeam: { name: string };
+  },
+  teamId: string,
+): string {
+  return teamId === match.homeTeamId ? match.homeTeam.name : match.awayTeam.name;
 }

@@ -20,13 +20,10 @@ import { StandinSection } from "./standins";
 export function CaptainTools({
   match,
   viewer,
-  seriesStarted,
   renderedAt,
 }: {
   match: MatchPageMatch;
   viewer: SessionUser;
-  /** A game is imported (the Standins card locks removal). */
-  seriesStarted: boolean;
   renderedAt: number;
 }) {
   const isCaptain =
@@ -77,11 +74,7 @@ export function CaptainTools({
           <RescheduleSection match={match} viewer={viewer} part="tools" />
         </div>
         <div className="min-w-0 empty:hidden">
-          <StandinSection
-            match={match}
-            viewer={viewer}
-            seriesStarted={seriesStarted}
-          />
+          <StandinSection match={match} viewer={viewer} />
         </div>
       </div>
       <div id={MATCH_ANCHOR.report} className="scroll-mt-24">

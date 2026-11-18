@@ -8,7 +8,7 @@ import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import { myMatchPanel, type PanelIdle } from "@/lib/my-match-panel";
 import { prisma } from "@/lib/prisma";
 import { readyCheckLive } from "@/lib/reschedule-ready-check";
-import { standinHomeLine } from "@/lib/standin-offer";
+import { standinHomeLine, type StandinOfferedGame } from "@/lib/standin-offer";
 import { loadStandinBoardSummary } from "@/lib/standin-offer-service";
 import { loadReadyCheckView } from "@/lib/reschedule-ready-check-service";
 import type { SeasonSnapshot } from "@/lib/queries";
@@ -273,17 +273,33 @@ export async function MyNextMatch({
     // A player in the standin pool with nothing booked: how many games need
     // someone right now. Any ACTIVE unrostered signup can cover, so a free
     // agent gets it too; nobody else pays for the read.
-    const standinGames =
+    const canCover =
       idle === "standin-list" ||
-      (idle === "no-team" && viewerHasActiveRegistration)
-        ? (
-            await loadStandinBoardSummary(
-              { id: seasonId, status: seasonStatus, teamSize },
-              nowMs,
-            )
-          ).count
-        : null;
-    const copy = idleCopy(idle, onlyFinalLeft, standinGames);
+      (idle === "no-team" && viewerHasActiveRegistration);
+    const [board, myOffers] = canCover
+      ? await Promise.all([
+          loadStandinBoardSummary(
+            { id: seasonId, status: seasonStatus, teamSize },
+            nowMs,
+          ),
+          // Read fresh, never from the board's cache: the line must change
+          // the moment they say they can play.
+          prisma.standinOffer.findMany({
+            where: {
+              userId,
+              match: { seasonId, status: { not: "COMPLETED" } },
+            },
+            select: { matchId: true, teamId: true },
+          }),
+        ])
+      : [null, []];
+    const offeredKeys = new Set(myOffers.map((o) => `${o.matchId}:${o.teamId}`));
+    // The games they're on the list for that still need someone.
+    const offered = (board?.needs ?? []).filter((n) =>
+      offeredKeys.has(`${n.matchId}:${n.teamId}`),
+    );
+    const standinGames = board ? board.count : null;
+    const copy = idleCopy(idle, onlyFinalLeft, standinGames, offered);
     const idleCard = (
       <Card className="p-4 text-sm">
         <div className="font-medium">{copy.title}</div>
@@ -411,6 +427,8 @@ function idleCopy(
   onlyFinalLeft: boolean,
   /** Games that need a standin now; null when the viewer couldn't cover. */
   standinGames: number | null,
+  /** Of those, the ones the viewer said they can play. */
+  offered: readonly StandinOfferedGame[] = [],
 ): { title: string; text: string; href: string; cta: string } {
   const schedule = { href: "/schedule#fixtures", cta: "See the schedule" };
   const bracket = { href: "/schedule#playoff-bracket", cta: "See the bracket" };
@@ -472,19 +490,24 @@ function idleCopy(
         text: "Its remaining fixtures were forfeited. The rest of the league is still worth watching.",
         ...schedule,
       };
-    case "standin-list":
+    case "standin-list": {
+      const line = standinHomeLine(standinGames ?? 0, offered);
       return {
-        title: "You're on the standin list",
+        title: line.title ?? "You're on the standin list",
         href: "/standins",
-        ...standinHomeLine(standinGames ?? 0),
+        text: line.text,
+        cta: line.cta,
       };
+    }
     default:
       // A free agent can stand in too: say so when a game needs someone.
       if (standinGames) {
+        const line = standinHomeLine(standinGames, offered);
         return {
-          title: "No match of your own coming up",
+          title: line.title ?? "No match of your own coming up",
           href: "/standins",
-          ...standinHomeLine(standinGames),
+          text: line.text,
+          cta: line.cta,
         };
       }
       return {

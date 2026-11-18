@@ -295,7 +295,6 @@ export default async function MatchDetailPage({
         <CaptainTools
           match={match}
           viewer={viewer!}
-          seriesStarted={games.length > 0}
           renderedAt={renderedAt}
         />
       ) : null}

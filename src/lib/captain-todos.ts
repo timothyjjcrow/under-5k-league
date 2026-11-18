@@ -16,10 +16,15 @@ import {
   type ReadyCheckView,
 } from "./reschedule-ready-check";
 import { coverChoices } from "./standin";
+import { standinHubPath } from "./standin-offer";
 
 export type CaptainTodo =
-  /** Players on the roster who said they can't make it and have no cover. */
-  | { kind: "uncovered"; names: string[] }
+  /**
+   * Seats with nobody lined up: players on the roster who said they can't
+   * make it and have no cover, and empty roster seats; with how many
+   * standins said they can play for this side.
+   */
+  | { kind: "uncovered"; names: string[]; emptySeats: number; offers: number }
   /** The other captain's standin request (over the MMR allowance). */
   | {
       kind: "standin-request";
@@ -34,13 +39,32 @@ export type CaptainTodo =
 
 export type CaptainTodoKind = CaptainTodo["kind"];
 
-/** The card on the match page that answers each kind. */
+/**
+ * Where each kind is answered: standin work on the Standins page (the one
+ * place every standin control lives), a time change on the match's
+ * Reschedule card.
+ */
 export const CAPTAIN_TODO_CARD: Record<CaptainTodoKind, "standins" | "reschedule"> = {
   uncovered: "standins",
   "standin-request": "standins",
   "answer-ready-check": "reschedule",
   "lock-in": "reschedule",
 };
+
+/**
+ * A to-do's link: the game on the Standins page for standin work, else the
+ * Reschedule card at `rescheduleHref` (an in-page `#anchor` where the card
+ * is on the same page, the match page's otherwise).
+ */
+export function captainTodoHref(
+  kind: CaptainTodoKind,
+  matchId: string,
+  rescheduleHref: string,
+): string {
+  return CAPTAIN_TODO_CARD[kind] === "standins"
+    ? standinHubPath(matchId)
+    : rescheduleHref;
+}
 
 export type CaptainTodoInput = {
   myTeamId: string;
@@ -61,6 +85,12 @@ export type CaptainTodoInput = {
   };
   /** The captain's own roster, in signing order. */
   roster: readonly { userId: string; name: string }[];
+  /**
+   * The board's need for this captain's side (`loadSideNeeds`): its empty
+   * roster seats with no booking or request, and how many standins said
+   * they can play. Null when the side needs nobody.
+   */
+  cover: { emptySeats: number; offers: number } | null;
   /** This schedule revision's OUT check-ins. */
   outUserIds: ReadonlySet<string>;
   /** The open ready check as this captain sees it, or null. */
@@ -87,7 +117,17 @@ export function captainTodos(input: CaptainTodoInput): CaptainTodo[] {
     const names = coverChoices(input.roster, input.outUserIds, covered)
       .choices.filter((c) => c.out)
       .map((c) => c.member.name);
-    if (names.length > 0) todos.push({ kind: "uncovered", names });
+    // An empty seat is a need too: the Standins page lists the game for it,
+    // so its captain must hear it here.
+    const emptySeats = input.cover?.emptySeats ?? 0;
+    if (names.length > 0 || emptySeats > 0) {
+      todos.push({
+        kind: "uncovered",
+        names,
+        emptySeats,
+        offers: input.cover?.offers ?? 0,
+      });
+    }
   }
   // The other team's requests: this captain's OK books them. Agree shows only
   // where a booking would be accepted, as on the Standins card.

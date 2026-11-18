@@ -52,6 +52,7 @@ import {
   rescheduleProposedMessage,
   standinApprovalRequestedMessage,
   standinAssignedMessage,
+  standinDroppedOutMessage,
   standinOfferedMessage,
   standinRemovedMessage,
   standinRequestCancelledMessage,
@@ -1436,7 +1437,8 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
     expect(msg).toContain("Dendi");
     expect(msg).toContain("week 4");
     expect(msg).toContain("<t:1800000000:F>");
-    expect(msg).toContain("standin");
+    // It ends with the ask to the standins reading the channel.
+    expect(msg).toContain("Standins who can play: say so");
   });
 
   it("omits the kickoff line when the match is unscheduled, labels playoffs", () => {
@@ -1539,8 +1541,8 @@ describe("playerOutMessage / rescheduleProposedMessage", () => {
       "**Dendi** can make the week 4 match after all — **Radiant Raccoons** vs **Dire Wolves** (<t:1800000000:F>).",
     );
     expect(msg).toContain("No need to find cover for them");
-    // The Standins card, where the OUT post it answers also lands.
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>$/);
+    // The Standins page, where a booked standin is cancelled.
+    expect(msg).toMatch(/on the Standins page: <[^<>\s]*\/standins\?match=m1>$/);
     // Unscheduled and hand-built: no kickoff, no link.
     const bare = playerBackInMessage({
       playerName: "Puppey",
@@ -1604,11 +1606,11 @@ describe("playerAwayMessage", () => {
     expect(lines[0]).toContain("3 matches");
     expect(lines[1]).toContain("Week 3 match");
     expect(lines[1]).toContain("<t:1800000000:F>");
-    expect(lines[1]).toMatch(/<[^<>\s]*\/matches\/m3#match-standins>/);
+    expect(lines[1]).toMatch(/<[^<>\s]*\/standins\?match=m3>/);
     expect(lines[2]).toContain("<t:1800604800:F>");
     expect(lines[3]).toContain("Playoff match");
     expect(lines[3]).not.toContain("<t:");
-    expect(lines[4]).toContain("line up standins");
+    expect(lines[4]).toContain("Standins who can play");
   });
 
   it("names each playoff fixture by its round", () => {
@@ -1646,10 +1648,10 @@ describe("playerAwayMessage", () => {
     expect(msg.length).toBeLessThanOrEqual(1_800);
     expect(msg).toMatch(/…and \d+ more/);
     const lines = msg.split("\n");
-    const shown = lines.filter((l) => l.includes("/matches/")).length;
+    const shown = lines.filter((l) => l.includes("/standins?match=")).length;
     const more = Number(/…and (\d+) more/.exec(msg)![1]);
     expect(shown + more).toBe(40);
-    expect(lines[lines.length - 1]).toContain("line up standins");
+    expect(lines[lines.length - 1]).toContain("Standins who can play");
   });
 });
 
@@ -2420,7 +2422,7 @@ describe("standin requests (the MMR rule)", () => {
     expect(msg).toContain("The **Dire Straits** captain has to agree first");
     expect(msg).toContain("since the standin is 700 MMR above the player they cover");
     expect(msg).toContain("<t:1760000000:F>");
-    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(msg).toContain("<https://league.example/standins?match=m1>");
   });
 
   // namedCoverBaseline: a lower teammate who said they're out set the
@@ -2505,7 +2507,7 @@ describe("standin requests (the MMR rule)", () => {
     expect(msg).toContain(
       "**Cap Dee** didn't agree to **Sub Sam** standing in for **Home Carry** on **Roshan's Rejects**",
     );
-    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(msg).toContain("<https://league.example/standins?match=m1>");
     expect(
       standinRequestDeclinedMessage({ ...fixture, replacedName: null, declinedByName: null }),
     ).toContain("An admin didn't agree to **Sub Sam** filling an open seat");
@@ -2518,7 +2520,7 @@ describe("standin requests (the MMR rule)", () => {
       "The request for **Sub Sam** standing in for **Home Carry** on **Roshan's Rejects**",
     );
     expect(left).toContain("is off: **Sub Sam** left the league. Line up someone else");
-    expect(left).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(left).toContain("<https://league.example/standins?match=m1>");
     expect(
       standinRequestCancelledMessage({ ...fixture, reason: "STANDIN_SIGNED" }),
     ).toContain("is off: **Sub Sam** was signed to a team.");
@@ -3156,10 +3158,10 @@ describe("no player-supplied name can inject markdown", () => {
 
 describe("match-page deep links", () => {
   // The people these messages mention are by definition NOT on the site — the
-  // link must land them on the match page (Standins card / check-in banner),
-  // not the front door, and it must be <bracketed> so the alert can't unfurl
-  // a preview card over itself.
-  it("playerOutMessage links the match page when a matchId is given", () => {
+  // link must land them where they act (the game on the Standins page, the
+  // match page's Reschedule card), not the front door, and it must be
+  // <bracketed> so the alert can't unfurl a preview card over itself.
+  it("playerOutMessage links the game on the Standins page when a matchId is given", () => {
     const msg = playerOutMessage({
       playerName: "Dendi",
       homeName: "H",
@@ -3169,8 +3171,19 @@ describe("match-page deep links", () => {
       whenMs: null,
       matchId: "m1",
     });
-    // Straight to the Standins card, where the captain lines up cover.
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1#match-standins>/);
+    // The game on the Standins page, where the captain lines up cover.
+    expect(msg).toMatch(/<[^<>\s]*\/standins\?match=m1>$/);
+    // With the side, the game's share link: a standin who opens it offers.
+    expect(playerOutMessage({
+      playerName: "Dendi",
+      homeName: "H",
+      awayName: "W",
+      week: 4,
+      isPlayoff: false,
+      whenMs: null,
+      matchId: "m1",
+      teamId: "t1",
+    })).toMatch(/say so here, and the captain picks: <[^<>\s]*\/standins\?match=m1&team=t1&play=1>$/);
   });
 
   it("reschedule messages link the match page, the Reschedule card where there is an answer to give", () => {
@@ -3224,9 +3237,10 @@ describe("match-page deep links", () => {
       whenMs: null,
     });
     expect(msg).not.toContain("/matches/");
+    expect(msg).not.toContain("/standins");
   });
 
-  it("standinAssignedMessage links the check-in page when a matchId is given", () => {
+  it("standinAssignedMessage links the game on the Standins page when a matchId is given", () => {
     const msg = standinAssignedMessage({
       standinName: "S",
       replacedName: "R",
@@ -3238,7 +3252,7 @@ describe("match-page deep links", () => {
       whenMs: null,
       matchId: "m1",
     });
-    expect(msg).toMatch(/<[^<>\s]*\/matches\/m1>/);
+    expect(msg).toMatch(/check in on the Standins page: <[^<>\s]*\/standins\?match=m1>$/);
   });
 
   it("standinAssignedMessage stays link-free without one", () => {
@@ -3661,6 +3675,59 @@ describe("fantasy's pick window on Discord", () => {
   });
 });
 
+describe("standinDroppedOutMessage", () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const base = {
+    standinName: "Sub Sam",
+    teamName: "Roshan's Rejects",
+    replacedName: "Home Carry",
+    homeName: "Roshan's Rejects",
+    awayName: "Dire Straits",
+    week: 4,
+    isPlayoff: false,
+    whenMs: 1_760_000_000_000,
+    matchId: "m1",
+    teamId: "t1",
+  };
+
+  it("tells the captain the seat is open again and asks the standins in the channel", () => {
+    vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
+    expect(standinDroppedOutMessage(base)).toBe(
+      "🚑 **Sub Sam** can't stand in for **Roshan's Rejects** after all — week 4 match **Roshan's Rejects** vs **Dire Straits** (<t:1760000000:F>). The seat for **Home Carry** is open again. Standins who can play: say so here, and the captain picks: <https://league.example/standins?match=m1&team=t1&play=1>",
+    );
+    expect(
+      standinDroppedOutMessage({ ...base, replacedName: null, teamName: null }),
+    ).toContain("can't stand in after all — week 4 match");
+    expect(
+      standinDroppedOutMessage({ ...base, replacedName: null }),
+    ).toContain("Their seat is open again.");
+  });
+
+  it("escapes player-chosen names", () => {
+    const msg = standinDroppedOutMessage({
+      ...base,
+      standinName: "[free skins](https://evil.example)",
+    });
+    expect(msg).not.toContain("[free skins](https://evil.example)");
+  });
+
+  it("is what a one-fixture away range sends for a seat given back", () => {
+    const { standinName, teamName, replacedName, ...fixture } = base;
+    expect(
+      playerAwayMessage(standinName, [
+        { ...fixture, released: { teamName: teamName!, replacedName } },
+      ]),
+    ).toBe(standinDroppedOutMessage(base));
+    // In a longer range the line says the seat is open again.
+    const lines = playerAwayMessage(standinName, [
+      { ...fixture, released: { teamName: teamName!, replacedName } },
+      { ...fixture, matchId: "m2", released: null },
+    ]).split("\n");
+    expect(lines[1]).toContain("their standin seat is open again");
+    expect(lines[2]).not.toContain("open again");
+  });
+});
+
 describe("standinOfferedMessage", () => {
   afterEach(() => vi.unstubAllEnvs());
 
@@ -3680,7 +3747,7 @@ describe("standinOfferedMessage", () => {
     expect(msg).toContain("**Sub Sam** (3,100 MMR) can stand in for **Roshan's Rejects**");
     expect(msg).toContain("**Roshan's Rejects** vs **Dire Straits**");
     expect(msg).toContain("<t:1760000000:F>");
-    expect(msg).toContain("<https://league.example/matches/m1#match-standins>");
+    expect(msg).toContain("<https://league.example/standins?match=m1>");
     // It names no covered player: who is out is the captains' to see.
     expect(msg).not.toMatch(/for \*\*[^*]+\*\* \(/);
   });
