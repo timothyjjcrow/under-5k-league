@@ -327,6 +327,12 @@ the rows in `StandinOffer`.
 - **The shared link is the game on the board**
   (`standinOfferPath`: `/standins?match=&team=&play=1`), copied from the
   captain's card or the game itself. Anyone may post it: it grants nothing.
+  Any player on the team can copy it, as the captain can (Tim, 2026-11-20):
+  a rostered player's own side leads the list (`orderStandinBoard` over
+  `loadStandinOfferViewer`'s `rosterTeamId`), marked "Your team", with the
+  copy button where a standin would see "I can play". It is a display
+  choice only: their standing is still "on a roster", so `offerToStandIn`
+  refuses them for any side.
   Opening it puts a signed-in standin who may offer on the list once
   (`standinArrivalAction`, `StandinOfferOnArrival`, which scrubs `play`
   first, as the inhouse night's `?imin=1` does); a signed-out visitor's
@@ -393,7 +399,8 @@ game there (`standinHubPath`: `/standins?match=`, or the share link
   booking with its check-in banner, where "Can't make it" gives the seat
   back, and each game a captain asked for them while the other captain has
   yet to agree. Then the games that need a standin, minus the captain's own
-  sides (never listed twice), with "I can play". Admins get a link to /admin.
+  sides (never listed twice), with "I can play"; a player's own team's games
+  lead it with the share link instead. Admins get a link to /admin.
 - **A link to one game opens on it.** `?match=` puts that fixture in the
   captain's section and highlights it; `ScrollToStandinGame` scrolls to the
   captain's card or the game on the list, whichever the viewer has (the
@@ -403,7 +410,8 @@ game there (`standinHubPath`: `/standins?match=`, or the share link
 - **Other pages summarise and link:** the match page's Standins card,
   Captain to-dos (`captainTodoHref`), the scoreboard's and Captains page's
   "Find a standin" (`captainCardHref`), the check-in banner's "Line up
-  cover", the team page's Match prep lines, and /me.
+  cover" (a captain's) and "Help find a standin" (every other player of a
+  side that `sideNeedsCover`), the team page's Match prep lines, and /me.
 - **Tests:** `src/app/standins/cover-card-guards.test.ts` (the card and the
   page's sections), `standins-page-guards.test.ts` (the list),
   `match-page-guards.test.ts` (the summary keeps no controls),

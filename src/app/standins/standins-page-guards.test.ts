@@ -80,6 +80,43 @@ describe("standins page", () => {
     expect(LINK).toMatch(/if \(action !== "offer"\) return;/);
   });
 
+  // Tim, 2026-11-20: any player on a team may share its game's link, as
+  // its captain can. Their own side leads the list with the link where a
+  // standin would see "I can play", never "you can't stand in".
+  it("gives a player their own team's game first, with its share link", () => {
+    expect(PAGE).toContain(
+      "const ownTeamId = myTeam ? null : (offerViewer?.rosterTeamId ?? null);",
+    );
+    expect(PAGE).toContain(
+      "const ordered = orderStandinBoard(others, { ownTeamId, linked });",
+    );
+    expect(PAGE).toContain(
+      "ownTeam={ownTeamId !== null && need.teamId === ownTeamId}",
+    );
+    // The own-team branch comes before the standing's, holds the copy
+    // button and no offer form.
+    const own = PAGE.indexOf("{ownTeam ? (");
+    const open = PAGE.indexOf('standing.kind === "open" ? (');
+    expect(own).toBeGreaterThan(-1);
+    expect(open).toBeGreaterThan(own);
+    const branch = PAGE.slice(own, open);
+    expect(branch).toMatch(
+      /<CopyStandinLink\s+matchId=\{need\.matchId\}\s+teamId=\{need\.teamId\}/,
+    );
+    expect(branch).not.toContain("offerToStandInAction");
+  });
+
+  // Every player on a short side is pointed at that game, where the link is;
+  // only the captain's line says "Line up cover".
+  it("sends a short side's players from the check-in banner to the game", () => {
+    const banner = stripLineComments(
+      sourceFile("src/components/checkin-banner.tsx").text,
+    );
+    expect(banner).toMatch(
+      /side\.role === "player" && sideNeedsCover\(side\.counts\) \? \(\s*<Link\s+href=\{standinHubPath\(matchId\)\}[\s\S]*?Help find a standin/,
+    );
+  });
+
   it("copies the link on the viewer's own origin, and never claims a failed copy", () => {
     expect(LINK).toContain(
       "`${window.location.origin}${standinOfferPath(matchId, teamId)}`",

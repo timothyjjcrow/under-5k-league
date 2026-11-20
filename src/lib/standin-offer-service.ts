@@ -399,6 +399,11 @@ export function loadStandinBoardSummary(
 export type StandinOfferViewer = {
   activeSignup: boolean;
   rostered: boolean;
+  /**
+   * The team of their roster seat this season, or null. A rostered player
+   * can't stand in, but their own side's game is theirs to share.
+   */
+  rosterTeamId: string | null;
   /** Signup MMR; 0 = unknown, or no signup. */
   mmr: number;
   commitments: StandinOfferCommitment[];
@@ -429,7 +434,7 @@ export async function loadStandinOfferViewer(
     }),
     prisma.teamMember.findUnique({
       where: { seasonId_userId: { seasonId, userId } },
-      select: { id: true },
+      select: { teamId: true },
     }),
     prisma.standinAssignment.findMany({
       where: { standinUserId: userId, match: unplayed },
@@ -466,6 +471,7 @@ export async function loadStandinOfferViewer(
   return {
     activeSignup,
     rostered: !!seat,
+    rosterTeamId: seat?.teamId ?? null,
     mmr: activeSignup ? (signup?.mmr ?? 0) : 0,
     commitments: [
       ...bookings.map((b) => commitment(b, "booked")),

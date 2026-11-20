@@ -31,6 +31,8 @@ type Fixture = {
   awayName: string;
   captain: User;
   out: User;
+  /** A home player who is in: neither the captain nor the one who is out. */
+  teammate: User;
   standin: User;
 };
 
@@ -110,6 +112,7 @@ async function withFixture(
       awayName,
       captain: users[0],
       out: users[1],
+      teammate: users[2],
       standin: users[size * 2],
     });
   } finally {
@@ -210,6 +213,55 @@ test("a standin offers, the captain picks on the same page, and a drop-out lists
     await expect(
       needs.getByRole("link", { name: /Find a standin/ }),
     ).toHaveAttribute("href", hub);
+    noErrors();
+  });
+});
+
+// Tim, 2026-11-20: any player on the team can copy the game's standin link,
+// as the captain can. The teammate's own side leads the list with the link
+// where a standin would see "I can play", and the player who is out is sent
+// there from their check-in.
+test("a teammate copies their team's standin link, and the player who is out is sent to it", async ({ page, request, context, baseURL }) => {
+  test.setTimeout(90_000);
+  await withFixture(request, async (f) => {
+    const noErrors = trackPageErrors(page);
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    const game = page.locator(`#need-${f.matchId}-${f.homeId}`);
+
+    await login(page, f.teammate, "/standins");
+    await untilHydrated(page, game);
+    // Their own side leads the list, marked as theirs.
+    await expect(page.locator('[id^="need-"]').first()).toHaveAttribute(
+      "id",
+      `need-${f.matchId}-${f.homeId}`,
+    );
+    await expect(game).toContainText(`${f.homeName} needs a standin`);
+    await expect(game).toContainText("Your team");
+    await expect(game).not.toContainText("can't stand in");
+    await expect(game.getByRole("button", { name: "I can play" })).toHaveCount(0);
+    // The board still never names who is out.
+    await expect(game).not.toContainText(f.out.name);
+    await game.getByRole("button", { name: /Copy standin link/ }).click();
+    await expect(game.getByRole("button", { name: /Copied!/ })).toBeVisible();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      new URL(
+        `/standins?match=${encodeURIComponent(f.matchId)}&team=${encodeURIComponent(f.homeId)}&play=1`,
+        baseURL,
+      ).href,
+    );
+    // Copying offers nothing: a teammate is never on their own side's list.
+    expect(await db.standinOffer.count({ where: { matchId: f.matchId } })).toBe(0);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expectNoHorizontalOverflow(page, "standins page for a teammate at 390px");
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // The player who is out is pointed at the game from their check-in.
+    await login(page, f.out, `/matches/${f.matchId}`);
+    const help = page.getByRole("link", { name: /Help find a standin/ });
+    await expect(help).toHaveAttribute(
+      "href",
+      `/standins?match=${encodeURIComponent(f.matchId)}`,
+    );
     noErrors();
   });
 });

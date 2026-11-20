@@ -253,6 +253,29 @@ describe("offering to stand in (integration)", () => {
     expect(home.id).not.toBe(other.id);
   });
 
+  // The Standins page gives a player their own side's share link from this
+  // (Tim, 2026-11-20); sharing is all it gives them.
+  it("knows a player's roster team, and still refuses their offer for it", async () => {
+    const { season, home, homeA, homeB, match } = await setup();
+    await sayOut(match.id, homeA.id);
+    expect(await loadStandinOfferViewer(season.id, homeB.id)).toMatchObject({
+      rostered: true,
+      rosterTeamId: home.id,
+    });
+    const sub = await standin(season.id, "Free Sub", 2500);
+    expect(await loadStandinOfferViewer(season.id, sub.id)).toMatchObject({
+      rostered: false,
+      rosterTeamId: null,
+    });
+    const own = await offerToStandIn({
+      matchId: match.id,
+      teamId: home.id,
+      userId: homeB.id,
+    });
+    expect(own).toMatchObject({ ok: false });
+    expect(await prisma.standinOffer.count()).toBe(0);
+  });
+
   it("refuses anyone a booking would refuse", async () => {
     const { season, home, homeA, awayB, match } = await setup();
     await sayOut(match.id, homeA.id);

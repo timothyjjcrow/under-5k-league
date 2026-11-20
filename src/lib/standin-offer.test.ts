@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   STANDIN_BOARD_AHEAD_DAYS,
   STANDIN_BOARD_BEHIND_HOURS,
+  orderStandinBoard,
   sortStandinOffers,
   standinArrivalAction,
   standinBoardWindow,
@@ -285,6 +286,54 @@ describe("standinOfferStanding", () => {
         ],
       }).kind,
     ).toBe("open");
+  });
+});
+
+describe("orderStandinBoard", () => {
+  // Soonest first, as the board loads them.
+  const a = { matchId: "m1", teamId: "red" };
+  const b = { matchId: "m1", teamId: "blue" };
+  const c = { matchId: "m2", teamId: "green" };
+  const d = { matchId: "m3", teamId: "red" };
+  const board = [a, b, c, d];
+
+  it("keeps the soonest-first order for a viewer with no team and no link", () => {
+    expect(orderStandinBoard(board, { ownTeamId: null, linked: null })).toEqual(
+      board,
+    );
+  });
+
+  it("leads with a player's own team's games, soonest first", () => {
+    expect(
+      orderStandinBoard(board, { ownTeamId: "red", linked: null }),
+    ).toEqual([a, d, b, c]);
+  });
+
+  it("puts a shared link's game next, and first when it is their own", () => {
+    expect(
+      orderStandinBoard(board, { ownTeamId: null, linked: c }),
+    ).toEqual([c, a, b, d]);
+    expect(
+      orderStandinBoard(board, { ownTeamId: "red", linked: { ...c } }),
+    ).toEqual([a, d, c, b]);
+    expect(
+      orderStandinBoard(board, { ownTeamId: "red", linked: { ...d } }),
+    ).toEqual([a, d, b, c]);
+  });
+
+  it("matches a link on its match and its side, never the match alone", () => {
+    expect(
+      orderStandinBoard(board, {
+        ownTeamId: null,
+        linked: { matchId: "m1", teamId: "blue" },
+      }),
+    ).toEqual([b, a, c, d]);
+  });
+
+  it("leaves the list it was given alone", () => {
+    const copy = [...board];
+    orderStandinBoard(board, { ownTeamId: "red", linked: c });
+    expect(board).toEqual(copy);
   });
 });
 

@@ -318,6 +318,35 @@ export function standinOfferPath(matchId: string, teamId: string): string {
   )}&play=1`;
 }
 
+/**
+ * The board's order for one viewer, from the soonest-first list: a rostered
+ * player's own team's games lead (the ones they came to share), then the
+ * game a shared link named, then the rest as they were. The captain's own
+ * sides are never passed in: they are in the captain's section above.
+ */
+export function orderStandinBoard<T extends { matchId: string; teamId: string }>(
+  needs: readonly T[],
+  opts: {
+    /** The viewer's roster team, when they are a player and not its captain. */
+    ownTeamId: string | null;
+    /** The game a shared link named. */
+    linked: { matchId: string; teamId: string } | null;
+  },
+): T[] {
+  const { ownTeamId, linked } = opts;
+  const rank = (n: T) =>
+    ownTeamId !== null && n.teamId === ownTeamId
+      ? 0
+      : linked && n.matchId === linked.matchId && n.teamId === linked.teamId
+        ? 1
+        : 2;
+  // Ties keep the incoming order: the list arrives soonest first.
+  return needs
+    .map((need, index) => ({ need, index }))
+    .sort((a, b) => rank(a.need) - rank(b.need) || a.index - b.index)
+    .map((x) => x.need);
+}
+
 /** What opening the shared link does for this viewer. */
 export type StandinArrivalAction =
   /** Put them on the list now. */

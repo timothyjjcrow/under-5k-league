@@ -291,6 +291,15 @@ function SideSummary({
           >
             Line up cover <LinkArrow />
           </Link>
+        ) : side.role === "player" && sideNeedsCover(side.counts) ? (
+          // A teammate can't book, but the game on the Standins page has the
+          // link they can share (Tim, 2026-11-20).
+          <Link
+            href={standinHubPath(matchId)}
+            className={textLink("whitespace-nowrap")}
+          >
+            Help find a standin <LinkArrow />
+          </Link>
         ) : null}
       </p>
       {rows.length > 0 ? (
