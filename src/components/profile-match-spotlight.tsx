@@ -34,9 +34,10 @@ export function ProfileMatchSpotlight({
   teamContext?: boolean;
 }) {
   const state = profileMatchState(match, nowMs);
-  const live = match.status === "LIVE";
+  // A series stopped partway days ago keeps its score but not the live look.
+  const live = match.status === "LIVE" && state !== "Unfinished";
   const done = match.status === "COMPLETED";
-  const scored = live || done;
+  const scored = match.status === "LIVE" || done;
   const home = teams.find((team) => team.id === match.homeTeamId);
   const away = teams.find((team) => team.id === match.awayTeamId);
   if (!home || !away) return null;

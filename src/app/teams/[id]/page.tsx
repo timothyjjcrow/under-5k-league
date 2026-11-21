@@ -980,14 +980,17 @@ export default async function TeamPage({
                     const myScore = isHome ? m.homeScore : m.awayScore;
                     const oppScore = isHome ? m.awayScore : m.homeScore;
                     const done = m.status === "COMPLETED";
-                    const live = m.status === "LIVE";
+                    const matchState = profileMatchState(m, nowMs);
+                    // A series stopped partway days ago is "Unfinished",
+                    // not Live (seriesStalled, via profileMatchState).
+                    const unfinished = matchState === "Unfinished";
+                    const live = m.status === "LIVE" && !unfinished;
                     const result =
                       m.winnerTeamId === id
                         ? "W"
                         : m.winnerTeamId === null
                           ? "D"
                           : "L";
-                    const matchState = profileMatchState(m, nowMs);
                     return (
                       <li key={m.id}>
                         <Link
@@ -1024,7 +1027,7 @@ export default async function TeamPage({
                               {done && m.forfeit ? " · Forfeit" : ""}
                             </span>
                           </span>
-                          {done || live ? (
+                          {done || live || unfinished ? (
                             <span className="shrink-0 font-display text-lg font-semibold tabular-nums">
                               {myScore}–{oppScore}
                             </span>
@@ -1056,9 +1059,11 @@ export default async function TeamPage({
                             >
                               {live
                                 ? "Live"
-                                : matchState === "Awaiting result"
-                                  ? "Awaiting result"
-                                  : "Upcoming"}
+                                : unfinished
+                                  ? "Unfinished"
+                                  : matchState === "Awaiting result"
+                                    ? "Awaiting result"
+                                    : "Upcoming"}
                             </Badge>
                           )}
                         </Link>

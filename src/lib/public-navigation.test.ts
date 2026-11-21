@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { AUTO_SYNC } from "./constants";
 
 const mocks = vi.hoisted(() => ({
   revision: "before-archive",
@@ -62,8 +63,22 @@ it("reads one LIVE match per season and revision for the header's chip", async (
   expect(await getPublicHasLiveMatch("season-1")).toBe(false);
   expect(mocks.matchFindFirst).toHaveBeenCalledTimes(1);
   expect(mocks.matchFindFirst).toHaveBeenCalledWith({
-    where: { seasonId: "season-1", status: "LIVE" }, select: { id: true },
+    where: {
+      seasonId: "season-1",
+      status: "LIVE",
+      OR: [{ scheduledAt: null }, { scheduledAt: { gte: expect.any(Date) } }],
+    },
+    select: { id: true },
   });
+  // A series stalled partway (seriesStalled) never lights the chip: the
+  // query only takes kickoffs inside the result-sync window.
+  const since = mocks.matchFindFirst.mock.calls[0][0].where.OR[1].scheduledAt.gte;
+  expect(Date.now() - since.getTime()).toBeGreaterThanOrEqual(
+    AUTO_SYNC.WINDOW_HOURS * 3600_000,
+  );
+  expect(Date.now() - since.getTime()).toBeLessThan(
+    AUTO_SYNC.WINDOW_HOURS * 3600_000 + 60_000,
+  );
 
   // Game one imports: the revision moves in the same transaction.
   mocks.matchFindFirst.mockResolvedValue({ id: "match-1" });

@@ -566,7 +566,8 @@ image has changed. The rules are in `next.config.ts`, and
   the playoffs' first date. Until a team is in or out it prints only the
   rule ("Top 4 of each group make the playoffs", `playoffPlacesPhrase`).
   The progress block lists only Live, Time TBC and Overdue counts: "6
-  Scheduled" was the fixture list's ordinary state. COMPLETE: "Relive
+  Scheduled" was the fixture list's ordinary state. A series stopped
+  partway (`seriesStalled`) counts as Overdue, never Live. COMPLETE: "Relive
   the season" and, under it, where the next season is announced (the league
   Discord, or League news without an invite); the champion banner below is the
   page's one champion block, so the hero names no team.

@@ -21,6 +21,7 @@ import type { VisibilityViewer } from "@/lib/visibility";
 import { LocalTime } from "@/components/local-time";
 import { SCRIM_STATUS } from "@/lib/constants";
 import { formatLeagueMatchTime } from "@/lib/match-time";
+import { cn } from "@/lib/utils";
 import { YourTeamLine, captainContact } from "./hero-controls";
 import { fmtWhen } from "./when";
 
@@ -170,16 +171,28 @@ export async function MyNextMatch({
       {live ? (
         // A series being played is not the check-in (the match page has its
         // own "ready for the next game"), so it is a link, above the prompt.
+        // One stopped partway days ago says so, without the live styling.
         <Link
           href={`/matches/${live.match.id}`}
-          className="group flex items-center gap-3 rounded-[var(--radius)] border border-danger/40 bg-danger/10 px-4 py-3 text-sm"
+          className={cn(
+            "group flex items-center gap-3 rounded-[var(--radius)] border px-4 py-3 text-sm",
+            live.unfinished
+              ? "border-accent/40 bg-accent/10"
+              : "border-danger/40 bg-danger/10",
+          )}
         >
-          <span
-            aria-hidden
-            className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
-          />
+          {live.unfinished ? null : (
+            <span
+              aria-hidden
+              className="animate-live-pulse inline-block h-1.5 w-1.5 shrink-0 rounded-full bg-danger"
+            />
+          )}
           <span className="min-w-0 flex-1 [overflow-wrap:anywhere]">
-            <span className="font-medium">Your series is live</span>{" "}
+            <span className="font-medium">
+              {live.unfinished
+                ? `Your ${matchRoundLabel(live.match, playoffRounds)} series isn't finished`
+                : "Your series is live"}
+            </span>{" "}
             <span className="text-muted">
               ·{" "}
               {live.teamId === live.match.homeTeamId

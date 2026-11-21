@@ -9,6 +9,7 @@ import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
+import { seriesStalled } from "@/lib/schedule";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
 import { teamHueVar } from "@/lib/team-hues";
@@ -180,6 +181,9 @@ export async function MatchScoreboard({
                 </Badge>
               ) : null}
             </>
+          ) : seriesStalled(match, renderedAt) ? (
+            // Stopped partway, its kickoff past the result window: not live.
+            <Badge tone="accent">Unfinished</Badge>
           ) : match.status === "LIVE" || games.length > 0 ? (
             <Badge tone="danger">LIVE</Badge>
           ) : resultPending ? (

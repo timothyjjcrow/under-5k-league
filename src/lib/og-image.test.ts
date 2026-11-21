@@ -101,6 +101,13 @@ describe("matchCardStatus", () => {
     expect(matchCardStatus(match({ awayScore: 1 }), names, "x", NOW).tone).toBe("live");
   });
 
+  it("calls a series stalled partway unfinished, not live", () => {
+    const weekLater = kickoff.getTime() + 6 * 86_400_000;
+    expect(
+      matchCardStatus(match({ status: "LIVE", homeScore: 1 }), names, "x", weekLater),
+    ).toEqual({ tone: "pending", text: "Unfinished · Best of 3" });
+  });
+
   it("awaits the result once kickoff has passed with nothing in", () => {
     expect(
       matchCardStatus(match({ bestOf: 2 }), names, "x", kickoff.getTime()),

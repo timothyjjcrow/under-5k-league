@@ -101,7 +101,7 @@ export function overdueResultsMessage(
   const age = Number.isInteger(days)
     ? `${days} day${days === 1 ? "" : "s"}`
     : `${windowHours} hours`;
-  return `${n} regular-season ${n === 1 ? "match" : "matches"} kicked off over ${age} ago and ${n === 1 ? "has" : "have"} no result yet (${weekList(status.pendingWeeks)}).`;
+  return `${n} regular-season ${n === 1 ? "match" : "matches"} kicked off over ${age} ago and ${n === 1 ? "has" : "have"} no final result yet (${weekList(status.pendingWeeks)}).`;
 }
 
 /**

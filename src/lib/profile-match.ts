@@ -1,4 +1,8 @@
-import { isRelevantOpenMatch, type SlateMatch } from "./schedule";
+import {
+  isRelevantOpenMatch,
+  seriesStalled,
+  type SlateMatch,
+} from "./schedule";
 
 /** Pick a profile's match spotlight without calling old fixtures "up next". */
 export function profileMatch<T extends SlateMatch>(
@@ -12,8 +16,12 @@ export function profileMatch<T extends SlateMatch>(
     a.week - b.week ||
     a.id.localeCompare(b.id);
   if (activeSeason) {
+    // A stalled series (stopped partway, kickoff past the result window) is
+    // not live: the spotlight goes to the next fixture instead.
     const live = matches
-      .filter((match) => match.status === "LIVE")
+      .filter(
+        (match) => match.status === "LIVE" && !seriesStalled(match, nowMs),
+      )
       .sort(byKickoff);
     if (live[0]) return live[0];
     const next = matches
@@ -35,6 +43,7 @@ export function profileMatch<T extends SlateMatch>(
 
 export function profileMatchState(match: SlateMatch, nowMs: number) {
   if (match.status === "COMPLETED") return "Latest result";
+  if (seriesStalled(match, nowMs)) return "Unfinished";
   if (match.status === "LIVE") return "Live now";
   if (!isRelevantOpenMatch(match, nowMs)) return "Awaiting result";
   if (!match.scheduledAt) return "Time TBD";

@@ -60,6 +60,21 @@ describe("myMatchPanel: the check-in", () => {
     expect(result.next).toBeNull();
     expect(result.live?.match.id).toBe("live");
     expect(result.live?.teamId).toBe("A");
+    expect(result.live?.unfinished).toBe(false);
+  });
+
+  it("names a series stalled partway unfinished and still prompts for the next one", () => {
+    const stalled = match({
+      id: "w2",
+      week: 2,
+      status: "LIVE",
+      scheduledAt: new Date(now - 6 * 24 * hour),
+    });
+    const next = match({ id: "w3", week: 3, scheduledAt: new Date(now + 24 * hour) });
+    const result = panel({ matches: [stalled, next] });
+    expect(result.live).toMatchObject({ teamId: "A", unfinished: true });
+    expect(result.live?.match.id).toBe("w2");
+    expect(result.next?.id).toBe("w3");
   });
 
   it("prompts a booked standin for the match they cover, on the booking's side", () => {

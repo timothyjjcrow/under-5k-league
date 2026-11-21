@@ -730,15 +730,35 @@ export type SlateMatch = {
 };
 
 /**
+ * A series that stopped partway: a game is in (LIVE) but its kickoff is past
+ * the result-sync window, so it is not being played now and nothing imports
+ * the rest by itself. Surfaces call it "Unfinished", never "Live", and it no
+ * longer holds the league's current week (isRelevantOpenMatch). Admins
+ * postponing the rest of a series to a later night was the case: a 1-0 Bo2
+ * from week 2 kept every page on week 2 the day before week 3. A LIVE series
+ * with no kickoff can't be judged and stays live.
+ */
+export function seriesStalled(
+  match: Pick<SlateMatch, "status" | "scheduledAt">,
+  nowMs: number,
+): boolean {
+  return (
+    match.status === MATCH_STATUS.LIVE &&
+    match.scheduledAt != null &&
+    match.scheduledAt.getTime() < nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000
+  );
+}
+
+/**
  * Is an unfinished fixture still relevant as current/upcoming schedule work?
- * LIVE and untimed rows remain visible. A timed row older than the result-sync
- * window is results debt: surfaces should label it overdue rather than call it
- * the player's next match or the league's current week.
+ * Untimed rows remain visible. A timed row older than the result-sync window
+ * is results debt, LIVE or not (a LIVE one is `seriesStalled`): surfaces
+ * should label it overdue or unfinished rather than call it the player's next
+ * match or the league's current week.
  */
 export function isRelevantOpenMatch(match: SlateMatch, nowMs: number): boolean {
   if (match.status === MATCH_STATUS.COMPLETED) return false;
-  if (match.status === MATCH_STATUS.LIVE || match.scheduledAt == null)
-    return true;
+  if (match.scheduledAt == null) return true;
   return (
     match.scheduledAt.getTime() >= nowMs - AUTO_SYNC.WINDOW_HOURS * 3600_000
   );
