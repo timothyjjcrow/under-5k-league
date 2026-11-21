@@ -651,6 +651,31 @@ describe("result sync — league matches (integration)", () => {
     expect(m.autoSyncAttempts).toBe(0);
   });
 
+  it("a slow OpenDota costs the pass one lookup, not its whole budget", async () => {
+    // 2026-11-21: recentMatches answered in ~12s, past the 8s timeout, for
+    // over an hour. Each pass waited out one fixture's lookups one by one
+    // until its budget ran out, skipped every later step, and the alert
+    // called the site failing.
+    const { match } = await setupNight({ offsetMs: -2 * HOUR });
+    mockRecent.mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return null; // timed out
+    });
+
+    const result = await runResultSync({ deadlineMs: Date.now() + 2_500 });
+    expect(mockRecent).toHaveBeenCalledTimes(1);
+    expect(result.skipped).not.toContain("LEAGUE_BUDGET_EXHAUSTED");
+
+    // Finding nothing proves nothing, so no backoff, but the fixture had its
+    // turn: the next pass doesn't ask OpenDota again at once.
+    const m = await prisma.match.findUniqueOrThrow({ where: { id: match.id } });
+    expect(m.autoSyncAttempts).toBe(0);
+    expect(m.autoSyncedAt).not.toBeNull();
+    mockRecent.mockClear();
+    await runResultSync({ deadlineMs: Date.now() + 2_500 });
+    expect(mockRecent).not.toHaveBeenCalled();
+  });
+
   it("league path never rewrites a COMPLETED match and remembers rejected ids", async () => {
     const { season, match, home, homeAccts, awayAccts } = await setupNight({
       offsetMs: -2 * HOUR,
