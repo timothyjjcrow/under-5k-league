@@ -300,6 +300,85 @@ describe("withdrawTeam", () => {
     ]);
   });
 
+  it("names the forfeited series that were past kickoff, and only those", async () => {
+    // A series past its kickoff may have been played with its games still
+    // waiting on the import, which the forfeit now refuses: the toast and the
+    // log name each one so the admin can check it.
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const mine = matches.filter(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    );
+    expect(mine).toHaveLength(3);
+    const [pastKickoff, live, later] = mine;
+    await prisma.match.update({
+      where: { id: pastKickoff.id },
+      data: { scheduledAt: new Date(Date.now() - 2 * 3600_000) },
+    });
+    await prisma.match.update({
+      where: { id: live.id },
+      data: { status: MATCH_STATUS.LIVE },
+    });
+    await prisma.match.update({
+      where: { id: later.id },
+      data: { scheduledAt: new Date(Date.now() + 24 * 3600_000) },
+    });
+    const nameOf = new Map(teams.map((t) => [t.id, t.name]));
+    const label = (m: (typeof mine)[number]) =>
+      `week ${m.week} v ${nameOf.get(m.homeTeamId === quitter.id ? m.awayTeamId : m.homeTeamId)}`;
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    const message = res?.message ?? "";
+    expect(message).toContain(
+      `3 fixture(s) forfeited to the opponents · 2 of them were past kickoff with no result yet (${label(pastKickoff)}, ${label(live)}): if one was actually played, fix it in Schedule & results`,
+    );
+    expect(message).not.toContain(label(later));
+    const log = await prisma.adminAction.findFirst({
+      where: { action: "withdrawTeam" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(log?.summary).toContain(
+      `2 of the forfeited fixture(s) were past kickoff with no result (${label(pastKickoff)}, ${label(live)})`,
+    );
+  });
+
+  it("says 'was' for a single series past kickoff", async () => {
+    const { teams, matches } = await midSeason();
+    const quitter = teams[0];
+    const first = matches.find(
+      (m) => m.homeTeamId === quitter.id || m.awayTeamId === quitter.id,
+    )!;
+    await prisma.match.update({
+      where: { id: first.id },
+      data: { scheduledAt: new Date(Date.now() - 3600_000) },
+    });
+
+    const res = await withdrawTeam(null, teamFd(quitter));
+
+    expect(res?.message ?? "").toMatch(
+      /3 fixture\(s\) forfeited to the opponents · 1 of them was past kickoff with no result yet \(week \d+ v WD Team \d\)/,
+    );
+    const log = await prisma.adminAction.findFirst({
+      where: { action: "withdrawTeam" },
+      orderBy: { createdAt: "desc" },
+    });
+    expect(log?.summary).toMatch(
+      /1 of the forfeited fixture\(s\) was past kickoff with no result/,
+    );
+  });
+
+  it("says nothing about kickoff when no forfeited series had started", async () => {
+    const { teams } = await midSeason();
+
+    const res = await withdrawTeam(null, teamFd(teams[0]));
+
+    expect(res).toMatchObject({
+      message: expect.stringMatching(/3 fixture\(s\) forfeited/),
+    });
+    expect(res?.message ?? "").not.toMatch(/past kickoff/);
+  });
+
   it("is REGULAR_SEASON-only, with the right pointer per phase", async () => {
     const { teams } = await midSeason();
     await prisma.season.updateMany({ data: { status: SEASON_STATUS.SIGNUPS } });
@@ -541,6 +620,11 @@ describe("withdrawTeam", () => {
           match.homeTeamId === quitter.id || match.awayTeamId === quitter.id,
       )!;
       const asHome = sniped.homeTeamId === quitter.id;
+      // Past kickoff, yet played for real: the toast names only forfeits.
+      await prisma.match.update({
+        where: { id: sniped.id },
+        data: { scheduledAt: new Date(Date.now() - 2 * 3600_000) },
+      });
       // A standin request there closes only where the forfeit claim won.
       const standin = await makeUser("Trigger Ask");
       const ask = await prisma.standinRequest.create({
@@ -580,6 +664,7 @@ describe("withdrawTeam", () => {
       expect(result).toMatchObject({
         message: expect.stringMatching(/completed for real while you clicked/),
       });
+      expect(result?.message ?? "").not.toMatch(/past kickoff/);
       expect(
         (await prisma.standinRequest.findUniqueOrThrow({ where: { id: ask.id } }))
           .status,

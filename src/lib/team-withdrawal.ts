@@ -1,4 +1,4 @@
-import { SEASON_STATUS } from "./constants";
+import { MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
 
 /**
  * Team withdrawal is a regular-season ruling, not a generic roster flag.
@@ -32,4 +32,37 @@ export function teamWithdrawalLockedReason(
  */
 export function withdrawalForfeitScore(bestOf: number): number {
   return Math.floor(bestOf / 2) + 1;
+}
+
+/** The fields of a fixture that `withdrawalKickedOffFixtures` reads. */
+export type WithdrawalFixture = {
+  phase: string;
+  status: string;
+  scheduledAt: Date | null;
+  homeTeamId: string;
+  awayTeamId: string;
+};
+
+/**
+ * The fixtures a withdrawal would forfeit whose kickoff has already passed:
+ * the team's unfinished REGULAR series that are live or past their scheduled
+ * time. Such a series may have been played and only be waiting on its import.
+ * The forfeit replaces that result, and the import is refused once the match
+ * is final, so the admin control counts these per team before the confirm and
+ * the toast names them afterwards. A fixture with no kickoff time has not
+ * kicked off.
+ */
+export function withdrawalKickedOffFixtures<T extends WithdrawalFixture>(
+  matches: readonly T[],
+  teamId: string,
+  nowMs: number,
+): T[] {
+  return matches.filter(
+    (match) =>
+      match.phase === MATCH_PHASE.REGULAR &&
+      match.status !== MATCH_STATUS.COMPLETED &&
+      (match.homeTeamId === teamId || match.awayTeamId === teamId) &&
+      (match.status === MATCH_STATUS.LIVE ||
+        (match.scheduledAt !== null && match.scheduledAt.getTime() <= nowMs)),
+  );
 }

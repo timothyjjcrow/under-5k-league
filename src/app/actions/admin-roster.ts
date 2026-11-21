@@ -86,6 +86,7 @@ import type { ActionResult } from "@/lib/action-result";
 import {
   teamWithdrawalLockedReason,
   withdrawalForfeitScore,
+  withdrawalKickedOffFixtures,
 } from "@/lib/team-withdrawal";
 import { saveTeamIdentity } from "@/lib/team-identity-service";
 import { expectedTeamIdentity, teamIdentitySummary } from "@/lib/team-identity";
@@ -1674,6 +1675,7 @@ export async function withdrawTeam(
   const lockedReason = teamWithdrawalLockedReason(season.status);
   if (lockedReason) return { error: lockedReason };
   const teamId = str(formData, "teamId");
+  const nowMs = Date.now();
 
   // This first read is presentation-only: it lets the success message say a
   // fixture completed for real while the admin was clicking. The transaction
@@ -1718,6 +1720,7 @@ export async function withdrawTeam(
             select: {
               id: true,
               week: true,
+              phase: true,
               status: true,
               scheduledAt: true,
               bestOf: true,
@@ -1929,6 +1932,21 @@ export async function withdrawTeam(
     teamNameOf.set(t.id, t.name);
   }
   const stoodDown = mootCover.filter((a) => forfeitedIds.has(a.matchId));
+  // Forfeited series that were already past kickoff: played, perhaps, with
+  // games the import hasn't brought in yet, which a final match now refuses.
+  // The control counted them before the confirm; name them so the admin can
+  // check each one, in week order (never row order). `open` was read before
+  // the forfeits, so it still holds each fixture's status and kickoff.
+  const kickedOff = withdrawalKickedOffFixtures(
+    open.filter((m) => forfeitedIds.has(m.id)),
+    team.id,
+    nowMs,
+  )
+    .sort((a, b) => a.week - b.week || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((m) => {
+      const opponentId = m.homeTeamId === team.id ? m.awayTeamId : m.homeTeamId;
+      return `week ${m.week} v ${teamNameOf.get(opponentId) ?? "their opponent"}`;
+    });
   for (const a of stoodDown) {
     await sendDiscordMessage(
       standinRemovedMessage({
@@ -1947,12 +1965,15 @@ export async function withdrawTeam(
   await sendDiscordMessage(teamWithdrewMessage(team.name, forfeited));
   await logAdminAction({
     action: "withdrawTeam",
-    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents, ${closedRequests} pending standin request(s) on them cancelled and ${cancelledScrims} unplayed scrim(s) cancelled${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}`,
+    summary: `Withdrew ${team.name} — ${forfeited} remaining fixture(s) forfeited to the opponents, ${closedRequests} pending standin request(s) on them cancelled and ${cancelledScrims} unplayed scrim(s) cancelled${raced ? ` (${raced} completed for real mid-flight and kept their result)` : ""}${kickedOff.length ? `; ${kickedOff.length} of the forfeited fixture(s) ${kickedOff.length === 1 ? "was" : "were"} past kickoff with no result (${kickedOff.join(", ")})` : ""}`,
     seasonId: season.id,
   });
   refresh();
   const notes = [
     `${forfeited} fixture(s) forfeited to the opponents`,
+    kickedOff.length
+      ? `${kickedOff.length} of them ${kickedOff.length === 1 ? "was" : "were"} past kickoff with no result yet (${kickedOff.join(", ")}): if one was actually played, fix it in Schedule & results`
+      : null,
     raced
       ? `${raced} completed for real while you clicked and kept their result`
       : null,
