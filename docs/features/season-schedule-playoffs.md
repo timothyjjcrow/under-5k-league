@@ -704,6 +704,15 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   `status: { not: COMPLETED }`. Seam `admin.withdrawTeam.beforeTx`; the test in
   `team-withdraw.itest.ts` must be RACED (a staged completed match is filtered by
   the read, so it passes against a blind write).
+- **A series past its kickoff is warned about, not skipped.** One played the
+  night before but not yet imported looks unfinished, so it is forfeited too,
+  and its games are then refused (a final match takes no more). Skipping it
+  would break the rule that a series under way is forfeited, so the control
+  warns instead: `withdrawalKickedOffFixtures` (`team-withdrawal.ts`: the
+  team's unfinished regular series that are live or past their kickoff)
+  counts them per team in the picker beside the standin bookings, the confirm
+  says to wait for those results, and the toast and the admin log name each
+  forfeited one by week and opponent, in week order, never row order.
 
 ## Season history
 
