@@ -649,7 +649,9 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   counts it under Overdue and the week gets "Results overdue". Every surface
   that showed it Live says "Unfinished" with its score instead: /schedule's
   rows, the match page's scoreboard, the team page, profiles, the Captains
-  page and its share picture; Home tells its players "Your Week N series
+  page, its share picture and the season archive's rows; the head-to-head
+  grid draws its score dashed (`crossTable` takes the clock as `nowMs`;
+  without it every LIVE series is live); Home tells its players "Your Week N series
   isn't finished"; the header's "Series live" chip ignores it.
   `stalled-series-guards.test.ts` pins the surfaces. US Season 2,
   2026-11-20: two week-2 Bo2s stopped at 1-0 and every page said Week 2 the

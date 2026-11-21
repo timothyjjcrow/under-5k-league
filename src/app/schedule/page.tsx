@@ -1057,6 +1057,7 @@ export default async function SchedulePage() {
                           teamName={teamName}
                           teamLogoUrl={teamLogoUrl}
                           matches={matches}
+                          nowMs={scheduleNow}
                         />
                       </div>
                     ))}

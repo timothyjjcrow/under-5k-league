@@ -12,7 +12,8 @@ import {
  * result-sync window) is unfinished, not live. On 2026-11-20 two US week-2
  * Bo2s sat at 1-0 for a week while the admins moved the rest to week 3's
  * night, and every page still said "Week 2", "Series live" and "Your series
- * is live". The rule is pure and tested in schedule.test.ts; these guards pin
+ * is live" (the head-to-head grid too, until a second pass the next morning).
+ * The rule is pure and tested in schedule.test.ts; these guards pin
  * that the surfaces showing a series' live state still ask it, so a refactor
  * can't quietly bring back a week-old pulsing "Live".
  */
@@ -49,6 +50,24 @@ describe("stalled series surfaces", () => {
     expect(team).toMatch(/matchState === "Unfinished"/);
     expect(code(sourceFile("src/components/profile-match-spotlight.tsx").text)).toMatch(
       /state !== "Unfinished"/,
+    );
+  });
+
+  it("the head-to-head grid and the season archive get the clock", () => {
+    // Without nowMs every LIVE series is live again (crossTable's default).
+    const grids = code(
+      haystackOf([
+        ...sourceFiles("src/app/schedule/**/*.tsx", 1),
+        ...folderSourceFiles("src/app/seasons/[id]", 1),
+      ]),
+    );
+    const sites = grids.match(/<SeasonGrid\b[\s\S]*?\/>/g) ?? [];
+    expect(sites.length).toBeGreaterThanOrEqual(2);
+    for (const site of sites) expect(site).toMatch(/nowMs=\{/);
+    const archive = code(haystackOf(folderSourceFiles("src/app/seasons/[id]", 1)));
+    expect(archive).toMatch(/const unfinished = seriesStalled\(m, nowMs\)/);
+    expect(code(sourceFile("src/lib/cross-table.ts").text)).toMatch(
+      /const live = m\.status === MATCH_STATUS\.LIVE && !unfinished/,
     );
   });
 

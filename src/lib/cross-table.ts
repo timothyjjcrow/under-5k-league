@@ -3,6 +3,7 @@
 // and season pages feed it prisma Match rows, this does the pairing math.
 
 import { MATCH_PHASE, MATCH_STATUS } from "./constants";
+import { seriesStalled } from "./schedule";
 
 export type CrossMatch = {
   id: string;
@@ -16,6 +17,8 @@ export type CrossMatch = {
   winnerTeamId: string | null;
   /** Ruled result: the score was awarded, not played. */
   forfeit?: boolean;
+  /** The kickoff, for telling a live series from one stopped partway. */
+  scheduledAt?: Date | null;
 };
 
 export type CrossCell = {
@@ -24,6 +27,9 @@ export type CrossCell = {
   played: boolean;
   /** Mid-series (some games imported, series undecided) — labels shouldn't claim "not played". */
   live: boolean;
+  /** Stopped partway, its kickoff past the result window (`seriesStalled`):
+   *  never `live`, but its running score still shows. */
+  unfinished: boolean;
   /** Row team's result — null until the match is COMPLETED. */
   result: "W" | "L" | "D" | null;
   /** Row team's games first, e.g. "2–0": the final score once played, the
@@ -43,11 +49,13 @@ export type CrossTable = {
  * Build the grid over REGULAR-season matches only (playoffs live in the
  * bracket). Every ordered pair gets a list — usually one meeting, more in a
  * double round robin — sorted by week. Matches naming teams outside
- * `teamIds` are ignored.
+ * `teamIds` are ignored. With `nowMs`, a series stopped partway is
+ * `unfinished`, not `live`; without it every LIVE series is live.
  */
 export function crossTable(
   teamIds: string[],
   matches: CrossMatch[],
+  nowMs?: number,
 ): CrossTable {
   const ids = new Set(teamIds);
   const cells = new Map<string, Map<string, CrossCell[]>>(
@@ -75,12 +83,14 @@ export function crossTable(
       const mine = row === m.homeTeamId ? m.homeScore : m.awayScore;
       const theirs = row === m.homeTeamId ? m.awayScore : m.homeScore;
       const played = m.status === MATCH_STATUS.COMPLETED;
-      const live = m.status === MATCH_STATUS.LIVE;
+      const unfinished = nowMs != null && seriesStalled(m, nowMs);
+      const live = m.status === MATCH_STATUS.LIVE && !unfinished;
       cells.get(row)!.get(col)!.push({
         matchId: m.id,
         week: m.week,
         played,
         live,
+        unfinished,
         result: !played
           ? null
           : m.winnerTeamId === row
@@ -88,7 +98,7 @@ export function crossTable(
             : m.winnerTeamId === null
               ? "D"
               : "L",
-        score: played || live ? `${mine}–${theirs}` : null,
+        score: played || live || unfinished ? `${mine}–${theirs}` : null,
         forfeit: played && m.forfeit === true,
       });
     }
