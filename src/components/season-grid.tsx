@@ -22,6 +22,7 @@ export function SeasonGrid({
   teamLogoUrl,
   matches,
   groupTitle,
+  nowMs,
 }: {
   /** Row and column order: the standings. */
   teamIds: string[];
@@ -30,8 +31,11 @@ export function SeasonGrid({
   matches: CrossMatch[];
   /** "Group A" in a group season, so each group's grid has its own name. */
   groupTitle?: string;
+  /** Request time: a series stopped partway (`seriesStalled`) then reads
+   *  unfinished, not live. Unset, every LIVE series shows live. */
+  nowMs?: number;
 }) {
-  const table = crossTable(teamIds, matches);
+  const table = crossTable(teamIds, matches, nowMs);
   const rankOf = new Map(teamIds.map((id, i) => [id, i + 1]));
 
   const cellChip = (rowId: string, cell: CrossCell) => {
@@ -42,7 +46,9 @@ export function SeasonGrid({
         } ${cell.score}${cell.forfeit ? " by forfeit" : ""} in week ${cell.week}`
       : cell.live
         ? `${rowName} ${cell.score} in week ${cell.week}, series in progress`
-        : `Week ${cell.week}, not played yet`;
+        : cell.unfinished
+          ? `${rowName} ${cell.score} in week ${cell.week}, series unfinished`
+          : `Week ${cell.week}, not played yet`;
     return (
       <Link
         key={cell.matchId}
@@ -60,7 +66,9 @@ export function SeasonGrid({
             "bg-danger/10 text-danger-soft hover:bg-danger/20",
           cell.result === "D" && "bg-accent/15 text-accent hover:bg-accent/25",
           cell.live && "border-danger/50 bg-danger/10 text-danger-soft",
-          !cell.played && !cell.live && "text-muted hover:text-info",
+          // Stopped partway: a dashed outline, no colour of a result.
+          cell.unfinished && "border-dashed border-muted/60 text-fg",
+          !cell.played && !cell.live && !cell.unfinished && "text-muted hover:text-info",
         )}
       >
         {cell.played ? (
@@ -217,8 +225,9 @@ export function SeasonGridKey({ className }: { className?: string }) {
       Read across: each row is that team&apos;s results, its score first.{" "}
       <span className="text-success">Green</span> won,{" "}
       <span className="text-danger-soft">red</span> lost,{" "}
-      <span className="text-accent">amber</span> drew; F is a forfeit and
-      &ldquo;wk 5&rdquo; a series still to play. Each cell opens its match.
+      <span className="text-accent">amber</span> drew; F is a forfeit,
+      a dashed score a series left unfinished and &ldquo;wk 5&rdquo; a series
+      still to play. Each cell opens its match.
     </p>
   );
 }

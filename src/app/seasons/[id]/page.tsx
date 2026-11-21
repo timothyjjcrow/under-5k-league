@@ -1,4 +1,4 @@
-import { MATCH_LIST_ORDER } from "@/lib/schedule";
+import { MATCH_LIST_ORDER, seriesStalled } from "@/lib/schedule";
 import { SectionNav } from "@/components/section-nav";
 import { rosterOrder } from "@/lib/team-roster";
 import Link from "@/components/app-link";
@@ -85,23 +85,29 @@ function ResultRow({
   match: m,
   teamName,
   teamLogoUrl,
+  nowMs,
 }: {
   match: Match;
   teamName: Map<string, string>;
   teamLogoUrl: Map<string, string | null>;
+  /** Request time, so a series stopped partway reads "Unfinished". */
+  nowMs: number;
 }) {
   const done = m.status === "COMPLETED";
-  const live = m.status === "LIVE";
+  const unfinished = seriesStalled(m, nowMs);
+  const live = m.status === "LIVE" && !unfinished;
   const label = done
     ? m.forfeit
       ? "Forfeit"
       : "Final score"
     : live
       ? "Live"
-      : m.scheduledAt
-        ? "Scheduled"
-        : "Time TBD";
-  const matchLabel = `View ${teamName.get(m.homeTeamId) ?? "unknown home team"} vs ${teamName.get(m.awayTeamId) ?? "unknown away team"}: ${done || live ? `${live ? "live, " : ""}${m.homeScore} to ${m.awayScore}${m.forfeit ? " by forfeit" : ""}` : m.scheduledAt ? "scheduled" : "kickoff not set"}`;
+      : unfinished
+        ? "Unfinished"
+        : m.scheduledAt
+          ? "Scheduled"
+          : "Time TBD";
+  const matchLabel = `View ${teamName.get(m.homeTeamId) ?? "unknown home team"} vs ${teamName.get(m.awayTeamId) ?? "unknown away team"}: ${done || live || unfinished ? `${live ? "live, " : unfinished ? "unfinished, " : ""}${m.homeScore} to ${m.awayScore}${m.forfeit ? " by forfeit" : ""}` : m.scheduledAt ? "scheduled" : "kickoff not set"}`;
   return (
     <div className="min-w-0 px-3 py-3 sm:px-4">
       <div className="mb-1 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 px-1 text-[10px] text-muted">
@@ -171,7 +177,7 @@ function ResultRow({
                 live ? "text-danger" : winner ? "text-fg" : "text-muted",
               )}
             >
-              {done || live ? side.score : "—"}
+              {done || live || unfinished ? side.score : "—"}
             </span>
           </div>
         );
@@ -195,6 +201,9 @@ export default async function SeasonArchivePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
+  // Request time, for telling a live series from one stopped partway.
+  // eslint-disable-next-line react-hooks/purity
+  const nowMs = Date.now();
   const [season, gameCount, fantasyEntry] = await Promise.all([
     prisma.season.findUnique({
       where: { id },
@@ -453,6 +462,7 @@ export default async function SeasonArchivePage({
                         match={match}
                         teamName={teamName}
                         teamLogoUrl={teamLogoUrl}
+                        nowMs={nowMs}
                       />
                     ))}
                   </CardBody>
@@ -500,6 +510,7 @@ export default async function SeasonArchivePage({
                     teamName={teamName}
                     teamLogoUrl={teamLogoUrl}
                     matches={regular}
+                    nowMs={nowMs}
                   />
                 </div>
               ))}
@@ -554,6 +565,7 @@ export default async function SeasonArchivePage({
                           match={m}
                           teamName={teamName}
                           teamLogoUrl={teamLogoUrl}
+                          nowMs={nowMs}
                         />
                       ))}
                     </CardBody>

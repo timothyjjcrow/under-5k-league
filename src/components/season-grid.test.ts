@@ -23,13 +23,14 @@ const match = (over: Partial<CrossMatch>): CrossMatch => ({
   ...over,
 });
 
-function render(matches: CrossMatch[]) {
+function render(matches: CrossMatch[], nowMs?: number) {
   return renderToStaticMarkup(
     createElement(SeasonGrid, {
       teamIds: ["a", "b", "c"],
       teamName,
       teamLogoUrl,
       matches,
+      ...(nowMs == null ? {} : { nowMs }),
     }),
   );
 }
@@ -52,6 +53,28 @@ describe("SeasonGrid", () => {
       'aria-label="Dire Wolves 0–1 in week 1, series in progress"',
     );
     expect(html).toMatch(/>Live<\/span><span>1–0<\/span>/);
+  });
+
+  it("shows a series stopped partway as unfinished, dashed, never Live", () => {
+    const html = render(
+      [
+        match({
+          id: "stalled",
+          status: "LIVE",
+          homeScore: 1,
+          awayScore: 0,
+          winnerTeamId: null,
+          scheduledAt: new Date("2026-11-14T22:00:00Z"),
+        }),
+      ],
+      Date.parse("2026-11-21T08:00:00Z"),
+    );
+    expect(html).toContain('aria-label="Radiant Raiders 1–0 in week 1, series unfinished"');
+    expect(html).toContain('aria-label="Dire Wolves 0–1 in week 1, series unfinished"');
+    expect(html).not.toContain(">Live<");
+    expect(html).not.toContain("series in progress");
+    expect(html).toContain("border-dashed");
+    expect(html).toMatch(/<span>1–0<\/span>/);
   });
 
   it("marks a ruled result as a forfeit", () => {

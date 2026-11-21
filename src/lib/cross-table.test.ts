@@ -21,10 +21,10 @@ describe("crossTable", () => {
   it("mirrors one meeting into both perspectives", () => {
     const t = crossTable(["A", "B"], [m({})]);
     expect(t.cells.get("A")!.get("B")).toEqual([
-      { matchId: "m1", week: 1, played: true, live: false, result: "W", score: "2–0", forfeit: false },
+      { matchId: "m1", week: 1, played: true, live: false, unfinished: false, result: "W", score: "2–0", forfeit: false },
     ]);
     expect(t.cells.get("B")!.get("A")).toEqual([
-      { matchId: "m1", week: 1, played: true, live: false, result: "L", score: "0–2", forfeit: false },
+      { matchId: "m1", week: 1, played: true, live: false, unfinished: false, result: "L", score: "0–2", forfeit: false },
     ]);
   });
 
@@ -39,6 +39,32 @@ describe("crossTable", () => {
     expect(cell.result).toBeNull();
     expect(cell.score).toBe("1–0");
     expect(t.cells.get("B")!.get("A")![0].score).toBe("0–1");
+  });
+
+  // US Season 2, 2026-11-20: two week-2 Bo2s sat at 1-0 for a week and the
+  // grid still called them live (seriesStalled, schedule.ts).
+  it("calls a series stopped partway unfinished, not live, given the time", () => {
+    const now = Date.parse("2026-11-21T08:00:00Z");
+    const stalled = m({
+      status: "LIVE",
+      homeScore: 1,
+      awayScore: 0,
+      winnerTeamId: null,
+      scheduledAt: new Date("2026-11-14T22:00:00Z"),
+    });
+    const cell = crossTable(["A", "B"], [stalled], now).cells.get("A")!.get("B")![0];
+    expect(cell).toMatchObject({ live: false, unfinished: true, played: false, score: "1–0" });
+    expect(crossTable(["A", "B"], [stalled], now).cells.get("B")!.get("A")![0].score).toBe("0–1");
+    // Within the window it is live; without a clock every LIVE series is.
+    const fresh = { ...stalled, scheduledAt: new Date(now - 3600_000) };
+    expect(crossTable(["A", "B"], [fresh], now).cells.get("A")!.get("B")![0]).toMatchObject({
+      live: true,
+      unfinished: false,
+    });
+    expect(crossTable(["A", "B"], [stalled]).cells.get("A")!.get("B")![0]).toMatchObject({
+      live: true,
+      unfinished: false,
+    });
   });
 
   it("marks a ruled result as a forfeit for both sides", () => {
@@ -65,7 +91,7 @@ describe("crossTable", () => {
       [m({ id: "m4", status: "SCHEDULED", week: 4, homeScore: 0, awayScore: 0, winnerTeamId: null })],
     );
     expect(t.cells.get("A")!.get("B")).toEqual([
-      { matchId: "m4", week: 4, played: false, live: false, result: null, score: null, forfeit: false },
+      { matchId: "m4", week: 4, played: false, live: false, unfinished: false, result: null, score: null, forfeit: false },
     ]);
   });
 
