@@ -25,7 +25,7 @@ describe("inhouseJoinRefusal — the medal", () => {
 
   it("names the medal and the cap (the Divine 4 who joined at a typed 5,000)", () => {
     expect(inhouseJoinRefusal({ mmr: 5000, source: "typed", rankTier: 74 })).toBe(
-      "Inhouses are for players up to 5,000 MMR, the same as the league: your Divine 4 medal puts you above it.",
+      "Inhouses are for players up to 5,000 MMR, the same as the league: your Divine 4 medal puts you above it. An admin can approve you: ask on My account.",
     );
     expect(inhouseJoinRefusal({ mmr: 0, source: "signup", rankTier: 80 })).toMatch(
       /your Immortal medal/,
@@ -172,11 +172,13 @@ describe("the MMR cap's call sites", () => {
     expect(start).toBeGreaterThan(-1);
     const body = service.slice(start, service.indexOf("\nexport ", start + 1));
     const facts = body.indexOf("await loadInhouseJoinFacts(viewer.id)");
-    const fixed = body.indexOf("inhouseFixedMmr({ adminMmr, signupMmr })");
-    const refusal = body.indexOf("inhouseJoinRefusal({ mmr: claimed, source, rankTier })");
+    const fixed = body.indexOf("inhouseFixedMmr({ adminMmr, approvedMmr, signupMmr })");
+    const refusal = body.indexOf("inhouseJoinRefusal({");
     expect(facts).toBeGreaterThan(-1);
     expect(fixed).toBeGreaterThan(facts);
     expect(refusal).toBeGreaterThan(fixed);
+    // The approval is the one exemption, and it is judged with the rest.
+    expect(body.slice(refusal, refusal + 160)).toContain("approved: approvedMmr !== null");
     expect(body.indexOf("if (refusal) return { ok: false, error: refusal };")).toBeGreaterThan(refusal);
     // The positions save and the queue write both come after it.
     expect(body.indexOf("setInhouseRoles(viewer, roles)")).toBeGreaterThan(refusal);
@@ -211,5 +213,40 @@ describe("the MMR cap's call sites", () => {
     expect(answered).toBeLessThan(action.indexOf("const joinButton"));
     // The MMR box stops at the cap.
     expect(queue).toContain("max={HARD_MMR_CEILING}");
+  });
+});
+
+describe("an admin's approval over the medal limit", () => {
+  it("lets the player past the medal and the number", () => {
+    for (const rankTier of [73, 75, 80]) {
+      for (const mmr of [0, 5000, 5620]) {
+        expect(
+          inhouseJoinRefusal({ mmr, source: "admin", rankTier, approved: true }),
+          `tier ${rankTier} at ${mmr}`,
+        ).toBeNull();
+      }
+    }
+  });
+
+  it("sets the join's MMR under an admin's inhouse MMR and over the signup's", () => {
+    expect(
+      inhouseFixedMmr({ adminMmr: null, approvedMmr: 5020, signupMmr: 4400 }),
+    ).toEqual({ mmr: 5020, source: "admin" });
+    expect(
+      inhouseFixedMmr({ adminMmr: 4800, approvedMmr: 5020, signupMmr: 4400 }),
+    ).toEqual({ mmr: 4800, source: "admin" });
+    expect(
+      inhouseFixedMmr({ adminMmr: null, approvedMmr: null, signupMmr: 4400 }),
+    ).toEqual({ mmr: 4400, source: "signup" });
+  });
+
+  it("offers Join before typing to an approved player, and only to them", () => {
+    const facts = { adminMmr: null, signupMmr: 0, rankTier: 75 };
+    expect(inhouseJoinRefusalBeforeTyping(facts)).toMatch(
+      /Divine 5 medal puts you above it\. An admin can approve you/,
+    );
+    expect(
+      inhouseJoinRefusalBeforeTyping({ ...facts, approvedMmr: 5420 }),
+    ).toBeNull();
   });
 });

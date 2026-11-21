@@ -52,6 +52,13 @@ export type RegistrationGateInput = {
    * applies. Absent means entered, as every other caller has it.
    */
   mmrKept?: boolean;
+  /**
+   * An admin approved this player over the medal line (approvedMedalMmr,
+   * medal-approval.ts; Tim, 2026-11-21): the medal rule lets them in. The
+   * save then stores the MMR the admin approved them at, kept rather than
+   * typed (`mmrKept`). Absent means no approval, as every other caller has it.
+   */
+  medalApproved?: boolean;
 };
 
 export type WithdrawGateInput = {
@@ -289,6 +296,7 @@ export function registrationGate({
   existingType,
   existingStatus,
   mmrKept = false,
+  medalApproved = false,
 }: RegistrationGateInput): string | null {
   const seasonClosed = registrationSeasonClosedError(season.status);
   if (seasonClosed) return seasonClosed;
@@ -316,10 +324,12 @@ export function registrationGate({
   //
   // ACTIVE is the exemption, not `hasExisting`: WITHDRAWN and REMOVED rows are
   // re-entries into the pool, i.e. fresh admissions, and are judged as such.
+  // An admin's approval over the medal line is the other exemption, the one
+  // a player asks for (medal-approval.ts).
   const admitted =
     hasExisting && existingStatus === REGISTRATION_STATUS.ACTIVE;
-  if (!admitted && medalProvesIneligible(rankTier)) {
-    return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it.`;
+  if (!admitted && !medalApproved && medalProvesIneligible(rankTier)) {
+    return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it. An admin can approve you: ask on this page.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;
   if (

@@ -3,6 +3,7 @@
 // offer Join read one rule.
 
 import { HARD_MMR_CEILING } from "./constants";
+import { MEDAL_APPROVAL_ASK_HINT } from "./medal-approval";
 import { rankMedalName } from "./rank";
 import { medalProvesIneligible } from "./registration";
 
@@ -37,22 +38,30 @@ export type InhouseFixedMmr = { mmr: number; source: "admin" | "signup" };
 /**
  * The MMR a queue join uses as it stands, whatever is typed: the inhouse MMR
  * an admin set for the player (Tim, 2026-10-17: admins edit any player's
- * inhouse MMR, signup or not), else the newest league signup's. Neither is
- * clamped to the medal: each is a deliberate number (an admin's call, or a
- * signup clamped at its own save or set by an admin), and the clamp is for
- * self-reported ones. Null: the player types theirs.
+ * inhouse MMR, signup or not), else the MMR an admin approved them at over
+ * the medal limit (medal-approval.ts; Tim, 2026-11-21), else the newest
+ * league signup's. None is clamped to the medal: each is a deliberate number
+ * (an admin's call, or a signup clamped at its own save or set by an admin),
+ * and the clamp is for self-reported ones. An approval's number reads as an
+ * admin's, which it is. Null: the player types theirs.
  */
 export function inhouseFixedMmr({
   adminMmr,
+  approvedMmr = null,
   signupMmr,
 }: {
   /** User.inhouseMmr: null = no admin number. */
   adminMmr: number | null;
+  /** approvedMedalMmr: null = no approval over the medal limit. */
+  approvedMmr?: number | null;
   /** The newest league signup's MMR, 0 = none. */
   signupMmr: number;
 }): InhouseFixedMmr | null {
   const admin = adminInhouseMmr(adminMmr);
   if (admin !== null) return { mmr: admin, source: "admin" };
+  if (approvedMmr !== null && approvedMmr > 0) {
+    return { mmr: approvedMmr, source: "admin" };
+  }
   if (signupMmr > 0) return { mmr: signupMmr, source: "signup" };
   return null;
 }
@@ -74,19 +83,28 @@ const MMR_FORMAT = new Intl.NumberFormat("en-US");
  * No medal is no opinion: the typed number stands, as at signup (Tim's call,
  * the same day). Unlike registrationGate, a league signup earns no medal
  * exemption (Tim's call too): every join is judged.
+ *
+ * The one exemption is an admin's approval over the medal limit, which the
+ * player asks for (medal-approval.ts; Tim, 2026-11-21): neither the medal
+ * nor the number refuses them, since the admin chose the number they play
+ * at, over the line or not.
  */
 export function inhouseJoinRefusal({
   mmr,
   source,
   rankTier,
+  approved = false,
 }: {
   mmr: number;
   source: InhouseMmrSource;
   rankTier: number | null | undefined;
+  /** An admin approved them over the medal limit (approvedMedalMmr). */
+  approved?: boolean;
 }): string | null {
+  if (approved) return null;
   const cap = `Inhouses are for players up to ${MMR_FORMAT.format(HARD_MMR_CEILING)} MMR, the same as the league`;
   if (medalProvesIneligible(rankTier)) {
-    return `${cap}: your ${rankMedalName(rankTier)} medal puts you above it.`;
+    return `${cap}: your ${rankMedalName(rankTier)} medal puts you above it. ${MEDAL_APPROVAL_ASK_HINT}`;
   }
   if (!(mmr > HARD_MMR_CEILING)) return null;
   const at = MMR_FORMAT.format(mmr);
@@ -110,20 +128,24 @@ export function inhouseJoinRefusal({
  */
 export function inhouseJoinRefusalBeforeTyping({
   adminMmr,
+  approvedMmr = null,
   signupMmr,
   rankTier,
 }: {
   /** User.inhouseMmr: null = no admin number. */
   adminMmr: number | null;
+  /** approvedMedalMmr: null = no approval over the medal limit. */
+  approvedMmr?: number | null;
   /** The newest league signup's MMR, 0 = none. */
   signupMmr: number;
   rankTier: number | null | undefined;
 }): string | null {
-  const fixed = inhouseFixedMmr({ adminMmr, signupMmr });
+  const fixed = inhouseFixedMmr({ adminMmr, approvedMmr, signupMmr });
   // With no fixed number only the medal can refuse before typing.
   return inhouseJoinRefusal({
     mmr: fixed?.mmr ?? 0,
     source: fixed?.source ?? "signup",
     rankTier,
+    approved: approvedMmr !== null,
   });
 }

@@ -209,6 +209,9 @@ import {
 } from "@/lib/league-delivery";
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
+import { AdminMedalApprovals } from "@/components/admin-medal-approvals";
+import { MEDAL_APPROVALS_ANCHOR } from "@/lib/medal-approval";
+import { loadMedalApprovalAdminRows } from "@/lib/medal-approval-service";
 import { ChaseCopy } from "@/components/chase-copy";
 import { ReturningCopy } from "@/components/returning-copy";
 import { loadReturningPlayers } from "@/lib/returning-players-service";
@@ -306,6 +309,7 @@ import {
   MATCH_SCHEDULE,
   HARD_MMR_CEILING,
   DRAFT_CLOCK_LIMITS,
+  MEDAL_APPROVAL_STATUS,
 } from "@/lib/constants";
 import {
   nextRegularKickoff,
@@ -605,6 +609,8 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
     // important in the offseason, when inhouse is the live mode.
     { id: "adm-inhouse-night", label: "Inhouse night" },
     { id: "adm-inhouse-players", label: "Inhouse players" },
+    // Season-independent too: an approval covers the league and inhouses.
+    { id: MEDAL_APPROVALS_ANCHOR, label: "Medal approvals" },
     { id: "adm-discord", label: "Discord" },
     { id: "adm-activity", label: "Activity" },
     { id: "adm-poll", label: "Match night poll" },
@@ -821,6 +827,12 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
           </Link>
         </CardBody>
       </AdminSection>
+
+      {/* Players over the medal line asking to be let in: season-independent,
+          since an approval covers inhouses too. Streamed like the night. */}
+      <Suspense fallback={<CardSkeleton rows={2} />}>
+        <MedalApprovalsSection />
+      </Suspense>
 
       {/* Evergreen because its inhouse channel, ping role and live board do
           not belong to a season; every inhouse control stays usable in the
@@ -7443,6 +7455,27 @@ async function AdminActivity() {
  * link for the whole league, kept across seasons.
  */
 /** The Inhouse night card (src/components/admin/inhouse-night-controls.tsx). */
+async function MedalApprovalsSection() {
+  const rows = await loadMedalApprovalAdminRows();
+  const pending = rows.filter(
+    (r) => r.status === MEDAL_APPROVAL_STATUS.PENDING,
+  ).length;
+  return (
+    <AdminSection
+      id={MEDAL_APPROVALS_ANCHOR}
+      title="Medal limit approvals"
+      subtitle={
+        pending > 0
+          ? `${pending} ${pending === 1 ? "player asks" : "players ask"} to play over the medal limit.`
+          : "Let a player over the medal limit sign up and join inhouses, at an MMR you set."
+      }
+      defaultOpen={pending > 0}
+    >
+      <AdminMedalApprovals rows={rows} />
+    </AdminSection>
+  );
+}
+
 async function AdminInhouseNight() {
   const { night } = await readInhouseNight();
   const rsvps = night ? await readInhouseNightRsvps(night.id) : null;

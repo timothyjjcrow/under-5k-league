@@ -1006,6 +1006,11 @@ enums, so every status column is a string whose allowed values live in
   permanent), who banned and lifted, and the site's record of the Discord
   role (`roleAddedAt`, `roleTriedAt`, `settledAt`). Rows are history; a new
   ban for a banned player lifts the old one ([inhouse](features/inhouse.md#bans)).
+- `MedalApproval` — one per player: a request to play over the medal line
+  (status PENDING, APPROVED or DECLINED, the player's note and medal) and
+  the admin's answer with the MMR they play at. Season-independent; it lets
+  the league signup and the inhouse queue past the medal rule
+  ([players-and-registration](features/players-and-registration.md#medal-approvals)).
 - `InhouseNightRsvp` — a player's "I'm in" for the planned inhouse night
   (which needs a linked Discord account), keyed by (`nightId`, `userId`). `nightId` is the night's id inside its
   Setting row, not a foreign key; rows cascade from their player, only the
@@ -1274,8 +1279,9 @@ permission; duplicate instances cannot multiply the roster fan-out.
    (`setPingRole`), the inhouse ban role (`setInhouseBanRole`), the
    Standin role kept on the season's standins and free agents
    (`setStandinRole`, driven by `standin-role-service.ts`), the OAuth
-   `guilds.join`, and the `getPingHealth` diagnostic (hierarchy + permission
-   math). Role assignment needs **Manage
+   `guilds.join`, a direct message to the one person who must act
+   (`sendDirectMessage`: a medal approval's request and answer), and the
+   `getPingHealth` diagnostic (hierarchy + permission math). Role assignment needs **Manage
    Roles** with the bot role above the target; automatic joining needs **Create
    Invite**, and the bot token must belong to the OAuth application's client id.
    Administrator is neither needed nor recommended. Missing any config piece

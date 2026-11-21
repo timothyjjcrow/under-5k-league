@@ -220,7 +220,9 @@ function PlayerRow({
               <span className="text-xs text-muted">No medal</span>
             )}
             {row.rankTierManual ? <Badge tone="info">manual medal</Badge> : null}
-            {overInhouseCap({ mmr: standing.mmr, rankTier: row.rankTier }) ? (
+            {row.approvedMmr !== null ? (
+              <Badge tone="success">medal limit approved</Badge>
+            ) : overInhouseCap({ mmr: standing.mmr, rankTier: row.rankTier }) ? (
               <Badge tone="danger">over the inhouse cap</Badge>
             ) : null}
             {ban ? <InhouseBanBadge endsAt={ban.endsAt} /> : null}

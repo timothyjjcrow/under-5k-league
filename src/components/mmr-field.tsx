@@ -19,6 +19,7 @@ export function MmrField({
   storedMmr,
   frozen,
   locked = false,
+  lockedHint,
   describedBy,
 }: {
   defaultValue: string;
@@ -31,6 +32,11 @@ export function MmrField({
    * box submits nothing, which saveRegistration reads as "unchanged".
    */
   locked?: boolean;
+  /**
+   * What a locked box says in place of MMR_SELF_EDIT_LOCKED_HINT: a medal
+   * approval's line (approvedMedalLine). Omitted: the post-draft hint.
+   */
+  lockedHint?: string;
   /** Id of the lead line above the box. */
   describedBy?: string;
 }) {
@@ -51,7 +57,7 @@ export function MmrField({
   }, []);
 
   const preview = locked
-    ? { tone: "muted" as const, text: MMR_SELF_EDIT_LOCKED_HINT }
+    ? { tone: "muted" as const, text: lockedHint ?? MMR_SELF_EDIT_LOCKED_HINT }
     : mmrPreviewLine({ typed, rankTier, storedMmr, frozen });
   return (
     <>

@@ -449,7 +449,7 @@ export function mmrLeadLine(rankTier: number | null | undefined): string | null 
 export function mmrRulesLine(softLimit: number): string {
   // The same rule as registrationGate and How it works: the MMR ceiling, and
   // a Divine 3 or higher medal is over it whatever number is typed.
-  const ceiling = `We don't take anyone over ${HARD_MMR_CEILING} MMR, or with a Divine 3 or higher medal.`;
+  const ceiling = `We don't take anyone over ${HARD_MMR_CEILING} MMR, or with a Divine 3 or higher medal unless an admin approves you.`;
   const soft = effectiveSoftMmrLimit(softLimit);
   return soft > 0
     ? `${ceiling} Above ${soft} you can still sign up, and an admin reviews your signup.`

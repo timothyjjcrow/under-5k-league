@@ -724,7 +724,17 @@ Every transition is a guarded claim; keep it that way (general rules:
   anything is written, the positions too. No medal is no opinion: the typed
   number stands (Tim's call), so an account OpenDota shows unranked can still
   get in by typing low. Unlike `registrationGate`, an ACTIVE league signup is
-  no medal exemption (Tim's call too): every join is judged. A medal is
+  no medal exemption (Tim's call too): every join is judged. The one
+  exemption is an admin's approval over the medal limit, which the player
+  asks for on /me (Tim, 2026-11-21; `players-and-registration.md`, "Medal
+  approvals"): neither the medal nor the number refuses an approved player
+  (`inhouseJoinRefusal`'s `approved`), and the approved MMR is their fixed
+  number, under an admin's inhouse MMR and over a league signup's
+  (`inhouseFixedMmr`; the room says "set by an admin"). `joinQueue` re-reads
+  the approval inside its Serializable transaction, before any write, and
+  refuses a join whose approval changed since its read. The medal refusal
+  ends by pointing at the ask ("An admin can approve you: ask on My
+  account."). A medal is
   corrected through `setPlayerRank` (on a signup) or `/admin/inhouse-players`
   (anyone's, below). It is judged at the join only: a
   medal that changes while a player is queued or in a game removes nobody,
@@ -781,6 +791,9 @@ Every transition is a guarded claim; keep it that way (general rules:
     keeps its snapshot.
   - **Judged at the join, like the cap:** a save that puts a queued player
     over it removes nobody, and its toast says to remove them from the room.
+    A player approved over the medal limit is never over it: the page badges
+    them "medal limit approved", shows the approved MMR ("approved over the
+    medal limit") when no inhouse MMR is set, and the toast drops the cap.
     Tests: `test/integration/inhouse-rating.itest.ts`, `inhouse-rating.test.ts`,
     `e2e/admin-inhouse-rating.spec.ts`.
 - **Order by exact keys, never row order.** Queue reads and formation sort

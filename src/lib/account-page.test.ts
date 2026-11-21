@@ -457,7 +457,7 @@ describe("MMR field copy", () => {
 
   it("keeps the ceiling and names the admin review above the soft limit", () => {
     expect(mmrRulesLine(0)).toBe(
-      "We don't take anyone over 5000 MMR, or with a Divine 3 or higher medal.",
+      "We don't take anyone over 5000 MMR, or with a Divine 3 or higher medal unless an admin approves you.",
     );
     expect(mmrRulesLine(4500)).toMatch(
       /Above 4500 you can still sign up, and an admin reviews your signup\.$/,

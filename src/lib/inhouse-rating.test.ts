@@ -152,6 +152,16 @@ describe("overInhouseCap", () => {
 describe("inhouseRatingSavedMessage", () => {
   const none: InhouseRating = { mmr: null, rankTier: null, manual: false };
 
+  it("leaves out the cap for a player approved over the medal limit", () => {
+    const after = { mmr: 5420, rankTier: 75, manual: false };
+    expect(
+      inhouseRatingSavedMessage({ name: "Div", before: none, after, queued: false }),
+    ).toMatch(/Over the 5,000 cap/);
+    expect(
+      inhouseRatingSavedMessage({ name: "Div", before: none, after, queued: false, approved: true }),
+    ).not.toMatch(/cap/);
+  });
+
   it("says a set MMR is on a queued player's spot already", () => {
     expect(
       inhouseRatingSavedMessage({
@@ -228,6 +238,15 @@ describe("inhouseRatingLogSummary", () => {
 });
 
 describe("inhouseMmrStanding", () => {
+  it("puts an approval over the medal limit between the admin's and the signup's", () => {
+    expect(
+      inhouseMmrStanding({ adminMmr: null, approvedMmr: 5020, signupMmr: 2500, lastGameMmr: null }),
+    ).toEqual({ mmr: 5020, source: "approved over the medal limit" });
+    expect(
+      inhouseMmrStanding({ adminMmr: 4100, approvedMmr: 5020, signupMmr: 2500, lastGameMmr: null }),
+    ).toEqual({ mmr: 4100, source: "set by an admin" });
+  });
+
   it("follows the join's own order: the admin's, the signup's, then typed", () => {
     expect(inhouseMmrStanding({ adminMmr: 4100, signupMmr: 2500, lastGameMmr: 3000 })).toEqual({
       mmr: 4100,

@@ -93,6 +93,7 @@ model User {
   inhouseLobbies         InhouseLobbyPlayer[]
   inhouseDuelQueue       InhouseDuelQueueEntry?
   inhouseBans            InhouseBan[]
+  medalApproval          MedalApproval?
   radiantDuels           InhouseDuel[]        @relation("InhouseDuelRadiant")
   direDuels              InhouseDuel[]        @relation("InhouseDuelDire")
   startedInhouses        InhouseLobby[]       @relation("InhouseStarter")
@@ -962,6 +963,34 @@ model InhouseTimeRsvp {
 // Rows are history: lifting one stamps liftedAt, and banning a banned player
 // lifts the old row and writes a new one. Active = not lifted and (endsAt
 // null, which is permanent, or endsAt in the future): activeInhouseBanWhere.
+// A player whose medal is over the league's line (a Divine 3 or higher, or
+// Immortal: medalProvesIneligible) asking an admin to let them in anyway, and
+// the admin's answer. One row per player and season-independent: an approval
+// covers the league signup and the inhouse queue alike (Tim, 2026-11-21).
+model MedalApproval {
+  id            String    @id @default(cuid())
+  userId        String    @unique
+  // PENDING, APPROVED or DECLINED (MEDAL_APPROVAL_STATUS).
+  status        String
+  // The player's own words, trimmed (MEDAL_APPROVAL_NOTE_MAX).
+  note          String    @default("")
+  // The medal when they asked, so the admin reads the request as it was made.
+  rankTier      Int?
+  requestedAt   DateTime  @default(now())
+  // The MMR an admin approved them at: a league signup is admitted at it and
+  // inhouse joins use it. Null until approved.
+  mmr           Int?
+  decidedAt     DateTime?
+  // Denormalised like AdminAction and InhouseBan: a Steam rename must not
+  // rewrite who decided.
+  decidedById   String?
+  decidedByName String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([status, requestedAt])
+}
+
 model InhouseBan {
   id           String    @id @default(cuid())
   userId       String

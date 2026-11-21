@@ -56,7 +56,7 @@ export function resultsCopy(hasLeagueTicket: boolean | null): {
  * (`registrationGate`).
  */
 export function eligibilityText(softLimit: number): string {
-  const ceiling = `Players ${mmrCeilingPhrase()} can join; Divine 3 and higher medals and Immortal players can't.`;
+  const ceiling = `Players ${mmrCeilingPhrase()} can join; Divine 3 and higher medals and Immortal players can't, unless an admin approves them.`;
   const soft = effectiveSoftMmrLimit(softLimit);
   if (soft <= 0) return ceiling;
   return `${ceiling} Above ${soft.toLocaleString("en-US")} MMR, an admin looks over your signup before the draft.`;

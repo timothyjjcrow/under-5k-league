@@ -42,6 +42,19 @@ export const REGISTRATION_STATUS = {
   REMOVED: "REMOVED",
 } as const;
 
+/**
+ * A player over the league's medal line asking an admin to let them in
+ * (`MedalApproval.status`, medal-approval.ts). PENDING until an admin
+ * answers; APPROVED lets their signup and inhouse joins past the medal rule
+ * at the MMR the admin set; DECLINED stays on the admin's list, where it can
+ * still be approved, and the player can't ask again.
+ */
+export const MEDAL_APPROVAL_STATUS = {
+  PENDING: "PENDING",
+  APPROVED: "APPROVED",
+  DECLINED: "DECLINED",
+} as const;
+
 export const DRAFT_STATUS = {
   NOT_STARTED: "NOT_STARTED",
   IN_PROGRESS: "IN_PROGRESS",

@@ -5,7 +5,11 @@
 // (inhouseFixedMmr in inhouse-mmr-cap.ts).
 
 import { HARD_MMR_CEILING } from "./constants";
-import { INHOUSE_ADMIN_MMR_MAX, inhouseFixedMmr } from "./inhouse-mmr-cap";
+import {
+  INHOUSE_ADMIN_MMR_MAX,
+  adminInhouseMmr,
+  inhouseFixedMmr,
+} from "./inhouse-mmr-cap";
 import { isEditableRankTier, rankMedalName } from "./rank";
 import { medalProvesIneligible } from "./registration";
 
@@ -148,12 +152,15 @@ export function inhouseRatingSavedMessage({
   before,
   after,
   queued,
+  approved = false,
 }: {
   name: string;
   before: InhouseRating;
   after: InhouseRating;
   /** They are in the queue now (the save rewrote a set MMR into it). */
   queued: boolean;
+  /** An admin approved them over the medal limit: the cap lets them in. */
+  approved?: boolean;
 }): string {
   const mmr =
     after.mmr !== null
@@ -161,7 +168,8 @@ export function inhouseRatingSavedMessage({
       : before.mmr !== null
         ? "inhouse MMR cleared from their next join"
         : "no inhouse MMR set";
-  const cap = overInhouseCap(after)
+  const cap =
+    !approved && overInhouseCap(after)
     ? queued
       ? ` Over the ${MMR_FORMAT.format(HARD_MMR_CEILING)} cap: they stay queued until you remove them, then can't join again.`
       : ` Over the ${MMR_FORMAT.format(HARD_MMR_CEILING)} cap: they can't join the queue.`
@@ -191,20 +199,28 @@ export function inhouseRatingLogSummary({
  */
 export function inhouseMmrStanding({
   adminMmr,
+  approvedMmr = null,
   signupMmr,
   lastGameMmr,
 }: {
   adminMmr: number | null;
+  /** The MMR an admin approved them at over the medal limit, null = none. */
+  approvedMmr?: number | null;
   /** The newest league signup's MMR, 0 = none. */
   signupMmr: number;
   /** Their latest inhouse game's MMR, null = none. */
   lastGameMmr: number | null;
 }): { mmr: number | null; source: string } {
-  const fixed = inhouseFixedMmr({ adminMmr, signupMmr });
+  const fixed = inhouseFixedMmr({ adminMmr, approvedMmr, signupMmr });
   if (fixed) {
     return {
       mmr: fixed.mmr,
-      source: fixed.source === "admin" ? "set by an admin" : "from their league signup",
+      source:
+        fixed.source !== "admin"
+          ? "from their league signup"
+          : adminInhouseMmr(adminMmr) === null
+            ? "approved over the medal limit"
+            : "set by an admin",
     };
   }
   return {

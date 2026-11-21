@@ -24,7 +24,7 @@ describe("LEAGUE_NAME_MEANING", () => {
 describe("eligibilityText", () => {
   it("states the hard ceiling and the medal rule", () => {
     expect(eligibilityText(0)).toBe(
-      "Players up to 5,000 MMR can join; Divine 3 and higher medals and Immortal players can't.",
+      "Players up to 5,000 MMR can join; Divine 3 and higher medals and Immortal players can't, unless an admin approves them.",
     );
   });
 

@@ -82,6 +82,8 @@ import {
   promoteGateError,
   withdrawGateError,
 } from "@/lib/registration";
+import { approvedMedalMmr } from "@/lib/medal-approval";
+import { loadMedalApproval } from "@/lib/medal-approval-service";
 import type { ActionResult } from "@/lib/action-result";
 import {
   teamWithdrawalLockedReason,
@@ -510,9 +512,14 @@ export async function reinstateSignup(
   // Advisory only, never a gate (the operator's-call stance): the flag flow
   // is one-way — refreshPlayerData names over-ceiling signups in ITS toast and
   // nothing warned when the same admin later reinstated one.
-  const warn = medalProvesIneligible(reg.user.rankTier)
-    ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
-    : "";
+  // An admin's approval over the medal limit (medal-approval.ts) is that
+  // review already done.
+  const approved =
+    approvedMedalMmr(await loadMedalApproval(reg.userId)) !== null;
+  const warn =
+    !approved && medalProvesIneligible(reg.user.rankTier)
+      ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`
+      : "";
   // Rule P (draft-room-version.ts): the draft room shows this commit.
   await publishDraftRoomChange();
   await logAdminAction({

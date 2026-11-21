@@ -24,8 +24,9 @@ import {
 // This is the ONE place the app uses a bot token, and it stays deliberately
 // tiny: role add and remove (the inhouse ping, inhouse ban and Standin
 // roles), the inhouse night's server event (create, edit,
-// delete, interested count) and reads; no gateway connection, no background
-// process, no slash commands. The token is a bearer credential
+// delete, interested count), a direct message to one person who must act
+// (sendDirectMessage: a medal approval's request and answer) and reads; no
+// gateway connection, no background process, no slash commands. The token is a bearer credential
 // under the same rule as the webhook URL — server-only, never rendered, never
 // logged, never returned to the browser.
 //
@@ -603,6 +604,56 @@ async function setMemberRole(
     if (res.status === 403) return "forbidden";
     return "failed";
   }
+  return "failed";
+}
+
+// ---------------------------------------------------------------------------
+// Direct messages
+// ---------------------------------------------------------------------------
+
+/**
+ * `unconfigured`: no bot token or guild (or a preview, which never writes).
+ * `closed`: Discord won't deliver it (the person blocks DMs from server
+ * members, or shares no server with the bot), which retrying never fixes.
+ */
+export type DirectMessageResult = "ok" | "unconfigured" | "closed" | "failed";
+
+/**
+ * Send one direct message from the bot to one Discord account: open (or
+ * reuse) the DM channel, then post. For the one person who must act, never
+ * a broadcast. Mentions are parsed nowhere, so nothing in `content` pings.
+ * Best-effort: never throws.
+ */
+export async function sendDirectMessage(
+  discordId: string,
+  content: string,
+): Promise<DirectMessageResult> {
+  const cfg = getGuildConfig();
+  if (!cfg || !discordMutationsAllowed()) return "unconfigured";
+  if (!/^\d{5,25}$/.test(discordId)) return "failed";
+  const opened = await call(cfg, "/users/@me/channels", "POST", {
+    recipient_id: discordId,
+  });
+  if (!opened) return "failed";
+  if (opened.status === 403) return "closed";
+  if (!opened.ok) return "failed";
+  let channelId: unknown = null;
+  try {
+    channelId = ((await opened.json()) as { id?: unknown })?.id;
+  } catch {
+    channelId = null;
+  }
+  if (typeof channelId !== "string" || !/^\d{5,25}$/.test(channelId)) {
+    return "failed";
+  }
+  const sent = await call(cfg, `/channels/${channelId}/messages`, "POST", {
+    content: content.slice(0, 2000),
+    allowed_mentions: { parse: [] },
+  });
+  if (!sent) return "failed";
+  if (sent.ok) return "ok";
+  // 50007: "Cannot send messages to this user" (DMs closed).
+  if (sent.status === 403) return "closed";
   return "failed";
 }
 

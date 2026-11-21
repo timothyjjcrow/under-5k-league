@@ -68,6 +68,8 @@ import {
 } from "@/lib/dota-account";
 import { retireStaleDotaAccountClaims } from "@/lib/dota-account-service";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
+import { approvedMedalMmr, approvedMmrKeptNote } from "@/lib/medal-approval";
+import { loadMedalApproval } from "@/lib/medal-approval-service";
 import { clampHeroList } from "@/lib/heroes";
 import { serializeRoles } from "@/lib/roles";
 import { fetchSteamProfiles } from "@/lib/steam";
@@ -108,6 +110,7 @@ class RegistrationIdentityChangedError extends Error {}
 class RegistrationDiscordChangedError extends Error {}
 class RegistrationMmrChangedError extends Error {}
 class RegistrationStateChangedError extends Error {}
+class RegistrationApprovalChangedError extends Error {}
 class DotaAccountCollisionError extends Error {}
 
 /**
@@ -311,12 +314,29 @@ export async function saveRegistration(
   let lockedMmrNote = "";
   const mmrLocked =
     !!existing && mmrSelfEditLocked(season.status, draftSnapshot?.status);
-  const mmrKept = keepsStoredMmr({
-    hasExisting: !!existing,
-    locked: mmrLocked,
-    mmrSubmitted: formData.has("mmr"),
-  });
-  if (existing && mmrKept) {
+  // An admin's approval over the medal limit (medal-approval.ts) sets the
+  // MMR they play at, and the player can't change it: an admission (a new
+  // signup, or a return from WITHDRAWN) stores the approved number, an
+  // ACTIVE signup keeps its own (admins correct it with setRegistrationMmr).
+  // Either way the number is kept, not typed, so the typed-MMR ceiling
+  // doesn't judge it and the medal clamp doesn't move it. Re-read inside the
+  // write's transaction below: one removed in between refuses the save.
+  const approvedMmr = approvedMedalMmr(await loadMedalApproval(user.id));
+  const mmrKept =
+    approvedMmr !== null ||
+    keepsStoredMmr({
+      hasExisting: !!existing,
+      locked: mmrLocked,
+      mmrSubmitted: formData.has("mmr"),
+    });
+  if (approvedMmr !== null) {
+    const keep =
+      existing?.status === REGISTRATION_STATUS.ACTIVE ? existing.mmr : approvedMmr;
+    if (formData.has("mmr") && str(formData, "mmr").trim() !== "" && mmr !== keep) {
+      lockedMmrNote = approvedMmrKeptNote(keep);
+    }
+    mmr = keep;
+  } else if (existing && mmrKept) {
     if (mmrLocked && formData.has("mmr") && mmr !== existing.mmr) {
       lockedMmrNote = mmrLockedAfterDraftNote(existing.mmr);
     }
@@ -368,6 +388,7 @@ export async function saveRegistration(
     // what tells the gate which of the two this submit is.
     existingStatus: existing?.status ?? null,
     mmrKept,
+    medalApproved: approvedMmr !== null,
   };
   // Refuse what no medal could change (an MMR over the ceiling, player
   // signups closed) before the provider call: a refused submit stores
@@ -508,7 +529,9 @@ export async function saveRegistration(
   // re-clamped: the stored number is already league-approved (clamped at its
   // own save, or set by an admin override — the escape hatch for stale
   // medals, which editing your roles must not silently destroy).
-  const untouched = !!existing && mmr === existing.mmr;
+  // An approved player's number is the admin's, never clamped (above).
+  const untouched =
+    approvedMmr !== null || (!!existing && mmr === existing.mmr);
   const check = untouched
     ? { mmr, adjusted: false, range: null }
     : clampMmrToRank(mmr, rankTier);
@@ -550,7 +573,10 @@ export async function saveRegistration(
   // `{ not: REMOVED }` branch, unchanged.) The predicate keeps the KEY name
   // `status`, so the ratchet's claim id (saveRegistration::status#1) is
   // untouched and its protecting test still kills the mutant.
-  const medalIneligible = medalProvesIneligible(rankTier);
+  // An approved player is let in by the approval, which the transaction
+  // re-reads, so their medal claims nothing here.
+  const medalIneligible =
+    approvedMmr === null && medalProvesIneligible(rankTier);
   const statusClaim = medalIneligible
     ? REGISTRATION_STATUS.ACTIVE
     : { not: REGISTRATION_STATUS.REMOVED };
@@ -615,6 +641,7 @@ export async function saveRegistration(
             currentRegistration,
             currentUser,
             seat,
+            currentApproval,
           ] = await Promise.all([
             tx.season.findUnique({
               where: { id: season.id },
@@ -651,6 +678,10 @@ export async function saveRegistration(
                   select: { id: true },
                 })
               : Promise.resolve(null),
+            tx.medalApproval.findUnique({
+              where: { userId: user.id },
+              select: { status: true, mmr: true },
+            }),
           ]);
 
           const draftPresenceChanged = !!currentDraft !== !!draftSnapshot;
@@ -672,6 +703,13 @@ export async function saveRegistration(
           }
           if (!currentUser || currentUser.rankTier !== rankTier) {
             throw new RegistrationIdentityChangedError();
+          }
+          // The medal approval the save judged, still the one standing: one
+          // removed since would admit a player over the line nobody let in,
+          // and one granted since would store a typed number over the
+          // admin's.
+          if (approvedMedalMmr(currentApproval) !== approvedMmr) {
+            throw new RegistrationApprovalChangedError();
           }
           // The Discord account the signup rule judged, still the one linked:
           // an unlink or a re-link to another account since would admit a
@@ -763,6 +801,13 @@ export async function saveRegistration(
         return {
           error:
             "Your MMR changed while you submitted — reload and review the updated number before trying again.",
+        };
+      }
+      if (error instanceof RegistrationApprovalChangedError) {
+        revalidatePath("/me");
+        return {
+          error:
+            "An admin changed your medal limit approval while you submitted — reload and try again.",
         };
       }
       if (error instanceof RegistrationRosterChangedError) {

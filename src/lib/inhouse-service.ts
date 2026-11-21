@@ -98,6 +98,10 @@ import {
   inhouseJoinRefusal,
   type InhouseMmrSource,
 } from "./inhouse-mmr-cap";
+import {
+  approvedMedalMmr,
+  MEDAL_APPROVAL_CHANGED_JOIN,
+} from "./medal-approval";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { buildDuelState } from "./inhouse-duel";
@@ -1359,6 +1363,8 @@ export async function makePick(
  */
 export async function loadInhouseJoinFacts(userId: string): Promise<{
   adminMmr: number | null;
+  /** The MMR an admin approved them at over the medal limit, or null. */
+  approvedMmr: number | null;
   signupMmr: number;
   rankTier: number | null;
 }> {
@@ -1376,11 +1382,16 @@ export async function loadInhouseJoinFacts(userId: string): Promise<{
     }),
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rankTier: true, inhouseMmr: true },
+      select: {
+        rankTier: true,
+        inhouseMmr: true,
+        medalApproval: { select: { status: true, mmr: true } },
+      },
     }),
   ]);
   return {
     adminMmr: adminInhouseMmr(user?.inhouseMmr),
+    approvedMmr: approvedMedalMmr(user?.medalApproval),
     signupMmr: reg?.mmr ?? 0,
     rankTier: user?.rankTier ?? null,
   };
@@ -1401,7 +1412,8 @@ export async function joinQueue(
   // the positions too. The transaction below judges it again, at the write.
   const banned = await inhouseBanRefusalFor(prisma, viewer.id);
   if (banned) return { ok: false, error: banned };
-  const { adminMmr, signupMmr, rankTier } = await loadInhouseJoinFacts(viewer.id);
+  const { adminMmr, approvedMmr, signupMmr, rankTier } =
+    await loadInhouseJoinFacts(viewer.id);
   // A fixed MMR is used as it stands (inhouseFixedMmr): an admin's inhouse
   // MMR for the player (their call, the escape hatch for a smurf or a stale
   // medal), else the registration MMR, which is league-approved as-is —
@@ -1410,7 +1422,10 @@ export async function joinQueue(
   // SELF-reported numbers get the medal check: the free-typed value and the
   // old lobby snapshot (which may predate medal validation). A blank-but-
   // medaled player seeds at the medal floor instead of unknown.
-  const fixed = inhouseFixedMmr({ adminMmr, signupMmr });
+  // An admin's approval over the medal limit (medal-approval.ts) is a fixed
+  // number too, and lets the player past the cap below; the transaction
+  // re-reads it.
+  const fixed = inhouseFixedMmr({ adminMmr, approvedMmr, signupMmr });
   let claimed: number;
   let source: InhouseMmrSource;
   if (fixed) {
@@ -1434,7 +1449,12 @@ export async function joinQueue(
   // The MMR cap (Tim, 2026-10-11): no Divine 3+ medal and nothing over the
   // league's ceiling, judged on the number as it came, before the clamp
   // below can only lower it. Refused before anything is written.
-  const refusal = inhouseJoinRefusal({ mmr: claimed, source, rankTier });
+  const refusal = inhouseJoinRefusal({
+    mmr: claimed,
+    source,
+    rankTier,
+    approved: approvedMmr !== null,
+  });
   if (refusal) return { ok: false, error: refusal };
   const safeMmr = fixed ? claimed : clampMmrToRank(claimed, rankTier).mmr;
   if (roles !== undefined) {
@@ -1456,8 +1476,9 @@ export async function joinQueue(
   // makes the two conflict, and the loser aborts with P2034.
   await raceHook("inhouse.joinQueue.beforeWrite");
   let joined: boolean | null = null;
-  // Set when the transaction found a ban the read above missed.
-  let bannedAtWrite = null as string | null;
+  // Set when the transaction found a ban the read above missed, or a medal
+  // approval that changed since it.
+  let refusedAtWrite = null as string | null;
   for (let attempt = 0; attempt < QUEUE_WRITE_RETRY_ATTEMPTS; attempt += 1) {
     try {
       joined = await prisma.$transaction(
@@ -1466,8 +1487,19 @@ export async function joinQueue(
           // Serializable and reads this queue, so a ban and a join that
           // cross abort one, and the retry reads the other's commit.
           // Nothing is written yet, so the refusal may return.
-          bannedAtWrite = await inhouseBanRefusalFor(tx, viewer.id);
-          if (bannedAtWrite) return false;
+          refusedAtWrite = await inhouseBanRefusalFor(tx, viewer.id);
+          if (refusedAtWrite) return false;
+          // The medal approval the join judged, still the one standing: one
+          // an admin removed since would queue a player over the cap nobody
+          // let in. Nothing is written yet, so the refusal may return.
+          const approval = await tx.medalApproval.findUnique({
+            where: { userId: viewer.id },
+            select: { status: true, mmr: true },
+          });
+          if (approvedMedalMmr(approval) !== approvedMmr) {
+            refusedAtWrite = MEDAL_APPROVAL_CHANGED_JOIN;
+            return false;
+          }
           // An admin's inhouse MMR as it stands now, so one saved since the
           // read above still lands (saveInhouseRating). That save also
           // rewrites a queued row's MMR, but finds no row for a first join
@@ -1553,7 +1585,7 @@ export async function joinQueue(
     }
     joined = true;
   }
-  if (!joined && bannedAtWrite) return { ok: false, error: bannedAtWrite };
+  if (!joined && refusedAtWrite) return { ok: false, error: refusedAtWrite };
   if (!joined) {
     return { ok: false, error: "You're already in a live inhouse" };
   }
