@@ -484,7 +484,7 @@ export async function StandinCoverCard({
             <p className="min-w-[12rem] flex-1 text-sm">
               Nobody has said they can play yet. This game is listed below
               for every standin; share it in Discord, and anyone who opens the
-              link is added to your list.
+              link can accept it in one tap to join your list.
             </p>
             <CopyStandinLink
               matchId={match.id}
@@ -800,7 +800,7 @@ export async function StandinCoverCard({
           <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 border-t border-line-soft pt-3">
             <CopyStandinLink matchId={match.id} teamId={myTeamId} />
             <p className="min-w-[12rem] flex-1 text-xs text-muted">
-              Anyone who opens the game&apos;s link is added to your list.
+              Anyone who opens the game&apos;s link can accept it to join your list.
             </p>
           </div>
         ) : null}

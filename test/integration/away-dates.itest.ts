@@ -547,7 +547,7 @@ describe("markAwayDates", () => {
     expect(post).toContain("**Booked Cover** can't stand in for **");
     expect(post).toContain(`The seat for **${player.name}** is open again.`);
     expect(post).toContain(
-      `/standins?match=${mine[1].id}&team=${alpha.id}&play=1`,
+      `/standins?match=${mine[1].id}&team=${alpha.id}`,
     );
     expect(mockSend.mock.calls[0][1]).toEqual({ users: [CAPTAIN_DISCORD] });
   });

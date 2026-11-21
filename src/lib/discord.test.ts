@@ -3183,7 +3183,7 @@ describe("match-page deep links", () => {
       whenMs: null,
       matchId: "m1",
       teamId: "t1",
-    })).toMatch(/say so here, and the captain picks: <[^<>\s]*\/standins\?match=m1&team=t1&play=1>$/);
+    })).toMatch(/accept here, and the captain picks: <[^<>\s]*\/standins\?match=m1&team=t1>$/);
   });
 
   it("reschedule messages link the match page, the Reschedule card where there is an answer to give", () => {
@@ -3693,7 +3693,7 @@ describe("standinDroppedOutMessage", () => {
   it("tells the captain the seat is open again and asks the standins in the channel", () => {
     vi.stubEnv("NEXT_PUBLIC_SITE_URL", "https://league.example");
     expect(standinDroppedOutMessage(base)).toBe(
-      "🚑 **Sub Sam** can't stand in for **Roshan's Rejects** after all — week 4 match **Roshan's Rejects** vs **Dire Straits** (<t:1760000000:F>). The seat for **Home Carry** is open again. Standins who can play: say so here, and the captain picks: <https://league.example/standins?match=m1&team=t1&play=1>",
+      "🚑 **Sub Sam** can't stand in for **Roshan's Rejects** after all — week 4 match **Roshan's Rejects** vs **Dire Straits** (<t:1760000000:F>). The seat for **Home Carry** is open again. Standins who can play: accept here, and the captain picks: <https://league.example/standins?match=m1&team=t1>",
     );
     expect(
       standinDroppedOutMessage({ ...base, replacedName: null, teamName: null }),

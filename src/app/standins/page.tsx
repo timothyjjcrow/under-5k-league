@@ -10,7 +10,6 @@ import { getCaptainTeam } from "@/lib/captains-service";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
   orderStandinBoard,
-  standinArrivalAction,
   standinNeedLabel,
   standinOfferCountLabel,
   standinOfferOutcomeLine,
@@ -20,6 +19,7 @@ import {
 } from "@/lib/standin-offer";
 import {
   loadStandinBoard,
+  loadStandinNeed,
   loadStandinOfferViewer,
   standingOn,
   type StandinBoardNeed,
@@ -34,7 +34,6 @@ import {
   CopyStandinLink,
   RegisterForStandinGame,
   ScrollToStandinGame,
-  StandinOfferOnArrival,
 } from "@/components/standin-offer-link";
 import { SteamSignInButton, SteamSignInNote } from "@/components/steam-sign-in";
 import {
@@ -48,6 +47,7 @@ import {
   textLink,
 } from "@/components/ui";
 import { cn } from "@/lib/utils";
+import { StandinAcceptCard } from "./accept-card";
 import { coverCardId } from "./cover-card";
 import { MyStandinGames } from "./my-games";
 import { TeamCover } from "./team-cover";
@@ -67,7 +67,6 @@ const DESCRIPTION =
 type StandinsSearch = {
   match?: string | string[];
   team?: string | string[];
-  play?: string | string[];
 };
 
 /** The game a shared link names, when its address is well-formed. */
@@ -121,7 +120,7 @@ export async function generateMetadata({
       return {
         ...shareMetadata(
           `${team} needs a standin`,
-          `${team} vs ${opponent}${when}. Open this to say you can play; their captain picks from everyone who does.`,
+          `${team} vs ${opponent}${when}. Open this and tap Accept to say you can play; their captain picks from everyone who does.`,
           "/standins",
         ),
         title: "Standins",
@@ -139,7 +138,6 @@ export default async function StandinsPage({
   const params = await searchParams;
   const linked = linkedGame(params);
   const focus = focusedMatch(params);
-  const play = singleSearchParam(params.play) === "1";
   const [viewer, season] = await Promise.all([
     getSessionUser(),
     getActiveSeason(),
@@ -164,25 +162,35 @@ export default async function StandinsPage({
 
   const isLinked = (n: StandinBoardNeed) =>
     !!linked && n.matchId === linked.matchId && n.teamId === linked.teamId;
-  const linkedNeed = needs.find(isLinked) ?? null;
+  // A shared link opens its game's accept card (Tim, 2026-11-21) for anyone
+  // who could stand in: never a rostered viewer (that side's captain lands on
+  // their team's cover, a teammate on the game marked as theirs).
+  const acceptAudience = !!linked && !myTeam && !offerViewer?.rostered;
+  // The board lists the coming week; a link may name a later game, which the
+  // offer write takes just the same. A kickoff still to come only.
+  const linkedNeed =
+    needs.find(isLinked) ??
+    (season && linked && acceptAudience
+      ? await loadStandinNeed(season, linked.matchId, linked.teamId).then(
+          (need) =>
+            need?.scheduledAt && need.scheduledAt.getTime() > nowMs ? need : null,
+        )
+      : null);
+  const acceptNeed = acceptAudience ? linkedNeed : null;
   // A captain's own sides are in their team's section above, never twice.
   const others = needs.filter((n) => n.teamId !== myTeam?.id);
   // A player's own team (Tim, 2026-11-20): any of its players may share its
   // game's link, as the captain can. Never the captain's: theirs is above.
   const ownTeamId = myTeam ? null : (offerViewer?.rosterTeamId ?? null);
   // Their own team's games lead, then the game the link names; the rest stay
-  // soonest first.
-  const ordered = orderStandinBoard(others, { ownTeamId, linked });
-  const arrivalStanding = linkedNeed ? standingOn(linkedNeed, offerViewer) : null;
-  // A rostered viewer (that side's captain or a teammate) opening a shared
-  // link is never told they can't stand in: the captain lands on their
-  // team's cover, and the link was never an offer for a teammate.
-  const arrival = offerViewer?.rostered
-    ? "none"
-    : standinArrivalAction(play, arrivalStanding);
+  // soonest first. The accept card's game is on the card, never twice: one
+  // Accept button.
+  const ordered = orderStandinBoard(others, { ownTeamId, linked }).filter(
+    (n) => !acceptNeed || !isLinked(n),
+  );
   const yourTeamsGame =
     !!linked && !!myTeam && linked.teamId === myTeam.id;
-  const sectionsAbove = !!myTeam || standinViewer;
+  const sectionsAbove = !!myTeam || standinViewer || !!acceptNeed;
 
   return (
     <div className="mx-auto max-w-3xl">
@@ -194,26 +202,30 @@ export default async function StandinsPage({
             : "Games that need a player. Say you can play, and that team's captain picks from everyone who did."
         }
       />
-      {focus ? (
+      {focus && !acceptNeed ? (
+        // The accept card is first on the page: nothing to scroll to.
         <ScrollToStandinGame
           ids={[coverCardId(focus), ...needs
             .filter((n) => n.matchId === focus)
             .map((n) => `need-${n.matchId}-${n.teamId}`)]}
         />
       ) : null}
-      {linked && linkedNeed ? (
-        <StandinOfferOnArrival
-          matchId={linked.matchId}
-          teamId={linked.teamId}
-          action={arrival}
-          blockedReason={
-            arrivalStanding?.kind === "blocked"
-              ? arrivalStanding.reason
-              : undefined
-          }
-        />
-      ) : null}
       <div className="space-y-6">
+        {acceptNeed ? (
+          <StandinAcceptCard
+            need={acceptNeed}
+            standing={standingOn(acceptNeed, offerViewer)}
+            viewerMmr={offerViewer?.mmr ?? 0}
+            signup={
+              <SignupStep
+                viewer={viewer}
+                next={standinOfferPath(acceptNeed.matchId, acceptNeed.teamId)}
+                game={{ matchId: acceptNeed.matchId, teamId: acceptNeed.teamId }}
+                signInLabel="Sign in with Steam to accept"
+              />
+            }
+          />
+        ) : null}
         {season && viewer && myTeam ? (
           <Suspense fallback={<CardSkeleton rows={4} />}>
             <TeamCover
@@ -232,7 +244,9 @@ export default async function StandinsPage({
         <section aria-labelledby={sectionsAbove ? "board-title" : undefined} className="space-y-4">
         {sectionsAbove ? (
           <h2 id="board-title" className="font-display text-xl font-semibold">
-            {myTeam ? "Other games that need a standin" : "Games that need a standin"}
+            {myTeam || acceptNeed
+              ? "Other games that need a standin"
+              : "Games that need a standin"}
           </h2>
         ) : null}
         {linked && !linkedNeed && !yourTeamsGame ? (
@@ -242,7 +256,7 @@ export default async function StandinsPage({
           </p>
         ) : null}
         {ordered.length === 0 ? (
-          myTeam ? (
+          myTeam || acceptNeed ? (
             <p className="text-sm text-muted">
               No other team needs a standin right now.
             </p>
@@ -267,7 +281,7 @@ export default async function StandinsPage({
                   viewer={viewer}
                   ownTeam={ownTeamId !== null && need.teamId === ownTeamId}
                   highlighted={isLinked(need)}
-                  first={index === 0}
+                  first={index === 0 && !acceptNeed}
                 />
               </li>
             ))}
@@ -308,9 +322,13 @@ function SignupStep({
   next,
   game,
   steamNote = true,
+  signInLabel = "Sign in with Steam to play",
 }: {
   viewer: SessionUser | null;
-  /** Where sign-in comes back to: the game's own link, so it ends on the list. */
+  /**
+   * Where sign-in comes back to: the game's own link, so it ends on the
+   * game's accept card.
+   */
   next: string;
   /** The game the signup should also put them on the list for. */
   game?: { matchId: string; teamId: string };
@@ -319,12 +337,14 @@ function SignupStep({
    * but the first: one page, one notice, not one per button.
    */
   steamNote?: boolean;
+  /** The sign-in button's words. */
+  signInLabel?: string;
 }) {
   if (!viewer) {
     return (
       <div className="flex max-w-sm flex-col gap-2">
         <SteamSignInButton next={next} size="md" className="self-start">
-          Sign in with Steam to play
+          {signInLabel}
         </SteamSignInButton>
         {steamNote ? <SteamSignInNote /> : null}
       </div>
@@ -425,8 +445,8 @@ function NeedCard({
           // Their own side: the link, where a standin would see "I can play".
           <div className="space-y-2">
             <p className="text-sm">
-              Share this game in Discord: a standin who opens the link is added
-              to the list, and your captain picks.
+              Share this game in Discord: a standin who opens the link can
+              accept it in one tap, and your captain picks.
             </p>
             <CopyStandinLink
               matchId={need.matchId}

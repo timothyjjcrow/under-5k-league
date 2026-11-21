@@ -35,6 +35,21 @@ export function standinBoardWindow(nowMs: number): { from: Date; to: Date } {
   };
 }
 
+/**
+ * One seat without cover. The player is named, so only the accept card shows
+ * it, and only to a standin who could accept (`standinAcceptNamesSeats`):
+ * named check-in answers are otherwise for captains and admins.
+ */
+export type StandinOpenSeat = {
+  /**
+   * The player who can't make it, with their signup MMR (0 = unknown); null
+   * for an empty roster seat.
+   */
+  player: { userId: string; name: string; mmr: number } | null;
+  /** The MMR a standin is judged against on this seat; null = unknown. */
+  baselineMmr: number | null;
+};
+
 /** What one side of a match still needs covered. */
 export type StandinSideNeed = {
   /** Seats without cover: players who are out, plus empty roster seats. */
@@ -47,6 +62,11 @@ export type StandinSideNeed = {
    * a known one.
    */
   baselineMmr: number | null;
+  /**
+   * Each seat in `seats`: the players who are out by name (id last), then
+   * the empty seats.
+   */
+  openSeats: StandinOpenSeat[];
 };
 
 /**
@@ -82,25 +102,41 @@ export function standinSideNeed(side: {
     0,
     side.teamSize - side.roster.length - side.emptySeatsTaken,
   );
-  const baselines: (number | null)[] = uncoveredOut.map(
-    (m) =>
-      namedCoverBaseline({
+  const named: StandinOpenSeat[] = uncoveredOut
+    .map((m) => ({
+      player: { userId: m.userId, name: m.name, mmr: m.mmr },
+      baselineMmr: namedCoverBaseline({
         replaced: { userId: m.userId, mmr: m.mmr },
         teammates: side.roster,
         outUserIds: side.outUserIds,
         coveredUserIds: side.bookedUserIds,
       }).baselineMmr,
-  );
-  if (emptySeats > 0) {
-    baselines.push(
-      coverBaselineMmr({ rosterMmrs: side.roster.map((m) => m.mmr) }),
+    }))
+    // Exact stored keys, the id last: the same order every render.
+    .sort(
+      (a, b) =>
+        a.player.name.localeCompare(b.player.name) ||
+        a.player.userId.localeCompare(b.player.userId),
     );
-  }
-  const known = baselines.filter((b): b is number => b !== null);
+  const emptyBaseline =
+    emptySeats > 0
+      ? coverBaselineMmr({ rosterMmrs: side.roster.map((m) => m.mmr) })
+      : null;
+  const openSeats: StandinOpenSeat[] = [
+    ...named,
+    ...Array.from({ length: emptySeats }, () => ({
+      player: null,
+      baselineMmr: emptyBaseline,
+    })),
+  ];
+  const known = openSeats
+    .map((s) => s.baselineMmr)
+    .filter((b): b is number => b !== null);
   return {
-    seats: uncoveredOut.length + emptySeats,
+    seats: openSeats.length,
     emptySeats,
     baselineMmr: known.length > 0 ? Math.max(...known) : null,
+    openSeats,
   };
 }
 
@@ -308,14 +344,58 @@ export function standinHubPath(matchId: string): string {
 }
 
 /**
- * The link a captain or a teammate shares: it opens the board on this game,
- * and puts a signed-in standin on the list (`play`). Opening it books
- * nothing, so it is safe to post anywhere.
+ * The link a captain or a teammate shares: it opens the Standins page on this
+ * game's accept card, where a standin taps Accept to go on the list (Tim,
+ * 2026-11-21). Opening it does nothing by itself, so it is safe to post
+ * anywhere. Links posted before then carry `&play=1`, which the page ignores.
  */
 export function standinOfferPath(matchId: string, teamId: string): string {
   return `/standins?match=${encodeURIComponent(matchId)}&team=${encodeURIComponent(
     teamId,
-  )}&play=1`;
+  )}`;
+}
+
+/**
+ * Whether the accept card names who the standin would replace. Only for a
+ * standin who could accept, or already has: named check-in answers are for
+ * captains and admins (`canViewNamedMatchAvailability`), and a standin about
+ * to take the seat is the one other person who needs them. A signed-out
+ * visitor, a viewer with no signup and one who can't take this seat see the
+ * count and the MMR, never the name.
+ */
+export function standinAcceptNamesSeats(standing: StandinOfferStanding): boolean {
+  return standing.kind === "open" || standing.kind === "offered";
+}
+
+/** One seat on the accept card: who it is, and the MMR it is judged at. */
+export function standinOpenSeatLine(seat: StandinOpenSeat): {
+  who: string;
+  mmr: string;
+} {
+  if (seat.player) {
+    return {
+      who: seat.player.name,
+      mmr:
+        seat.player.mmr > 0
+          ? `${MMR_NUMBER.format(seat.player.mmr)} MMR`
+          : "MMR unknown",
+    };
+  }
+  // An empty seat counts as the team's lowest MMR (`coverBaselineMmr`).
+  return {
+    who: "Empty roster seat",
+    mmr:
+      seat.baselineMmr === null
+        ? "MMR unknown"
+        : `counts as ${MMR_NUMBER.format(seat.baselineMmr)} MMR`,
+  };
+}
+
+/** The standin's own MMR beside the seat's, on the accept card. */
+export function standinViewerMmrLine(mmr: number): string {
+  return mmr > 0
+    ? `Your signup MMR is ${MMR_NUMBER.format(mmr)}.`
+    : "Your signup MMR isn't set.";
 }
 
 /**
@@ -345,33 +425,6 @@ export function orderStandinBoard<T extends { matchId: string; teamId: string }>
     .map((need, index) => ({ need, index }))
     .sort((a, b) => rank(a.need) - rank(b.need) || a.index - b.index)
     .map((x) => x.need);
-}
-
-/** What opening the shared link does for this viewer. */
-export type StandinArrivalAction =
-  /** Put them on the list now. */
-  | "offer"
-  /** Tell them they already are. */
-  | "already"
-  /** Tell them why they can't. */
-  | "blocked"
-  /** Nothing automatic: the game's own button says what to do next. */
-  | "none";
-
-/**
- * A shared link's one-time answer. Only a signed-in player who may offer is
- * added; a signed-out visitor or one without a signup gets the game's own
- * button (sign in, or register as a standin), never a silent nothing.
- */
-export function standinArrivalAction(
-  play: boolean,
-  standing: StandinOfferStanding | null,
-): StandinArrivalAction {
-  if (!play || !standing) return "none";
-  if (standing.kind === "open") return "offer";
-  if (standing.kind === "offered") return "already";
-  if (standing.kind === "blocked") return "blocked";
-  return "none";
 }
 
 /** One standin who said they can play, as the captain's card lists them. */

@@ -245,7 +245,7 @@ test("a teammate copies their team's standin link, and the player who is out is 
     await expect(game.getByRole("button", { name: /Copied!/ })).toBeVisible();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
       new URL(
-        `/standins?match=${encodeURIComponent(f.matchId)}&team=${encodeURIComponent(f.homeId)}&play=1`,
+        `/standins?match=${encodeURIComponent(f.matchId)}&team=${encodeURIComponent(f.homeId)}`,
         baseURL,
       ).href,
     );
@@ -262,6 +262,63 @@ test("a teammate copies their team's standin link, and the player who is out is 
       "href",
       `/standins?match=${encodeURIComponent(f.matchId)}`,
     );
+    noErrors();
+  });
+});
+
+// Tim, 2026-11-21: opening a standin link adds nobody. It opens the game's
+// accept card (the team, who they'd replace and at what MMR) and the
+// standin's own tap on Accept puts them on the list. A signed-out visitor
+// sees the game and the MMR, never who is out.
+test("a standin link opens an accept card, and only Accept puts them on the list", async ({ page, request, context }) => {
+  test.setTimeout(90_000);
+  await withFixture(request, async (f) => {
+    const noErrors = trackPageErrors(page);
+    const link = `/standins?match=${encodeURIComponent(f.matchId)}&team=${encodeURIComponent(f.homeId)}`;
+    const card = page.locator(`#accept-${f.matchId}-${f.homeId}`);
+
+    await login(page, f.standin, link);
+    await untilHydrated(page, card);
+    await expect(card).toContainText(`Stand in for ${f.homeName}`);
+    await expect(card).toContainText(`vs ${f.awayName}`);
+    const replacing = card.getByRole("list", { name: "You'd replace" });
+    await expect(replacing).toContainText(f.out.name);
+    await expect(replacing).toContainText("2,800 MMR");
+    await expect(card).toContainText("Your signup MMR is 2,800.");
+    // The game is on the card only, never twice on the page.
+    await expect(page.locator(`#need-${f.matchId}-${f.homeId}`)).toHaveCount(0);
+    // Opening it added nobody, an old link's `play=1` included.
+    await page.goto(`${link}&play=1`);
+    await untilHydrated(page, card);
+    await page.waitForLoadState("networkidle");
+    expect(await db.standinOffer.count({ where: { matchId: f.matchId } })).toBe(0);
+    await page.setViewportSize({ width: 390, height: 900 });
+    await expectNoHorizontalOverflow(page, "standin accept card at 390px");
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    // One tap on Accept puts them on the list.
+    await card.getByRole("button", { name: "Accept", exact: true }).click();
+    await expect(
+      page.getByText(`You're on the list for ${f.homeName}.`, { exact: false }).first(),
+    ).toBeVisible();
+    await expect(card).toContainText("You accepted: you're on the list.");
+    await expect
+      .poll(() =>
+        db.standinOffer.count({
+          where: { matchId: f.matchId, teamId: f.homeId, userId: f.standin.id },
+        }),
+      )
+      .toBe(1);
+
+    // Signed out: the game and the seat's MMR, a sign-in that comes back
+    // here, and no name.
+    await context.clearCookies();
+    await page.goto(link);
+    await expect(card).toContainText(`${f.homeName} needs a standin.`);
+    await expect(card).not.toContainText(f.out.name);
+    await expect(
+      card.getByRole("link", { name: "Sign in with Steam to accept" }),
+    ).toBeVisible();
     noErrors();
   });
 });

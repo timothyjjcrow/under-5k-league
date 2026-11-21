@@ -4,7 +4,7 @@ import {
   STANDIN_BOARD_BEHIND_HOURS,
   orderStandinBoard,
   sortStandinOffers,
-  standinArrivalAction,
+  standinAcceptNamesSeats,
   standinBoardWindow,
   standinHomeLine,
   standinHubPath,
@@ -14,8 +14,10 @@ import {
   standinOfferOutcomeLine,
   standinOfferPath,
   standinOfferStanding,
+  standinOpenSeatLine,
   standinSeatLine,
   standinSideNeed,
+  standinViewerMmrLine,
   type StandinOfferCommitment,
 } from "./standin-offer";
 
@@ -38,7 +40,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 0, emptySeats: 0, baselineMmr: null });
+    ).toMatchObject({ seats: 0, emptySeats: 0, baselineMmr: null });
   });
 
   it("counts a player who is out and judges the seat by their MMR", () => {
@@ -51,7 +53,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: 2800 });
+    ).toMatchObject({ seats: 1, emptySeats: 0, baselineMmr: 2800 });
   });
 
   it("judges every out seat by the lowest absentee, as the booking does", () => {
@@ -65,7 +67,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 2, emptySeats: 0, baselineMmr: 2400 });
+    ).toMatchObject({ seats: 2, emptySeats: 0, baselineMmr: 2400 });
   });
 
   it("leaves out a seat a booking or a waiting request already holds", () => {
@@ -92,7 +94,7 @@ describe("standinSideNeed", () => {
         askedUserIds: new Set(["p4"]),
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: 2400 });
+    ).toMatchObject({ seats: 1, emptySeats: 0, baselineMmr: 2400 });
   });
 
   it("counts empty roster seats against the team's lowest MMR", () => {
@@ -105,7 +107,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 1,
       }),
-    ).toEqual({ seats: 1, emptySeats: 1, baselineMmr: 2600 });
+    ).toMatchObject({ seats: 1, emptySeats: 1, baselineMmr: 2600 });
   });
 
   it("takes the seat that suits a standin best when seats differ", () => {
@@ -119,7 +121,7 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 2, emptySeats: 1, baselineMmr: 3000 });
+    ).toMatchObject({ seats: 2, emptySeats: 1, baselineMmr: 3000 });
   });
 
   it("keeps an unknown seat unknown", () => {
@@ -132,7 +134,86 @@ describe("standinSideNeed", () => {
         askedUserIds: none,
         emptySeatsTaken: 0,
       }),
-    ).toEqual({ seats: 1, emptySeats: 0, baselineMmr: null });
+    ).toMatchObject({ seats: 1, emptySeats: 0, baselineMmr: null });
+  });
+
+  // The accept card names each seat (Tim, 2026-11-21): who is out, by name,
+  // then the empty seats, each with the MMR the booking would judge.
+  it("lists each open seat: the players who are out by name, then empty seats", () => {
+    const need = standinSideNeed({
+      teamSize: 5,
+      // Out: "Zed" (3000) and "Amy" (2400); one empty seat; p3 is booked.
+      roster: [
+        { userId: "u1", name: "Zed", mmr: 3000 },
+        { userId: "u2", name: "Amy", mmr: 2400 },
+        { userId: "u3", name: "Bo", mmr: 2200 },
+        { userId: "u4", name: "Cy", mmr: 2600 },
+      ],
+      outUserIds: new Set(["u1", "u2", "u3"]),
+      bookedUserIds: new Set(["u3"]),
+      askedUserIds: none,
+      emptySeatsTaken: 0,
+    });
+    expect(need.openSeats).toEqual([
+      { player: { userId: "u2", name: "Amy", mmr: 2400 }, baselineMmr: 2400 },
+      // Zed's seat is judged at Amy's 2400, as the booking would.
+      { player: { userId: "u1", name: "Zed", mmr: 3000 }, baselineMmr: 2400 },
+      { player: null, baselineMmr: 2200 },
+    ]);
+    expect(need.seats).toBe(need.openSeats.length);
+  });
+
+  it("lists no seat when nobody is needed", () => {
+    expect(
+      standinSideNeed({
+        teamSize: 5,
+        roster: roster(3000, 2800, 2600, 2400, 2200),
+        outUserIds: none,
+        bookedUserIds: none,
+        askedUserIds: none,
+        emptySeatsTaken: 0,
+      }).openSeats,
+    ).toEqual([]);
+  });
+});
+
+describe("the accept card", () => {
+  // Named check-in answers are for captains and admins; a standin who could
+  // take the seat is the one other person who sees who they'd replace.
+  it("names who is out only to a standin who could accept", () => {
+    expect(standinAcceptNamesSeats({ kind: "open", outcome: "book" })).toBe(true);
+    expect(standinAcceptNamesSeats({ kind: "offered", outcome: "ask" })).toBe(true);
+    expect(standinAcceptNamesSeats({ kind: "signed-out" })).toBe(false);
+    expect(standinAcceptNamesSeats({ kind: "no-signup" })).toBe(false);
+    expect(standinAcceptNamesSeats({ kind: "blocked", reason: "x" })).toBe(false);
+  });
+
+  it("says each seat's player and MMR", () => {
+    expect(
+      standinOpenSeatLine({
+        player: { userId: "u1", name: "Zed", mmr: 3000 },
+        baselineMmr: 2400,
+      }),
+    ).toEqual({ who: "Zed", mmr: "3,000 MMR" });
+    expect(
+      standinOpenSeatLine({
+        player: { userId: "u1", name: "Zed", mmr: 0 },
+        baselineMmr: null,
+      }),
+    ).toEqual({ who: "Zed", mmr: "MMR unknown" });
+    expect(standinOpenSeatLine({ player: null, baselineMmr: 2200 })).toEqual({
+      who: "Empty roster seat",
+      mmr: "counts as 2,200 MMR",
+    });
+    expect(standinOpenSeatLine({ player: null, baselineMmr: null })).toEqual({
+      who: "Empty roster seat",
+      mmr: "MMR unknown",
+    });
+  });
+
+  it("says the standin's own MMR", () => {
+    expect(standinViewerMmrLine(2850)).toBe("Your signup MMR is 2,850.");
+    expect(standinViewerMmrLine(0)).toBe("Your signup MMR isn't set.");
   });
 });
 
@@ -337,32 +418,6 @@ describe("orderStandinBoard", () => {
   });
 });
 
-describe("standinArrivalAction", () => {
-  it("does nothing without play, or with no game to answer", () => {
-    expect(standinArrivalAction(false, { kind: "open", outcome: "book" })).toBe(
-      "none",
-    );
-    expect(standinArrivalAction(true, null)).toBe("none");
-  });
-
-  it("offers once for a player who may, and only says so otherwise", () => {
-    expect(standinArrivalAction(true, { kind: "open", outcome: "ask" })).toBe(
-      "offer",
-    );
-    expect(
-      standinArrivalAction(true, { kind: "offered", outcome: "book" }),
-    ).toBe("already");
-    expect(standinArrivalAction(true, { kind: "blocked", reason: "x" })).toBe(
-      "blocked",
-    );
-  });
-
-  it("leaves sign-in and signup to the game's own button", () => {
-    expect(standinArrivalAction(true, { kind: "signed-out" })).toBe("none");
-    expect(standinArrivalAction(true, { kind: "no-signup" })).toBe("none");
-  });
-});
-
 describe("board window and copy", () => {
   it("lists kickoffs from just past to a week out", () => {
     const now = Date.UTC(2026, 10, 15, 12);
@@ -443,7 +498,7 @@ describe("board window and copy", () => {
 
   it("builds the shared link", () => {
     expect(standinOfferPath("m1", "t1")).toBe(
-      "/standins?match=m1&team=t1&play=1",
+      "/standins?match=m1&team=t1",
     );
   });
 
