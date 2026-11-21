@@ -27,6 +27,8 @@ import {
   parseInhouseRatingForm,
 } from "@/lib/inhouse-rating";
 import { saveInhouseRating } from "@/lib/inhouse-rating-service";
+import { approvedMedalMmr } from "@/lib/medal-approval";
+import { loadMedalApproval } from "@/lib/medal-approval-service";
 import { voidLastResult } from "@/lib/inhouse-service";
 import {
   inhouseBanLiftedMessage,
@@ -87,7 +89,9 @@ export async function setInhouseRating(
     action: "setInhouseRating",
     summary: inhouseRatingLogSummary(saved),
   });
-  return { message: inhouseRatingSavedMessage(saved) };
+  const approved =
+    approvedMedalMmr(await loadMedalApproval(parsed.input.userId)) !== null;
+  return { message: inhouseRatingSavedMessage({ ...saved, approved }) };
 }
 
 /**

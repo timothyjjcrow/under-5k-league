@@ -32,6 +32,7 @@ import * as scheduleResults from "@/app/actions/admin-schedule-results";
 import * as discord from "@/app/actions/admin-discord";
 import * as matchNightPoll from "@/app/actions/admin-match-night-poll";
 import * as inhouseNight from "@/app/actions/admin-inhouse-night";
+import * as medalApprovals from "@/app/actions/admin-medal-approvals";
 // Admin-only modules that predate the admin-*.ts split. They open with
 // `try { await requireAdmin() } catch { return { error: "Not authorized" } }`
 // rather than adminOrError, which is the same session check and the same
@@ -60,6 +61,7 @@ const MODULES = {
   "src/app/actions/admin-discord.ts": discord,
   "src/app/actions/admin-match-night-poll.ts": matchNightPoll,
   "src/app/actions/admin-inhouse-night.ts": inhouseNight,
+  "src/app/actions/admin-medal-approvals.ts": medalApprovals,
   "src/app/actions/automation.ts": automation,
   "src/app/actions/game-participants.ts": gameParticipants,
   "src/app/actions/import-progress.ts": importProgress,

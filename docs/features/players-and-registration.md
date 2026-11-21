@@ -123,8 +123,9 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   a medal and the hourly player data refresh fills it in.
 - **Judge the medal only at admission.** A medal whose exact floor clears the
   ceiling (Divine 3+/Immortal, `medalProvesIneligible`) refuses a new signup
-  whatever is typed; an ACTIVE registrant is exempt (WITHDRAWN or REMOVED
-  returning is a new admission). A later-synced medal is warn-only: re-judging
+  whatever is typed, unless an admin approved them
+  ([below](#medal-approvals)); an ACTIVE registrant is exempt (WITHDRAWN or
+  REMOVED returning is a new admission). A later-synced medal is warn-only: re-judging
   it would lock an admitted player out of their own form. The typed MMR is
   checked every submit while the player may still type it; a stored number the
   save keeps instead (`mmrKept`: the post-draft lock, or no field sent) is not. Late medals show in the "Refresh player data now"
@@ -159,6 +160,62 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   admins change it with `setPlayerRank` or `setRegistrationMmr`. Tests:
   `rank.test.ts`, `registration.test.ts`, `registration.itest.ts`,
   `registration-standin-mmr.itest.ts`, `inhouse.itest.ts`.
+
+## Medal approvals
+
+A player whose medal is over the line (a Divine 3 or higher, or Immortal:
+`medalProvesIneligible`) can ask an admin to let them in anyway (Tim,
+2026-11-21). Rules in `src/lib/medal-approval.ts`, reads and writes in
+`medal-approval-service.ts`, the table `MedalApproval` (one row per player,
+season-independent).
+
+- **One approval covers the league signup and the inhouse queue.** It is a
+  per-player row, not a per-season one: an approved player signs up next
+  season without asking again, until an admin removes it.
+- **The player asks on /me; admins answer on /admin.** /me's "Over the medal
+  limit" card (`MedalApprovalCard`, `medalApprovalView`) shows only to a
+  player the medal refuses, or one already approved: Ask (with an optional
+  note), then "asked", "declined" or the approved MMR. The signup refusal
+  and the inhouse refusal both end by pointing at it. `askMedalApproval`
+  refuses a medal under the line and a second ask (a declined request stays
+  on the admin's list, where it can still be approved); a duplicate submit
+  that loses the unique key answers from the winner's row.
+- **The bot DMs each admin when a player asks, and the player when an admin
+  answers** (`sendDirectMessage`, the one direct message the bot sends: to
+  the person who must act). Admins are the `ADMIN_STEAM_IDS` allowlist (the
+  stored role only in local development), linked accounts only. Sent from
+  the actions after the commit and the response, best-effort: the request is
+  on /admin whatever Discord does.
+- **The admin sets the MMR they play at** (Tim's pick over the medal's floor
+  or a typed number). /admin's "Medal limit approvals" (`#adm-medal-approvals`,
+  open when a request waits) starts the box at the medal's exact floor
+  (`defaultApprovalMmr`: 5,020 for a Divine 3). Any number from 1 to 12,000
+  is allowed, over the ceiling included: the admin chose it.
+- **What an approval changes.** `registrationGate` takes `medalApproved` and
+  skips the medal rule only (closed signups stay closed). `saveRegistration`
+  stores the approved number at admission (a new signup, or a return from
+  WITHDRAWN) and an ACTIVE signup keeps its own; either way the number is
+  kept, never typed (`mmrKept`), so the typed ceiling doesn't judge it, the
+  clamp doesn't move it, and a different number sent says so in the toast
+  (`approvedMmrKeptNote`). /me's MMR box is disabled with the approval's
+  line (`MmrField` `lockedHint`). Admins still correct a signup with
+  `setRegistrationMmr`. The inhouse side is in `inhouse.md` ("The MMR cap").
+- **Each admin write claims the status its list showed.** Approve claims
+  PENDING or DECLINED, decline claims PENDING, remove claims whichever it
+  showed (`deleteMany` plus a count): a second admin answering first gets
+  "That request just changed". The ratchet protects the two `updateMany`
+  claims; the `deleteMany` was sabotage-checked by hand.
+- **The signup and the join re-read the approval at the write.**
+  `saveRegistration` re-reads it in its Serializable transaction and refuses
+  ("An admin changed your medal limit approval…") when it no longer matches;
+  `joinQueue` does the same before its first write. Removing an approval
+  touches nothing already there: a signup or a queue spot stays until an
+  admin removes it, and the remove toast says so.
+- **An approved player isn't flagged again:** "Refresh player data now"'s
+  over-ceiling list and `reinstateSignup`'s warning skip them.
+- Tests: `medal-approval.test.ts`, `test/integration/medal-approval.itest.ts`
+  (the seams `medalApproval.{ask,approve,decline,remove}.beforeWrite`,
+  `registration.saveRegistration.beforeWrite`, `inhouse.joinQueue.beforeWrite`).
 
 ## Returning players
 

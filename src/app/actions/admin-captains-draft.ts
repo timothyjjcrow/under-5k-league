@@ -86,6 +86,7 @@ import {
   recordAnnouncementCovered,
 } from "@/lib/announcement-marker";
 import { medalProvesIneligible } from "@/lib/registration";
+import { approvedMedalMmr } from "@/lib/medal-approval";
 import type { ActionResult } from "@/lib/action-result";
 import {
   carriedTeamIdentity,
@@ -1835,14 +1836,26 @@ export async function refreshPlayerData(
   // who plays is the operator's call (withdraw/reinstate, or setRegistrationMmr).
   // Re-read rather than reusing `regs`: that snapshot predates the sync, so its
   // user.rankTier is exactly the null we just filled in.
+  // A player an admin approved over the medal limit (medal-approval.ts) has
+  // had that review, so isn't named again.
   const flagged = season
     ? await prisma.registration.findMany({
         where: { seasonId: season.id, status: "ACTIVE" },
-        include: { user: { select: { name: true, rankTier: true } } },
+        include: {
+          user: {
+            select: {
+              name: true,
+              rankTier: true,
+              medalApproval: { select: { status: true, mmr: true } },
+            },
+          },
+        },
       })
     : [];
-  const overCeiling = flagged.filter((r) =>
-    medalProvesIneligible(r.user.rankTier),
+  const overCeiling = flagged.filter(
+    (r) =>
+      medalProvesIneligible(r.user.rankTier) &&
+      approvedMedalMmr(r.user.medalApproval) === null,
   );
   const warning = overCeiling.length
     ? ` ⚠️ ${overCeiling.length} signup(s) now have a medal above the ${HARD_MMR_CEILING} ceiling: ${overCeiling

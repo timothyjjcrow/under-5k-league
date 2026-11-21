@@ -98,6 +98,9 @@ import { HeroPicker } from "@/components/hero-picker";
 import { MmrField } from "@/components/mmr-field";
 import { SavedSignupForm } from "@/components/saved-signup-form";
 import { ReturningJoinCard } from "@/components/returning-join-card";
+import { MedalApprovalCard } from "@/components/medal-approval-card";
+import { approvedMedalLine, medalApprovalView } from "@/lib/medal-approval";
+import { loadMedalApproval } from "@/lib/medal-approval-service";
 import { AwayDatesCard } from "@/components/away-dates-card";
 import { listAwayFixtures } from "@/lib/availability-service";
 import {
@@ -126,11 +129,13 @@ export default async function MePage({
   if (!user) redirect("/login?next=/me");
   // Season/profile reads do not depend on one another. Keeping them parallel
   // avoids making every profile visit pay three sequential database waits.
-  const [{ discord: discordParam }, season, dbUser] = await Promise.all([
-    searchParams,
-    getActiveSeason(),
-    prisma.user.findUnique({ where: { id: user.id } }),
-  ]);
+  const [{ discord: discordParam }, season, dbUser, medalApproval] =
+    await Promise.all([
+      searchParams,
+      getActiveSeason(),
+      prisma.user.findUnique({ where: { id: user.id } }),
+      loadMedalApproval(user.id),
+    ]);
   // The game they came to stand in for, when "Register as a standin to
   // play" on the Standins page remembered one and its side still needs
   // someone: the signup form says so, and its submit offers for it.
@@ -266,14 +271,24 @@ export default async function MePage({
   // to its floor by saveRegistration, so tell the player up front. A medal
   // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
   // ineligible outright — registrationGate will reject it whatever they type.
+  // An admin's approval over the medal limit (medal-approval.ts) lifts the
+  // block and sets the MMR: the box shows the approved number, disabled, as
+  // saveRegistration stores it.
+  const medalView = medalApprovalView({
+    rankTier: dbUser?.rankTier ?? null,
+    approval: medalApproval,
+  });
+  const approvedMmr = medalView.kind === "approved" ? medalView.mmr : null;
   const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
-  const medalBlocked = medalFloor != null && medalFloor > HARD_MMR_CEILING;
+  const medalBlocked =
+    approvedMmr === null && medalFloor != null && medalFloor > HARD_MMR_CEILING;
   const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
   // After the draft a player's own signup MMR is fixed (saveRegistration
   // keeps it): an existing signup's box renders disabled and says who can
   // change it. A first signup still types its own.
   const mmrLocked =
     !!season && !!reg && mmrSelfEditLocked(season.status, draft?.status);
+  const mmrBoxLocked = mmrLocked || approvedMmr !== null;
 
   // Your-season context: the roster seat (from DRAFT on) or, for standins,
   // the matches they've been assigned to cover.
@@ -327,7 +342,7 @@ export default async function MePage({
   // saveRegistration as the form. Null when that can't be offered honestly
   // (the medal or last season's MMR is over the ceiling): the form says why.
   const returningPlan =
-    season && !reg && previous && !medalBlocked
+    season && !reg && previous && !medalBlocked && approvedMmr === null
       ? returningJoinPlan({
           seasonName: season.name,
           previous,
@@ -424,6 +439,7 @@ export default async function MePage({
           screen empty and ran about 2,000px. Phones keep the same order. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
       <div className="min-w-0 space-y-6">
+      <MedalApprovalCard view={medalView} />
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
         // Between seasons: a cancelled season, or an admin reactivating an old
@@ -956,9 +972,10 @@ export default async function MePage({
                       <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-danger">
                         Your {rankMedalName(dbUser?.rankTier)} medal puts you
                         above {HARD_MMR_CEILING} MMR, so this league can&apos;t
-                        take your signup.
+                        take your signup unless an admin approves you (see
+                        Over the medal limit).
                       </p>
-                    ) : mmrLead && !mmrLocked ? (
+                    ) : mmrLead && !mmrBoxLocked ? (
                       <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-muted">
                         {mmrLead}
                       </p>
@@ -972,7 +989,11 @@ export default async function MePage({
                       key={String(reg?.mmr ?? "new")}
                       // `|| ""` (not ??): a stored unknown (0) must render
                       // blank, or resubmitting trips the min=1 validation.
-                      defaultValue={String(form?.mmr || "")}
+                      defaultValue={String(
+                        (approvedMmr !== null && !isRegistered
+                          ? approvedMmr
+                          : form?.mmr) || "",
+                      )}
                       rankTier={dbUser?.rankTier ?? null}
                       storedMmr={reg ? reg.mmr : null}
                       frozen={
@@ -980,17 +1001,27 @@ export default async function MePage({
                         reg.status === REGISTRATION_STATUS.ACTIVE &&
                         auctionRunning(draft?.status)
                       }
-                      locked={mmrLocked}
+                      locked={mmrBoxLocked}
+                      lockedHint={
+                        approvedMmr !== null && !mmrLocked
+                          ? approvedMedalLine(
+                              isRegistered && reg ? reg.mmr : approvedMmr,
+                            )
+                          : undefined
+                      }
                       describedBy={
-                        medalBlocked || (mmrLead && !mmrLocked)
+                        medalBlocked || (mmrLead && !mmrBoxLocked)
                           ? "mmr-lead"
                           : undefined
                       }
                     />
                     </div>
-                    <p className="mt-1 text-xs text-muted">
-                      {mmrRulesLine(season.maxMmr)}
-                    </p>
+                    {/* An approved player's box says what applies to them. */}
+                    {approvedMmr === null ? (
+                      <p className="mt-1 text-xs text-muted">
+                        {mmrRulesLine(season.maxMmr)}
+                      </p>
+                    ) : null}
                   </div>
 
                   {/* Out of the optional disclosure: one tap each, and the

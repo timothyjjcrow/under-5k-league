@@ -143,6 +143,38 @@ describe("registrationGate — medal floor (the anti-sandbagging line)", () => {
     }
   });
 
+  it("points a refused player at the ask, and lets an admin-approved one in", () => {
+    const facts = {
+      season: signups,
+      type: "PLAYER" as const,
+      mmr: 4500,
+      rankTier: 75,
+      hasExisting: false,
+    };
+    expect(registrationGate(facts)).toMatch(
+      /Divine 5 medal puts you above it\. An admin can approve you: ask on this page\./,
+    );
+    // The approved number is kept, not typed (saveRegistration), so even
+    // one over the ceiling stands.
+    expect(
+      registrationGate({ ...facts, mmr: 5420, mmrKept: true, medalApproved: true }),
+    ).toBeNull();
+    // A returning WITHDRAWN player is an admission too.
+    expect(
+      registrationGate({
+        ...facts,
+        hasExisting: true,
+        existingType: "PLAYER",
+        existingStatus: "WITHDRAWN",
+        medalApproved: true,
+      }),
+    ).toBeNull();
+    // The approval lifts the medal rule only: a closed signup window stays shut.
+    expect(
+      registrationGate({ ...facts, season: regular, medalApproved: true }),
+    ).toMatch(/closed/);
+  });
+
   it("judges the RAW claim, not a clamped one — an overstated lie can't slip under", () => {
     // Ancient 5's window (3696–5389) crosses the ceiling: a 6000 claim is
     // out-of-window, but the gate sees the raw 6000 and rejects it the same
@@ -676,7 +708,9 @@ describe("mmrSelfEditLocked — a player's own MMR after the draft", () => {
     expect(page).toMatch(
       /!!reg && mmrSelfEditLocked\(season\.status, draft\?\.status\)/,
     );
-    expect(page).toMatch(/locked=\{mmrLocked\}/);
+    // An admin's medal approval locks the same box (medal-approval.ts).
+    expect(page).toMatch(/mmrBoxLocked = mmrLocked \|\| approvedMmr !== null/);
+    expect(page).toMatch(/locked=\{mmrBoxLocked\}/);
     const field = sourceFile("src/components/mmr-field.tsx").text;
     expect(field).toMatch(/disabled=\{locked\}/);
     expect(field).toMatch(/MMR_SELF_EDIT_LOCKED_HINT/);

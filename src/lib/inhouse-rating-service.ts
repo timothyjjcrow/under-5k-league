@@ -11,6 +11,7 @@ import {
   effectiveDotaAccountId,
 } from "./dota-account";
 import { adminInhouseMmr } from "./inhouse-mmr-cap";
+import { approvedMedalMmr } from "./medal-approval";
 import {
   INHOUSE_RATING_CHANGED,
   sameInhouseRating,
@@ -160,6 +161,8 @@ export type InhouseRatingRow = {
   rankTierManual: boolean;
   /** User.inhouseMmr, null = none. */
   adminMmr: number | null;
+  /** The MMR an admin approved them at over the medal limit, null = none. */
+  approvedMmr: number | null;
   /** The newest league signup's MMR (joinQueue's), 0 = none. */
   signupMmr: number;
   /** The MMR their queue spot holds, null = not queued. */
@@ -267,6 +270,7 @@ async function loadRows(ids: string[]): Promise<InhouseRatingRow[]> {
         rankTier: true,
         rankTierManual: true,
         inhouseMmr: true,
+        medalApproval: { select: { status: true, mmr: true } },
       },
     }),
     // joinQueue's signup: the newest with an MMR.
@@ -306,6 +310,7 @@ async function loadRows(ids: string[]): Promise<InhouseRatingRow[]> {
         rankTier: u.rankTier,
         rankTierManual: u.rankTierManual,
         adminMmr: adminInhouseMmr(u.inhouseMmr),
+        approvedMmr: approvedMedalMmr(u.medalApproval),
         signupMmr: signupMmr.get(id) ?? 0,
         queuedMmr: queuedMmr.get(id) ?? null,
         lastGameMmr: lastGameMmr.get(id) ?? null,

@@ -3452,7 +3452,7 @@ describe("inhouse — the MMR cap on joinQueue", () => {
     expect(await joinQueue(sessionFor(user), 5000, ["2"])).toEqual({
       ok: false,
       error:
-        "Inhouses are for players up to 5,000 MMR, the same as the league: your Divine 4 medal puts you above it.",
+        "Inhouses are for players up to 5,000 MMR, the same as the league: your Divine 4 medal puts you above it. An admin can approve you: ask on My account.",
     });
     expect(await queueRow(user.id)).toBeNull();
     // Refused before the positions save too.
@@ -3462,7 +3462,7 @@ describe("inhouse — the MMR cap on joinQueue", () => {
       const other = await playerWith(`Over ${rankTier}`, rankTier);
       expect(await joinQueue(sessionFor(other), 0)).toEqual({
         ok: false,
-        error: expect.stringMatching(/medal puts you above it\.$/),
+        error: expect.stringMatching(/medal puts you above it\. An admin can approve you/),
       });
       expect(await queueRow(other.id)).toBeNull();
     }
@@ -3478,7 +3478,7 @@ describe("inhouse — the MMR cap on joinQueue", () => {
     });
     expect(await joinQueue(sessionFor(user), 0)).toEqual({
       ok: false,
-      error: expect.stringMatching(/your Divine 5 medal puts you above it\.$/),
+      error: expect.stringMatching(/your Divine 5 medal puts you above it\. An admin can approve you/),
     });
     expect(await queueRow(user.id)).toBeNull();
   });

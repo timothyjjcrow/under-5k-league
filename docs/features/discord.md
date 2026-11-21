@@ -289,7 +289,13 @@ actions: `src/app/actions/admin-discord.ts`.
   fails). The ids only feed the site's headcount; they are never shown. Discord has no
   endpoint for a bot to mark someone Interested, so the site's "I'm in" is
   its own list ([inhouse](inhouse.md#inhouse-night)). `getPingHealth` reports `canCreateEvents` (Create Events or
-  Manage Events) as its own line in the checklist. Discord has no self-assign
+  Manage Events) as its own line in the checklist. It sends one kind of
+  direct message (`sendDirectMessage`: open the DM channel, then post with
+  `allowed_mentions: { parse: [] }`; `closed` when Discord won't deliver):
+  a medal approval's request to each admin and the answer to the player
+  ([players-and-registration](players-and-registration.md#medal-approvals)),
+  from the actions after the commit, best-effort. A DM is for the one
+  person who must act, never a broadcast. Discord has no self-assign
   toggle, so /me's `setInhousePingOptIn` calls `setPingRole` (PUT/DELETE
   `/guilds/{g}/members/{u}/roles/{r}`) on an OAuth-proven `discordId`. Missing
   token, guild or role hides the opt-in (`pingOptInAvailable`), never

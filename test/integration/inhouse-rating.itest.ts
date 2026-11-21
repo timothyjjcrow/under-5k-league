@@ -163,6 +163,7 @@ describe("an admin's inhouse MMR and medal, signup or not", () => {
 
     expect(await loadInhouseJoinFacts(user.id)).toEqual({
       adminMmr: 4100,
+      approvedMmr: null,
       signupMmr: 2000,
       rankTier: 11,
     });
@@ -212,7 +213,7 @@ describe("an admin's inhouse MMR and medal, signup or not", () => {
     await setInhouseRating({}, ratingForm(smurf.id, { mmr: "", rankTier: "74" }));
     expect(await joinQueue(sessionFor(smurf), 2000)).toEqual({
       ok: false,
-      error: expect.stringMatching(/your Divine 4 medal puts you above it\.$/),
+      error: expect.stringMatching(/your Divine 4 medal puts you above it\. An admin can approve you: ask on My account\.$/),
     });
   });
 
