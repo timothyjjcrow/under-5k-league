@@ -284,12 +284,14 @@ the rows in `StandinOffer`.
   nothing while booking is closed (`standinAssignmentOpen`'s phase half). An
   unscheduled fixture isn't listed: there is no night to promise. A
   withdrawn team's side never is.
-- **It never says who is out.** Named check-in answers are for captains and
-  admins (`canViewNamedMatchAvailability`), so the board, its link preview
-  and the captain's ping carry the team, the count ("needs 2 standins") and
-  the MMR the seat is judged against, never a covered player's name
-  (`standins-page-guards.test.ts`). With several open seats the MMR shown is
-  the highest baseline among them: the seat that suits a standin best.
+- **The board never says who is out.** Named check-in answers are for
+  captains and admins (`canViewNamedMatchAvailability`), so the board, its
+  link preview and the captain's ping carry the team, the count ("needs 2
+  standins") and the MMR the seat is judged against, never a covered
+  player's name (`standins-page-guards.test.ts`). With several open seats the
+  MMR shown is the highest baseline among them: the seat that suits a
+  standin best. The one exception is the accept card below, to a standin who
+  could take the seat (Tim, 2026-11-21).
 - **Offer only where a booking could follow** (`standinOfferStanding`, fed by
   `loadStandinOfferViewer`): an ACTIVE signup of either type, no roster seat,
   no booking or waiting request in this match, no decline for this team in
@@ -325,20 +327,39 @@ the rows in `StandinOffer`.
   marks who offered and sorts them first in their group
   (`standinPickerGroups`' `offered`).
 - **The shared link is the game on the board**
-  (`standinOfferPath`: `/standins?match=&team=&play=1`), copied from the
+  (`standinOfferPath`: `/standins?match=&team=`), copied from the
   captain's card or the game itself. Anyone may post it: it grants nothing.
   Any player on the team can copy it, as the captain can (Tim, 2026-11-20):
   a rostered player's own side leads the list (`orderStandinBoard` over
   `loadStandinOfferViewer`'s `rosterTeamId`), marked "Your team", with the
   copy button where a standin would see "I can play". It is a display
   choice only: their standing is still "on a roster", so `offerToStandIn`
-  refuses them for any side.
-  Opening it puts a signed-in standin who may offer on the list once
-  (`standinArrivalAction`, `StandinOfferOnArrival`, which scrubs `play`
-  first, as the inhouse night's `?imin=1` does); a signed-out visitor's
-  "Sign in with Steam to play" comes back to the same link, so their first
-  click ends on the list. It unfurls as "<team> needs a standin" with the
+  refuses them for any side. It unfurls as "<team> needs a standin" with the
   opponent and the kickoff on the league's clock.
+- **Opening the link adds nobody: it opens the game's accept card** (Tim,
+  2026-11-21; `StandinAcceptCard`, `src/app/standins/accept-card.tsx`). The
+  card leads the page for anyone not on a roster (`acceptAudience`: the
+  side's captain lands on their cover, a teammate on the game marked as
+  theirs) and says the team, the opponent, the kickoff, each seat
+  (`openSeats` from `standinSideNeed`: the players who are out by name, then
+  empty seats, through `standinOpenSeatLine`), the best-fit line and the
+  standin's own MMR, then one Accept button: `offerToStandInAction`, the
+  same offer as "I can play". Before 2026-11-21 the link offered on arrival;
+  old posts carry `&play=1`, which the page ignores.
+  - Names only for a standin who could accept (`standinAcceptNamesSeats`:
+    standing `open` or `offered`). A signed-out visitor, a viewer with no
+    signup and one who can't take the seat get the count and the MMR. The
+    seats travel on every `StandinBoardNeed` server-side, so render them
+    nowhere else (the page guard pins `openSeats` to the card).
+  - Signed out, "Sign in with Steam to accept" comes back to the same card;
+    with no signup, "Register as a standin to play" keeps the game for the
+    signup's own submit (below). The card takes the page's one Steam notice.
+  - The game isn't listed again under it, so the page has one Accept button
+    for it, and the board's heading becomes "Other games that need a
+    standin".
+  - A linked game past the board's week (`STANDIN_BOARD_AHEAD_DAYS`) still
+    opens, through `loadStandinNeed`, while its kickoff is to come: the offer
+    write never had the board's window.
 - **Ping the captain once, not once per name.** A new offer returns a post
   for that side's captain alone (`standinOfferedMessage`); the action claims
   `standinOfferPing:<match>:<team>:<scheduleRevision>` for
@@ -375,8 +396,10 @@ the rows in `StandinOffer`.
 - **Tests:** `standin-offer.test.ts`, `standin-offers.itest.ts` (the board,
   the refusals, what a booking does to the list), `standin-game.test.ts`,
   the "lists who said they can play" guard in `match-page-guards.test.ts`
-  and `src/app/standins/standins-page-guards.test.ts` (the page, the
-  actions, Home's callout and the signup that joins a game).
+  and `src/app/standins/standins-page-guards.test.ts` (the page, the accept
+  card, the actions, Home's callout and the signup that joins a game), and
+  `e2e-mid/standins-hub.spec.ts` (the accept card: nothing added on
+  opening, Accept, no names signed out).
 - **Not built yet:** "needs a standin" lines on the #schedule card, a weekly
   "free this week", and a time limit on a request the other captain never
   answers (each is Tim's call). Built 2026-11-17: a booked standin's own

@@ -995,7 +995,7 @@ export function playerOutMessage(m: {
    *  hand-built calls stay valid. */
   matchId?: string;
   /** The side that lost the player: with it, the link is the game's share
-   *  link, so a standin who opens it is put on its list. */
+   *  link, which opens its accept card for a standin. */
   teamId?: string;
 }): string {
   const label = fixtureLabel(m);
@@ -1008,14 +1008,14 @@ export function playerOutMessage(m: {
  * The ask every "a seat is open" post ends with. It goes to the channel the
  * standins read, so it speaks to them, and the mentioned captain picks on
  * the same page: the game's share link (`standinOfferPath`) lands the
- * captain on their team's cover and puts a standin who opens it on the list.
+ * captain on their team's cover and a standin on the game's accept card.
  */
 function standinCallLine(m: { matchId?: string; teamId?: string }): string {
   if (!m.matchId) return " Standins who can play: say so on the Standins page, and the captain picks.";
   const path = m.teamId
     ? standinOfferPath(m.matchId, m.teamId)
     : standinHubPath(m.matchId);
-  return ` Standins who can play: say so here, and the captain picks: <${resolveSiteUrl()}${path}>`;
+  return ` Standins who can play: accept here, and the captain picks: <${resolveSiteUrl()}${path}>`;
 }
 
 /** The game on the Standins page, as a post's link: a captain lands on

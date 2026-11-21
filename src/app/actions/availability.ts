@@ -211,7 +211,7 @@ export async function setAvailability(
         : null,
       whenMs: match.scheduledAt?.getTime() ?? null,
       // The game on the Standins page: the mentioned captain lands on their
-      // team's cover for it, and a standin who opens it offers to play.
+      // team's cover for it, and a standin on the game's accept card.
       matchId: match.id,
       teamId,
     };

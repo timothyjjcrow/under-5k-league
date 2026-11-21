@@ -14,6 +14,9 @@ const PAGE = stripLineComments(sourceFile("src/app/standins/page.tsx").text);
 const LINK = stripLineComments(
   sourceFile("src/components/standin-offer-link.tsx").text,
 );
+const ACCEPT = stripLineComments(
+  sourceFile("src/app/standins/accept-card.tsx").text,
+);
 const ACTIONS = stripLineComments(
   sourceFile("src/app/actions/standin-offers.ts").text,
 );
@@ -28,6 +31,8 @@ describe("standins page", () => {
     expect(PAGE).not.toMatch(/matchAvailability|loadOutUserIds|teamMember/);
     expect(PAGE).toContain("standinNeedLabel(need.seats)");
     expect(PAGE).toContain("standinSeatLine(need.baselineMmr)");
+    // The list never names a seat: only the accept card does, below.
+    expect(PAGE).not.toMatch(/openSeats|standinOpenSeatLine/);
   });
 
   it("renders a control only where the offer would be taken", () => {
@@ -48,8 +53,8 @@ describe("standins page", () => {
     expect(PAGE).not.toContain("isCaptain");
   });
 
-  // A signed-out visitor's sign-in comes back to the game's own link, so
-  // their first click ends with them on the list.
+  // A signed-out visitor's sign-in comes back to the game's own link, so it
+  // ends on the game's accept card.
   it("signs in back to the game's link", () => {
     expect(PAGE).toMatch(
       /<SignupStep\s+viewer=\{viewer\}\s+next=\{standinOfferPath\(need\.matchId, need\.teamId\)\}\s+game=\{\{ matchId: need\.matchId, teamId: need\.teamId \}\}/,
@@ -58,26 +63,69 @@ describe("standins page", () => {
     // One Steam notice a page, on the first game, not one per button.
     expect(PAGE).toContain("{steamNote ? <SteamSignInNote /> : null}");
     expect(PAGE).toContain("steamNote={first}");
-    expect(PAGE).toContain("first={index === 0}");
+    expect(PAGE).toContain("first={index === 0 && !acceptNeed}");
   });
 
-  it("answers a shared link once, from the server's rule", () => {
-    // A rostered viewer (that side's captain, a teammate) is never told they
-    // can't stand in: the link lands the captain on their team's cover.
-    expect(PAGE).toMatch(
-      /const arrival = offerViewer\?\.rostered\s*\? "none"\s*: standinArrivalAction\(play, arrivalStanding\);/,
+  // Tim, 2026-11-21: opening a shared link adds nobody. It opens the game's
+  // accept card, and the standin's own tap on Accept is the offer.
+  it("opens a shared link on an accept card that offers only on a tap", () => {
+    expect(PAGE).not.toMatch(/StandinOfferOnArrival|standinArrivalAction|params\.play/);
+    expect(LINK).not.toContain("offerToStandInAction");
+    // Never for a rostered viewer: that side's captain lands on their team's
+    // cover, a teammate on the game marked as theirs.
+    expect(PAGE).toContain(
+      "const acceptAudience = !!linked && !myTeam && !offerViewer?.rostered;",
     );
-    // Only for a game the board lists: a filled seat gets the note instead,
-    // except on the captain's own game, which their section shows.
-    expect(PAGE).toMatch(/\{linked && linkedNeed \? \(\s*<StandinOfferOnArrival/);
+    expect(PAGE).toContain("const acceptNeed = acceptAudience ? linkedNeed : null;");
+    // A game past the board's week still opens, with its kickoff to come.
+    expect(PAGE).toMatch(
+      /await loadStandinNeed\(season, linked\.matchId, linked\.teamId\)[\s\S]*?need\.scheduledAt\.getTime\(\) > nowMs/,
+    );
+    // The card's game is on the card only: one Accept button for it.
+    expect(PAGE).toMatch(
+      /orderStandinBoard\(others, \{ ownTeamId, linked \}\)\.filter\(\s*\(n\) => !acceptNeed \|\| !isLinked\(n\),\s*\)/,
+    );
+    expect(PAGE).toMatch(
+      /<StandinAcceptCard\s+need=\{acceptNeed\}\s+standing=\{standingOn\(acceptNeed, offerViewer\)\}/,
+    );
+    // Sign-in comes back to the same card, never straight onto the list.
+    expect(PAGE).toMatch(
+      /next=\{standinOfferPath\(acceptNeed\.matchId, acceptNeed\.teamId\)\}/,
+    );
+    // The page's one Steam notice moves to the card.
+    expect(PAGE).toContain("first={index === 0 && !acceptNeed}");
+    // Only a filled seat gets the note, except on the captain's own game.
     expect(PAGE).toMatch(/\{linked && !linkedNeed && !yourTeamsGame \? \(/);
-    // The address loses `play` before anything is sent, so a refresh or a
-    // copied tab never offers again.
-    const scrub = LINK.indexOf('url.searchParams.delete("play")');
-    const send = LINK.indexOf("offerToStandInAction(null, form)");
-    expect(scrub).toBeGreaterThan(-1);
-    expect(send).toBeGreaterThan(scrub);
-    expect(LINK).toMatch(/if \(action !== "offer"\) return;/);
+  });
+
+  it("puts the offer behind the card's one Accept button", () => {
+    // Accept is the offer form; the button is inside the open branch only.
+    expect(ACCEPT).toMatch(
+      /standing\.kind === "open" \? \([\s\S]*?<ActionForm action=\{offerToStandInAction\} hidden=\{hidden\}>\s*<SubmitButton variant="accent" size="lg">\s*Accept\s*<\/SubmitButton>/,
+    );
+    expect(ACCEPT.match(/offerToStandInAction\}/g)).toHaveLength(1);
+    // Taking it back stays for anyone on the list.
+    expect(ACCEPT).toMatch(
+      /standing\.kind === "offered" \? \([\s\S]*?action=\{withdrawStandinOfferAction\}/,
+    );
+    // Sign in or register for anyone who can't accept yet.
+    expect(ACCEPT).toMatch(/standing\.kind === "blocked" \? \([\s\S]*?\) : \(\s*signup\s*\)/);
+  });
+
+  // Tim asked for the card to show who the standin replaces and their MMR.
+  // Named check-in answers are otherwise for captains and admins, so the
+  // names are for a standin who could accept, and only on the card.
+  it("names who the standin would replace only to a standin who could accept", () => {
+    expect(ACCEPT).toContain("const named = standinAcceptNamesSeats(standing);");
+    const names = ACCEPT.indexOf("need.openSeats.map(");
+    const gate = ACCEPT.indexOf("{named ? (");
+    expect(gate).toBeGreaterThan(-1);
+    expect(names).toBeGreaterThan(gate);
+    expect(ACCEPT.match(/need\.openSeats/g)).toHaveLength(1);
+    expect(ACCEPT).toContain("standinOpenSeatLine(seat)");
+    // Everyone sees the count and the seat's MMR.
+    expect(ACCEPT).toContain("standinNeedLabel(need.seats)");
+    expect(ACCEPT).toContain("standinSeatLine(need.baselineMmr)");
   });
 
   // Tim, 2026-11-20: any player on a team may share its game's link, as
@@ -88,7 +136,7 @@ describe("standins page", () => {
       "const ownTeamId = myTeam ? null : (offerViewer?.rosterTeamId ?? null);",
     );
     expect(PAGE).toContain(
-      "const ordered = orderStandinBoard(others, { ownTeamId, linked });",
+      "const ordered = orderStandinBoard(others, { ownTeamId, linked })",
     );
     expect(PAGE).toContain(
       "ownTeam={ownTeamId !== null && need.teamId === ownTeamId}",

@@ -1,89 +1,22 @@
 "use client";
 
-import { useRouter } from "next/navigation";
-import { startTransition, useEffect, useRef, useState } from "react";
-import { offerToStandInAction } from "@/app/actions/standin-offers";
+import { useEffect, useState } from "react";
 import { pushToast } from "@/components/toaster";
 import { buttonClasses, type ButtonSize, type ButtonVariant } from "@/components/ui";
-import {
-  standinOfferPath,
-  type StandinArrivalAction,
-} from "@/lib/standin-offer";
+import { standinOfferPath } from "@/lib/standin-offer";
 import {
   STANDIN_GAME_COOKIE,
   STANDIN_GAME_MAX_AGE_SECONDS,
   standinGameValue,
 } from "@/lib/standin-game";
 
-// A game's shared standin link (standinOfferPath) on the page it opens: the
-// one-time "I can play" it asks for, and the button that copies it.
+// A game's shared standin link (standinOfferPath): the button that copies it,
+// and the pieces of the Standins page it opens on. Opening it adds nobody:
+// the page's accept card has the one Accept button (Tim, 2026-11-21).
 
 /**
- * Answers a shared link once: puts a signed-in standin who may offer on the
- * list, or says they already are, or why they can't be. The server decides
- * which (standinArrivalAction); this only acts. It scrubs `play` from the
- * address first, so a refresh or a copied tab never offers again (the
- * inhouse night's `?imin=1` works the same way), then refreshes the page:
- * called from an effect, the action's own revalidation never reaches it. A
- * lost answer is unknown, never failed: the game shows the truth on reload.
- *
- * Opening the link only ever adds a name to a list the captain picks from,
- * and one tap takes it off again, which is why this may act without a press.
- */
-export function StandinOfferOnArrival({
-  matchId,
-  teamId,
-  action,
-  blockedReason,
-}: {
-  matchId: string;
-  teamId: string;
-  action: StandinArrivalAction;
-  /** Why they can't offer, for `action: "blocked"`. */
-  blockedReason?: string;
-}) {
-  const answered = useRef(false);
-  const router = useRouter();
-  useEffect(() => {
-    const url = new URL(window.location.href);
-    if (url.searchParams.has("play")) {
-      url.searchParams.delete("play");
-      window.history.replaceState(null, "", url);
-    }
-    if (answered.current) return;
-    answered.current = true;
-    if (action === "already") {
-      pushToast("info", "You're already on the list for this game.");
-      return;
-    }
-    if (action === "blocked") {
-      if (blockedReason) pushToast("info", blockedReason);
-      return;
-    }
-    if (action !== "offer") return;
-    const form = new FormData();
-    form.set("matchId", matchId);
-    form.set("teamId", teamId);
-    startTransition(async () => {
-      try {
-        const result = await offerToStandInAction(null, form);
-        if (result?.error) pushToast("error", result.error);
-        else if (result?.message) pushToast("success", result.message);
-        router.refresh();
-      } catch {
-        pushToast(
-          "error",
-          "The connection dropped before we could confirm. Reload to see whether you're on the list.",
-        );
-      }
-    });
-  }, [action, blockedReason, matchId, teamId, router]);
-  return null;
-}
-
-/**
- * Copies a game's standin link: it opens the Standins page on this game, and
- * a signed-in standin who opens it is put on the list. The address comes
+ * Copies a game's standin link: it opens the Standins page on this game's
+ * accept card, where a standin taps Accept to go on the list. The address comes
  * from `window.location.origin` at click time, so a preview, a custom domain
  * and localhost each copy themselves.
  */
@@ -112,7 +45,7 @@ export function CopyStandinLink({
           setCopied(true);
           pushToast(
             "success",
-            "Copied. Paste it in Discord: a standin who opens it is added to this game's list.",
+            "Copied. Paste it in Discord: a standin who opens it can accept this game in one tap.",
           );
           setTimeout(() => setCopied(false), 2500);
         } catch {

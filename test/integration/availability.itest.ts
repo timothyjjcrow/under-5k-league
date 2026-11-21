@@ -443,7 +443,7 @@ describe("setAvailability — assigned standins", () => {
     );
     expect(call, "a standin's drop-out must announce").toBeTruthy();
     expect(String(call![0])).toContain(
-      `/standins?match=${match.id}&team=${home.id}&play=1>`,
+      `/standins?match=${match.id}&team=${home.id}>`,
     );
   });
 });
