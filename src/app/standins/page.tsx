@@ -9,6 +9,7 @@ import { getActiveSeason } from "@/lib/season";
 import { getCaptainTeam } from "@/lib/captains-service";
 import { shareMetadata } from "@/lib/share-metadata";
 import {
+  orderStandinBoard,
   standinArrivalAction,
   standinNeedLabel,
   standinOfferCountLabel,
@@ -166,11 +167,12 @@ export default async function StandinsPage({
   const linkedNeed = needs.find(isLinked) ?? null;
   // A captain's own sides are in their team's section above, never twice.
   const others = needs.filter((n) => n.teamId !== myTeam?.id);
-  // The game the link names leads the list; the rest stay soonest first.
-  const ordered =
-    linkedNeed && linkedNeed.teamId !== myTeam?.id
-      ? [linkedNeed, ...others.filter((n) => n !== linkedNeed)]
-      : others;
+  // A player's own team (Tim, 2026-11-20): any of its players may share its
+  // game's link, as the captain can. Never the captain's: theirs is above.
+  const ownTeamId = myTeam ? null : (offerViewer?.rosterTeamId ?? null);
+  // Their own team's games lead, then the game the link names; the rest stay
+  // soonest first.
+  const ordered = orderStandinBoard(others, { ownTeamId, linked });
   const arrivalStanding = linkedNeed ? standingOn(linkedNeed, offerViewer) : null;
   // A rostered viewer (that side's captain or a teammate) opening a shared
   // link is never told they can't stand in: the captain lands on their
@@ -263,6 +265,7 @@ export default async function StandinsPage({
                   need={need}
                   standing={standingOn(need, offerViewer)}
                   viewer={viewer}
+                  ownTeam={ownTeamId !== null && need.teamId === ownTeamId}
                   highlighted={isLinked(need)}
                   first={index === 0}
                 />
@@ -352,12 +355,18 @@ function NeedCard({
   need,
   standing,
   viewer,
+  ownTeam,
   highlighted,
   first,
 }: {
   need: StandinBoardNeed;
   standing: StandinOfferStanding;
   viewer: SessionUser | null;
+  /**
+   * The viewer plays for this side (not as its captain). They can't stand
+   * in for it, but sharing its link is how they help fill the seat.
+   */
+  ownTeam: boolean;
   /** The game a shared link opened. */
   highlighted: boolean;
   /** The first game listed: it carries the page's one Steam notice. */
@@ -375,6 +384,7 @@ function NeedCard({
       <CardBody className="space-y-3">
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
           <Badge tone="info">{need.roundLabel}</Badge>
+          {ownTeam ? <Badge tone="accent">Your team</Badge> : null}
           <span className="text-muted">
             {need.scheduledAt ? (
               <LocalTime
@@ -411,7 +421,20 @@ function NeedCard({
             </>
           ) : null}
         </p>
-        {standing.kind === "open" ? (
+        {ownTeam ? (
+          // Their own side: the link, where a standin would see "I can play".
+          <div className="space-y-2">
+            <p className="text-sm">
+              Share this game in Discord: a standin who opens the link is added
+              to the list, and your captain picks.
+            </p>
+            <CopyStandinLink
+              matchId={need.matchId}
+              teamId={need.teamId}
+              variant="secondary"
+            />
+          </div>
+        ) : standing.kind === "open" ? (
           <div className="space-y-2">
             <p className="text-sm">
               {standinOfferOutcomeLine(standing.outcome, need.opponentName)}

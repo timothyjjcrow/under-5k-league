@@ -17,6 +17,20 @@ const CAPTURED = JSON.parse(readFileSync(new URL("./dev-audit.fixture.json", imp
 const PICOMATCH = "GHSA-fc5q-39xc-vjpf";
 const report = () => structuredClone(CAPTURED);
 
+// The entry the shipped list held for that advisory from 2026-11-18 until
+// GitHub withdrew it (the list is empty since 2026-11-20). The tests judge
+// the captured report against it, so they keep covering a listed advisory
+// whatever the shipped list holds.
+const PICOMATCH_EXCEPTION = Object.freeze({
+  id: PICOMATCH,
+  package: "picomatch",
+  range: "<=4.0.7",
+  added: "2026-11-18",
+  reason: "ReDoS in a glob pattern; picomatch reaches the repo only through dev tooling.",
+  removeWhen: "picomatch ships a version outside <=4.0.7.",
+});
+const LISTED = Object.freeze([PICOMATCH_EXCEPTION]);
+
 const advisory = ({ name, url, severity, range = "<1.0.0", source = 1 }) => ({
   source,
   name,
@@ -65,8 +79,8 @@ function withoutPicomatch() {
   return base;
 }
 
-test("the captured report passes with the shipped list: picomatch tolerated, moderates below the bar", () => {
-  const result = evaluateDevAudit(report());
+test("the captured report passes with its advisory listed: picomatch tolerated, moderates below the bar", () => {
+  const result = evaluateDevAudit(report(), LISTED);
   assert.equal(result.ok, true);
   assert.deepEqual(result.blocking, []);
   assert.deepEqual(result.stale, []);
@@ -90,13 +104,23 @@ test("without the list the captured report fails, as npm audit --audit-level=hig
   assert.match(lines.at(-1), /Failed\.$/);
 });
 
+// GitHub withdrew GHSA-fc5q-39xc-vjpf on 2026-11-18, so the shipped list
+// tolerates nothing: a clean report passes, and the captured one fails.
+test("the shipped list tolerates nothing a report doesn't need", () => {
+  assert.equal(evaluateDevAudit({ ...report(), vulnerabilities: {} }).ok, true);
+  const captured = evaluateDevAudit(report());
+  assert.equal(captured.ok, false);
+  assert.deepEqual(captured.stale, []);
+  assert.deepEqual(captured.blocking.map((a) => [a.id, a.package]), [[PICOMATCH, "picomatch"]]);
+});
+
 test("a new high or critical advisory anywhere else blocks, while the listed one stays tolerated", () => {
   for (const severity of ["high", "critical"]) {
     const result = evaluateDevAudit(withAdvisory(report(), {
       name: "left-pad",
       url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
       severity,
-    }));
+    }), LISTED);
     assert.equal(result.ok, false, severity);
     assert.deepEqual(result.blocking.map((a) => [a.id, a.package, a.severity]), [["GHSA-aaaa-bbbb-cccc", "left-pad", severity]]);
     assert.deepEqual(result.tolerated.map(({ advisory: a }) => a.id), [PICOMATCH]);
@@ -109,7 +133,7 @@ test("a new low or moderate advisory doesn't block, as with --audit-level=high",
       name: "left-pad",
       url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
       severity,
-    }));
+    }), LISTED);
     assert.equal(result.ok, true, severity);
     assert.equal(result.belowThreshold, 4, severity);
   }
@@ -125,7 +149,7 @@ test("an exception covers its GHSA id in its package only", () => {
     source: 2,
   }));
   another.vulnerabilities.picomatch.severity = "critical";
-  const second = evaluateDevAudit(another);
+  const second = evaluateDevAudit(another, LISTED);
   assert.equal(second.ok, false);
   assert.deepEqual(second.blocking.map((a) => [a.id, a.package]), [["GHSA-dddd-eeee-ffff", "picomatch"]]);
   assert.deepEqual(second.tolerated.map(({ advisory: a }) => a.id), [PICOMATCH]);
@@ -136,7 +160,7 @@ test("an exception covers its GHSA id in its package only", () => {
     url: `https://github.com/advisories/${PICOMATCH}`,
     severity: "high",
     range: "<=4.0.7",
-  }));
+  }), LISTED);
   assert.equal(elsewhere.ok, false);
   assert.deepEqual(elsewhere.blocking.map((a) => [a.id, a.package]), [[PICOMATCH, "micromatch"]]);
   assert.deepEqual(elsewhere.stale.map((entry) => entry.package), ["picomatch"]);
@@ -145,7 +169,7 @@ test("an exception covers its GHSA id in its package only", () => {
 test("a listed advisory that is no longer reported fails until its entry is deleted", () => {
   const fixed = withoutPicomatch();
   assert.equal(advisoriesIn(fixed).some((a) => a.package === "picomatch"), false);
-  const result = evaluateDevAudit(fixed);
+  const result = evaluateDevAudit(fixed, LISTED);
   assert.equal(result.ok, false);
   assert.deepEqual(result.blocking, []);
   assert.deepEqual(result.stale.map((entry) => entry.id), [PICOMATCH]);
@@ -156,7 +180,7 @@ test("a listed advisory that is no longer reported fails until its entry is dele
 
   // A clean audit is the same case.
   const clean = { ...report(), vulnerabilities: {} };
-  assert.deepEqual(evaluateDevAudit(clean).stale.map((entry) => entry.id), [PICOMATCH]);
+  assert.deepEqual(evaluateDevAudit(clean, LISTED).stale.map((entry) => entry.id), [PICOMATCH]);
   assert.equal(evaluateDevAudit(clean, []).ok, true);
 });
 
@@ -166,7 +190,7 @@ test("a listed advisory downgraded below high is stale too: the gate passes with
     if (entry.severity === "high") entry.severity = "moderate";
     for (const via of entry.via) if (typeof via !== "string") via.severity = via.severity === "high" ? "moderate" : via.severity;
   }
-  const result = evaluateDevAudit(downgraded);
+  const result = evaluateDevAudit(downgraded, LISTED);
   assert.equal(result.ok, false);
   assert.deepEqual(result.stale.map((entry) => entry.id), [PICOMATCH]);
   assert.equal(result.belowThreshold, 4);
@@ -175,7 +199,7 @@ test("a listed advisory downgraded below high is stale too: the gate passes with
 test("a listed advisory whose vulnerable range changed fails for a review", () => {
   const edited = report();
   edited.vulnerabilities.picomatch.via[0].range = "<4.0.8";
-  const result = evaluateDevAudit(edited);
+  const result = evaluateDevAudit(edited, LISTED);
   assert.equal(result.ok, false);
   assert.deepEqual(result.tolerated, []);
   assert.deepEqual(result.stale, []);
@@ -190,7 +214,7 @@ test("a high advisory without a GHSA id can't be listed, so it blocks", () => {
     name: "left-pad",
     url: "https://www.npmjs.com/advisories/1234",
     severity: "high",
-  }));
+  }), LISTED);
   assert.equal(result.ok, false);
   assert.deepEqual(result.blocking.map((a) => a.id), ["npm advisory 1"]);
 });
@@ -198,42 +222,42 @@ test("a high advisory without a GHSA id can't be listed, so it blocks", () => {
 test("ids read from an advisory URL are compared in GitHub's spelling", () => {
   const shouted = report();
   shouted.vulnerabilities.picomatch.via[0].url = "https://github.com/advisories/GHSA-FC5Q-39XC-VJPF";
-  assert.equal(evaluateDevAudit(shouted).ok, true);
+  assert.equal(evaluateDevAudit(shouted, LISTED).ok, true);
 });
 
 test("an npm error or a report it can't read fails rather than passes", () => {
   assert.throws(
-    () => evaluateDevAudit({ error: { code: "ENOTFOUND", summary: "request to https://registry.npmjs.org failed" } }),
+    () => evaluateDevAudit({ error: { code: "ENOTFOUND", summary: "request to https://registry.npmjs.org failed" } }, LISTED),
     /npm audit failed \(ENOTFOUND\): request to https:\/\/registry\.npmjs\.org failed/,
   );
-  assert.throws(() => evaluateDevAudit(null), /Not an npm audit report/);
-  assert.throws(() => evaluateDevAudit({ ...report(), auditReportVersion: 3 }), /auditReportVersion 3, expected 2/);
-  assert.throws(() => evaluateDevAudit({ auditReportVersion: 2 }), /no vulnerabilities object/);
+  assert.throws(() => evaluateDevAudit(null, LISTED), /Not an npm audit report/);
+  assert.throws(() => evaluateDevAudit({ ...report(), auditReportVersion: 3 }, LISTED), /auditReportVersion 3, expected 2/);
+  assert.throws(() => evaluateDevAudit({ auditReportVersion: 2 }, LISTED), /no vulnerabilities object/);
 
   const noSeverity = report();
   delete noSeverity.vulnerabilities.vite.severity;
-  assert.throws(() => evaluateDevAudit(noSeverity), /entry for vite has no severity/);
+  assert.throws(() => evaluateDevAudit(noSeverity, LISTED), /entry for vite has no severity/);
 
   const unnamed = report();
   delete unnamed.vulnerabilities.picomatch.via[0].name;
-  assert.throws(() => evaluateDevAudit(unnamed), /entry for picomatch has an advisory without a package/);
+  assert.throws(() => evaluateDevAudit(unnamed, LISTED), /entry for picomatch has an advisory without a package/);
 
   // A package rated critical with nothing critical behind it: npm's report
   // changed under the script.
   const unexplained = report();
   unexplained.vulnerabilities.vite.severity = "critical";
-  assert.throws(() => evaluateDevAudit(unexplained), /rates vite critical, but no critical advisory leads to it/);
+  assert.throws(() => evaluateDevAudit(unexplained, LISTED), /rates vite critical, but no critical advisory leads to it/);
 
   // A cycle of packages with no advisory behind them.
   const cycle = report();
   cycle.vulnerabilities.a = { name: "a", severity: "high", via: ["b"], effects: ["b"], range: "*", nodes: [], fixAvailable: false };
   cycle.vulnerabilities.b = { name: "b", severity: "high", via: ["a"], effects: ["a"], range: "*", nodes: [], fixAvailable: false };
-  assert.throws(() => evaluateDevAudit(cycle), /rates a high, but no high advisory leads to it/);
+  assert.throws(() => evaluateDevAudit(cycle, LISTED), /rates a high, but no high advisory leads to it/);
 });
 
 test("every shipped exception is complete, and malformed or doubled ones are refused", () => {
-  assert.ok(DEV_AUDIT_EXCEPTIONS.length > 0);
   assert.doesNotThrow(() => assertExceptions(DEV_AUDIT_EXCEPTIONS));
+  assert.doesNotThrow(() => assertExceptions(LISTED));
   for (const entry of DEV_AUDIT_EXCEPTIONS) {
     assert.ok(Object.isFrozen(entry));
     assert.match(entry.reason, /dev/i, `${entry.id} says why it is dev-only`);
@@ -241,7 +265,7 @@ test("every shipped exception is complete, and malformed or doubled ones are ref
   }
   assert.ok(Object.isFrozen(DEV_AUDIT_EXCEPTIONS));
 
-  const good = DEV_AUDIT_EXCEPTIONS[0];
+  const good = PICOMATCH_EXCEPTION;
   assert.throws(() => assertExceptions([{ ...good, id: "GHSA-FC5Q-39XC-VJPF" }]), /needs a GHSA id spelled as GitHub does/);
   assert.throws(() => assertExceptions([{ ...good, id: "CVE-2026-0001" }]), /needs a GHSA id/);
   for (const field of ["package", "range", "reason", "removeWhen"]) {

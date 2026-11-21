@@ -30,20 +30,9 @@ import { pathToFileURL } from "node:url";
  * and must still report exactly `range`.
  */
 export const DEV_AUDIT_EXCEPTIONS = Object.freeze([
-  Object.freeze({
-    id: "GHSA-fc5q-39xc-vjpf",
-    package: "picomatch",
-    range: "<=4.0.7",
-    added: "2026-11-18",
-    reason:
-      "ReDoS through single-branch repeated extglobs in a glob pattern. picomatch reaches the repo only through dev tooling " +
-      "(vite and vitest, tinyglobby and fdir, eslint-config-next, typescript-eslint), which match the repo's own config " +
-      "globs, never a request's input; the production audit passes. No release is patched (4.0.7 is the latest), and " +
-      "`npm audit fix` offers only a vite 8 to 6 downgrade that brings vite's own high advisories.",
-    removeWhen:
-      "picomatch ships a version outside <=4.0.7: update the lockfile to it and delete this entry " +
-      "(this script fails once the advisory stops being reported).",
-  }),
+  // Empty since 2026-11-20: GHSA-fc5q-39xc-vjpf (picomatch, listed
+  // 2026-11-18) was withdrawn by GitHub on 2026-11-18 and stopped being
+  // reported. Its row is in docs/DECISIONS.md under Closed since.
 ]);
 
 /** Severities that fail this audit, as `--audit-level=high` does. */
