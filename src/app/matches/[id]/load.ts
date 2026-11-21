@@ -23,8 +23,10 @@ export async function loadMatch(id: string) {
   return prisma.match.findUnique({
     where: { id },
     include: {
-      homeTeam: true,
-      awayTeam: true,
+      // Each captain's name for the scoreboard's lobby host line
+      // (matchLobbyHosts): the home captain hosts, the away one is backup.
+      homeTeam: { include: { captain: { select: { id: true, name: true } } } },
+      awayTeam: { include: { captain: { select: { id: true, name: true } } } },
       // The shown columns only: the participant index's copy of each box
       // score stays in the database.
       games: { orderBy: { startTime: "asc" }, select: GAME_VIEW_COLUMNS },

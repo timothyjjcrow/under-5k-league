@@ -61,14 +61,60 @@ export function seriesLobbyRule(bestOf: number): string {
   return `Bo${n} = one lobby per game, first to ${Math.ceil(n / 2)} wins`;
 }
 
+/** A team captain as the lobby host line names them. */
+export type LobbyHostCaptain = {
+  id: string;
+  name: string;
+  teamName: string;
+  /** The signed-in viewer is this captain. */
+  isViewer: boolean;
+};
+
+/**
+ * Who makes this match's Dota lobby: the home team's captain hosts and the
+ * away team's captain is the backup (rules #hosting, and the lobby
+ * checklist's first step). The scoreboard names both for everyone, so a
+ * player or admin never has to work out which side is "home".
+ */
+export function matchLobbyHosts(
+  match: {
+    homeTeam: { name: string; captain: { id: string; name: string } };
+    awayTeam: { name: string; captain: { id: string; name: string } };
+  },
+  viewerId: string | null,
+): { host: LobbyHostCaptain; backup: LobbyHostCaptain } {
+  const side = (team: typeof match.homeTeam): LobbyHostCaptain => ({
+    id: team.captain.id,
+    name: team.captain.name,
+    teamName: team.name,
+    isViewer: viewerId != null && viewerId === team.captain.id,
+  });
+  return { host: side(match.homeTeam), backup: side(match.awayTeam) };
+}
+
+/**
+ * The lobby host line shows while a lobby may still be made: the active
+ * season's series that isn't final. A finished or archived match has no
+ * lobby left to host.
+ */
+export function lobbyHostShown(match: {
+  status: string;
+  season: { isActive: boolean };
+}): boolean {
+  return match.season.isActive && match.status !== "COMPLETED";
+}
+
 /** The pieces of the one-line "How to host" summary, in reading order. */
 export function howToHostParts({
   homeTeamName,
+  hostCaptainName,
   bestOf,
   region,
   mode,
 }: {
   homeTeamName: string;
+  /** The home team's captain, who hosts (`matchLobbyHosts`). */
+  hostCaptainName: string;
   bestOf: number;
   /** LEAGUE_CONFIG.gameServerRegion — never a hard-coded region. */
   region: string;
@@ -76,7 +122,7 @@ export function howToHostParts({
   mode: string;
 }): string[] {
   return [
-    `${homeTeamName}'s captain hosts`,
+    `${hostCaptainName} (${homeTeamName}'s captain) hosts`,
     region,
     mode,
     seriesLobbyRule(bestOf),

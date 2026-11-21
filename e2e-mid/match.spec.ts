@@ -74,6 +74,11 @@ test("an unplayed match page renders the preview with the scouting report", asyn
   await expect(scheduledDetails.first()).toBeVisible();
   await scheduledDetails.first().click();
   await expect(page).toHaveURL(/\/matches\//);
+  // Everyone sees who makes the Dota lobby, under the kickoff time: the home
+  // captain hosts and the away captain is the backup.
+  await expect(page.locator("[data-lobby-host]")).toHaveText(
+    /^Lobby host: .+ \(.+ captain\) · Backup: .+ \(.+ captain\)$/,
+  );
   await expect(page.getByText("Scouting report")).toBeVisible();
   // On a phone the scouting card starts folded to its heading; a tap opens it.
   const scouting = page.locator("#match-scouting");
@@ -123,6 +128,10 @@ test("captains can report an open series and get a clear correction handoff once
   ).toBeVisible();
 
   await page.goto(openHref!);
+  // The home captain reads that the lobby is theirs to make.
+  await expect(page.locator("[data-lobby-host]")).toHaveText(
+    /^Lobby host: you \(.+ captain\) · Backup: .+ \(.+ captain\)$/,
+  );
   // The scoreboard says what the page can do for a captain. This fixture
   // kicks off within three hours, so it is match night: lobby setup and
   // reporting lead, then finding cover and moving the time. Cover is found
@@ -214,7 +223,7 @@ test("captains can report an open series and get a clear correction handoff once
   await expect(page.getByText("How to host:", { exact: true })).toHaveCount(1);
   await expect(
     page.getByText(
-      /captain hosts · .+ · Captains Mode · Bo2 = two separate lobbies/,
+      /Result Captain \(.+'s captain\) hosts · .+ · Captains Mode · Bo2 = two separate lobbies/,
     ),
   ).toBeVisible();
   await expect(

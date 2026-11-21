@@ -193,6 +193,33 @@ describe("match page result card", () => {
   });
 });
 
+describe("match page lobby host", () => {
+  // Tim, 2026-11-21: nobody but the two captains could see who makes the
+  // lobby, and they saw only the home team's name, at the page's bottom.
+  it("names both captains on the scoreboard for every viewer", () => {
+    const card = CARD("scoreboard.tsx");
+    expect(card).toContain("lobbyHostShown(match)");
+    expect(card).toContain("matchLobbyHosts(match, viewer?.id ?? null)");
+    expect(card).toContain("<LobbyHostLine {...lobbyHosts} />");
+    // Not behind a captain or sign-in check.
+    const line = card.indexOf("const lobbyHosts =");
+    expect(card.slice(line, line + 160)).not.toMatch(/showCaptainTools|isCaptain/);
+  });
+
+  it("loads each captain's name with the teams, and How to host names the host", () => {
+    const load = CARD("load.ts");
+    expect(load).toContain(
+      "homeTeam: { include: { captain: { select: { id: true, name: true } } } }",
+    );
+    expect(load).toContain(
+      "awayTeam: { include: { captain: { select: { id: true, name: true } } } }",
+    );
+    expect(CARD("report-result.tsx")).toContain(
+      "hostCaptainName: match.homeTeam.captain.name",
+    );
+  });
+});
+
 describe("match page lobby bot panel", () => {
   it("gives players, standins and admins the season lobby's name and password", () => {
     // resolveDotaLobby lets them view the season lobby, and DOTA-LOBBY-BOT.md

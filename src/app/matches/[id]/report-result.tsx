@@ -80,6 +80,7 @@ export function ReportResultSection({
     !!match.season.dotaLeagueId && !live && !afterScheduledTime;
   const hostParts = howToHostParts({
     homeTeamName: match.homeTeam.name,
+    hostCaptainName: match.homeTeam.captain.name,
     bestOf: match.bestOf,
     region: LEAGUE_CONFIG.gameServerRegion,
     mode: LEAGUE_GAME_MODE.name,

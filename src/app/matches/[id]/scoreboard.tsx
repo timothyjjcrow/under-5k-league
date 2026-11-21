@@ -9,6 +9,11 @@ import { getLeagueStream } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { matchResultsOpen } from "@/lib/league-lifecycle";
+import {
+  lobbyHostShown,
+  matchLobbyHosts,
+  type LobbyHostCaptain,
+} from "@/lib/match-hosting";
 import { seriesStalled } from "@/lib/schedule";
 import { calledItCount, pickemControlFor } from "@/lib/pickem";
 import type { ChampionPresentation } from "@/lib/champion-presentation";
@@ -29,6 +34,7 @@ import {
   Card,
   CardBody,
   LinkArrow,
+  PlayerLink,
   TeamCrest,
   buttonClasses,
 } from "@/components/ui";
@@ -117,6 +123,12 @@ export async function MatchScoreboard({
   const playerWatch = streamPlayerWindow(match, match.season.isActive);
   const stream = playerWatch ? await getLeagueStream() : null;
   const embed = stream ? streamEmbed(stream) : null;
+  // Who makes the Dota lobby, for everyone: players, standins and admins
+  // need it as much as the two captains, whose How to host line sits at the
+  // bottom of the page in Captain tools.
+  const lobbyHosts = lobbyHostShown(match)
+    ? matchLobbyHosts(match, viewer?.id ?? null)
+    : null;
 
   return (
     <Card className="relative overflow-hidden">
@@ -276,6 +288,7 @@ export async function MatchScoreboard({
           ) : (
             <span>Kickoff time TBD</span>
           )}
+          {lobbyHosts ? <LobbyHostLine {...lobbyHosts} /> : null}
           {watch && stream ? <WatchLink stream={stream} watch={watch} /> : null}
           {pickVerdict ? (
             <PickemTray
@@ -425,5 +438,42 @@ function TeamSide({
         {name}
       </Link>
     </div>
+  );
+}
+
+/**
+ * "Lobby host: <home captain> (<team> captain) · Backup: <away captain>
+ * (<team> captain)", on its own line under the kickoff time. Each name links
+ * to the captain's profile; the viewer's own name reads "you".
+ */
+function LobbyHostLine({
+  host,
+  backup,
+}: {
+  host: LobbyHostCaptain;
+  backup: LobbyHostCaptain;
+}) {
+  return (
+    <p data-lobby-host className="basis-full [overflow-wrap:anywhere]">
+      <b className="text-fg">Lobby host:</b> <LobbyCaptain captain={host} />
+      {" · "}
+      <span className="whitespace-nowrap">Backup:</span>{" "}
+      <LobbyCaptain captain={backup} />
+    </p>
+  );
+}
+
+function LobbyCaptain({ captain }: { captain: LobbyHostCaptain }) {
+  return (
+    <>
+      {captain.isViewer ? (
+        <b className="text-fg">you</b>
+      ) : (
+        <PlayerLink userId={captain.id} className="font-medium text-fg">
+          {captain.name}
+        </PlayerLink>
+      )}
+      {` (${captain.teamName} captain)`}
+    </>
   );
 }
