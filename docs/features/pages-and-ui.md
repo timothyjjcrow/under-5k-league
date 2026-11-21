@@ -1390,8 +1390,16 @@ the filter rules are pure in `src/lib/player-pool.ts`
   data (check-ins, comfort picks), so side by side from `xl` left a hole
   under whichever was shorter. A team header lets its form strip wrap under
   a long name.
+- **Everyone sees who makes the lobby, on the scoreboard.** Under the kickoff
+  time, "Lobby host: <home captain> (<team> captain) · Backup: <away
+  captain> (<team> captain)" names both captains, each linked to their
+  profile and "you" for the viewer's own (`matchLobbyHosts`,
+  `lobbyHostShown`: the active season's series until it is final). Before
+  2026-11-21 only the two captains were told, at the page's bottom, and only
+  the home team's name; Tim asked for the captain to be named for everyone.
 - **Both captains always get a "How to host" line built from data**
-  (`src/lib/match-hosting.ts`, tested): the home captain hosts,
+  (`src/lib/match-hosting.ts`, tested): the home captain hosts, named
+  (`hostCaptainName`),
   `LEAGUE_CONFIG.gameServerRegion`, `LEAGUE_GAME_MODE` (the mode the lobby bot
   also sets) and the match's own `bestOf` (`seriesLobbyRule`). A ticketed
   season makes it the first line of the lobby checklist; a ticketless one

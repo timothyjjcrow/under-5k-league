@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   howToHostParts,
   leagueResultCopy,
+  lobbyHostShown,
+  matchLobbyHosts,
   MISSING_LEAGUE_TICKET_WARNING,
   NO_TICKET_REPORT_SUBTITLE,
   NO_TICKET_RESULT_NOTE,
@@ -35,12 +37,13 @@ describe("howToHostParts", () => {
     expect(
       howToHostParts({
         homeTeamName: "Blue Wolves",
+        hostCaptainName: "Alice",
         bestOf: 2,
         region: eu.gameServerRegion,
         mode: LEAGUE_GAME_MODE.name,
       }),
     ).toEqual([
-      "Blue Wolves's captain hosts",
+      "Alice (Blue Wolves's captain) hosts",
       "Europe West",
       "Captains Mode",
       "Bo2 = two separate lobbies",
@@ -49,11 +52,54 @@ describe("howToHostParts", () => {
     expect(
       howToHostParts({
         homeTeamName: "Red",
+        hostCaptainName: "Bob",
         bestOf: 3,
         region: us.gameServerRegion,
         mode: LEAGUE_GAME_MODE.name,
       })[1],
     ).toBe("US East");
+  });
+});
+
+describe("matchLobbyHosts", () => {
+  const match = {
+    homeTeam: { name: "Blue Wolves", captain: { id: "u-home", name: "Alice" } },
+    awayTeam: { name: "Red", captain: { id: "u-away", name: "Bob" } },
+  };
+
+  it("makes the home captain the host and the away captain the backup", () => {
+    expect(matchLobbyHosts(match, null)).toEqual({
+      host: { id: "u-home", name: "Alice", teamName: "Blue Wolves", isViewer: false },
+      backup: { id: "u-away", name: "Bob", teamName: "Red", isViewer: false },
+    });
+  });
+
+  it("marks the viewer's own side, and only theirs", () => {
+    const asHost = matchLobbyHosts(match, "u-home");
+    expect(asHost.host.isViewer).toBe(true);
+    expect(asHost.backup.isViewer).toBe(false);
+    const asBackup = matchLobbyHosts(match, "u-away");
+    expect(asBackup.host.isViewer).toBe(false);
+    expect(asBackup.backup.isViewer).toBe(true);
+    const asPlayer = matchLobbyHosts(match, "u-other");
+    expect(asPlayer.host.isViewer || asPlayer.backup.isViewer).toBe(false);
+  });
+});
+
+describe("lobbyHostShown", () => {
+  it("shows while the active season's series can still be played", () => {
+    for (const status of ["SCHEDULED", "LIVE"]) {
+      expect(lobbyHostShown({ status, season: { isActive: true } })).toBe(true);
+    }
+  });
+
+  it("hides on a final series or an archived season", () => {
+    expect(
+      lobbyHostShown({ status: "COMPLETED", season: { isActive: true } }),
+    ).toBe(false);
+    expect(
+      lobbyHostShown({ status: "SCHEDULED", season: { isActive: false } }),
+    ).toBe(false);
   });
 });
 
