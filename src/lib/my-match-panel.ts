@@ -5,7 +5,7 @@
 // only draws what this returns.
 
 import { AUTO_SYNC, MATCH_PHASE, MATCH_STATUS, SEASON_STATUS } from "./constants";
-import { byKickoff } from "./schedule";
+import { byKickoff, seriesStalled } from "./schedule";
 
 export type PanelMatch = {
   id: string;
@@ -59,8 +59,10 @@ export type PanelIdle =
 export type MyMatchPanel<M extends PanelMatch, B extends PanelBooking> = {
   /** The fixture the check-in answers for: timed, not yet started, not stale. */
   next: M | null;
-  /** The viewer's series being played now. Not a check-in: a link to it. */
-  live: { match: M; teamId: string } | null;
+  /** The viewer's series being played now. Not a check-in: a link to it.
+   *  `unfinished` when it stopped partway and its kickoff is past the result
+   *  window (`seriesStalled`): still theirs to finish, but not live. */
+  live: { match: M; teamId: string; unfinished: boolean } | null;
   /** The earliest open fixture where a standin has the viewer's seat, when it
    *  comes before `next` (or there is no `next`). */
   covered: { match: M; booking: B } | null;
@@ -127,7 +129,8 @@ export function myMatchPanel<
       continue;
     }
     if (m.status === MATCH_STATUS.LIVE) {
-      if (!live) live = { match: m, teamId };
+      if (!live)
+        live = { match: m, teamId, unfinished: seriesStalled(m, input.nowMs) };
       continue;
     }
     if (!next) next = m;

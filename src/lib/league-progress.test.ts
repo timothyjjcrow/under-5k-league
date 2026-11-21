@@ -35,7 +35,7 @@ describe("league progress presentation", () => {
       [
         match("done", "COMPLETED", 1, old),
         match("old", "SCHEDULED", 2, old),
-        match("live", "LIVE", 3, old),
+        match("live", "LIVE", 3, new Date(now - 3600_000)),
         match("future", "SCHEDULED", 3, new Date(now + 3600_000)),
         match("untimed", "SCHEDULED", 4, null),
         { ...match("playoff", "COMPLETED", 6, old), phase: "FINAL" },
@@ -52,6 +52,30 @@ describe("league progress presentation", () => {
       totalWeeks: 4,
     });
     expect(result.awaiting.map((row) => row.id)).toEqual(["old"]);
+    expect(
+      result.completed +
+        result.live +
+        result.scheduled +
+        result.untimed +
+        result.awaiting.length,
+    ).toBe(result.total);
+  });
+
+  // US season 2, 2026-11-20: week 2's two unfinished Bo2s (1-0 since Nov 14)
+  // made Home say "Week 2 of 5" and "2 Live" the day before week 3.
+  it("counts a series stalled partway as overdue, not live, and moves the week on", () => {
+    const week2 = new Date(now - 6 * 86_400_000);
+    const week3 = new Date(now + 86_400_000);
+    const result = leagueProgress(
+      [
+        match("w2-done", "COMPLETED", 2, week2),
+        match("w2-stalled", "LIVE", 2, week2),
+        match("w3", "SCHEDULED", 3, week3),
+      ],
+      now,
+    );
+    expect(result).toMatchObject({ live: 0, scheduled: 1, focusWeek: 3 });
+    expect(result.awaiting.map((row) => row.id)).toEqual(["w2-stalled"]);
     expect(
       result.completed +
         result.live +

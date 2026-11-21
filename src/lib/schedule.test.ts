@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import {
   focusSlate,
+  isRelevantOpenMatch,
+  seriesStalled,
   roundRobin,
   byeTeamsByWeek,
   orderScheduleWeeks,
@@ -28,6 +30,7 @@ import {
   scheduleFilterTeamId,
 } from "./schedule";
 import { LEAGUE_CONFIG } from "./league-config";
+import { AUTO_SYNC } from "./constants";
 
 describe("matchNightForWeek", () => {
   const first = new Date("2026-07-12T18:00:00-07:00");
@@ -920,6 +923,43 @@ describe("focusSlate", () => {
     expect(title).toBe("This week · Week 2");
   });
 
+  // US season 2, 2026-11-20: two week-2 Bo2s stopped at 1-0 on Nov 14 and
+  // the admins moved the rest to week 3's night. LIVE counted as current
+  // forever, so every page said "Week 2" the day before week 3.
+  it("moves on to the next week when an earlier series stalled partway", () => {
+    const now = new Date("2026-11-20T20:00:00Z").getTime();
+    const week2 = new Date("2026-11-14T22:00:00Z");
+    const week3 = new Date("2026-11-21T22:00:00Z");
+    const { slate, title } = focusSlate(
+      "REGULAR_SEASON",
+      [
+        { ...m("w2-done", 2, "COMPLETED"), scheduledAt: week2 },
+        { ...m("w2-stalled-a", 2, "LIVE"), scheduledAt: week2 },
+        { ...m("w2-stalled-b", 2, "LIVE"), scheduledAt: week2 },
+        { ...m("w3-a", 3), scheduledAt: week3 },
+        { ...m("w3-b", 3), scheduledAt: week3 },
+      ],
+      now,
+    );
+    expect(slate.map((x) => x.id)).toEqual(["w3-a", "w3-b"]);
+    expect(title).toBe("This week · Week 3");
+  });
+
+  it("keeps a series that went live tonight in tonight's slate", () => {
+    const now = new Date("2026-11-21T23:30:00Z").getTime();
+    const tonight = new Date("2026-11-21T22:00:00Z");
+    const { slate, title } = focusSlate(
+      "REGULAR_SEASON",
+      [
+        { ...m("live", 3, "LIVE"), scheduledAt: tonight },
+        { ...m("later", 4), scheduledAt: new Date("2026-11-28T22:00:00Z") },
+      ],
+      now,
+    );
+    expect(slate.map((x) => x.id)).toEqual(["live"]);
+    expect(title).toBe("This week · Week 3");
+  });
+
   it("takes every open bracket match during playoffs, whatever the week", () => {
     const { slate, title } = focusSlate("PLAYOFFS", [
       m("r1", 9, "COMPLETED", "PLAYOFF"),
@@ -983,5 +1023,41 @@ describe("byKickoff ties", async () => {
     const later = { id: "a", scheduledAt: new Date("2026-08-16T21:00:00Z"), week: 1, createdAt: made };
     const sooner = { id: "z", scheduledAt: new Date("2026-08-15T21:00:00Z"), week: 1, createdAt: made };
     expect([later, sooner].sort(byKickoff).map((m) => m.id)).toEqual(["z", "a"]);
+  });
+});
+
+describe("seriesStalled and isRelevantOpenMatch", () => {
+  const now = new Date("2026-11-20T20:00:00Z").getTime();
+  const windowMs = AUTO_SYNC.WINDOW_HOURS * 3600_000;
+  const at = (ms: number) => new Date(ms);
+  const row = (status: string, scheduledAt: Date | null) => ({
+    id: "m",
+    week: 2,
+    phase: "REGULAR",
+    status,
+    scheduledAt,
+  });
+
+  it("calls a LIVE series stalled only once its kickoff is past the result window", () => {
+    expect(seriesStalled(row("LIVE", at(now - windowMs)), now)).toBe(false);
+    expect(seriesStalled(row("LIVE", at(now - windowMs - 1)), now)).toBe(true);
+    expect(seriesStalled(row("LIVE", at(now - 3600_000)), now)).toBe(false);
+  });
+
+  it("never calls an unplayed, finished or untimed series stalled", () => {
+    const old = at(now - 7 * 86_400_000);
+    expect(seriesStalled(row("SCHEDULED", old), now)).toBe(false);
+    expect(seriesStalled(row("COMPLETED", old), now)).toBe(false);
+    expect(seriesStalled(row("LIVE", null), now)).toBe(false);
+  });
+
+  it("treats a stalled series as results debt, like an unplayed one", () => {
+    const old = at(now - windowMs - 1);
+    expect(isRelevantOpenMatch(row("LIVE", old), now)).toBe(false);
+    expect(isRelevantOpenMatch(row("SCHEDULED", old), now)).toBe(false);
+    expect(isRelevantOpenMatch(row("LIVE", at(now - 3600_000)), now)).toBe(true);
+    expect(isRelevantOpenMatch(row("LIVE", null), now)).toBe(true);
+    expect(isRelevantOpenMatch(row("SCHEDULED", null), now)).toBe(true);
+    expect(isRelevantOpenMatch(row("COMPLETED", at(now)), now)).toBe(false);
   });
 });

@@ -12,7 +12,11 @@ export function leagueProgress(matches: SlateMatch[], nowMs: number) {
     (match) => match.status === "COMPLETED",
   ).length;
   const open = regular.filter((match) => match.status !== "COMPLETED");
-  const live = open.filter((match) => match.status === "LIVE").length;
+  // A stalled series (seriesStalled) is not live: it counts with the overdue
+  // results, so Home's "Live" count and the week in focus move on without it.
+  const live = open.filter(
+    (match) => match.status === "LIVE" && isRelevantOpenMatch(match, nowMs),
+  ).length;
   const awaiting = open.filter((match) => !isRelevantOpenMatch(match, nowMs));
   const untimed = open.filter(
     (match) => match.status !== "LIVE" && !match.scheduledAt,

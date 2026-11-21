@@ -68,6 +68,9 @@ export type MatchView = {
   /** Series in progress — some games imported, not decided (auto-sync makes
    *  "Bo3 at 1–0" a common minutes-fresh state worth showing live). */
   live: boolean;
+  /** A series stopped partway, kickoff past the result window
+   *  (`seriesStalled`): its partial score shows, labelled "Unfinished". */
+  unfinished?: boolean;
   homeWin: boolean;
   awayWin: boolean;
   /** Pre-formatted on the server; null when unscheduled. */
@@ -679,7 +682,7 @@ function ResultLine({
   mine: boolean;
   showWhen: boolean;
 }) {
-  const scored = m.done || m.live;
+  const scored = m.done || m.live || m.unfinished;
   const name = (winner: boolean) =>
     m.done ? (winner ? "font-semibold text-fg" : "text-muted") : "text-fg";
   return (
@@ -704,6 +707,7 @@ function ResultLine({
         )}
       >
         {m.live ? <span className="sr-only">live </span> : null}
+        {m.unfinished ? <span className="sr-only">unfinished </span> : null}
         {scored ? `${m.homeScore}–${m.awayScore}` : "vs"}
         {m.done && m.forfeit ? (
           <span
@@ -783,13 +787,15 @@ function MatchRow({
       : "Final score"
     : m.live
       ? "Live"
-      : m.reportResult
-        ? "Result needed"
-        : m.awaitingResult
-          ? "Awaiting result"
-          : m.whenTs != null
-            ? "Upcoming"
-            : "Time TBD";
+      : m.unfinished
+        ? "Unfinished"
+        : m.reportResult
+          ? "Result needed"
+          : m.awaitingResult
+            ? "Awaiting result"
+            : m.whenTs != null
+              ? "Upcoming"
+              : "Time TBD";
   // Live is danger-soft, the token for danger TEXT on a danger tint
   // (globals.css): plain danger at this 12px size sits at the AA line on
   // the live card's tint and under it once the card is hovered.
@@ -797,7 +803,7 @@ function MatchRow({
     ? "text-danger-soft"
     : m.done
       ? "text-success"
-      : m.awaitingResult || m.whenTs == null
+      : m.awaitingResult || m.unfinished || m.whenTs == null
         ? "text-accent"
         : "text-info";
   const sides = [
@@ -974,7 +980,7 @@ function MatchRow({
                 ) : null}
               </div>
               {side.rsvp ? <RsvpBadge side={side.rsvp} /> : null}
-              {m.done || m.live ? (
+              {m.done || m.live || m.unfinished ? (
                 <span
                   className={cn(
                     "ml-1 w-7 shrink-0 text-center font-display text-2xl tabular-nums",

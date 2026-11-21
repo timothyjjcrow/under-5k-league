@@ -58,6 +58,7 @@ import {
   matchRoundLabel,
   orderScheduleWeeks,
   roundName,
+  seriesStalled,
   teamByeWeek,
   type Pairing,
 } from "@/lib/schedule";
@@ -570,7 +571,10 @@ export default async function SchedulePage() {
       awaitingResult: resultOverdue(m, freshFrom),
       reportResult: reportDueIds.has(m.id),
       forfeit: m.forfeit,
-      live: m.status === "LIVE",
+      // A series stopped partway and left past its window reads
+      // "Unfinished", never a pulsing Live a week later (seriesStalled).
+      live: m.status === "LIVE" && !seriesStalled(m, scheduleNow),
+      unfinished: seriesStalled(m, scheduleNow),
       homeWin: m.winnerTeamId === m.homeTeamId,
       awayWin: m.winnerTeamId === m.awayTeamId,
       whenFull: fmtWhen(m.scheduledAt),
@@ -624,7 +628,6 @@ export default async function SchedulePage() {
           .filter((m) => m.status !== "COMPLETED")
           .every(
             (m) =>
-              m.status !== "LIVE" &&
               m.scheduledAt != null &&
               m.scheduledAt.getTime() < freshFrom,
           ),

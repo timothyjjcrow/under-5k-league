@@ -35,7 +35,7 @@ import {
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { prisma } from "@/lib/prisma";
 import type { SeasonSnapshot } from "@/lib/queries";
-import { matchRoundLabel } from "@/lib/schedule";
+import { matchRoundLabel, seriesStalled } from "@/lib/schedule";
 import { cn } from "@/lib/utils";
 
 /** The team's unplayed fixtures: a live one first, then by week and kickoff. */
@@ -182,13 +182,15 @@ export async function MatchDesk({
                     current && "font-medium",
                   )}
                 >
-                  {m.status === MATCH_STATUS.LIVE ? (
+                  {m.status === MATCH_STATUS.LIVE && !seriesStalled(m, nowMs) ? (
                     <span aria-hidden className="h-1.5 w-1.5 shrink-0 rounded-full bg-danger" />
                   ) : null}
                   {matchRoundLabel(m, rounds)} · vs {nameOf(opponentOf(m))}
                 </span>
                 <span className="flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted">
-                  {m.status === MATCH_STATUS.LIVE ? (
+                  {seriesStalled(m, nowMs) ? (
+                    <span>Unfinished</span>
+                  ) : m.status === MATCH_STATUS.LIVE ? (
                     <span>Live now</span>
                   ) : m.scheduledAt ? (
                     <LocalTime
@@ -224,7 +226,11 @@ export async function MatchDesk({
           <div className="min-w-0 flex-1 basis-48">
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs font-semibold uppercase tracking-wider text-muted">
               {roundLabel}
-              {live ? <Badge tone="danger">Live</Badge> : null}
+              {seriesStalled(match, nowMs) ? (
+                <Badge tone="accent">Unfinished</Badge>
+              ) : live ? (
+                <Badge tone="danger">Live</Badge>
+              ) : null}
             </p>
             <p className="font-semibold [overflow-wrap:anywhere]">
               vs{" "}

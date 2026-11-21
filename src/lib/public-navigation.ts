@@ -1,4 +1,4 @@
-import { MATCH_STATUS } from "./constants";
+import { AUTO_SYNC, MATCH_STATUS } from "./constants";
 import { hasOfficialChampion } from "./official-champion";
 import { prisma } from "./prisma";
 import { createPublicSnapshot } from "./public-cache";
@@ -17,11 +17,24 @@ export const getPublicHasHistory = createPublicSnapshot(
 // it is one indexed row behind the shared public snapshot. Game imports move a
 // match in and out of LIVE in the same transaction that stamps the public game
 // revision this is keyed by; any other writer is covered by the snapshot's
-// 60-second expiry.
+// 60-second expiry. A stalled series (`seriesStalled`: LIVE, kickoff past the
+// result-sync window) is not live, so it never lights the chip; the same
+// expiry lets one cross that line within a minute.
 export const getPublicHasLiveMatch = createPublicSnapshot(
-  "public-navigation-live-match-v1",
+  "public-navigation-live-match-v2",
   async (seasonId) => seasonId !== null && (await prisma.match.findFirst({
-    where: { seasonId, status: MATCH_STATUS.LIVE },
+    where: {
+      seasonId,
+      status: MATCH_STATUS.LIVE,
+      OR: [
+        { scheduledAt: null },
+        {
+          scheduledAt: {
+            gte: new Date(Date.now() - AUTO_SYNC.WINDOW_HOURS * 3600_000),
+          },
+        },
+      ],
+    },
     select: { id: true },
   })) !== null,
 );

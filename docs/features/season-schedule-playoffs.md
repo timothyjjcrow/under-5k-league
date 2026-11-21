@@ -642,6 +642,24 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   `/schedule#this-week`). Byes show per week (`byeTeamsByWeek`) even under a
   team filter, plus "Week N: bye" (`teamByeWeek`). In PLAYOFFS and COMPLETE the
   regular season folds into `ScheduleFold` (`id="fixtures"`).
+- **A series stopped partway stops holding the week** (`seriesStalled`,
+  `schedule.ts`): LIVE with its kickoff past `AUTO_SYNC.WINDOW_HOURS` is
+  results debt, like an unplayed fixture that old (`isRelevantOpenMatch`).
+  So "this week" on Home, /schedule and the #schedule card moves on, Home
+  counts it under Overdue and the week gets "Results overdue". Every surface
+  that showed it Live says "Unfinished" with its score instead: /schedule's
+  rows, the match page's scoreboard, the team page, profiles, the Captains
+  page and its share picture; Home tells its players "Your Week N series
+  isn't finished"; the header's "Series live" chip ignores it.
+  `stalled-series-guards.test.ts` pins the surfaces. US Season 2,
+  2026-11-20: two week-2 Bo2s stopped at 1-0 and every page said Week 2 the
+  day before week 3. **Finishing one is an admin's job:** neither Set time
+  nor the ready check moves a LIVE series, and the result window (3 days
+  before to 6 after kickoff) keeps auto-import and captain reports from
+  finding games played a week later. An admin adds each game with Import
+  game on the match page, which skips the window; the series then closes as
+  usual. Moving the series instead is deferred
+  ([decisions](../DECISIONS.md#deferred-on-purpose)).
 - **Playoff race tab** (REGULAR_SEASON): every team under In, In the hunt
   or Out (`playoffRaceGroups`), then the "Playoff picture", the projected
   first round (hidden while ties are open).

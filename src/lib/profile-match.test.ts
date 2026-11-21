@@ -19,9 +19,17 @@ describe("profile match spotlight", () => {
   it("prioritizes live matches, then the nearest relevant fixture", () => {
     const next = fixture("next", "SCHEDULED", 1);
     const later = fixture("later", "SCHEDULED", 4);
-    const live = fixture("live", "LIVE", -7);
+    const live = fixture("live", "LIVE", -0.05);
     expect(profileMatch([later, next, live], now, true)?.id).toBe("live");
     expect(profileMatch([later, next], now, true)?.id).toBe("next");
+    expect(profileMatchState(live, now)).toBe("Live now");
+  });
+
+  it("calls a series stalled partway unfinished and spotlights the next one", () => {
+    const stalled = fixture("stalled", "LIVE", -6, 2);
+    const next = fixture("next", "SCHEDULED", 1, 3);
+    expect(profileMatchState(stalled, now)).toBe("Unfinished");
+    expect(profileMatch([stalled, next], now, true)?.id).toBe("next");
   });
 
   it("never promotes old result debt as the next match", () => {

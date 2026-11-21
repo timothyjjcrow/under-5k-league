@@ -274,7 +274,9 @@ Captain report, admin import, league feed and roster scan all end in
   advances and records its result (see `inhouse.md`).
 - **LIVE chips.** `/schedule` rows and the dashboard This-week strip pulse a
   partial score while a series is LIVE (`MatchView.live`); "Bo3 at 1-0" is a
-  common, minutes-fresh state.
+  common, minutes-fresh state. Past the sync window it is no longer scanned
+  and reads "Unfinished" (`seriesStalled`; an admin imports the rest:
+  [season-schedule-playoffs](season-schedule-playoffs.md#bracket-and-schedule-views)).
 
 ## Player data from OpenDota
 

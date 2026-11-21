@@ -94,7 +94,7 @@ describe("overdueResultsMessage", () => {
     expect(
       overdueResultsMessage(regularSeasonStatus([m(2, "SCHEDULED")]), 48),
     ).toBe(
-      "1 regular-season match kicked off over 2 days ago and has no result yet (week 2).",
+      "1 regular-season match kicked off over 2 days ago and has no final result yet (week 2).",
     );
     expect(
       overdueResultsMessage(
@@ -102,7 +102,7 @@ describe("overdueResultsMessage", () => {
         36,
       ),
     ).toBe(
-      "2 regular-season matches kicked off over 36 hours ago and have no result yet (weeks 3–4).",
+      "2 regular-season matches kicked off over 36 hours ago and have no final result yet (weeks 3–4).",
     );
   });
 });

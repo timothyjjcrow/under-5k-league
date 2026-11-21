@@ -5,6 +5,7 @@
 
 import { MATCH_STATUS } from "./constants";
 import { seriesResultText } from "./link-preview";
+import { seriesStalled } from "./schedule";
 import {
   championTitles,
   playerCardHonors,
@@ -121,6 +122,10 @@ export function matchCardStatus(
   const series = `Best of ${match.bestOf}`;
   if (match.status === MATCH_STATUS.COMPLETED) {
     return { tone: "final", text: seriesResultText(match, names) };
+  }
+  // Stopped partway, its kickoff past the result window: not live now.
+  if (seriesStalled(match, nowMs)) {
+    return { tone: "pending", text: `Unfinished · ${series}` };
   }
   if (match.status === MATCH_STATUS.LIVE || match.homeScore + match.awayScore > 0) {
     return { tone: "live", text: `Live now · ${series}` };
