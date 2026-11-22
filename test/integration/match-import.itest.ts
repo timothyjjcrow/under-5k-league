@@ -862,6 +862,39 @@ describe("autoDetectGamesForMatch", () => {
     expect(await prisma.game.count({ where: { matchId: rematch.id } })).toBe(0);
     expect(await prisma.game.count({ where: { matchId: week1.id } })).toBe(1);
   });
+
+  it("stops at the first player OpenDota can't answer, before asking the rest", async () => {
+    const season = await makeSeason({ teamSize: 5, status: "REGULAR_SEASON" });
+    const home = await makeTeam(season.id, "Home", 0);
+    const away = await makeTeam(season.id, "Away", 1);
+    const homeAccts = await roster(season.id, home.id, "H", 5);
+    const awayAccts = await roster(season.id, away.id, "A", 5);
+    const match = await regularMatch(season.id, home.id, away.id);
+
+    // The second lookup times out (null). The other nine would all list the
+    // game, but a scan missing one history can't prove the series, so asking
+    // them would only wait out more timeouts.
+    const REAL = 8501;
+    let asked = 0;
+    vi.mocked(fetchRecentMatchIds).mockImplementation(async () => {
+      asked++;
+      return asked === 2 ? null : [REAL];
+    });
+    vi.mocked(fetchOpenDotaMatch).mockImplementation(async (id) =>
+      id === String(REAL) ? gameOf(REAL, homeAccts, awayAccts, true) : null,
+    );
+
+    const res = await autoDetectGamesForMatch(match.id);
+    expect(res).toMatchObject({
+      imported: 0,
+      scanned: 2,
+      unreachable: true,
+      pending: true,
+    });
+    expect(asked).toBe(2);
+    expect(fetchOpenDotaMatch).not.toHaveBeenCalled();
+    expect(await prisma.game.count({ where: { matchId: match.id } })).toBe(0);
+  });
 });
 
 describe("enrichStoredGames", () => {

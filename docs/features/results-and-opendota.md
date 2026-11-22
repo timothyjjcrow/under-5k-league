@@ -253,6 +253,17 @@ Captain report, admin import, league feed and roster scan all end in
   scan gives its increment back, a pending one keeps its turn, and one that ran
   out of time restores its exact claim and the throttle (seam
   `resultSync.syncDueMatches.beforeDeadlineRollback`).
+- **A scan stops at the first lookup OpenDota can't answer.** Missing one
+  player's recent games, a scan can't prove the series and imports nothing,
+  so `autoDetectGamesForMatch` returns unreachable and pending at once
+  instead of asking the rest (every caller, manual buttons included). The
+  fixture keeps its turn and the throttle stands, so a slow OpenDota costs a
+  pass one lookup timeout, not its budget. On 2026-11-21 `recentMatches` took
+  about 12s (over `OPEN_DOTA_RECENT_TIMEOUT_MS`) for over an hour: each US
+  pass waited out one fixture's lookups until its budget ran out, skipped
+  every later step, and the scheduler alert reported the site failing. The
+  league feed's `/leagues/{id}/matchIds` stayed fast and kept importing.
+  Test: "a slow OpenDota costs the pass one lookup" in `result-sync.itest.ts`.
 - **Show the backoff.** A match in backoff looks exactly like "no games yet",
   so the admin "Automatic result sync" card (`AutoSyncHealth`,
   `src/app/admin/page.tsx`) shows each in-window match's last scan, empty-scan

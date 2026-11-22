@@ -1485,28 +1485,37 @@ export async function autoDetectGamesForMatch(
 
   // Count how many of our players share each recent match id.
   const counts = new Map<number, number>();
-  let unreachable = false;
+  let asked = 0;
   for (const acc of accounts) {
     if (budgetStopped()) {
       return {
         imported: 0,
         scanned: counts.size,
-        unreachable,
         deadlineReached: true,
       };
     }
     const ids = await fetchRecentMatchIds(acc, 20, fetchOptions); // null = unreachable
+    asked++;
     if (ids === null) {
       if (budgetStopped() || openDotaBudgetExpired(fetchOptions)) {
         return {
           imported: 0,
           scanned: counts.size,
-          unreachable,
           deadlineReached: true,
         };
       }
-      unreachable = true;
-      continue;
+      // Stop at the first lookup OpenDota can't answer. A scan missing one
+      // player's history can't prove the series, so it imports nothing this
+      // time whatever the other lookups say; asking them anyway only waits out
+      // their timeouts. On 2026-11-21 recentMatches took ~12s (over the 8s
+      // timeout) for over an hour, and each worker pass spent its whole budget
+      // waiting out one fixture's lookups, skipping every later step.
+      return {
+        imported: 0,
+        scanned: asked,
+        unreachable: true,
+        pending: true,
+      };
     }
     for (const id of ids) counts.set(id, (counts.get(id) ?? 0) + 1);
   }
@@ -1551,7 +1560,7 @@ export async function autoDetectGamesForMatch(
   await expireImportCandidates();
   const cached = new Map((await loadImportCandidates(match.seasonId, candidateIdStrings))
     .map((row) => [row.dotaMatchId, row]));
-  let discoveryComplete = !unreachable;
+  let discoveryComplete = true;
   let reviewRequired = false;
   // Wall-clock budget: each candidate is a separate OpenDota round trip (8s
   // timeout each), so a slow API turned one scan into minutes of work and the
@@ -1613,7 +1622,6 @@ export async function autoDetectGamesForMatch(
     return {
       imported: 0,
       scanned: accounts.length,
-      unreachable,
       pending: true,
       ...(reviewRequired ? { reviewRequired: true, error: "Some game details need administrator review" } : {}),
       ...(budgetStopped() || (bounded && !canStartOpenDotaFetch(fetchOptions, OPEN_DOTA_MATCH_TIMEOUT_MS + IMPORT_COMMIT_RESERVE_MS))
@@ -1706,7 +1714,6 @@ export async function autoDetectGamesForMatch(
   return {
     imported,
     scanned: accounts.length,
-    unreachable,
     ...(!discoveryComplete ? { pending: true } : {}),
     ...(budgetStopped() || openDotaBudgetExpired(fetchOptions)
       ? { deadlineReached: true }
