@@ -283,7 +283,10 @@ import {
   recoverablePostseasonBracket,
   seasonPhasePolicy,
 } from "@/lib/season-phase-policy";
-import { teamWithdrawalLockedReason } from "@/lib/team-withdrawal";
+import {
+  teamWithdrawalLockedReason,
+  withdrawalKickedOffFixtures,
+} from "@/lib/team-withdrawal";
 import { draftClocks, mmrWeightedBudgets } from "@/lib/draft";
 import {
   profileSyncAllowed,
@@ -465,7 +468,7 @@ export default async function AdminPage({ searchParams }: { searchParams: Promis
   ) : null;
   const captainsCard = season && data && nextStep ? (
     <AdminAnchor id="adm-captains">
-      <CaptainControls season={season} data={data} />
+      <CaptainControls season={season} data={data} nowMs={nowMs} />
     </AdminAnchor>
   ) : null;
   const setupControls = seasonCard ? <>{seasonCard}{captainsCard}</> : null;
@@ -2464,9 +2467,11 @@ function RemovalBlockedNote({ blocker }: { blocker: SignupRemovalBlocker }) {
 function CaptainControls({
   season,
   data,
+  nowMs,
 }: {
   season: Season;
   data: AdminData;
+  nowMs: number;
 }) {
   // Two tiers, matching the server guards: once the draft has RUN (live,
   // paused, or complete) captain management and Start draft are locked —
@@ -3385,11 +3390,13 @@ function CaptainControls({
                     Team…
                   </option>
                   {/* The confirm's consequences are static strings on a
-                      one-picker form, so the per-team REAL number (confirms
-                      must name real numbers) rides in the option label:
+                      one-picker form, so the per-team REAL numbers (confirms
+                      must name real numbers) ride in the option label:
                       standin bookings on the fixtures this withdrawal would
                       forfeit — either side's, since the opponent's cover dies
-                      with the fixture too. */}
+                      with the fixture too — and those fixtures already past
+                      kickoff, which may have been played and only be waiting
+                      on their import (withdrawalKickedOffFixtures). */}
                   {(() => {
                     const openRegular = data.matches.filter(
                       (m) => m.phase === "REGULAR" && m.status !== "COMPLETED",
@@ -3411,12 +3418,23 @@ function CaptainControls({
                       .filter((t) => !t.withdrawn)
                       .map((t) => {
                         const n = bookingsFor(t.id);
+                        const kickedOff = withdrawalKickedOffFixtures(
+                          data.matches,
+                          t.id,
+                          nowMs,
+                        ).length;
+                        const notes = [
+                          n > 0
+                            ? `${n} standin booking(s) on their open fixtures`
+                            : null,
+                          kickedOff > 0
+                            ? `${kickedOff} series past kickoff with no result`
+                            : null,
+                        ].filter(Boolean);
                         return (
                           <option key={t.id} value={t.id}>
                             {t.name}
-                            {n > 0
-                              ? ` — ${n} standin booking(s) on their open fixtures`
-                              : ""}
+                            {notes.length > 0 ? ` — ${notes.join(" · ")}` : ""}
                           </option>
                         );
                       });
@@ -3427,6 +3445,7 @@ function CaptainControls({
                   title="Withdraw this team from the season?"
                   consequences={[
                     "Every unplayed regular fixture of the selected team is forfeited 0-N to the opponent; that official score counts in the game-diff tiebreak.",
+                    "A series past its kickoff with no result on the site is forfeited too, even if it was played and its games just haven't imported yet: a final match takes no more games. The team picker counts these per team; wait for those results before withdrawing.",
                     "Open reschedule proposals on those fixtures are cancelled.",
                     "Standins booked on those fixtures — either side's — are stood down with an @-mention.",
                     "The team is excluded from playoff seeding — its played results and roster are kept.",
