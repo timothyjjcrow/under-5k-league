@@ -679,7 +679,7 @@ describe("the rules page's claims hold in the code", () => {
 
   it("holds a free-agent signing to the same allowance over the player it replaces", () => {
     expect(section(build(), "rosters")).toContain(
-      "A signed player can be at most 100 MMR above the player they replace (the latest player released from that team whose seat is still open), or the team's lowest MMR when no released player is waiting to be replaced. When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.",
+      "A signed player can be at most 100 MMR above the player they replace (the latest player released from that team whose seat is still open). When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.",
     );
     const replaced = { kind: "replaced" as const, name: "Bob", mmr: 2000 };
     // "at most 100 MMR above the player they replace"
@@ -696,7 +696,8 @@ describe("the rules page's claims hold in the code", () => {
         { id: "c", userId: "c", name: "C", joinedAt: at(30), endedAt: null, acquisitionMmr: 3050, endReason: null, acquisitionKind: "FREE_AGENT" },
       ])?.name,
     ).toBe("A");
-    // "or the team's lowest MMR when nobody has left"
+    // Not spelled out in the rule: a team nobody has left (short from the
+    // draft) is still judged, by its lowest MMR.
     expect(
       freeAgentBaseline({
         teamName: "T",

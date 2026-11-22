@@ -410,7 +410,7 @@ function rostersSection(s: CarriedSeasonSettings): RuleSection {
     rules: [
       `Teams have ${plural(s.teamSize, "player")}, the captain included.`,
       "After the auction, admins can sign undrafted players into open seats and release players, until the season ends.",
-      `A signed player can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they replace (the latest player released from that team whose seat is still open), or the team's lowest MMR when no released player is waiting to be replaced. When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.`,
+      `A signed player can be at most ${STANDIN_MMR_ALLOWANCE.toLocaleString("en-US")} MMR above the player they replace (the latest player released from that team whose seat is still open). When the site doesn't know one of the two MMRs, it counts as over. An admin can sign them over that, and the announcement shows both MMRs.`,
       "Anyone with an active signup who isn't on a roster can stand in: standins and undrafted players alike.",
       "Standins are arranged on the Standins page. A game that needs a standin lists itself there, standins say they can play, and that team's captain picks from everyone who did or from anyone in the pool. Admins can book for any team. One standin per seat.",
       `A standin can't be booked for two matches within ${plural(STANDIN_CONFLICT_HOURS, "hour")} of each other.`,
