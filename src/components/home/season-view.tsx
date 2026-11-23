@@ -19,6 +19,8 @@ import {
   seasonPlan,
   withBracket,
 } from "@/lib/season-format";
+import { parseBreakDates } from "@/lib/season-breaks";
+import { BreakNotice } from "./break-notice";
 import {
   bracketSeedLabels,
   standingsSections,
@@ -338,7 +340,13 @@ function regularSeasonPlan(
   return planFormat && lastRegularWeek > 0 && season.status === "REGULAR_SEASON"
     ? {
         format: planFormat,
-        plan: seasonPlan(planFormat, season.firstMatchNight, lastRegularWeek),
+        plan: seasonPlan(
+          planFormat,
+          season.firstMatchNight,
+          lastRegularWeek,
+          undefined,
+          parseBreakDates(season.breakDates),
+        ),
       }
     : null;
 }
@@ -651,6 +659,15 @@ export async function SeasonView({
   );
   const showBracket =
     season.status === "PLAYOFFS" && bracketRoundsView.length > 0;
+  // Breaks (season-breaks.ts): the plan's last round says how far ahead a
+  // break can still delay something; in the playoffs, the bracket's.
+  const seasonBreaks = parseBreakDates(season.breakDates);
+  const playoffWeeks = playoffMatches.map((m) => m.week);
+  const lastPlannedRound = seasonPlanView
+    ? Math.max(...seasonPlanView.plan.map((step) => step.toWeek))
+    : playoffWeeks.length > 0
+      ? Math.min(...playoffWeeks) + playoffRounds - 1
+      : 0;
 
   const recentResults = matches
     .filter((m) => m.status === "COMPLETED")
@@ -823,6 +840,24 @@ export async function SeasonView({
           teams={teams}
           regularComplete={regularSeasonStatus(matches).allComplete}
           hasTiebreakers={matches.some((m) => m.phase === "TIEBREAKER")}
+        />
+      ) : null}
+
+      {/* The week before a break: which night is off and when play resumes. */}
+      {seasonBreaks.length > 0 ? (
+        <BreakNotice
+          firstMatchNight={season.firstMatchNight}
+          breaks={seasonBreaks}
+          kickoffs={matches.flatMap((m) =>
+            m.status === "SCHEDULED" && m.scheduledAt ? [m.scheduledAt] : [],
+          )}
+          lastRound={lastPlannedRound}
+          tiebreakerRound={
+            matches
+              .filter((m) => m.phase === "REGULAR")
+              .reduce((max, m) => Math.max(max, m.week), 0) + 1
+          }
+          nowMs={seasonViewNow}
         />
       ) : null}
 

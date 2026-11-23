@@ -44,6 +44,7 @@ const INHOUSE_DUEL_ACCEPT_MIGRATION = "20261029120000_inhouse_duel_accept";
 const INHOUSE_BAN_MIGRATION = "20261102120000_inhouse_ban";
 const STANDIN_OFFER_MIGRATION = "20261115120000_standin_offer";
 const MEDAL_APPROVAL_MIGRATION = "20261121120000_medal_approval";
+const SEASON_BREAKS_MIGRATION = "20261122120000_season_breaks";
 const ROOT_PATH = fileURLToPath(ROOT);
 const SCHEMA_PATH = fileURLToPath(SCHEMA);
 const BASELINE_SQL_PATH = fileURLToPath(BASELINE_SQL);
@@ -191,6 +192,7 @@ async function rehearseFreshDatabase(url) {
           INHOUSE_BAN_MIGRATION,
           STANDIN_OFFER_MIGRATION,
           MEDAL_APPROVAL_MIGRATION,
+          SEASON_BREAKS_MIGRATION,
         ]),
       "fresh deploy must finish every reviewed migration in order",
     );
@@ -463,6 +465,7 @@ async function rehearseExistingLegacyDatabase(url) {
           INHOUSE_BAN_MIGRATION,
           STANDIN_OFFER_MIGRATION,
           MEDAL_APPROVAL_MIGRATION,
+          SEASON_BREAKS_MIGRATION,
         ]),
       "legacy path must resolve baseline and finish every release migration",
     );

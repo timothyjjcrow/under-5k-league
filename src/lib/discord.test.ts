@@ -13,6 +13,7 @@ import {
   draftStartedAnnouncement,
   draftCompleteAnnouncement,
   regularSeasonStartedMessage,
+  seasonBreakMessage,
   freeAgentSignedMessage,
   inhouseLobbyMessage,
   inhouseQueueMessage,
@@ -299,6 +300,20 @@ describe("discord message formatters", () => {
     expect(msg).toContain("regular season is live.** Two groups of 5: the top 4 of each group make the playoffs.");
     expect(msg).toContain("\n**Group A:** A\\*1, A2\n**Group B:** B1, B2\nWeek 1:");
     expect(msg).toContain(`Playoffs from <t:${Date.UTC(2026, 11, 19, 22) / 1000}:D>; the week before (<t:${Date.UTC(2026, 11, 12, 22) / 1000}:D>) is kept for tiebreakers.`);
+  });
+
+  it("names the nights the season takes a break", () => {
+    const night = Date.UTC(2026, 11, 26, 22);
+    const msg = regularSeasonStartedMessage("S2", {
+      week: 1,
+      fixtures: [{ home: "A1", away: "A2", whenMs: Date.UTC(2026, 10, 7, 22) }],
+      byes: [],
+      playoffsMs: Date.UTC(2026, 11, 19, 22),
+      breaksMs: [night],
+    });
+    expect(msg).toContain(`\nNo games on <t:${night / 1000}:D>: league break.\nCheck in for your match`);
+    expect(regularSeasonStartedMessage("S2", { week: 1, fixtures: [{ home: "A1", away: "A2", whenMs: null }], byes: [], breaksMs: [] }))
+      .not.toContain("league break");
   });
 
   it("caps a long opening week and says how many more are on the schedule", () => {
@@ -3013,6 +3028,18 @@ describe("no player-supplied name can inject markdown", () => {
         { matchId: "m1", homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: 1_800_000_000_000 },
       ],
     }),
+    seasonBreakMessage({
+      change: "ADD",
+      nightMs: 1_800_000_000_000,
+      moves: [
+        { matchId: "m1", homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: 1_800_600_000_000 },
+      ],
+      kept: [
+        { matchId: "m2", homeName: EVIL, awayName: EVIL, week: 1, isPlayoff: false, whenMs: 1_800_100_000_000 },
+      ],
+      clearedRsvps: 1,
+      plan: [{ label: "Grand final", fromMs: 1_801_000_000_000, toMs: 1_801_000_000_000 }],
+    }),
     adminRetimeMessage({
       clearedRsvps: 0,
       moves: [
@@ -3767,5 +3794,64 @@ describe("standinOfferedMessage", () => {
     expect(msg).not.toContain("[free skins](https://evil.example)");
     expect(msg).toContain("(MMR unknown)");
     expect(msg).not.toContain("<t:");
+  });
+});
+
+describe("seasonBreakMessage", () => {
+  const night = Date.UTC(2026, 11, 26, 22);
+  const sf = Date.UTC(2027, 0, 2, 22);
+  const final = Date.UTC(2027, 0, 9, 22);
+  const semi = (matchId: string, homeName: string, awayName: string, whenMs: number) => ({
+    matchId,
+    homeName,
+    awayName,
+    week: 8,
+    isPlayoff: true,
+    roundLabel: "Semifinal",
+    whenMs,
+  });
+
+  it("says which night is off, what moved and the season's new dates", () => {
+    const msg = seasonBreakMessage({
+      change: "ADD",
+      nightMs: night,
+      moves: [semi("m1", "Team *A*", "Team B", sf), semi("m2", "Team C", "Team D", sf)],
+      kept: [],
+      clearedRsvps: 3,
+      plan: [
+        { label: "Semifinals", fromMs: sf, toMs: sf },
+        { label: "Grand final", fromMs: final, toMs: final },
+      ],
+    });
+    expect(msg).toContain(`🗓️ **League break: no games on <t:${night / 1000}:D>.** Every round from then on plays one league night later.`);
+    expect(msg).toContain("New kickoffs (2 matches):");
+    expect(msg).toContain(`• Semifinal: **Team \\*A\\*** vs **Team B** — <t:${sf / 1000}:F>`);
+    expect(msg).toContain(`Season dates now: Semifinals <t:${sf / 1000}:D> · Grand final <t:${final / 1000}:D>`);
+    expect(msg).toContain("Check-ins on the moved matches were reset (3 cleared)");
+    expect(msg).toMatch(/Full schedule: <https?:\/\/[^>]+\/schedule>$/);
+  });
+
+  it("names the fixtures that kept an agreed time, and a removed break", () => {
+    const thursday = Date.UTC(2026, 11, 25, 2);
+    const msg = seasonBreakMessage({
+      change: "REMOVE",
+      nightMs: night,
+      moves: [],
+      kept: [semi("m3", "Team E", "Team F", thursday)],
+      clearedRsvps: 0,
+      plan: [{ label: "Group stage ends", fromMs: final, toMs: final }],
+    });
+    expect(msg).toContain(`**The league break on <t:${night / 1000}:D> is off.** Every round from then on plays one league night earlier.`);
+    expect(msg).toContain(`Staying at their arranged time:\n• Semifinal: **Team E** vs **Team F** — <t:${thursday / 1000}:F>`);
+    expect(msg).not.toContain("New kickoff");
+    expect(msg).not.toContain("Check-ins");
+  });
+
+  it("caps a long list of moved matches", () => {
+    const moves = Array.from({ length: 11 }, (_, i) => ({ ...semi(`m${i}`, `H${i}`, `A${i}`, sf), week: 4, isPlayoff: false }));
+    const msg = seasonBreakMessage({ change: "ADD", nightMs: night, moves, kept: [], clearedRsvps: 0, plan: [] });
+    expect(msg).toContain("• Week 4: **H7** vs **A7**");
+    expect(msg).not.toContain("**H8**");
+    expect(msg).toContain("• …and 3 more");
   });
 });

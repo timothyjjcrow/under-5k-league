@@ -5,7 +5,8 @@ import { DOTA_MATCH_KIND, MATCH_PHASE, SEASON_STATUS, STANDIN_REQUEST_STATUS } f
 import { projectPlayoffField } from "./playoff-field";
 import { playoffSetupRevision } from "./playoff-command";
 import { regularSeasonStatus } from "./schedule-status";
-import { upcomingMatchNight } from "./schedule";
+import { upcomingRoundNight } from "./schedule";
+import { parseBreakDates } from "./season-breaks";
 import { FORMAT_UNREADABLE_MESSAGE, parseFormatConfig } from "./season-format";
 import { parseTiebreakerStage, tiebreakerSlot, type TiebreakerGroup } from "./tiebreakers";
 import { parseSingleTiebreakerSlot } from "./tiebreaker-format";
@@ -110,7 +111,12 @@ async function scheduleMissingGroups(tx: Prisma.TransactionClient, source: Snaps
     const nextWeek = Math.max(0, ...matches.map((m) => m.week)) + 1;
     const latestKickoff = Math.max(0, ...matches.map((m) => m.scheduledAt?.getTime() ?? 0));
     const night = season.firstMatchNight
-      ? upcomingMatchNight(season.firstMatchNight, nextWeek, Math.max(Date.now(), latestKickoff + 1))
+      ? upcomingRoundNight(
+          season.firstMatchNight,
+          nextWeek,
+          parseBreakDates(season.breakDates),
+          Math.max(Date.now(), latestKickoff + 1),
+        )
       : null;
     const data: Prisma.MatchCreateManyInput[] = [];
     for (const group of groups) {

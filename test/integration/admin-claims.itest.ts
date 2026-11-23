@@ -164,7 +164,7 @@ describe("admin schedule writes only touch the rows they claim to", () => {
     const planned = matchNightForWeek(anchor, lastWeek + 2);
     const regular = matches.find((m) => m.week === lastWeek)!;
     expect(
-      (await loadRescheduleDeadline(prisma, regular, updated.firstMatchNight, Date.now()))?.getTime(),
+      (await loadRescheduleDeadline(prisma, regular, updated, Date.now()))?.getTime(),
     ).toBe(tiebreakerNight.getTime());
 
     // Finish the regular season without ties (lower draft order wins), then

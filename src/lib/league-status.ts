@@ -253,6 +253,9 @@ export type StatusInhouseNight = {
   joinUrl: string;
 };
 
+/** A break (a league night with no games) in the coming week, and when play resumes. */
+export type StatusBreak = { nightMs: number; resumesAtMs: number };
+
 export type LeagueStatusSnapshot = {
   leagueName: string;
   siteUrl: string;
@@ -274,6 +277,8 @@ export type LeagueStatusSnapshot = {
    *  has set it on /admin's Season handoff card. */
   nextSignupsAtMs: number | null;
   inhouseNight: StatusInhouseNight | null;
+  /** Regular season and playoffs: a break in the coming week (season-breaks.ts). */
+  seasonBreak: StatusBreak | null;
   urls: {
     signUp: string;
     howItWorks: string;
@@ -679,6 +684,20 @@ function draftCard(s: LeagueStatusSnapshot): {
   };
 }
 
+/** The week before a break: the night with no games and when play resumes. */
+function breakSection(s: LeagueStatusSnapshot): Component | null {
+  const b = s.seasonBreak;
+  if (!b) return null;
+  return textDisplay(
+    `**League break** · no games ${ts(b.nightMs, "D")}\n-# Back ${ts(b.resumesAtMs, "F")} · ${ts(b.resumesAtMs, "R")}`,
+  );
+}
+
+function pushBreak(blocks: (Component | null)[], s: LeagueStatusSnapshot) {
+  const section = breakSection(s);
+  if (section) blocks.push(divider(), section);
+}
+
 function pushNight(blocks: (Component | null)[], s: LeagueStatusSnapshot) {
   const night = inhouseNightSection(s);
   if (night) blocks.push(divider(), night);
@@ -765,6 +784,7 @@ function seasonCard(s: LeagueStatusSnapshot): Component[] {
       ]),
     );
   }
+  pushBreak(blocks, s);
   // The race before last week's awards: the table changes every result,
   // the highlights once a week.
   const standings = standingsSection(s.table);
@@ -804,6 +824,7 @@ function playoffsCard(s: LeagueStatusSnapshot): Component[] {
       );
     }
   }
+  pushBreak(blocks, s);
   pushPoll(blocks, s);
   pushNight(blocks, s);
   const buttons = p ? [linkButton("Bracket", p.bracketUrl)] : [];

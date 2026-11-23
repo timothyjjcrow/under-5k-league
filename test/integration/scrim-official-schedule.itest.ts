@@ -30,7 +30,7 @@ import {
   createPlayoffBracket,
 } from "@/lib/playoff-service";
 import { prisma } from "@/lib/prisma";
-import { upcomingMatchNight } from "@/lib/schedule";
+import { upcomingRoundNight } from "@/lib/schedule";
 import {
   generateRegularSchedule,
   makeSeason,
@@ -156,10 +156,7 @@ describe("official fixture creation respects confirmed scrims", () => {
     // Round one plays two weeks after the last regular week: the week after
     // it is kept for tiebreakers.
     const firstPlayoffWeek = Math.max(...matches.map((match) => match.week)) + 2;
-    const playoffNight = upcomingMatchNight(
-      firstNight,
-      firstPlayoffWeek,
-      Date.now(),
+    const playoffNight = upcomingRoundNight(firstNight, firstPlayoffWeek, [], Date.now(),
     );
     await linkDiscord(teams[0].captainId, "900000000000000001");
     await linkDiscord(teams[1].captainId, "900000000000000002");
@@ -220,7 +217,7 @@ describe("official fixture creation respects confirmed scrims", () => {
     for (const semifinal of semifinals) await recordMatch(semifinal.id, 2, 0);
 
     const finalWeek = Math.max(...semifinals.map((match) => match.week)) + 1;
-    const finalNight = upcomingMatchNight(firstNight, finalWeek, Date.now());
+    const finalNight = upcomingRoundNight(firstNight, finalWeek, [], Date.now());
     const finalistIds = semifinals.map((match) => match.homeTeamId);
     const host = teams.find((team) => team.id === finalistIds[0])!;
     const practicePartner = teams.find((team) => team.id !== finalistIds[0])!;
@@ -280,7 +277,7 @@ describe("official fixture creation respects confirmed scrims", () => {
     for (const semifinal of semifinals) await recordMatch(semifinal.id, 2, 0);
 
     const finalWeek = Math.max(...semifinals.map((match) => match.week)) + 1;
-    const finalNight = upcomingMatchNight(firstNight, finalWeek, Date.now());
+    const finalNight = upcomingRoundNight(firstNight, finalWeek, [], Date.now());
     const finalistIds = semifinals.map((match) => match.homeTeamId);
     const scrim = await confirmedScrim({
       seasonId: season.id,

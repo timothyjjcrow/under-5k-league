@@ -14,6 +14,7 @@ const revisionInput: RevisionInput = {
     playoffBestOf: 3,
     finalBestOf: 5,
     firstMatchNight: new Date("2026-08-01T02:00:00.000Z"),
+    breakDates: null,
     formatConfig: null,
   },
   teams: [
@@ -82,7 +83,11 @@ const revisionMutations: RevisionMutation[] = [
     name: "season.firstMatchNight",
     mutate: (input) =>
       (input.season.firstMatchNight = new Date("2026-08-08T02:00:00.000Z")),
+  },  {
+    name: "season.breakDates",
+    mutate: (input) => (input.season.breakDates = '["2026-08-15"]'),
   },
+
   { name: "team.id", mutate: (input) => (input.teams[0].id = "c") },
   {
     name: "team.withdrawn",

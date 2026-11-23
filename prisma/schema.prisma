@@ -203,6 +203,11 @@ model Season {
   // {"v":1,"groups":2,"meet":1,"playoffs":4}. Null is the Recommended format,
   // the team-count rule. While regular fixtures exist it describes them.
   formatConfig    String?
+  // Breaks: league nights with no games (holidays), as a sorted JSON array of
+  // calendar dates on the league's clock, ["2026-12-26"]. Each covers the
+  // league night nearest it; rounds after it play one night later
+  // (season-breaks.ts, roundNight). Null is no breaks.
+  breakDates      String?
   // Durable competitive lock for Fantasy. The first imported Game stamps this
   // in the SAME transaction as the game/series projection. It deliberately
   // survives game removal: once real performance data was visible, deleting a

@@ -33,7 +33,7 @@ note before changing that area: it is required reading, not background.
 | [inhouse](docs/features/inhouse.md) | the inhouse queue, lobby engine, `/api/inhouse`, the inhouse room, the inhouse night or Play later, admins' inhouse MMR and medal and inhouse bans (`/admin/inhouse-players`) |
 | [inhouse-duels](docs/features/inhouse-duels.md) | the 1v1 mid queue and duels: pairing, their bot lobbies, results and clocks, the 1v1 card on `/inhouse`, the 1v1 leaderboard |
 | [discord](docs/features/discord.md) | any Discord post or mention, webhooks, the ping role and bot, the Standin role, account linking, the queue board, the #schedule status card |
-| [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
+| [season-schedule-playoffs](docs/features/season-schedule-playoffs.md) | phases, fixtures and kickoff times, breaks (nights with no games), reschedules, standings and tiebreakers, playoffs and the bracket, the calendar feed, season history |
 | [pages-and-ui](docs/features/pages-and-ui.md) | navigation, the UI kit, Home, the Captains page (`/captains`), `/players`, `/inhouse`, `/admin` or match page layout, the casters' stream overlay (`/overlay`), the fixture servers |
 | [players-and-registration](docs/features/players-and-registration.md) | signup and MMR rules, medal approvals (a player over the medal line let in by an admin), the Discord a signup needs, the player pool and scouting, profiles, compare, team names, logos and jerseys |
 | [stats-and-side-games](docs/features/stats-and-side-games.md) | impact points, honors, Leaders, Hall of Fame, Record book, Hero meta and the hero pages, power rankings, scouting, fantasy, pick'em, scrims, news |
@@ -343,8 +343,11 @@ Details and reasons are in [pages-and-ui](docs/features/pages-and-ui.md).
   `match-time.test.ts` guards it). Discord times are `<t:epoch:F>`, never
   formatted strings.
 - **Do week math on the league's clock** (`LEAGUE_CONFIG.timeZone`) through
-  `matchNightForWeek`, `shiftMatchNight` and `upcomingMatchNight`, so "Sundays
-  6 PM" survives daylight saving. `null` gives fixed intervals, for tests only.
+  `roundNight`, `upcomingRoundNight` and `shiftMatchNight`, so "Sundays 6 PM"
+  survives daylight saving and a round skips the season's breaks (nights with
+  no games, `Season.breakDates`). The raw rhythm `matchNightForWeek` is for the
+  few places a break can't apply (`schedule-break-guards.test.ts`). `null`
+  gives fixed intervals, for tests only.
 
 ## Cross-cutting server rules
 

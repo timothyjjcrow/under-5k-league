@@ -33,6 +33,7 @@ import {
   rescheduleDeadline,
 } from "./schedule";
 import { roundLabelsForPost } from "./playoff-rounds";
+import { parseBreakDates } from "./season-breaks";
 import { isSerializationConflict } from "./prisma-errors";
 import { raceHook } from "./race-hook";
 import { retrySerializable } from "./serializable-retry";
@@ -229,7 +230,7 @@ type CalendarMatch = {
 async function calendarProblem(
   tx: Tx,
   match: CalendarMatch,
-  firstMatchNight: Date | null,
+  calendar: SeasonCalendar,
   time: Date,
   stage: "propose" | "lock",
 ): Promise<string | null> {
@@ -253,13 +254,19 @@ async function calendarProblem(
   const deadline = await loadRescheduleDeadline(
     tx,
     match,
-    firstMatchNight,
+    calendar,
     Date.now(),
   );
   if (deadline && time.getTime() >= deadline.getTime())
     return "Regular-season matches must be played before the tiebreaker week, the week ahead of the playoffs — pick an earlier time, or ask an admin";
   return null;
 }
+
+/** What the reschedule deadline reads from the season: week 1's night and the breaks. */
+export type SeasonCalendar = {
+  firstMatchNight: Date | null;
+  breakDates: string | null;
+};
 
 /**
  * The instant a regular-season match must move to BEFORE (exclusive), or null
@@ -269,7 +276,7 @@ async function calendarProblem(
 export async function loadRescheduleDeadline(
   db: Pick<Prisma.TransactionClient, "match">,
   match: { seasonId: string; phase: string },
-  firstMatchNight: Date | null,
+  calendar: SeasonCalendar,
   nowMs: number,
 ): Promise<Date | null> {
   if (match.phase !== MATCH_PHASE.REGULAR) return null;
@@ -290,7 +297,8 @@ export async function loadRescheduleDeadline(
   ]);
   return rescheduleDeadline({
     phase: match.phase,
-    firstMatchNight,
+    firstMatchNight: calendar.firstMatchNight,
+    breaks: parseBreakDates(calendar.breakDates),
     lastRegularWeek: lastRegular._max.week ?? 0,
     earliestPostseasonKickoffMs: firstPostseason?.scheduledAt?.getTime() ?? null,
     nowMs,
@@ -324,6 +332,7 @@ function loadActiveSeason(tx: Tx) {
         status: true,
         teamSize: true,
         firstMatchNight: true,
+        breakDates: true,
         draft: { select: { status: true } },
       },
     })
@@ -677,7 +686,7 @@ export async function proposeReschedule(
           const problem = await calendarProblem(
             tx,
             match,
-            activeSeason.firstMatchNight,
+            activeSeason,
             time,
             "propose",
           );
@@ -786,7 +795,7 @@ async function lockInTx(
   const problem = await calendarProblem(
     tx,
     match,
-    activeSeason.firstMatchNight,
+    activeSeason,
     time,
     "lock",
   );
@@ -927,7 +936,7 @@ export async function voteReschedule(
                 : await calendarProblem(
                     tx,
                     match,
-                    activeSeason.firstMatchNight,
+                    activeSeason,
                     time,
                     "lock",
                   );

@@ -1,7 +1,7 @@
 // The season's calendar from the day its schedule is made (`seasonPlan`):
-// the regular weeks, the reserved tiebreaker week and each playoff round,
-// every date on the viewer's clock. Server-safe; the dates hydrate through
-// <LocalTime>.
+// the regular weeks, the reserved tiebreaker week, each playoff round and
+// each break (a night with no games), every date on the viewer's clock.
+// Server-safe; the dates hydrate through <LocalTime>.
 
 import { LocalTime } from "./local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
@@ -40,7 +40,21 @@ export function SeasonPlanList({
       aria-label={label}
       className={cn("grid grid-cols-1 gap-1 text-xs text-muted sm:grid-cols-2", className)}
     >
-      {plan.map((step) => (
+      {plan.map((step) =>
+        step.kind === "BREAK" ? (
+          <li
+            key={`BREAK-${step.from?.getTime() ?? step.fromWeek}`}
+            className="flex min-w-0 flex-wrap items-baseline gap-x-1.5"
+          >
+            <span className="font-medium text-fg">{step.label}</span>
+            {step.from ? (
+              <span>
+                · <PlanDate date={step.from} />
+              </span>
+            ) : null}
+            <span>· no games</span>
+          </li>
+        ) : (
         <li
           key={`${step.kind}-${step.fromWeek}`}
           className="flex min-w-0 flex-wrap items-baseline gap-x-1.5"
@@ -63,7 +77,8 @@ export function SeasonPlanList({
           ) : null}
           {step.kind === "TIEBREAKER" ? <span>(only if a tie needs it)</span> : null}
         </li>
-      ))}
+        ),
+      )}
     </ol>
   );
 }

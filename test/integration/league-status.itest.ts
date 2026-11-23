@@ -72,6 +72,7 @@ function snapshot(players: number): LeagueStatusSnapshot {
     lastChampion: null,
     nextSignupsAtMs: null,
     inhouseNight: null,
+    seasonBreak: null,
     urls: {
       signUp: `${site}/me`,
       howItWorks: `${site}/how-it-works`,

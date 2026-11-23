@@ -8,6 +8,8 @@ type RevisionSeason = {
   playoffBestOf: number;
   finalBestOf: number;
   firstMatchNight: Date | null;
+  /** The season's breaks: they date round one. */
+  breakDates: string | null;
   /** The stored format: it sets how many teams the bracket seeds. */
   formatConfig: string | null;
 };
@@ -63,6 +65,8 @@ export function playoffSetupRevision(input: {
     finalBestOf: input.season.finalBestOf,
     firstMatchNight: input.season.firstMatchNight?.toISOString() ?? null,
     formatConfig: input.season.formatConfig,
+    // Only when set, so a season with no breaks keeps the revision it had.
+    ...(input.season.breakDates ? { breakDates: input.season.breakDates } : {}),
   };
   const teams = input.teams
     .map((team) => ({ id: team.id, withdrawn: !!team.withdrawn, groupKey: team.groupKey }))

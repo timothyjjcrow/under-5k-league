@@ -271,6 +271,51 @@ describe("seasonPlan", () => {
     expect(plan[4].from?.toISOString()).toBe("2027-01-02T22:00:00.000Z");
   });
 
+  it("puts each break where it falls and dates the rounds after it a night later", () => {
+    // US Season 2 with Saturday Dec 26 off: the semis move to Jan 2, the final to Jan 9.
+    const first = new Date("2026-11-07T14:00:00-08:00");
+    const plan = seasonPlan(seasonFormat(12)!, first, undefined, "America/Los_Angeles", ["2026-12-26"]);
+    expect(plan.map((s) => [s.kind, s.label, s.fromWeek, s.from?.toISOString()])).toEqual([
+      ["REGULAR", "Group stage", 1, "2026-11-07T22:00:00.000Z"],
+      ["TIEBREAKER", "Tiebreakers", 6, "2026-12-12T22:00:00.000Z"],
+      ["PLAYOFF", "Quarterfinals", 7, "2026-12-19T22:00:00.000Z"],
+      ["BREAK", "Break", 8, "2026-12-26T22:00:00.000Z"],
+      ["PLAYOFF", "Semifinals", 8, "2027-01-02T22:00:00.000Z"],
+      ["PLAYOFF", "Grand final", 9, "2027-01-09T22:00:00.000Z"],
+    ]);
+  });
+
+  it("lists a break inside the regular season after it, in date order", () => {
+    const first = new Date("2026-11-07T14:00:00-08:00");
+    const plan = seasonPlan(seasonFormat(12)!, first, undefined, "America/Los_Angeles", [
+      "2026-11-28",
+      "2026-12-26",
+      "2027-01-02",
+    ]);
+    expect(plan.map((s) => [s.kind, s.fromWeek, s.from?.toISOString().slice(0, 10)])).toEqual([
+      ["REGULAR", 1, "2026-11-07"],
+      ["BREAK", 4, "2026-11-28"],
+      ["TIEBREAKER", 6, "2026-12-19"],
+      ["BREAK", 7, "2026-12-26"],
+      ["BREAK", 7, "2027-01-02"],
+      ["PLAYOFF", 7, "2027-01-09"],
+      ["PLAYOFF", 8, "2027-01-16"],
+      ["PLAYOFF", 9, "2027-01-23"],
+    ]);
+    // The group stage now ends Dec 12, a week later.
+    expect(plan[0].to?.toISOString().slice(0, 10)).toBe("2026-12-12");
+  });
+
+  it("leaves out breaks before week 1 or after the final", () => {
+    const first = new Date("2026-11-07T14:00:00-08:00");
+    const plan = seasonPlan(seasonFormat(12)!, first, undefined, "America/Los_Angeles", [
+      "2026-11-07",
+      "2027-03-06",
+    ]);
+    expect(plan.some((s) => s.kind === "BREAK")).toBe(false);
+    expect(plan).toEqual(seasonPlan(seasonFormat(12)!, first, undefined, "America/Los_Angeles"));
+  });
+
   it("follows the schedule's real last week and has no dates without week 1", () => {
     const plan = seasonPlan(seasonFormat(6)!, null, 6);
     expect(plan.map((s) => [s.label, s.fromWeek])).toEqual([
@@ -280,6 +325,8 @@ describe("seasonPlan", () => {
       ["Grand final", 9],
     ]);
     expect(plan.every((s) => s.from === null && s.to === null)).toBe(true);
+    // A break needs week 1's night to know where it falls.
+    expect(seasonPlan(seasonFormat(6)!, null, 6, null, ["2026-12-26"])).toEqual(plan);
   });
 });
 

@@ -208,14 +208,15 @@ export type FormatPreview = {
 /**
  * The season `knobs` make for `teamCount` teams, as generation would build
  * it: groups split by the generator's own draw, fixtures from the same
- * round robin, the plan from week 1's night when it is known. Null below two
- * teams.
+ * round robin, the plan from week 1's night when it is known (skipping the
+ * season's breaks). Null below two teams.
  */
 export function previewSeasonFormat(
   knobs: FormatKnobs,
   teamCount: number,
   firstMatchNight: Date | null,
   timeZone?: string | null,
+  breaks: readonly string[] = [],
 ): FormatPreview | null {
   const format = buildSeasonFormat(knobs, teamCount);
   if (!format) return null;
@@ -243,10 +244,7 @@ export function previewSeasonFormat(
     format,
     problems: formatProblems(knobs, teamCount),
     fixtures: fixtures.length,
-    plan:
-      timeZone === undefined
-        ? seasonPlan(format, firstMatchNight)
-        : seasonPlan(format, firstMatchNight, undefined, timeZone),
+    plan: seasonPlan(format, firstMatchNight, undefined, timeZone, breaks),
     groups: groupViews,
   };
 }

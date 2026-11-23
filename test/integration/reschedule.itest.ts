@@ -1072,7 +1072,7 @@ describe("reschedule league-calendar rules (integration)", () => {
     const deadline = await loadRescheduleDeadline(
       prisma,
       ab,
-      season.firstMatchNight,
+      season,
       Date.now(),
     );
     expect(deadline).not.toBeNull();
@@ -1096,7 +1096,7 @@ describe("reschedule league-calendar rules (integration)", () => {
       await loadRescheduleDeadline(
         prisma,
         { seasonId: season.id, phase: MATCH_PHASE.PLAYOFF },
-        season.firstMatchNight,
+        season,
         Date.now(),
       ),
     ).toBeNull();

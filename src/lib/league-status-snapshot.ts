@@ -20,13 +20,15 @@ import {
   byKickoff,
   byeTeamsByWeek,
   isRelevantOpenMatch,
-  matchNightForWeek,
   nextPlayoffRoundName,
   playoffTotalRounds,
   roundName,
+  roundNight,
   slotIndex,
   slotRound,
 } from "./schedule";
+import { parseBreakDates, upcomingBreak } from "./season-breaks";
+import { resolveSeasonFormat } from "./season-format";
 import { leagueProgress } from "./league-progress";
 import { projectPlayoffField } from "./playoff-field";
 import { standingsSections } from "./season-groups";
@@ -49,6 +51,7 @@ import { weekWrapPath } from "./week-wrap";
 import { draftNightSoon, draftRosterCounts } from "./draft-setup";
 import type {
   LeagueStatusSnapshot,
+  StatusBreak,
   StatusDraft,
   StatusFixture,
   StatusHighlights,
@@ -153,6 +156,7 @@ export async function loadLeagueStatusSnapshot(
     lastChampion: null,
     nextSignupsAtMs: null,
     inhouseNight,
+    seasonBreak: null,
     urls: {
       signUp: `${siteUrl}/me`,
       howItWorks: `${siteUrl}/how-it-works`,
@@ -213,12 +217,14 @@ export async function loadLeagueStatusSnapshot(
       return {
         ...withSeason,
         phase: "REGULAR_SEASON",
+        seasonBreak: seasonBreakOf(season, teams, matches, nowMs),
         ...(await loadRegularSeason(season, teams, matches, nowMs, siteUrl)),
       };
     case SEASON_STATUS.PLAYOFFS:
       return {
         ...withSeason,
         phase: "PLAYOFFS",
+        seasonBreak: seasonBreakOf(season, teams, matches, nowMs),
         playoffs: await loadPlayoffs(season, teams, matches, nowMs, siteUrl),
       };
     case SEASON_STATUS.COMPLETE:
@@ -233,6 +239,41 @@ export async function loadLeagueStatusSnapshot(
 }
 
 // --- Shared ------------------------------------------------------------------
+
+/**
+ * A break in the coming week (upcomingBreak, the rule Home's notice uses):
+ * its night and when play resumes, the next round's planned night when that
+ * round has no fixtures yet.
+ */
+function seasonBreakOf(
+  season: Season,
+  teams: readonly CardTeam[],
+  matches: readonly CardMatch[],
+  nowMs: number,
+): StatusBreak | null {
+  const breaks = parseBreakDates(season.breakDates);
+  if (breaks.length === 0) return null;
+  const lastRegular = matches
+    .filter((m) => m.phase === MATCH_PHASE.REGULAR)
+    .reduce((max, m) => Math.max(max, m.week), 0);
+  const format = resolveSeasonFormat(season, teams, lastRegular > 0);
+  const lastRound = Math.max(
+    0,
+    ...matches.map((m) => m.week),
+    format && lastRegular > 0 ? lastRegular + 1 + format.playoffRounds : 0,
+  );
+  const next = upcomingBreak({
+    firstMatchNight: season.firstMatchNight,
+    breaks,
+    kickoffs: matches.flatMap((m) =>
+      m.status === MATCH_STATUS.SCHEDULED && m.scheduledAt ? [m.scheduledAt] : [],
+    ),
+    lastRound,
+    tiebreakerRound: lastRegular + 1,
+    nowMs,
+  });
+  return next ? { nightMs: next.night.getTime(), resumesAtMs: next.resumesAt.getTime() } : null;
+}
 
 /**
  * An open match-night poll's turnout, else the season's night as every page
@@ -532,7 +573,7 @@ async function loadDraft(
 
 /**
  * The night a week is played: the planned one (week 1's night plus whole
- * weeks on the league's clock) while any fixture is on it, else the time
+ * weeks on the league's clock, past the breaks) while any fixture is on it, else the time
  * most of the week's fixtures share, for a week an admin moved as a whole.
  * A fixture off that night is a moved one.
  */
@@ -542,7 +583,7 @@ function weekNightMs(
   fixtures: readonly CardMatch[],
 ): number | null {
   const planned = season.firstMatchNight
-    ? matchNightForWeek(season.firstMatchNight, week).getTime()
+    ? roundNight(season.firstMatchNight, week, parseBreakDates(season.breakDates)).getTime()
     : null;
   const times = fixtures.flatMap((m) =>
     m.scheduledAt ? [m.scheduledAt.getTime()] : [],
@@ -742,10 +783,15 @@ async function loadPlayoffs(
       ? {
           round: roundName(round + 1, total),
           bestOf: round + 1 === total - 1 ? season.finalBestOf : season.playoffBestOf,
-          // Playoff rounds keep counting league weeks (firstMatchNight).
+          // Playoff rounds keep counting league weeks (firstMatchNight),
+          // past the season's breaks.
           atMs:
             season.firstMatchNight && lastWeek > 0
-              ? matchNightForWeek(season.firstMatchNight, lastWeek + 1).getTime()
+              ? roundNight(
+                  season.firstMatchNight,
+                  lastWeek + 1,
+                  parseBreakDates(season.breakDates),
+                ).getTime()
               : null,
         }
       : null;
