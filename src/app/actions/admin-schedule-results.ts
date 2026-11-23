@@ -25,10 +25,19 @@ import {
 } from "@/lib/constants";
 import {
   matchNightForWeek,
+  roundNight,
   shiftMatchNight,
   slotRound,
   hasLaterBracketRound,
 } from "@/lib/schedule";
+import { formatBreakDate, parseBreakDates } from "@/lib/season-breaks";
+import {
+  changeSeasonBreak,
+  type SeasonBreakChange,
+  type SeasonBreakOutcome,
+} from "@/lib/season-break-service";
+import { announceSeasonBreak } from "@/lib/season-break-announcement";
+import { formatLeagueMatchTime } from "@/lib/match-time";
 import { regularScheduleRevision } from "@/lib/schedule-revision";
 import { formatProblems, formatToken, parseFormatChoice } from "@/lib/season-builder";
 import { playedSeriesFinalError, seriesScoreError } from "@/lib/standings";
@@ -318,6 +327,7 @@ async function replaceRegularSchedule(input: {
   let outcome: {
     seasonId: string;
     firstNight: Date;
+    breaks: string[];
     format: SeasonFormat;
     teams: { id: string; name: string }[];
     groups: { key: string; teamIds: string[] }[];
@@ -368,6 +378,7 @@ async function replaceRegularSchedule(input: {
               status: true,
               regularBestOf: true,
               firstMatchNight: true,
+              breakDates: true,
               ...SEASON_FORMAT_SELECT,
             },
           }),
@@ -442,6 +453,7 @@ async function replaceRegularSchedule(input: {
         const format = plannedSeasonFormat({ formatConfig: nextFormatConfig }, teams.length);
         if (!format) throw new ScheduleNeedsTeamsError();
         const firstNight = input.firstNight ?? currentSeason.firstMatchNight;
+        const breaks = parseBreakDates(currentSeason.breakDates);
         if (!firstNight || firstNight.getTime() < Date.now()) {
           throw new FirstNightPassedError(firstNight);
         }
@@ -501,7 +513,8 @@ async function replaceRegularSchedule(input: {
           homeTeamId: fixture.home,
           awayTeamId: fixture.away,
           bestOf: currentSeason.regularBestOf,
-          scheduledAt: matchNightForWeek(firstNight, fixture.week),
+          // Each week's night skips the season's breaks (holidays).
+          scheduledAt: roundNight(firstNight, fixture.week, breaks),
         }));
 
         // A generated schedule is just as authoritative as a manual retime.
@@ -644,6 +657,7 @@ async function replaceRegularSchedule(input: {
         return {
           seasonId: currentSeason.id,
           firstNight,
+          breaks,
           format,
           teams: teams.map(({ id, name }) => ({ id, name })),
           groups: groupKeys.map((key, index) => ({ key, teamIds: groups[index] })),
@@ -788,9 +802,18 @@ async function replaceRegularSchedule(input: {
       ? `${outcome.cleared.proposals} open reschedule(s)`
       : null,
   ].filter(Boolean);
-  const plan = seasonPlan(outcome.format, outcome.firstNight, outcome.weeks);
+  const plan = seasonPlan(
+    outcome.format,
+    outcome.firstNight,
+    outcome.weeks,
+    undefined,
+    outcome.breaks,
+  );
   const tiebreakerNight = plan.find((step) => step.kind === "TIEBREAKER")?.from;
   const playoffNight = plan.find((step) => step.kind === "PLAYOFF")?.from;
+  const breakNights = plan.flatMap((step) =>
+    step.kind === "BREAK" && step.from ? [formatLeagueMatchTime(step.from, "date")] : [],
+  );
   const groupsFrom =
     outcome.groupsFrom === "DRAWN"
       ? ", drawn by roster MMR"
@@ -801,6 +824,8 @@ async function replaceRegularSchedule(input: {
     message: `${groupPlan.kind === "SWAP" ? "Groups swapped and schedule regenerated" : "Schedule generated"} · ${formatName(outcome.format)}${groupsFrom}${
       groupsLine ? ` (${groupsLine})` : ""
     } · ${playoffEntrantsPhrase(outcome.format)} make the playoffs · ${outcome.rows} matches over ${outcome.weeks} week(s) · week 1: ${formatLeagueTime(outcome.firstNight)}, then weekly${
+      breakNights.length ? ` (no games ${breakNights.join(", ")}: break)` : ""
+    }${
       tiebreakerNight && playoffNight
         ? ` · tiebreaker week ${formatLeagueTime(tiebreakerNight)} (only if a tie needs it), playoffs from ${formatLeagueTime(playoffNight)}`
         : ""
@@ -2557,6 +2582,105 @@ export async function setWeekNight(
         : "") +
       ` · ${outcome.rsvps} check-in(s) cleared · ${outcome.proposals} open reschedule proposal(s) cancelled` +
       (announced ? " · captains notified on Discord" : "") +
+      (clashes.length
+        ? ` · ⚠ standin clash: ${clashes.join("; ")} — remove one of those assignments`
+        : ""),
+  };
+}
+
+/**
+ * Add a break: a league night with no games (a holiday). Every round from
+ * that night on plays one league night later; the fixtures on those nights
+ * move with them (season-break-service.ts).
+ */
+export async function addSeasonBreak(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  return changeSeasonBreakFromForm("ADD", formData);
+}
+
+/** Remove a break that is still to come: the rounds after it move back a night. */
+export async function removeSeasonBreak(
+  _prev: ActionResult,
+  formData: FormData,
+): Promise<ActionResult> {
+  const admin = await adminOrError();
+  if ("error" in admin) return admin;
+  return changeSeasonBreakFromForm("REMOVE", formData);
+}
+
+async function changeSeasonBreakFromForm(
+  change: SeasonBreakChange,
+  formData: FormData,
+): Promise<ActionResult> {
+  const expectedActiveSeasonId = str(formData, "expectedActiveSeasonId").trim();
+  if (!expectedActiveSeasonId) {
+    return {
+      error: "This breaks form is stale — reload before changing the season's breaks.",
+    };
+  }
+  let outcome: SeasonBreakOutcome;
+  try {
+    outcome = await changeSeasonBreak({
+      change,
+      expectedActiveSeasonId,
+      expectedBreaks: str(formData, "expectedBreaks"),
+      date: str(formData, "date"),
+    });
+  } catch (error) {
+    return {
+      error: actionErrorMessage(
+        error,
+        "The breaks couldn't be changed. Reload and try again.",
+        change === "ADD" ? "addSeasonBreak" : "removeSeasonBreak",
+      ),
+    };
+  }
+  const movedIds = outcome.moved.map((move) => move.id);
+  // Moved kickoffs are automated work: the worker's next wake-up follows them.
+  updateTag(AUTOMATION_GATE_TAG);
+  await logAdminAction({
+    action: change === "ADD" ? "addSeasonBreak" : "removeSeasonBreak",
+    summary:
+      `${change === "ADD" ? "Added" : "Removed"} the break on ${outcome.date}` +
+      ` — moved ${movedIds.length} scheduled match(es), kept ${outcome.kept.length} on an arranged time,` +
+      ` cleared ${outcome.rsvps} check-in(s) and cancelled ${outcome.proposals} open proposal(s)`,
+    seasonId: outcome.seasonId,
+  });
+  // A moved fixture can land on a night its booked standin already covers
+  // elsewhere: report it, as every retime does.
+  const clashes = await clashesAfterRetime(outcome.seasonId, movedIds);
+  refresh();
+  const announced = await announceSeasonBreak(outcome);
+  const night = outcome.night
+    ? formatLeagueMatchTime(outcome.night, "date")
+    : formatBreakDate(outcome.date);
+  const head =
+    change === "ADD"
+      ? outcome.night
+        ? `Break added: no games on ${night}`
+        : `Break planned for the week of ${night}: it skips the match night nearest it once week 1's night is set`
+      : `Break on ${night} removed`;
+  const moved = movedIds.length
+    ? ` · ${movedIds.length} match${movedIds.length === 1 ? "" : "es"} moved one night ${change === "ADD" ? "later" : "earlier"}`
+    : outcome.night
+      ? ` · no fixtures to move yet; rounds from then on are dated ${change === "ADD" ? "a night later" : "back on that night"}`
+      : "";
+  const kept = outcome.kept.length
+    ? ` · ${outcome.kept.length} kept a time arranged off the league night (change one with Update time in its match row if needed)`
+    : "";
+  return {
+    ok: true,
+    message:
+      head +
+      moved +
+      kept +
+      (outcome.rsvps ? ` · ${outcome.rsvps} check-in(s) cleared` : "") +
+      (outcome.proposals ? ` · ${outcome.proposals} open reschedule proposal(s) cancelled` : "") +
+      (announced ? " · posted to Discord" : "") +
       (clashes.length
         ? ` · ⚠ standin clash: ${clashes.join("; ")} — remove one of those assignments`
         : ""),

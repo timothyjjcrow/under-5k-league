@@ -203,6 +203,13 @@ actions: `src/app/actions/admin-discord.ts`.
   (`availability.itest.ts`). Both keys carry the match's `scheduleRevision`,
   like `checkinNudgeKey`: a retime wipes the answers, so an OUT for the new
   kickoff pings the captain at once instead of waiting out the old window.
+- **A break's post pings only booked standins.** Adding or removing a break
+  (a night with no games, `seasonBreakMessage` from `announceSeasonBreak`)
+  is league-wide news: one post names the night, the moved and kept fixtures
+  and the season's new dates, and mentions only the standins booked on a
+  moved fixture, whose booking quoted the old kickoff. No post before the
+  season starts; the season-start post names the break nights instead
+  ([season-schedule-playoffs](season-schedule-playoffs.md#breaks)).
 
 ## Announcements that post once
 

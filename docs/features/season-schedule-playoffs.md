@@ -201,8 +201,9 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
 - **`generateSchedule` requires the first match night**
   (`Season.firstMatchNight`): an untimed fixture gets no check-in, reminder,
   auto-import or pick'em lock.
-  Week N is `matchNightForWeek(first, N)`, on the local clock of
-  `LEAGUE_CONFIG.timeZone` (datetime rule in CLAUDE.md). Wall-time
+  Week N is `roundNight(first, N, breaks)`: week 1's night plus whole league
+  nights on the local clock of `LEAGUE_CONFIG.timeZone` (datetime rule in
+  CLAUDE.md), skipping the season's breaks ([Breaks](#breaks)). Wall-time
   conversion lives in `zoned-time.ts`: a skipped spring-forward time moves
   forward by the jump, a repeated fall-back time takes the earlier one.
 - **Name a single fixture with `matchRoundLabel` (`schedule.ts`, tested),
@@ -284,14 +285,16 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   accepted: a late cascade (weeks 7-10 of 10 moved to Thursdays) keeps the old
   night printed until the new slot holds as many fixtures; weighting open
   fixtures more is the fix if that matters.
-- **Date new postseason rounds with `upcomingMatchNight`**, which rolls a passed
-  date forward in whole weeks. Otherwise a slipped season stamps a new round with
-  last week's kickoff and auto-sync searches a closed window.
+- **Date new postseason rounds with `upcomingRoundNight`**, which rolls a passed
+  date forward in whole weeks to the next night no break covers. Otherwise a
+  slipped season stamps a new round with last week's kickoff and auto-sync
+  searches a closed window.
 - **Regular matches must fit before the tiebreaker night.** `rescheduleDeadline`
   (via `loadRescheduleDeadline`, shared by the check and the form hint) is the
   earliest postseason kickoff (a tiebreaker counts), else the night of the week
-  after the last regular week, the reserved tiebreaker night, while still
-  ahead. Start playoffs refuses while any regular result is outstanding.
+  after the last regular week, the reserved tiebreaker night (past any
+  break), while still ahead. Start playoffs refuses while any regular result
+  is outstanding.
 
 - **Fixture lists sort by week, kickoff, then id** (`MATCH_LIST_ORDER`,
   `byKickoff` with an id tiebreak; `schedule.ts`): /schedule, Home, the season
@@ -299,6 +302,94 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   then createdAt, and one `createMany` gives every fixture the same
   createdAt, so a week listed "Aug 16" above "Aug 15" and could reshuffle
   once rows were updated.
+
+## Breaks
+
+A break is a league night with no games, for a holiday (Tim's call,
+2026-11-21; [DECISIONS](../DECISIONS.md#product-decisions)). Main files:
+`src/lib/schedule.ts` (the date math, "Breaks"), `src/lib/season-breaks.ts`
+(pure decisions), `src/lib/season-break-service.ts` (the write),
+`src/lib/season-break-announcement.ts` (the post),
+`src/components/admin/season-breaks-controls.tsx` (/admin's box) and
+`src/components/home/break-notice.tsx`.
+
+- **Weeks stay rounds; only the dates skip.** Week 4 is still Week 4 when a
+  break delays it: standings, honors, reminders and every "Week N" label are
+  keyed by `Match.week`, and none of them changes. Round N plays on the N-th
+  league night from week 1's that no break covers (`roundNight`,
+  `roundSlot`); week 1's own night is never skipped.
+- **A break is a date, and covers the nearest league night.** `Season.breakDates`
+  is a sorted JSON array of calendar dates on the league's clock
+  (`["2026-12-26"]`, `parseBreakDates`, `serializeBreakDates`). A date covers
+  the league night at most three days from it (`BREAK_REACH_DAYS`); nights are
+  seven days apart, so every date covers exactly one. With week 1's night set,
+  Add break stores the night's own date (`chooseBreak`, and the toast names
+  it); before it is set, any later date can be planned. A break keeps covering
+  its week when the season's night moves to another weekday.
+- **Every date a round gets skips the breaks.** Generation, the season plan
+  (`seasonPlan`'s last argument), the season builder's preview, Start playoffs
+  and each next round (`upcomingRoundNight`), tiebreaker weeks, the reschedule
+  deadline (`rescheduleDeadline`'s `breaks`, through `loadRescheduleDeadline`'s
+  season calendar), and the #schedule card's week night all read the season's
+  breaks. `schedule-break-guards.test.ts` fails on a new caller of the raw
+  `matchNightForWeek` outside its listed places, on `upcomingMatchNight`
+  (removed) and on a `seasonPlan` call without the breaks. The bracket's
+  `playoffSetupRevision` hashes the breaks when there are any, so a Start
+  playoffs form from before a break changed is refused.
+- **Adding a break moves the fixtures it delays; removing one moves them
+  back.** `changeSeasonBreak` runs in one Serializable transaction: it claims
+  the season as the form showed it (`expectedBreaks`, `seasonBreaksToken`),
+  works out each round's night before and after (`breakShift`), and moves the
+  scheduled fixtures on a moving round's night to its new night at the same
+  time of day (`shiftMatchNight`), under the retime contract above: the
+  revision bump, the auto-sync reset, nudges invalidated, check-ins deleted,
+  open proposals cancelled and each old kickoff's reminder marker released
+  (`releaseRetimedReminderMarker`). Rounds with no fixtures yet need nothing:
+  they are dated from the breaks when they are built.
+- **A fixture off its round's night keeps its time.** A time the captains
+  agreed (or an admin set) is someone's arrangement, so only fixtures on the
+  round's night move; the rest are counted in the toast and listed in the post
+  ("Staying at their arranged time"), and Update time on the match
+  row moves one by hand. A moving round with a live or played fixture on its
+  night is refused ("Week 3 has already started"), as is a night that has
+  started, week 1's night or earlier, a night that is already a break, a
+  second break in one week and a finished season. Every refusal is thrown, so
+  none leaves half a move.
+- **Breaks can be planned in any phase but a finished season**
+  (`seasonBreaksEditable`). The box sits under the season builder: in the
+  Season format card during signups and the draft, in Schedule & results
+  after the auction. Its select offers every league night still to come
+  through two past the season's last round (`breakNightOptions`), each with
+  the round on it and how many scheduled matches it would move, and each
+  break's Remove confirm counts the matches it moves back. A break whose
+  night has passed shows "passed" and has no Remove (`breakRemoveRefusal`):
+  removing it would re-date later rounds onto nights already gone.
+- **Players are told where they look.** The season plan (Home, /schedule, the
+  admin format box) lists each break as "Break · <date> · no games" before the
+  step it delays (a break inside the regular season follows it, and the
+  regular season's last date moves). Home (`BreakNotice`) and the #schedule
+  card (`seasonBreak`, "League break · no games …") speak up from a week
+  before the night until its end and say when the league is back: the first
+  scheduled kickoff after it, or the next planned round's night when that
+  round isn't built yet, never the reserved tiebreaker week, which may not be
+  played (`upcomingBreak`). The season-start post names the
+  break nights, and the generate toast says "no games …: break".
+- **One post per change, pinging only booked standins.** `announceSeasonBreak`
+  posts after the commit, best-effort, once the season has started (the
+  regular season or the playoffs; before that the season-start post names the
+  breaks) and the break has a night: the night, the moved fixtures (eight at most), the kept ones,
+  the cleared check-ins and the season's new dates from the plan
+  (`seasonBreakMessage`). It pings only standins booked on a moved fixture,
+  whose booking quoted the old kickoff; captains read it with everyone else.
+- **Concurrency.** The Season row and every fixture are read and written in
+  the one Serializable transaction, so a rival break, a week move's cascade,
+  Start playoffs or a retime or result on a moved fixture either lands before
+  the snapshot (and is seen) or forces a serialization failure, which is
+  refused with the stale-page copy. Both claims are reviewed equivalents in
+  the ratchet; `season-breaks.itest.ts` races two adds and pins a cascade at
+  the `seasonBreaks.change.beforeWrite` seam (Postgres; red only with the
+  isolation downgraded too). The proposal cancel's `status: PENDING` is
+  protected: its blind write cancels an answered proposal.
 
 ## Rescheduling
 

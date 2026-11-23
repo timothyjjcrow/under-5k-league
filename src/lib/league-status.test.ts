@@ -51,6 +51,7 @@ function snap(over: Partial<LeagueStatusSnapshot> = {}): LeagueStatusSnapshot {
     lastChampion: null,
     nextSignupsAtMs: null,
     inhouseNight: null,
+    seasonBreak: null,
     urls: {
       signUp: `${SITE}/me`,
       howItWorks: `${SITE}/how-it-works`,
@@ -486,6 +487,21 @@ describe("regular season card", () => {
   it("uses the hero's picture beside the player of the week", () => {
     const json = JSON.stringify(renderLeagueStatus(season).payload);
     expect(json).toContain("https://cdn.example/drow.png");
+  });
+
+  it("names a break in the coming week under the week, and says nothing otherwise", () => {
+    const night = T0 + 6 * 86_400_000;
+    const back = T0 + 13 * 86_400_000;
+    const text = all({ ...season, seasonBreak: { nightMs: night, resumesAtMs: back } });
+    expect(text).toContain(
+      `**League break** · no games <t:${night / 1000}:D>\n-# Back <t:${back / 1000}:F> · <t:${back / 1000}:R>`,
+    );
+    expect(text.indexOf("**League break**")).toBeGreaterThan(text.indexOf("This week"));
+    expect(text.indexOf("**League break**")).toBeLessThan(text.indexOf("**Standings**"));
+    expect(all(season)).not.toContain("League break");
+    // A break changes the card, so it repaints.
+    expect(renderLeagueStatus({ ...season, seasonBreak: { nightMs: night, resumesAtMs: back } }).digest)
+      .not.toBe(renderLeagueStatus(season).digest);
   });
 
   it("says the regular season is done when no week is left", () => {

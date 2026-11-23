@@ -243,12 +243,7 @@ async function composerProps(
     ),
   };
   const [deadline, fixtures, scrims] = await Promise.all([
-    loadRescheduleDeadline(
-      prisma,
-      match,
-      match.season.firstMatchNight,
-      nowMs,
-    ),
+    loadRescheduleDeadline(prisma, match, match.season, nowMs),
     prisma.match.findMany({
       where: {
         seasonId: match.seasonId,

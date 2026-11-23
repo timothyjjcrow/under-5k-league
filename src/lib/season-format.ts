@@ -6,10 +6,13 @@
 // from client code.
 
 import {
+  breakCoversNight,
   matchNightForWeek,
   pickBracketSize,
   roundName,
+  roundNight,
   roundRobin,
+  roundSlot,
   type Pairing,
 } from "./schedule";
 
@@ -508,10 +511,14 @@ export function seedGroups(
 }
 
 export type SeasonPlanStep = {
-  kind: "REGULAR" | "TIEBREAKER" | "PLAYOFF";
-  /** "Regular season", "Group stage", "Tiebreakers", "Semifinals", "Grand final". */
+  /** BREAK is a league night with no games (`Season.breakDates`). */
+  kind: "REGULAR" | "TIEBREAKER" | "PLAYOFF" | "BREAK";
+  /** "Regular season", "Group stage", "Tiebreakers", "Semifinals", "Grand final", "Break". */
   label: string;
-  /** First and last week of the step (equal for a single week). */
+  /**
+   * First and last week of the step (equal for a single week). A break's is
+   * the week it delays, the one that plays after it.
+   */
   fromWeek: number;
   toWeek: number;
   /** Match nights of those weeks on the league's clock, when week 1 is set. */
@@ -522,8 +529,9 @@ export type SeasonPlanStep = {
 /**
  * The season's calendar from the day its schedule is made: the regular
  * weeks, the tiebreaker week (played only if a tie needs it) and each playoff
- * round. `lastRegularWeek` is the schedule's real last week when fixtures
- * exist. Dates follow `firstMatchNight` on the league's clock, so moving the
+ * round, with each break (a night with no games) where it falls. `lastRegularWeek`
+ * is the schedule's real last week when fixtures exist. Dates follow
+ * `firstMatchNight` on the league's clock, skipping the breaks, so moving the
  * season's match night with the cascade moves the whole plan.
  */
 export function seasonPlan(
@@ -531,13 +539,10 @@ export function seasonPlan(
   firstMatchNight: Date | null,
   lastRegularWeek: number = format.regularWeeks,
   timeZone?: string | null,
+  breaks: readonly string[] = [],
 ): SeasonPlanStep[] {
   const night = (week: number) =>
-    firstMatchNight
-      ? timeZone === undefined
-        ? matchNightForWeek(firstMatchNight, week)
-        : matchNightForWeek(firstMatchNight, week, timeZone)
-      : null;
+    firstMatchNight ? roundNight(firstMatchNight, week, breaks, timeZone) : null;
   const step = (
     kind: SeasonPlanStep["kind"],
     label: string,
@@ -552,7 +557,7 @@ export function seasonPlan(
     to: night(toWeek),
   });
   const tiebreakerWeek = lastRegularWeek + 1;
-  return [
+  const plan: SeasonPlanStep[] = [
     step(
       "REGULAR",
       format.kind === "GROUPS" ? "Group stage" : "Regular season",
@@ -569,6 +574,30 @@ export function seasonPlan(
       ),
     ),
   ];
+  if (!firstMatchNight || breaks.length === 0) return plan;
+  // Walk the league nights up to the last round's; each one a break covers
+  // goes in before the first step it delays, after any break before it.
+  const lastRound = tiebreakerWeek + format.playoffRounds;
+  const lastSlot = roundSlot(firstMatchNight, lastRound, breaks, timeZone);
+  let rounds = 1;
+  for (let slot = 2; slot <= lastSlot; slot += 1) {
+    const at = matchNightForWeek(firstMatchNight, slot, timeZone);
+    if (!breakCoversNight(at, breaks, timeZone)) {
+      rounds += 1;
+      continue;
+    }
+    const delays = rounds + 1;
+    const index = plan.findIndex((other) => other.kind !== "BREAK" && other.fromWeek >= delays);
+    plan.splice(index === -1 ? plan.length : index, 0, {
+      kind: "BREAK",
+      label: "Break",
+      fromWeek: delays,
+      toWeek: delays,
+      from: at,
+      to: at,
+    });
+  }
+  return plan;
 }
 
 const COUNT_WORDS = ["No", "One", "Two", "Three", "Four"];

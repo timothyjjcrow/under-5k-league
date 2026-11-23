@@ -109,6 +109,7 @@ import {
   seasonPlan,
   withBracket,
 } from "@/lib/season-format";
+import { parseBreakDates } from "@/lib/season-breaks";
 import {
   bracketSeedLabels,
   standingsSections,
@@ -478,6 +479,8 @@ export default async function SchedulePage() {
             planFormat,
             season.firstMatchNight,
             Math.max(...regular.map((m) => m.week)),
+            undefined,
+            parseBreakDates(season.breakDates),
           ),
         }
       : null;

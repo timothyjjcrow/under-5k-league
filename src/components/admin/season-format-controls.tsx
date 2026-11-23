@@ -18,6 +18,7 @@ import {
   seasonPlan,
   withBracket,
 } from "@/lib/season-format";
+import { parseBreakDates } from "@/lib/season-breaks";
 
 type FormatTeam = { id: string; name: string; groupKey: string | null; withdrawn?: boolean };
 
@@ -33,7 +34,7 @@ export function SeasonFormatControls({
   regenerateOpen,
   regenerateConsequences,
 }: {
-  season: { id: string; name: string; formatConfig: string | null };
+  season: { id: string; name: string; formatConfig: string | null; breakDates: string | null };
   /** The season's teams, withdrawn ones included (they keep their group). */
   teams: FormatTeam[];
   firstMatchNight: Date | null;
@@ -58,7 +59,13 @@ export function SeasonFormatControls({
     format,
     formatBracketSize(format, teams.filter((team) => !team.withdrawn).length),
   );
-  const plan = seasonPlan(shown, firstMatchNight, lastRegularWeek || format.regularWeeks);
+  const plan = seasonPlan(
+    shown,
+    firstMatchNight,
+    lastRegularWeek || format.regularWeeks,
+    undefined,
+    parseBreakDates(season.breakDates),
+  );
   const groups =
     format.kind === "GROUPS"
       ? SEASON_GROUP_KEYS.map((key) => ({

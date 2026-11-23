@@ -80,6 +80,7 @@ export function SeasonFormatBuilder({
   scheduleRevision,
   generateLockedReason,
   firstMatchNightTs,
+  breakDates = [],
   nowMs,
   regenerateConsequences,
 }: {
@@ -98,6 +99,8 @@ export function SeasonFormatBuilder({
   /** Why Generate can't run now, or null when it can. */
   generateLockedReason: string | null;
   firstMatchNightTs: number | null;
+  /** The season's breaks (`parseBreakDates`): the preview's dates skip them. */
+  breakDates?: readonly string[];
   nowMs: number;
   /** What a regenerate destroys, for its confirm. */
   regenerateConsequences: string[];
@@ -134,6 +137,7 @@ export function SeasonFormatBuilder({
     count,
     nightTs !== null ? new Date(nightTs) : null,
     LEAGUE_CONFIG.timeZone,
+    breakDates,
   );
   const alternatives = count >= PREVIEW_MIN ? formatAlternatives(count) : [];
   const errors = preview?.problems.errors ?? [];

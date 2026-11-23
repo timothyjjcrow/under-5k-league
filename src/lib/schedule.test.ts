@@ -24,7 +24,13 @@ import {
   groupPlayoffRounds,
   matchNightForWeek,
   shiftMatchNight,
-  upcomingMatchNight,
+  upcomingRoundNight,
+  breakCoversNight,
+  breakDayNumber,
+  leagueDateKey,
+  leagueDayNumber,
+  roundNight,
+  roundSlot,
   rescheduleDeadline,
   leagueMonthWindow,
   scheduleFilterTeamId,
@@ -160,13 +166,13 @@ describe("leagueMonthWindow", () => {
   });
 });
 
-describe("upcomingMatchNight", () => {
+describe("upcomingRoundNight with no breaks", () => {
   const first = new Date("2026-07-12T18:00:00-07:00");
   const WEEK = 7 * 24 * 3600 * 1000;
 
   it("leaves a future night exactly where the arithmetic puts it", () => {
     const now = new Date("2026-07-20T12:00:00-07:00").getTime();
-    const w3 = upcomingMatchNight(first, 3, now); // Jul 26
+    const w3 = upcomingRoundNight(first, 3, [], now); // Jul 26
     expect(w3.getTime()).toBe(matchNightForWeek(first, 3).getTime());
   });
 
@@ -174,7 +180,7 @@ describe("upcomingMatchNight", () => {
     // A bracket created weeks after its arithmetic date must not be born with
     // a kickoff already outside its own auto-sync window.
     const now = new Date("2026-09-20T21:00:00-07:00").getTime();
-    const rolled = upcomingMatchNight(first, 3, now);
+    const rolled = upcomingRoundNight(first, 3, [], now);
     expect(rolled.getTime()).toBeGreaterThan(now);
     // Still the league's weekday + kickoff time: a whole number of weeks on.
     const delta = rolled.getTime() - matchNightForWeek(first, 3).getTime();
@@ -183,24 +189,24 @@ describe("upcomingMatchNight", () => {
 
   it("rolls forward when the night is only just past", () => {
     const w1 = matchNightForWeek(first, 1).getTime();
-    const rolled = upcomingMatchNight(first, 1, w1 + 1000);
+    const rolled = upcomingRoundNight(first, 1, [], w1 + 1000);
     expect(rolled.getTime()).toBe(w1 + WEEK);
   });
 
   it("is stable across a whole season of weeks", () => {
     const now = new Date("2026-08-01T12:00:00-07:00").getTime();
     for (let w = 1; w <= 12; w++) {
-      expect(upcomingMatchNight(first, w, now).getTime()).toBeGreaterThan(now);
+      expect(upcomingRoundNight(first, w, [], now).getTime()).toBeGreaterThan(now);
     }
   });
 
   it("rolls late European playoff rounds forward across both clock changes", () => {
-    expect(upcomingMatchNight(
-      new Date("2026-03-15T20:00:00+01:00"), 2,
+    expect(upcomingRoundNight(
+      new Date("2026-03-15T20:00:00+01:00"), 2, [],
       new Date("2026-03-29T19:30:00+02:00").getTime(), "Europe/Berlin",
     ).toISOString()).toBe("2026-03-29T18:00:00.000Z");
-    expect(upcomingMatchNight(
-      new Date("2026-10-11T20:00:00+02:00"), 2,
+    expect(upcomingRoundNight(
+      new Date("2026-10-11T20:00:00+02:00"), 2, [],
       new Date("2026-10-25T19:30:00+01:00").getTime(), "Europe/Berlin",
     ).toISOString()).toBe("2026-10-25T19:00:00.000Z");
   });
@@ -208,7 +214,108 @@ describe("upcomingMatchNight", () => {
   it("keeps a playoff kickoff that is due exactly now", () => {
     const first = new Date("2026-10-18T20:00:00+02:00");
     const now = new Date("2026-10-25T20:00:00+01:00").getTime();
-    expect(upcomingMatchNight(first, 2, now, "Europe/Berlin").getTime()).toBe(now);
+    expect(upcomingRoundNight(first, 2, [], now, "Europe/Berlin").getTime()).toBe(now);
+  });
+});
+
+describe("breaks", () => {
+  const LA = "America/Los_Angeles";
+  // US Season 2's rhythm: Saturdays at 2 PM Pacific from Nov 7.
+  const first = new Date("2026-11-07T14:00:00-08:00");
+  const day = (iso: string) => leagueDateKey(new Date(iso), LA);
+
+  it("reads only real calendar dates", () => {
+    expect(breakDayNumber("2026-12-26")).toBe(Date.UTC(2026, 11, 26) / 864e5);
+    expect(breakDayNumber("2026-02-30")).toBeNull();
+    expect(breakDayNumber("2026-12-26T00:00")).toBeNull();
+    expect(breakDayNumber("26/12/2026")).toBeNull();
+  });
+
+  it("dates days on the league's clock, not UTC", () => {
+    // 2 PM Pacific on Dec 26 is 22:00 UTC the same day; 8 PM is Dec 27 in UTC.
+    expect(leagueDateKey(new Date("2026-12-26T20:00:00-08:00"), LA)).toBe("2026-12-26");
+    expect(leagueDateKey(new Date("2026-12-26T20:00:00-08:00"), null)).toBe("2026-12-27");
+    expect(leagueDayNumber(new Date("2026-12-26T23:59:00-08:00"), LA)).toBe(
+      breakDayNumber("2026-12-26"),
+    );
+  });
+
+  it("is the weekly rhythm with no breaks", () => {
+    for (let round = -1; round <= 12; round += 1) {
+      expect(roundNight(first, round, [], LA).getTime()).toBe(
+        matchNightForWeek(first, round, LA).getTime(),
+      );
+      expect(roundSlot(first, round, [], LA)).toBe(round);
+    }
+  });
+
+  it("plays every round from the break on one night later", () => {
+    const breaks = ["2026-12-26"];
+    // Weeks 1-7 keep their nights (Nov 7 .. Dec 19).
+    for (let round = 1; round <= 7; round += 1) {
+      expect(roundNight(first, round, breaks, LA).getTime()).toBe(
+        matchNightForWeek(first, round, LA).getTime(),
+      );
+    }
+    expect(day(roundNight(first, 8, breaks, LA).toISOString())).toBe("2027-01-02");
+    expect(day(roundNight(first, 9, breaks, LA).toISOString())).toBe("2027-01-09");
+    expect(roundNight(first, 9, breaks, LA).toISOString()).toBe("2027-01-09T22:00:00.000Z");
+  });
+
+  it("skips back-to-back breaks", () => {
+    const breaks = ["2026-12-26", "2027-01-02"];
+    expect(day(roundNight(first, 7, breaks, LA).toISOString())).toBe("2026-12-19");
+    expect(day(roundNight(first, 8, breaks, LA).toISOString())).toBe("2027-01-09");
+    expect(day(roundNight(first, 9, breaks, LA).toISOString())).toBe("2027-01-16");
+    expect(roundSlot(first, 9, breaks, LA)).toBe(11);
+  });
+
+  it("covers the league night nearest the date, within three days", () => {
+    // Christmas Day (a Friday) covers Saturday Dec 26; so does Tuesday Dec 29.
+    expect(day(roundNight(first, 8, ["2026-12-25"], LA).toISOString())).toBe("2027-01-02");
+    expect(day(roundNight(first, 8, ["2026-12-29"], LA).toISOString())).toBe("2027-01-02");
+    // Wednesday Dec 30 is nearer Saturday Jan 2: the semis keep Dec 26.
+    expect(day(roundNight(first, 8, ["2026-12-30"], LA).toISOString())).toBe("2026-12-26");
+    expect(breakCoversNight(new Date("2026-12-26T14:00:00-08:00"), ["2026-12-23"], LA)).toBe(true);
+    expect(breakCoversNight(new Date("2026-12-26T14:00:00-08:00"), ["2026-12-22"], LA)).toBe(false);
+  });
+
+  it("keeps covering its week when the night moves to another weekday", () => {
+    // The season moved to Sundays: a break stored for Saturday Dec 26 now
+    // skips Sunday Dec 27.
+    const sunday = new Date("2026-11-08T14:00:00-08:00");
+    expect(day(roundNight(sunday, 8, ["2026-12-26"], LA).toISOString())).toBe("2027-01-03");
+  });
+
+  it("never skips week 1's own night", () => {
+    expect(roundNight(first, 1, ["2026-11-07"], LA).getTime()).toBe(first.getTime());
+    expect(day(roundNight(first, 2, ["2026-11-07"], LA).toISOString())).toBe("2026-11-14");
+  });
+
+  it("ignores junk dates", () => {
+    expect(roundNight(first, 8, ["not a date", "2026-13-01"], LA).getTime()).toBe(
+      matchNightForWeek(first, 8, LA).getTime(),
+    );
+  });
+
+  it("keeps the local time across daylight saving", () => {
+    // Berlin, Sundays 20:00 from Oct 11: a break on Oct 25 (the fall-back
+    // day) sends week 3 to Nov 1, still 20:00 local.
+    const berlin = new Date("2026-10-11T20:00:00+02:00");
+    expect(roundNight(berlin, 3, ["2026-10-25"], "Europe/Berlin").toISOString()).toBe(
+      "2026-11-01T19:00:00.000Z",
+    );
+  });
+
+  it("rolls a passed round forward past a break", () => {
+    const breaks = ["2026-12-26"];
+    // Round 7 (Dec 19) has passed by Dec 20: the next night, Dec 26, is a
+    // break, so the round is dated Jan 2.
+    const now = new Date("2026-12-20T12:00:00-08:00").getTime();
+    expect(day(upcomingRoundNight(first, 7, breaks, now, LA).toISOString())).toBe("2027-01-02");
+    // A round already after the break keeps its own night.
+    expect(day(upcomingRoundNight(first, 8, breaks, now, LA).toISOString())).toBe("2027-01-02");
+    expect(day(upcomingRoundNight(first, 9, breaks, now, LA).toISOString())).toBe("2027-01-09");
   });
 });
 
@@ -217,6 +324,7 @@ describe("rescheduleDeadline", () => {
   const base = {
     phase: "REGULAR",
     firstMatchNight: first,
+    breaks: [] as string[],
     lastRegularWeek: 5,
     earliestPostseasonKickoffMs: null,
     nowMs: new Date("2026-09-20T12:00:00-07:00").getTime(),
@@ -227,6 +335,13 @@ describe("rescheduleDeadline", () => {
     expect(rescheduleDeadline(base)?.toISOString()).toBe(
       matchNightForWeek(first, 6, "America/Los_Angeles").toISOString(),
     );
+  });
+
+  it("moves with a break before the tiebreaker night", () => {
+    // Week 6 (the tiebreaker night) was Oct 11; a break on Oct 4 makes it Oct 18.
+    expect(
+      rescheduleDeadline({ ...base, breaks: ["2026-10-04"] })?.toISOString(),
+    ).toBe(matchNightForWeek(first, 7, "America/Los_Angeles").toISOString());
   });
 
   it("prefers a postseason kickoff already on the calendar", () => {

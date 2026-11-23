@@ -216,6 +216,20 @@ const EQUIVALENT = new Set([
   "src/app/actions/admin-schedule-results.ts::reopenMatch::games+season+status#1",
   "src/app/actions/admin-season.ts::setSeasonPhase::isActive+status#1",
   "src/app/actions/admin-schedule-results.ts::setWeekNight::scheduledAt+status#1",
+  // changeSeasonBreak (a break added or removed) reads the Season row and
+  // every fixture of the season, then writes that Season row and the moved
+  // fixtures, all in one SERIALIZABLE transaction. A rival break, a week
+  // move's cascade, a phase change or a retime/result on a moved fixture
+  // either commits before the snapshot (the fresh read refuses or no longer
+  // moves it) or after the read and forces P2034 on the same-row write, with
+  // or without the copied predicates. season-breaks.itest.ts races two adds
+  // (one winner, every fixture moved at most once) and pins a cascade landing
+  // at the seasonBreaks.change.beforeWrite seam (Postgres). The predicates
+  // stay as the transition's documentation and defense in depth. Its
+  // RescheduleRequest status claim is NOT equivalent: a blind write would
+  // cancel an answered proposal, which the retime-contract test catches.
+  "src/lib/season-break-service.ts::changeSeasonBreak::breakDates+firstMatchNight+isActive+status#1",
+  "src/lib/season-break-service.ts::changeSeasonBreak::scheduledAt+status#1",
   // These actions likewise read the authoritative Season, Match, Registration
   // or Team rows and write those same rows inside SERIALIZABLE transactions.
   // Pre-snapshot changes fail the fresh checks; post-read changes force P2034,
@@ -373,6 +387,7 @@ const FILES = [
   "src/lib/inhouse-rating-service.ts",
   "src/lib/inhouse-ban-service.ts",
   "src/lib/medal-approval-service.ts",
+  "src/lib/season-break-service.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */

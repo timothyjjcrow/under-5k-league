@@ -40,6 +40,7 @@ import {
   serializeFormatConfig,
   type SeasonFormat,
 } from "@/lib/season-format";
+import { parseBreakDates } from "@/lib/season-breaks";
 import {
   formatDiff,
   formatEditState,
@@ -676,7 +677,7 @@ async function seasonOpeningSlate(seasonId: string) {
     }),
     prisma.season.findUnique({
       where: { id: seasonId },
-      select: { firstMatchNight: true, ...SEASON_FORMAT_SELECT },
+      select: { firstMatchNight: true, breakDates: true, ...SEASON_FORMAT_SELECT },
     }),
   ]);
   if (fixtures.length === 0 || !season) return undefined;
@@ -693,6 +694,8 @@ async function seasonOpeningSlate(seasonId: string) {
           format,
           season.firstMatchNight,
           Math.max(...fixtures.map((fixture) => fixture.week)),
+          undefined,
+          parseBreakDates(season.breakDates),
         )
       : null;
   const week = fixtures[0].week;
@@ -735,6 +738,9 @@ async function seasonOpeningSlate(seasonId: string) {
       : {}),
     tiebreakerMs: plan?.find((step) => step.kind === "TIEBREAKER")?.from?.getTime() ?? null,
     playoffsMs: plan?.find((step) => step.kind === "PLAYOFF")?.from?.getTime() ?? null,
+    breaksMs: (plan ?? []).flatMap((step) =>
+      step.kind === "BREAK" && step.from ? [step.from.getTime()] : [],
+    ),
   };
 }
 

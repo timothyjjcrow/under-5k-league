@@ -152,7 +152,16 @@ import { RollCallControls } from "@/components/admin/roll-call-controls";
 import { SeasonFormatBuilder } from "@/components/admin/season-format-builder";
 import { SeasonFormatControls } from "@/components/admin/season-format-controls";
 import { formatEditState, formatProblems, knobsLabel } from "@/lib/season-builder";
-import { parseFormatConfig, teamCountSeasonNote } from "@/lib/season-format";
+import {
+  parseFormatConfig,
+  plannedSeasonFormat,
+  resolveSeasonFormat,
+  seasonPlan,
+  teamCountSeasonNote,
+  withBracket,
+} from "@/lib/season-format";
+import { SeasonBreaksControls } from "@/components/admin/season-breaks-controls";
+import { parseBreakDates } from "@/lib/season-breaks";
 import { playoffPlacesPhrase } from "@/lib/season-groups";
 import { InhouseNightControls } from "@/components/admin/inhouse-night-controls";
 import { inhouseNightPhase } from "@/lib/inhouse-night";
@@ -3914,6 +3923,47 @@ function TiebreakerControls({
 }
 
 /**
+ * The season plan the Breaks box counts rounds from: the built schedule's
+ * (a bracket withdrawals shrank included, as /schedule prints it), or before
+ * fixtures exist the one Generate would build for today's teams.
+ */
+function breaksPlan(season: Season, data: AdminData) {
+  const lastRegularWeek = data.matches
+    .filter((match) => match.phase === MATCH_PHASE.REGULAR)
+    .reduce((max, match) => Math.max(max, match.week), 0);
+  const format =
+    lastRegularWeek > 0
+      ? resolveSeasonFormat(season, data.teams, true)
+      : plannedSeasonFormat(season, data.teams.length);
+  if (!format) return [];
+  const field = projectPlayoffField(data.teams, data.matches, season);
+  return seasonPlan(
+    withBracket(format, field.bracketSize),
+    season.firstMatchNight,
+    lastRegularWeek || format.regularWeeks,
+    undefined,
+    parseBreakDates(season.breakDates),
+  );
+}
+
+/** The Breaks box for `season`, wherever the season builder is. */
+function SeasonBreaks({ season, data, nowMs }: { season: Season; data: AdminData; nowMs: number }) {
+  return (
+    <SeasonBreaksControls
+      season={season}
+      plan={breaksPlan(season, data)}
+      fixtures={data.matches.map((match) => ({
+        id: match.id,
+        week: match.week,
+        status: match.status,
+        scheduledAt: match.scheduledAt,
+      }))}
+      nowMs={nowMs}
+    />
+  );
+}
+
+/**
  * Where the season builder renders, for the page and every link to it: its
  * own Season format card while captains are picked (`setupFirst`) and the
  * schedule card is hidden, else inside Schedule & results. Only one renders.
@@ -3986,9 +4036,13 @@ function SeasonFormatSetup({
           scheduleRevision={scheduleRevision}
           generateLockedReason={null}
           firstMatchNightTs={season.firstMatchNight?.getTime() ?? null}
+          breakDates={parseBreakDates(season.breakDates)}
           nowMs={nowMs}
           regenerateConsequences={[]}
         />
+        <div className="mt-3">
+          <SeasonBreaks season={season} data={data} nowMs={nowMs} />
+        </div>
       </CardBody>
     </Card>
   );
@@ -4108,6 +4162,7 @@ function ScheduleControls({
               scheduleRevision={scheduleRevision}
               generateLockedReason={scheduleGenerationLockedReason}
               firstMatchNightTs={season.firstMatchNight?.getTime() ?? null}
+              breakDates={parseBreakDates(season.breakDates)}
               nowMs={nowMs}
               regenerateConsequences={regenerateConsequences}
             />
@@ -4122,6 +4177,9 @@ function ScheduleControls({
           regenerateOpen={!scheduleGenerationLockedReason && regularCount > 0}
           regenerateConsequences={regenerateConsequences}
         />
+        <div className="mt-3">
+          <SeasonBreaks season={season} data={data} nowMs={nowMs} />
+        </div>
         {data.matches.length === 0 ? (
           <p className="mt-3 text-sm text-muted">
             No fixtures have been generated for this season.

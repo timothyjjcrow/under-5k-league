@@ -231,9 +231,14 @@ MMR and stored on `Team.groupKey`), runs the pure circle-method round robin per 
 (`regularSeasonFixtures` over `roundRobin` in `src/lib/schedule.ts`,
 home/away fairness, rotating BYE, mirrored second leg for small tables) and
 stamps kickoffs as pure arithmetic off `Season.firstMatchNight`
-(`matchNightForWeek`: week N = first + (N−1)×7d). The week after the last
+(`roundNight`: week N = first + (N−1)×7d on the league's clock, skipping each
+break in `Season.breakDates`, a league night with no games). The week after the last
 regular week is reserved for tiebreakers; round one plays the week after it
-(`firstPlayoffWeek`). The rendered active-season
+(`firstPlayoffWeek`). Breaks are added and removed by
+`changeSeasonBreak` (`src/lib/season-break-service.ts`, pure rules in
+`src/lib/season-breaks.ts`, the post in `src/lib/season-break-announcement.ts`),
+which moves the fixtures of every later round in one Serializable
+transaction. The rendered active-season
 id is a required mutation claim. Active season, lifecycle/Draft, teams,
 withdrawal flags, played rows, attached games, and replacement collateral are
 read in the same Serializable transaction that deletes/recreates fixtures and

@@ -753,6 +753,11 @@ the league is already draftable and many visitors have joined. Write for both.
   playoffs from Sat, Dec 19", opening to every step (`seasonPlan`), dates on
   the viewer's clock. /schedule shows it in DRAFT (with fixtures) and the
   regular season, Home above the standings in the regular season.
+  A break (a night with no games) is its own row, "Break · <date> · no
+  games", before the step it delays; in the week before one, Home shows a
+  `BreakNotice` above This week (the night, and when the league is back) and
+  /admin's Breaks box sits under the season format
+  ([season-schedule-playoffs](season-schedule-playoffs.md#breaks)).
 - **The standings are one card with three tabs:** Table, Head-to-head and
   Playoff race (`ViewTabs`, `src/components/view-tabs.tsx`), the last two only
   when the phase shows them. The server renders every panel and hides the

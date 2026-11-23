@@ -2,7 +2,8 @@ import { Prisma } from "@prisma/client";
 import { randomUUID } from "node:crypto";
 import { recordHistoryAction, type HistoryActor } from "./roster-history";
 import { prisma } from "./prisma";
-import { nextRoundPairings, upcomingMatchNight } from "./schedule";
+import { nextRoundPairings, upcomingRoundNight } from "./schedule";
+import { parseBreakDates } from "./season-breaks";
 import { bracketShapeProblem, projectPlayoffField } from "./playoff-field";
 import {
   FORMAT_UNREADABLE_MESSAGE,
@@ -521,9 +522,10 @@ export async function createPlayoffBracket(
           .filter((match) => match.phase === MATCH_PHASE.TIEBREAKER)
           .reduce((latest, match) => Math.max(latest, match.scheduledAt?.getTime() ?? 0), 0);
         const playoffScheduledAt = season.firstMatchNight
-          ? upcomingMatchNight(
+          ? upcomingRoundNight(
               season.firstMatchNight,
               roundOneWeek,
+              parseBreakDates(season.breakDates),
               Math.max(Date.now(), lastTiebreakerKickoff + 1),
             )
           : null;
@@ -984,6 +986,7 @@ export async function advancePlayoffBracket(
               playoffBestOf: true,
               finalBestOf: true,
               firstMatchNight: true,
+              breakDates: true,
             },
           }),
           tx.match.findMany({
@@ -1027,7 +1030,12 @@ export async function advancePlayoffBracket(
             ? seasonNow.finalBestOf
             : seasonNow.playoffBestOf;
         const scheduledAt = seasonNow.firstMatchNight
-          ? upcomingMatchNight(seasonNow.firstMatchNight, week, Date.now())
+          ? upcomingRoundNight(
+              seasonNow.firstMatchNight,
+              week,
+              parseBreakDates(seasonNow.breakDates),
+              Date.now(),
+            )
           : null;
         // League fixtures win. A practice scrim booked near this round's
         // night used to leave the build marker unclaimed and the round (the

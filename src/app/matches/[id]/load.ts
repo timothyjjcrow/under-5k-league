@@ -45,9 +45,11 @@ export async function loadMatch(id: string) {
           name: true,
           championTeamId: true,
           dotaLeagueId: true,
-          // The Standins card's open seats and the reschedule form's deadline.
+          // The Standins card's open seats and the reschedule form's deadline
+          // (week 1's night and the breaks).
           teamSize: true,
           firstMatchNight: true,
+          breakDates: true,
           // The playoff places on the preview's tables and stakes.
           ...SEASON_FORMAT_SELECT,
         },

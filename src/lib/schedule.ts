@@ -78,8 +78,134 @@ export function leagueMonthWindow(
   };
 }
 
+// --- Breaks ------------------------------------------------------------------
+//
+// A break is a league night with no games (a holiday). The season stores each
+// one as a calendar date on the league's clock ("2026-12-26",
+// `Season.breakDates`), and a break covers the league night nearest that
+// date, at most BREAK_REACH_DAYS away. Nights are seven days apart, so every
+// date covers exactly one night, and a break keeps covering its week when the
+// season's night moves to another weekday.
+//
+// Week numbers stay rounds: Week 4 is still Week 4 when a break delays it.
+// Only the dates skip. Every date a round is given (generation, the season
+// plan, tiebreaker and playoff rounds, the reschedule deadline, the #schedule
+// card) goes through `roundNight` or `upcomingRoundNight`, never
+// `matchNightForWeek` (`schedule-break-guards.test.ts`).
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+export const BREAK_REACH_DAYS = 3;
+const BREAK_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/** A "YYYY-MM-DD" date as whole days since 1970-01-01; null when not a real date. */
+export function breakDayNumber(date: string): number | null {
+  const m = BREAK_DATE.exec(date);
+  if (!m) return null;
+  const [year, month, day] = m.slice(1).map(Number);
+  const ms = Date.UTC(year, month - 1, day);
+  const check = new Date(ms);
+  if (
+    check.getUTCFullYear() !== year ||
+    check.getUTCMonth() !== month - 1 ||
+    check.getUTCDate() !== day
+  ) {
+    return null;
+  }
+  return ms / DAY_MS;
+}
+
+/** `date`'s calendar day on the league's clock, as whole days since 1970-01-01. */
+export function leagueDayNumber(
+  date: Date,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): number {
+  const wall = timeZone ? wallTime(date, timeFormatter(timeZone)) : date.getTime();
+  return Math.floor(wall / DAY_MS);
+}
+
+/** `date`'s calendar date on the league's clock, "2026-12-26". */
+export function leagueDateKey(
+  date: Date,
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): string {
+  return new Date(leagueDayNumber(date, timeZone) * DAY_MS).toISOString().slice(0, 10);
+}
+
+function breakDays(breaks: readonly string[]): number[] {
+  return breaks.flatMap((date) => {
+    const day = breakDayNumber(date);
+    return day === null ? [] : [day];
+  });
+}
+
+function coveredByBreak(
+  night: Date,
+  days: readonly number[],
+  timeZone: string | null,
+): boolean {
+  if (days.length === 0) return false;
+  const day = leagueDayNumber(night, timeZone);
+  return days.some((breakDay) => Math.abs(day - breakDay) <= BREAK_REACH_DAYS);
+}
+
+/** Whether a break covers `night` (the league night nearest one of the dates). */
+export function breakCoversNight(
+  night: Date,
+  breaks: readonly string[],
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): boolean {
+  return coveredByBreak(night, breakDays(breaks), timeZone);
+}
+
 /**
- * The league night for `week`, rolled forward if that date has already passed.
+ * The league night (counted from week 1's, which is 1) that round `round`
+ * plays on: the round-th night no break covers. Week 1's own night is never
+ * skipped: a break can't come before the season starts. Rounds below 1 (an
+ * anchor worked backwards) count plain weeks.
+ */
+export function roundSlot(
+  firstNight: Date,
+  round: number,
+  breaks: readonly string[],
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): number {
+  if (round <= 1) return round;
+  const days = breakDays(breaks);
+  if (days.length === 0) return round;
+  let slot = 1;
+  let rounds = 1;
+  // Each break covers at most one night, so this ends within
+  // round + breaks.length nights.
+  while (rounds < round) {
+    slot += 1;
+    if (!coveredByBreak(matchNightForWeek(firstNight, slot, timeZone), days, timeZone)) {
+      rounds += 1;
+    }
+  }
+  return slot;
+}
+
+/**
+ * Round `round`'s match night: week 1's night plus whole league nights on the
+ * league's clock, skipping every night a break covers. With no breaks it is
+ * `matchNightForWeek`.
+ */
+export function roundNight(
+  firstNight: Date,
+  round: number,
+  breaks: readonly string[],
+  timeZone: string | null = SCHEDULE_TIME_ZONE,
+): Date {
+  return matchNightForWeek(
+    firstNight,
+    roundSlot(firstNight, round, breaks, timeZone),
+    timeZone,
+  );
+}
+
+/**
+ * Round `round`'s night, rolled forward to the next league night no break
+ * covers if that date has already passed.
  *
  * Playoff rounds are dated by pure arithmetic off `firstMatchNight`, so once a
  * season slips (captain reschedules don't move the anchor) a bracket created
@@ -91,20 +217,23 @@ export function leagueMonthWindow(
  *
  * Rolling forward in whole weeks keeps the league's weekday and kickoff time.
  */
-export function upcomingMatchNight(
+export function upcomingRoundNight(
   firstNight: Date,
-  week: number,
+  round: number,
+  breaks: readonly string[],
   nowMs: number,
   timeZone: string | null = SCHEDULE_TIME_ZONE,
 ): Date {
-  const t = matchNightForWeek(firstNight, week, timeZone);
+  let slot = roundSlot(firstNight, round, breaks, timeZone);
+  const t = matchNightForWeek(firstNight, slot, timeZone);
   if (t.getTime() >= nowMs) return t;
-  let nextWeek = week + Math.max(0, Math.floor((nowMs - t.getTime()) / WEEK_MS));
-  let next = matchNightForWeek(firstNight, nextWeek, timeZone);
+  const days = breakDays(breaks);
+  slot += Math.max(0, Math.floor((nowMs - t.getTime()) / WEEK_MS));
+  let next = matchNightForWeek(firstNight, slot, timeZone);
   // UTC estimates can be an hour either side of a daylight-saving boundary.
-  while (next.getTime() < nowMs) {
-    nextWeek += 1;
-    next = matchNightForWeek(firstNight, nextWeek, timeZone);
+  while (next.getTime() < nowMs || coveredByBreak(next, days, timeZone)) {
+    slot += 1;
+    next = matchNightForWeek(firstNight, slot, timeZone);
   }
   return next;
 }
@@ -131,6 +260,8 @@ export function upcomingMatchNight(
 export function rescheduleDeadline(options: {
   phase: string;
   firstMatchNight: Date | null;
+  /** The season's breaks (`parseBreakDates(season.breakDates)`). */
+  breaks: readonly string[];
   lastRegularWeek: number;
   earliestPostseasonKickoffMs: number | null;
   nowMs: number;
@@ -140,9 +271,10 @@ export function rescheduleDeadline(options: {
   if (options.earliestPostseasonKickoffMs != null)
     return new Date(options.earliestPostseasonKickoffMs);
   if (!options.firstMatchNight || options.lastRegularWeek < 1) return null;
-  const planned = matchNightForWeek(
+  const planned = roundNight(
     options.firstMatchNight,
     options.lastRegularWeek + 1,
+    options.breaks,
     options.timeZone === undefined ? SCHEDULE_TIME_ZONE : options.timeZone,
   );
   return planned.getTime() > options.nowMs ? planned : null;

@@ -399,6 +399,8 @@ export function regularSeasonStartedMessage(
     /** The reserved tiebreaker night and the first playoff night, epoch ms. */
     tiebreakerMs?: number | null;
     playoffsMs?: number | null;
+    /** The nights the season takes a break (no games), epoch ms. */
+    breaksMs?: number[];
   },
   /** Fantasy rosters aren't locked yet (no game imported), so say it's open. */
   fantasyOpen = false,
@@ -417,9 +419,11 @@ export function regularSeasonStartedMessage(
     ms != null && Number.isFinite(ms) ? `<t:${Math.floor(ms / 1000)}:D>` : null;
   const tiebreakers = stamp(opening.tiebreakerMs);
   const playoffs = stamp(opening.playoffsMs);
-  const calendar = playoffs
-    ? `\nPlayoffs from ${playoffs}${tiebreakers ? `; the week before (${tiebreakers}) is kept for tiebreakers.` : "."}`
-    : "";
+  const breaks = (opening.breaksMs ?? []).flatMap((ms) => stamp(ms) ?? []);
+  const calendar =
+    (playoffs
+      ? `\nPlayoffs from ${playoffs}${tiebreakers ? `; the week before (${tiebreakers}) is kept for tiebreakers.` : "."}`
+      : "") + (breaks.length ? `\nNo games on ${breaks.join(", ")}: league break.` : "");
   const shown = opening.fixtures.slice(0, OPENING_FIXTURES_SHOWN);
   const lines = shown.map((f) => {
     const when =
@@ -2072,16 +2076,20 @@ const ADMIN_RETIME_MAX_LINES = 10;
  * getting its first time (fixtures generated without times, then a match
  * night set) reads "Kickoff set"; "moved" is kept for a time that existed.
  */
+/** A moved fixture's round as a post names it: "Week 4", "Semifinal". */
+function retimeMoveLabel(move: Pick<AdminRetimeMove, "week" | "isPlayoff" | "isTiebreaker" | "roundLabel">): string {
+  return move.isTiebreaker
+    ? `Tiebreaker week ${move.week}`
+    : move.isPlayoff
+      ? (playoffFixtureTitle(move.roundLabel) ?? "Playoffs")
+      : `Week ${move.week}`;
+}
+
 export function adminRetimeMessage(m: {
   moves: AdminRetimeMove[];
   clearedRsvps: number;
 }): string {
-  const label = (move: AdminRetimeMove) =>
-    move.isTiebreaker
-      ? `Tiebreaker week ${move.week}`
-      : move.isPlayoff
-        ? (playoffFixtureTitle(move.roundLabel) ?? "Playoffs")
-        : `Week ${move.week}`;
+  const label = retimeMoveLabel;
   const when = (move: AdminRetimeMove) =>
     move.whenMs == null
       ? "unscheduled for now"
@@ -2122,6 +2130,58 @@ export function adminRetimeMessage(m: {
         ? `🗓️ **Schedule moved** by an admin — ${m.moves.length} matches have new kickoffs:`
         : `🗓️ **Schedule updated** by an admin — ${setCount} new kickoff${setCount === 1 ? "" : "s"} and ${movedCount} moved:`;
   return `${header}\n${lines.join("\n")}\n${reset.trim() ? `${reset.trim()} ` : ""}Full schedule: <${site}/schedule>`;
+}
+
+const SEASON_BREAK_MAX_LINES = 8;
+
+/**
+ * A break added or removed (season-breaks.ts): the night with no games, the
+ * fixtures that moved and the new dates of what is left of the season (the
+ * season plan's steps after the night). The moved fixtures' booked standins
+ * are pinged by the caller: their booking quoted the old kickoff.
+ */
+export function seasonBreakMessage(m: {
+  change: "ADD" | "REMOVE";
+  nightMs: number;
+  moves: AdminRetimeMove[];
+  /** Fixtures of a moved round left on a time someone arranged. */
+  kept: AdminRetimeMove[];
+  clearedRsvps: number;
+  /** The plan after the night: "Semifinals", and its night (or range). */
+  plan: { label: string; fromMs: number; toMs: number }[];
+}): string {
+  const day = (ms: number) => `<t:${Math.floor(ms / 1000)}:D>`;
+  const when = (move: AdminRetimeMove) =>
+    move.whenMs == null ? "unscheduled for now" : `<t:${Math.floor(move.whenMs / 1000)}:F>`;
+  const fixture = (move: AdminRetimeMove) =>
+    `• ${retimeMoveLabel(move)}: **${name(move.homeName)}** vs **${name(move.awayName)}** — ${when(move)}`;
+  const header =
+    m.change === "ADD"
+      ? `🗓️ **League break: no games on ${day(m.nightMs)}.** Every round from then on plays one league night later.`
+      : `🗓️ **The league break on ${day(m.nightMs)} is off.** Every round from then on plays one league night earlier.`;
+  const lines: string[] = [];
+  if (m.moves.length > 0) {
+    lines.push(m.moves.length === 1 ? "New kickoff:" : `New kickoffs (${m.moves.length} matches):`);
+    const shown = m.moves.slice(0, SEASON_BREAK_MAX_LINES);
+    lines.push(...shown.map(fixture));
+    if (m.moves.length > shown.length) lines.push(`• …and ${m.moves.length - shown.length} more`);
+  }
+  if (m.kept.length > 0) {
+    lines.push("Staying at their arranged time:");
+    lines.push(...m.kept.slice(0, SEASON_BREAK_MAX_LINES).map(fixture));
+  }
+  if (m.plan.length > 0) {
+    const steps = m.plan.map((step) =>
+      step.toMs !== step.fromMs
+        ? `${step.label} ${day(step.fromMs)} – ${day(step.toMs)}`
+        : `${step.label} ${day(step.fromMs)}`,
+    );
+    lines.push(`Season dates now: ${steps.join(" · ")}`);
+  }
+  const reset = m.clearedRsvps
+    ? `Check-ins on the moved matches were reset (${m.clearedRsvps} cleared), so please check in again. `
+    : "";
+  return `${header}${lines.length ? `\n${lines.join("\n")}` : ""}\n${reset}Full schedule: <${resolveSiteUrl()}/schedule>`;
 }
 
 export function testMessage(): string {
