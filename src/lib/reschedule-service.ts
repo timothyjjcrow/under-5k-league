@@ -201,7 +201,7 @@ export type VoteOutcome =
 const VOTE_ATTEMPTS = 6;
 
 // Sanity bounds for a proposed time (`schedule.ts` explains them; /rules
-// quotes them).
+// leaves them out: they catch a mistyped date, not a league rule).
 
 function assertSaneProposedTime(proposedTime: Date, now = new Date()): void {
   if (!Number.isFinite(proposedTime.getTime()))

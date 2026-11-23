@@ -31,12 +31,7 @@ import {
   knownPlayersPerSide,
 } from "./league-result-window";
 import { seriesLobbyRule } from "./match-hosting";
-import {
-  FIXTURE_CONFLICT_WINDOW_MS,
-  RESCHEDULE_MAX_AHEAD_MS,
-  RESCHEDULE_PAST_GRACE_MS,
-  playoffFirstRound,
-} from "./schedule";
+import { FIXTURE_CONFLICT_WINDOW_MS, playoffFirstRound } from "./schedule";
 import {
   SEASON_GROUP_KEYS,
   describeSeasonFormat,
@@ -153,7 +148,7 @@ function plural(n: number, unit: string): string {
   return `${n.toLocaleString("en-US")} ${unit}${n === 1 ? "" : "s"}`;
 }
 
-/** A duration in the largest whole unit: "an hour", "4 hours", "180 days". */
+/** A duration in the largest whole unit: "an hour", "4 hours", "3 days". */
 function span(ms: number): string {
   if (ms % DAY_MS === 0) {
     return ms === DAY_MS ? "a day" : plural(ms / DAY_MS, "day");
@@ -448,11 +443,15 @@ function matchNightSection(
         ? `Match night: ${night}. Kickoff times show in your own time zone.`
         : "Match night is to be announced. Kickoff times show in your own time zone.",
       `Once your match has a kickoff time, answer its check-in (I'm in, or Can't make it) so your captain can find cover. It stays open until ${plural(AUTO_SYNC.WINDOW_HOURS, "hour")} after kickoff.`,
-      `Captains move a match with a ready check: either captain offers up to ${MAX_RESCHEDULE_OPTIONS} times on the match page, everyone playing answers each one, and the match moves itself once both captains and a full lineup on each side can make a time. Either captain can lock in a time the other captain said yes to without waiting for everyone.`,
-      "After a ready check, each player's answer to the new time becomes their check-in. Admins can also move a match or a whole week; that clears its check-ins, so everyone answers again.",
-      `A proposed time can't be more than ${span(RESCHEDULE_PAST_GRACE_MS)} in the past, more than ${span(RESCHEDULE_MAX_AHEAD_MS)} ahead, or ${clash}.`,
+      `To move a match, either captain starts a ready check on the match page with up to ${MAX_RESCHEDULE_OPTIONS} times. Everyone playing answers each one, and the match moves itself once both captains and a full lineup on each side can make a time.`,
+      "Either captain can also lock in a time the other captain said yes to, without waiting for everyone. Either way, each player's answer to the new time becomes their check-in.",
+      // The sanity bounds on a proposal (RESCHEDULE_PAST_GRACE_MS,
+      // RESCHEDULE_MAX_AHEAD_MS) catch a mistyped date, not a league rule,
+      // so they stay in the refusal toast and off the page.
+      `A proposed time can't be ${clash}.`,
       "A regular-season match has to be played before the tiebreaker week, the week ahead of the playoffs.",
       "A series that has started can't be moved.",
+      "Admins can also move a match or a whole week. That clears its check-ins, so everyone answers again.",
     ],
   };
 }
