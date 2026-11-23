@@ -1,9 +1,11 @@
+import { HARD_MMR_CEILING } from "./constants";
 import type { GuildMembership } from "./discord-roles";
 import {
   clampMmrToRank,
   formatMmrRange,
   rankMedalName,
 } from "./rank";
+import { medalProvesIneligible } from "./registration";
 
 /**
  * Pure row-level readiness signals for the admin signup-moderation lists —
@@ -16,7 +18,12 @@ import {
  */
 
 export type SignupFlag = {
-  key: "over-soft-limit" | "mmr-off-medal" | "blank-signup" | "no-mmr";
+  key:
+    | "over-soft-limit"
+    | "over-medal-line"
+    | "mmr-off-medal"
+    | "blank-signup"
+    | "no-mmr";
   label: string;
   detail: string;
   /** Badge tone: "accent" = worth a look before the draft; "neutral" = context. */
@@ -32,10 +39,26 @@ export function signupFlags(
     captainNote: string;
     rankTier: number | null | undefined;
   },
-  /** Season.maxMmr, the SOFT limit (0 or absent = none). */
-  opts: { maxMmr?: number } = {},
+  /** Season.maxMmr, the SOFT limit (0 or absent = none). `medalApproved`:
+   *  an admin approved this player over the medal line (medal-approval.ts). */
+  opts: { maxMmr?: number; medalApproved?: boolean } = {},
 ): SignupFlag[] {
   const flags: SignupFlag[] = [];
+  // A medal over the line (Divine 3+/Immortal) that arrived after they signed
+  // up: the signup stands (registrationGate judges the medal only at
+  // admission), so the flag says that and names the admin's two choices. An
+  // approval is that review already done.
+  if (!opts.medalApproved && medalProvesIneligible(reg.rankTier)) {
+    flags.push({
+      key: "over-medal-line",
+      label: "over the medal line",
+      tone: "accent",
+      detail:
+        `Their ${rankMedalName(reg.rankTier)} medal is over the league's ` +
+        `${HARD_MMR_CEILING.toLocaleString("en-US")} MMR line. They're still ` +
+        "signed up: keep them or remove them before the draft.",
+    });
+  }
   // The soft limit is a REVIEW threshold, never a block: players over it
   // join the pool like anyone else (registration.ts), and reviewing them is
   // the admin's job. This flag is the tool for that review, so its words

@@ -10,6 +10,7 @@ import {
   medalApprovalDecidedDm,
   medalApprovalRequestedDm,
   medalApprovalView,
+  medalLimitLine,
   parseApprovalMmr,
   parseMedalApprovalNote,
 } from "./medal-approval";
@@ -136,6 +137,27 @@ describe("the bot's messages", () => {
     expect(
       medalApprovalDecidedDm({ approved: false, mmr: null, meUrl: "https://x/me" }),
     ).toMatch(/declined/);
+  });
+});
+
+describe("medalLimitLine — the card's line under its title", () => {
+  it("tells a player who isn't signed up that the medal turns them away", () => {
+    expect(medalLimitLine("Divine 3", false)).toBe(
+      "Your Divine 3 medal is over the league's 5,000 MMR line, so league signups and inhouses turn it away. An admin can approve you anyway, at an MMR they set.",
+    );
+  });
+
+  it("tells a signed-up player their signup stays and the ask is for inhouses", () => {
+    expect(medalLimitLine("Divine 3", true)).toBe(
+      "Your Divine 3 medal is over the league's 5,000 MMR line. You're already signed up, so your signup stays, though an admin may ask you about your MMR. Inhouses turn the medal away: ask an admin here if you want to play them.",
+    );
+  });
+
+  it("is what the card shows, with /me saying whether they're signed up", () => {
+    const card = stripLineComments(sourceFile("src/components/medal-approval-card.tsx").text);
+    expect(card).toMatch(/medalLimitLine\(view\.medal, signedUp\)/);
+    const me = stripLineComments(sourceFile("src/app/me/page.tsx").text);
+    expect(me).toMatch(/<MedalApprovalCard view=\{medalView\} signedUp=\{isRegistered\} \/>/);
   });
 });
 

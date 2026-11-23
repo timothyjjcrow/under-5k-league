@@ -139,6 +139,19 @@ export function medalApprovalView({
   return { kind: "ask", medal };
 }
 
+/**
+ * The "Over the medal limit" card's line under its title. A player already
+ * signed up for the season is in (`medalRefusesSignup`: a medal that rose
+ * later never removes anyone), so their line says the signup stands and the
+ * ask is for inhouses, which turn the medal away on every join.
+ */
+export function medalLimitLine(medal: string, signedUp: boolean): string {
+  const line = `${MMR_FORMAT.format(HARD_MMR_CEILING)} MMR`;
+  return signedUp
+    ? `Your ${medal} medal is over the league's ${line} line. You're already signed up, so your signup stays, though an admin may ask you about your MMR. Inhouses turn the medal away: ask an admin here if you want to play them.`
+    : `Your ${medal} medal is over the league's ${line} line, so league signups and inhouses turn it away. An admin can approve you anyway, at an MMR they set.`;
+}
+
 /** The line every medal refusal ends with, pointing at the ask. */
 export const MEDAL_APPROVAL_ASK_HINT =
   "An admin can approve you: ask on My account.";

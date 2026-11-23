@@ -3,6 +3,7 @@ import {
   MMR_SELF_EDIT_LOCKED_HINT,
   keepsStoredMmr,
   medalProvesIneligible,
+  medalRefusesSignup,
   mmrFrozenDuringDraftLine,
   mmrLockedAfterDraftNote,
   mmrSelfEditLocked,
@@ -221,6 +222,36 @@ describe("registrationGate — medal floor (the anti-sandbagging line)", () => {
         hasExisting: false,
       }),
     ).toBeNull();
+  });
+});
+
+describe("medalRefusesSignup — the one medal rule /me and the gate share", () => {
+  it("keeps a new signup over the line out, unless an admin approved them", () => {
+    expect(medalRefusesSignup({ rankTier: 73, existingStatus: null })).toBe(true);
+    expect(
+      medalRefusesSignup({ rankTier: 73, existingStatus: null, medalApproved: true }),
+    ).toBe(false);
+  });
+
+  it("never shuts out a player who is already signed up", () => {
+    // A medal that rose after they joined: the signup stands.
+    expect(medalRefusesSignup({ rankTier: 73, existingStatus: "ACTIVE" })).toBe(false);
+    // A return from WITHDRAWN or REMOVED is a new admission, judged again.
+    expect(medalRefusesSignup({ rankTier: 73, existingStatus: "WITHDRAWN" })).toBe(true);
+    expect(medalRefusesSignup({ rankTier: 73, existingStatus: "REMOVED" })).toBe(true);
+  });
+
+  it("refuses nobody whose medal is under the line or unknown", () => {
+    expect(medalRefusesSignup({ rankTier: 72, existingStatus: null })).toBe(false);
+    expect(medalRefusesSignup({ rankTier: null, existingStatus: null })).toBe(false);
+  });
+
+  it("is what /me reads for its medal warning, so the two never disagree", () => {
+    const me = stripLineComments(sourceFile("src/app/me/page.tsx").text);
+    expect(me).toMatch(/const medalBlocked = medalRefusesSignup\(\{/);
+    expect(me).toMatch(/existingStatus: reg\?\.status \?\? null/);
+    const gate = stripLineComments(sourceFile("src/lib/registration.ts").text);
+    expect(gate).toMatch(/if \(\s*medalRefusesSignup\(\{/);
   });
 });
 

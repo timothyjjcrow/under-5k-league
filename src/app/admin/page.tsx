@@ -219,7 +219,7 @@ import {
 import { INHOUSE_ANNOUNCEMENT_STATUS } from "@/lib/inhouse-announcement-outbox";
 import { DangerSubmit } from "@/components/danger-submit";
 import { AdminMedalApprovals } from "@/components/admin-medal-approvals";
-import { MEDAL_APPROVALS_ANCHOR } from "@/lib/medal-approval";
+import { MEDAL_APPROVALS_ANCHOR, approvedMedalMmr } from "@/lib/medal-approval";
 import { loadMedalApprovalAdminRows } from "@/lib/medal-approval-service";
 import { ChaseCopy } from "@/components/chase-copy";
 import { ReturningCopy } from "@/components/returning-copy";
@@ -1306,6 +1306,15 @@ function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
   }
 }
 
+/** A signup row's user, plus the medal approval its "over the medal line"
+ *  flag reads (regSignupFlags). Players and the standin pool share it, since
+ *  both render through SignupRowMeta. */
+const SIGNUP_ROW_INCLUDE = {
+  user: {
+    include: { medalApproval: { select: { status: true, mmr: true } } },
+  },
+} as const;
+
 async function loadSeasonAdminData(seasonId: string, teamSize: number) {
   const [
     players,
@@ -1320,14 +1329,14 @@ async function loadSeasonAdminData(seasonId: string, teamSize: number) {
     await Promise.all([
       prisma.registration.findMany({
         where: { seasonId, status: "ACTIVE", type: "PLAYER" },
-        include: { user: true },
+        include: SIGNUP_ROW_INCLUDE,
         orderBy: [{ wantsCaptain: "desc" }, { mmr: "desc" }],
       }),
       // Registered standins PLUS undrafted full players — the same pool the
       // match page's Admin tools offer (adminStandinPoolWhere).
       prisma.registration.findMany({
         where: adminStandinPoolWhere(seasonId),
-        include: { user: true },
+        include: SIGNUP_ROW_INCLUDE,
         orderBy: { mmr: "desc" },
       }),
       // Admin-removed signups: listed so the removal stays reversible (the
@@ -6123,7 +6132,10 @@ function regSignupFlags(reg: AdminData["players"][number], maxMmr: number) {
       captainNote: reg.captainNote,
       rankTier: reg.user.rankTier,
     },
-    { maxMmr },
+    {
+      maxMmr,
+      medalApproved: approvedMedalMmr(reg.user.medalApproval) !== null,
+    },
   );
 }
 
