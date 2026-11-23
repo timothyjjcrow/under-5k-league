@@ -1866,7 +1866,7 @@ export async function refreshPlayerData(
         )
         .join(
           ", ",
-        )}${overCeiling.length > 5 ? `, +${overCeiling.length - 5} more` : ""} — review before the draft.`
+        )}${overCeiling.length > 5 ? `, +${overCeiling.length - 5} more` : ""}. They're still signed up: keep them or remove them before the draft.`
     : "";
 
   const gamesPart =

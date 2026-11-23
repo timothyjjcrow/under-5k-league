@@ -1,25 +1,29 @@
 import { ActionForm, SubmitButton } from "@/components/action-form";
 import { Card, CardBody, CardHeader } from "@/components/ui";
 import { askForMedalApproval } from "@/app/actions/medal-approval";
-import { HARD_MMR_CEILING } from "@/lib/constants";
 import {
   approvedMedalLine,
   MEDAL_APPROVAL_CARD_ANCHOR,
   MEDAL_APPROVAL_NOTE_MAX,
+  medalLimitLine,
   type MedalApprovalView,
 } from "@/lib/medal-approval";
-
-const MMR_FORMAT = new Intl.NumberFormat("en-US");
 
 /**
  * /me's card for a player over the league's medal line (medal-approval.ts):
  * ask an admin to approve them, then the answer. Season-independent, since an
  * approval covers inhouses too; the inhouse room's refusal points here.
- * Renders nothing when the medal refuses nobody.
+ * `signedUp` (an ACTIVE signup this season) makes the line say their signup
+ * stands. Renders nothing when the medal refuses nobody.
  */
-export function MedalApprovalCard({ view }: { view: MedalApprovalView }) {
+export function MedalApprovalCard({
+  view,
+  signedUp = false,
+}: {
+  view: MedalApprovalView;
+  signedUp?: boolean;
+}) {
   if (view.kind === "none") return null;
-  const line = `${MMR_FORMAT.format(HARD_MMR_CEILING)} MMR`;
   return (
     <section id={MEDAL_APPROVAL_CARD_ANCHOR} className="scroll-mt-24">
       <Card>
@@ -29,7 +33,7 @@ export function MedalApprovalCard({ view }: { view: MedalApprovalView }) {
           subtitle={
             view.kind === "approved"
               ? undefined
-              : `Your ${view.medal} medal is over the league's ${line} line, so league signups and inhouses turn it away. An admin can approve you anyway, at an MMR they set.`
+              : medalLimitLine(view.medal, signedUp)
           }
         />
         <CardBody className="space-y-3 text-sm">

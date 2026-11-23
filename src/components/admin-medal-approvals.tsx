@@ -95,7 +95,9 @@ export function AdminMedalApprovals({ rows }: { rows: MedalApprovalAdminRow[] })
         and the bot messages each admin with a linked Discord. Approving lets
         them sign up and join inhouses at the MMR you set: a new signup is
         stored at it, every inhouse join uses it unless you set an inhouse MMR
-        on Inhouse players, and they can&apos;t change it themselves.
+        on Inhouse players, and they can&apos;t change it themselves. A player
+        already signed up for the season stays signed up either way, so for
+        them approving only opens inhouses and later signups.
       </p>
       {rows.length === 0 ? (
         <p className="text-sm text-muted">No requests yet.</p>

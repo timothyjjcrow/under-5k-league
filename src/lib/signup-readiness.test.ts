@@ -111,6 +111,25 @@ describe("signupFlags", () => {
     expect(key(9000, 0)).not.toContain("over-soft-limit");
     expect(key(9000)).not.toContain("over-soft-limit");
   });
+
+  it("flags a signup whose medal went over the line, and says they're still in", () => {
+    // Divine 3 at 4900 sits inside the medal's window, so "MMR ≠ medal"
+    // stays quiet: this flag is the only one that names the line.
+    const flags = signupFlags({ ...baseReg, mmr: 4900, rankTier: 73 });
+    expect(flags.map((f) => f.key)).toEqual(["over-medal-line"]);
+    const flag = flags[0];
+    expect(flag.detail).toBe(
+      "Their Divine 3 medal is over the league's 5,000 MMR line. They're still signed up: keep them or remove them before the draft.",
+    );
+    expect(signupNeedsReview(flags, true)).toBe(true);
+  });
+
+  it("drops the medal-line flag once an admin approved them, or under the line", () => {
+    const key = (rankTier: number, medalApproved?: boolean) =>
+      signupFlags({ ...baseReg, mmr: 4900, rankTier }, { medalApproved }).map((f) => f.key);
+    expect(key(73, true)).not.toContain("over-medal-line");
+    expect(key(72)).not.toContain("over-medal-line");
+  });
 });
 
 describe("signupNeedsReview", () => {

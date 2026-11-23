@@ -326,9 +326,13 @@ export function registrationGate({
   // re-entries into the pool, i.e. fresh admissions, and are judged as such.
   // An admin's approval over the medal line is the other exemption, the one
   // a player asks for (medal-approval.ts).
-  const admitted =
-    hasExisting && existingStatus === REGISTRATION_STATUS.ACTIVE;
-  if (!admitted && !medalApproved && medalProvesIneligible(rankTier)) {
+  if (
+    medalRefusesSignup({
+      rankTier,
+      existingStatus: hasExisting ? existingStatus : null,
+      medalApproved,
+    })
+  ) {
     return `This league doesn't take players over ${HARD_MMR_CEILING} MMR — your ${rankMedalName(rankTier)} medal puts you above it. An admin can approve you: ask on this page.`;
   }
   const wasPlayer = hasExisting && existingType === REGISTRATION_TYPE.PLAYER;
@@ -358,6 +362,30 @@ export function registrationGate({
 export function medalProvesIneligible(rankTier: number | null | undefined): boolean {
   const medalFloor = rankTierExactMinMmr(rankTier);
   return medalFloor != null && medalFloor > HARD_MMR_CEILING;
+}
+
+/**
+ * Whether the medal line keeps this player out of the season's signup: a
+ * medal over the line, no admin approval, and no ACTIVE signup already in.
+ * An ACTIVE signup is already admitted, so a medal that rose later never
+ * shuts them out (registrationGate's medal branch). /me reads the same rule,
+ * so it never tells a signed-up player the league "can't take" them.
+ */
+export function medalRefusesSignup({
+  rankTier,
+  existingStatus,
+  medalApproved = false,
+}: {
+  rankTier: number | null | undefined;
+  /** The player's signup for this season's status, or null for none. */
+  existingStatus: string | null | undefined;
+  medalApproved?: boolean;
+}): boolean {
+  return (
+    existingStatus !== REGISTRATION_STATUS.ACTIVE &&
+    !medalApproved &&
+    medalProvesIneligible(rankTier)
+  );
 }
 
 export type PromoteGateInput = {

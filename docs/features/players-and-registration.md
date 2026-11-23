@@ -129,7 +129,12 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   it would lock an admitted player out of their own form. The typed MMR is
   checked every submit while the player may still type it; a stored number the
   save keeps instead (`mmrKept`: the post-draft lock, or no field sent) is not. Late medals show in the "Refresh player data now"
-  toast and the "MMR ≠ medal" flag; nothing auto-removes anyone.
+  toast and the admin signup list's "over the medal line" flag (`signupFlags`,
+  which says they're still signed up: keep or remove them); nothing
+  auto-removes anyone. One rule, `medalRefusesSignup`, drives the gate and
+  /me, so /me never tells a signed-up player the league "can't take" them:
+  their "Over the medal limit" card says the signup stays and the ask is for
+  inhouses (`medalLimitLine`).
 - **A stored registration MMR is league-approved.** Never re-clamp an unchanged
   resubmit, so an admin correction survives a role edit. `setRegistrationMmr`
   and `setPlayerRank` (`admin-roster.ts`) are the never-clamped escape hatch,

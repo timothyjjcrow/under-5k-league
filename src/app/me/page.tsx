@@ -74,12 +74,13 @@ import {
   SEASON_STATUS,
 } from "@/lib/constants";
 import {
+  medalRefusesSignup,
   mmrSelfEditLocked,
   registrationSeasonClosedError,
 } from "@/lib/registration";
 import { DRAFT_READINESS, draftReadiness } from "@/lib/draft-readiness";
 import { draftSetupOpen } from "@/lib/draft-setup";
-import { rankMedalName, rankTierExactMinMmr } from "@/lib/rank";
+import { rankMedalName } from "@/lib/rank";
 import { DOTA_ROLES, parseRoles } from "@/lib/roles";
 import { matchRoundLabel } from "@/lib/schedule";
 import {
@@ -270,18 +271,21 @@ export default async function MePage({
   // The medal's plausible MMR window — signup claims outside it are snapped
   // to its floor by saveRegistration, so tell the player up front. A medal
   // whose EXACT band floor clears the hard ceiling (Divine 3+/Immortal) is
-  // ineligible outright — registrationGate will reject it whatever they type.
-  // An admin's approval over the medal limit (medal-approval.ts) lifts the
-  // block and sets the MMR: the box shows the approved number, disabled, as
-  // saveRegistration stores it.
+  // ineligible outright — registrationGate will reject it whatever they type,
+  // unless they're already signed up (an ACTIVE signup is admitted, and a
+  // medal that rose later doesn't undo that). An admin's approval over the
+  // medal limit (medal-approval.ts) lifts the block and sets the MMR: the box
+  // shows the approved number, disabled, as saveRegistration stores it.
   const medalView = medalApprovalView({
     rankTier: dbUser?.rankTier ?? null,
     approval: medalApproval,
   });
   const approvedMmr = medalView.kind === "approved" ? medalView.mmr : null;
-  const medalFloor = rankTierExactMinMmr(dbUser?.rankTier ?? null);
-  const medalBlocked =
-    approvedMmr === null && medalFloor != null && medalFloor > HARD_MMR_CEILING;
+  const medalBlocked = medalRefusesSignup({
+    rankTier: dbUser?.rankTier ?? null,
+    existingStatus: reg?.status ?? null,
+    medalApproved: approvedMmr !== null,
+  });
   const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
   // After the draft a player's own signup MMR is fixed (saveRegistration
   // keeps it): an existing signup's box renders disabled and says who can
@@ -439,7 +443,7 @@ export default async function MePage({
           screen empty and ran about 2,000px. Phones keep the same order. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_24rem] lg:items-start">
       <div className="min-w-0 space-y-6">
-      <MedalApprovalCard view={medalView} />
+      <MedalApprovalCard view={medalView} signedUp={isRegistered} />
       <section id="profile-signup" className="scroll-mt-24">
       {!season ? (
         // Between seasons: a cancelled season, or an admin reactivating an old
