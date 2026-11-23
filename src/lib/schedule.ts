@@ -283,7 +283,8 @@ export function rescheduleDeadline(options: {
 // Sanity bounds for a captain-proposed time: a datetime-local typo (year 0002
 // from typing "2", 20268 from a stray digit) or a past date would otherwise
 // sail straight into Match.scheduledAt on acceptance. Enforced by
-// reschedule-service and quoted by /rules, so the two can't disagree.
+// reschedule-service. They catch typos, not league rules, so /rules leaves
+// them out and the refusal toast says what went wrong.
 export const RESCHEDULE_PAST_GRACE_MS = 60 * 60 * 1000; // "tonight, an hour ago" is fine
 export const RESCHEDULE_MAX_AHEAD_MS = 180 * 24 * 60 * 60 * 1000; // no league pauses half a year
 

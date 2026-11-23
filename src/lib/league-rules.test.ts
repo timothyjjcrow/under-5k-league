@@ -451,7 +451,7 @@ describe("leagueRules", () => {
   it("writes durations and clocks in words", () => {
     const rules = build();
     expect(section(rules, "match-night")).toContain(
-      "A proposed time can't be more than an hour in the past, more than 180 days ahead, or within 4 hours of either team's other league matches or booked scrims.",
+      "A proposed time can't be within 4 hours of either team's other league matches or booked scrims.",
     );
     expect(section(rules, "match-night")).toContain(
       `It stays open until ${AUTO_SYNC.WINDOW_HOURS} hours after kickoff.`,
@@ -986,5 +986,15 @@ describe("the reschedule rules", () => {
     expect(rules).toContain("lock in a time the other captain said yes to");
     expect(rules).toContain("becomes their check-in");
     expect(rules).not.toMatch(/accepts or declines|clears every check-in/);
+  });
+
+  // The 1-hour-past and 180-day-ahead bounds (reschedule-service.ts) catch a
+  // mistyped date. Quoted as rules they read as if a league ran half a year.
+  it("leave out the typo guards on a proposed time", () => {
+    const rules = section(build(), "match-night");
+    expect(rules).not.toMatch(/180|days ahead|in the past/);
+    expect(rules).toContain(
+      "Admins can also move a match or a whole week. That clears its check-ins, so everyone answers again.",
+    );
   });
 });

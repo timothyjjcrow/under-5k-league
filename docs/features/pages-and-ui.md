@@ -97,6 +97,10 @@ plus `src/components/home/*`, `e2e-mid/helpers.ts` (layout probes),
   captain can lock a time the other said yes to, answers become check-ins;
   an admin move clears check-ins). The page kept the old propose /
   accept-or-decline flow after #27 because no test pinned it; one does now.
+  It quotes the four-hour clash and the tiebreaker-week deadline, never the
+  typo guards on a proposal (an hour past, 180 days ahead): those catch a
+  mistyped date, and quoted as rules they read as if a league ran half a
+  year. The refusal toast still says "check the year".
 - **Which season:** the active one, else the latest (worded as how the league
   played it, and that the next season starts with the same settings); with no
   season at all, `carriedSeasonSettings(null)` under a "First-season defaults"
