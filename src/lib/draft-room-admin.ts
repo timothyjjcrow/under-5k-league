@@ -36,7 +36,7 @@ export type StartDraftPreflight = {
 
 /**
  * What the draft room's waiting room needs to offer an admin the Start draft
- * button: the same checks and confirm text as the Captains & draft card on
+ * button: the same checks and confirm text as the Draft card on
  * /admin, built by the same helpers from the same rows (the season's teams
  * and its ACTIVE PLAYER registrations). Null once setup has closed, when
  * there is nothing to start.

@@ -127,7 +127,8 @@ Admin actions: `src/app/actions/admin-captains-draft.ts`. Helpers:
 
 ## Admin draft-night controls
 
-In the Captains & draft card on `/admin` and inside the room
+On the Draft card (admin Season tab, live controls first, Abort in a
+fold) and inside the room
 (`draftToolbarControls`; same actions, confirm text from `draft-admin.ts`).
 
 - **Pause parks clocks; Resume re-arms them.** `pauseDraft` runs both

@@ -112,26 +112,10 @@ export function ScheduleControls({
           : null);
   // The same predicate saveSeasonFormat runs in its transaction.
   const formatState = seasonFormatEditState(season, data);
-  return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Schedule & results"
-        subtitle="Choose the season's layout, generate the schedule and enter weekly scores."
-        action={
-          // The lock reason sits where the control would be, not in a banner
-          // over the card: once any result exists it is true all season.
-          // Until then the season builder below holds Generate.
-          formatState.mode === "LOCKED" ? (
-            <p className="max-w-sm text-xs text-muted">
-              {regularCount > 0 ? "Regenerate schedule" : "Generate schedule"}{" "}
-              is unavailable:{" "}
-              {scheduleGenerationLockedReason ?? formatState.lockReason}
-            </p>
-          ) : null
-        }
-      />
-      <CardBody>
+  // The tools that reshape the schedule: the season builder (Generate or
+  // Regenerate while no result exists), its groups, and the breaks.
+  const tools = (
+    <>
         {formatState.mode !== "LOCKED" ? (
           <div className="mb-3">
             <SeasonFormatBuilder
@@ -169,6 +153,100 @@ export function ScheduleControls({
         <div className="mt-3">
           <SeasonBreaks season={season} data={data} nowMs={nowMs} />
         </div>
+    </>
+  );
+  const moveNight = (() => {
+    const openWeeks = [
+      ...new Set(
+        data.matches
+          .filter((m) => m.status === MATCH_STATUS.SCHEDULED)
+          .map((m) => m.week),
+      ),
+    ].sort((a, b) => a - b);
+    return scheduleEditingOpen && openWeeks.length > 0 ? (
+      <ActionForm
+        action={setWeekNight}
+        hidden={{ expectedActiveSeasonId: season.id }}
+        className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/30 p-3 text-xs"
+      >
+        <span className="font-medium text-fg">
+          Move a match night
+        </span>
+        <select
+          name="week"
+          aria-label="Week to move"
+          className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+        >
+          {openWeeks.map((w) => (
+            <option key={w} value={w}>
+              Week {w}
+            </option>
+          ))}
+        </select>
+        <span aria-label="New match night" role="group">
+          <LocalDatetimeField
+            name="night"
+            tsName="nightTs"
+            timeZone={LEAGUE_CONFIG.timeZone}
+            className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
+          />
+        </span>
+        <label className="flex items-center gap-1.5 text-muted">
+          <input type="checkbox" name="cascade" />
+          shift later weeks too
+        </label>
+        {/* This had NO confirmation, and with the cascade ticked it
+            retimes every LATER week too and deletes the check-ins on
+            all of them — the widest-reaching unconfirmed control on
+            the page. The times can be moved back; the check-ins
+            cannot, so ten players per fixture have to be asked again.
+            The dialog cannot know whether the cascade box is ticked
+            (it is server-rendered), so it names both effects. */}
+        <SubmitButton
+          variant="secondary"
+          size="sm"
+          confirm={`Move this week's match night?\n\nEvery scheduled match in the week is retimed and its check-ins are cleared — players will have to check in again. Live and final matches stay on their recorded kickoff. If "shift later weeks too" is ticked, every later scheduled week moves by the same amount and loses its check-ins as well.`}
+        >
+          Move night
+        </SubmitButton>
+        <span className="w-full text-muted">
+          Retimes every scheduled match in the week and clears its
+          check-ins and any open reschedule proposals; the cascade
+          keeps the weekly rhythm by moving later scheduled weeks by
+          the same amount.
+        </span>
+      </ActionForm>
+    ) : null;
+  })();
+
+  return (
+    <Card>
+      <CardHeader
+        headingLevel={2}
+        title="Schedule & results"
+        subtitle={
+          regularCount === 0
+            ? "Choose the season's layout and generate the schedule."
+            : "Weekly results first; the tools that move a night, add a break or rebuild the schedule fold under the weeks."
+        }
+        action={
+          // The lock reason sits where the control would be, not in a banner
+          // over the card: once any result exists it is true all season.
+          // Until then the season builder below holds Generate.
+          formatState.mode === "LOCKED" ? (
+            <p className="max-w-sm text-xs text-muted">
+              {regularCount > 0 ? "Regenerate schedule" : "Generate schedule"}{" "}
+              is unavailable:{" "}
+              {scheduleGenerationLockedReason ?? formatState.lockReason}
+            </p>
+          ) : null
+        }
+      />
+      <CardBody>
+        {/* Before the round robin exists, building it is the job: the
+            builder leads. After, results do, and the tools that reshape the
+            schedule fold under the weeks. */}
+        {regularCount === 0 ? tools : null}
         {data.matches.length === 0 ? (
           <p className="mt-3 text-sm text-muted">
             No fixtures have been generated for this season.
@@ -233,69 +311,6 @@ export function ScheduleControls({
               ]}
             />
             <PendingReschedules seasonId={season.id} teams={data.teams} />
-            {(() => {
-              const openWeeks = [
-                ...new Set(
-                  data.matches
-                    .filter((m) => m.status === MATCH_STATUS.SCHEDULED)
-                    .map((m) => m.week),
-                ),
-              ].sort((a, b) => a - b);
-              return scheduleEditingOpen && openWeeks.length > 0 ? (
-                <ActionForm
-                  action={setWeekNight}
-                  hidden={{ expectedActiveSeasonId: season.id }}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-line bg-surface-2/30 p-3 text-xs"
-                >
-                  <span className="font-medium text-fg">
-                    Move a match night
-                  </span>
-                  <select
-                    name="week"
-                    aria-label="Week to move"
-                    className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-                  >
-                    {openWeeks.map((w) => (
-                      <option key={w} value={w}>
-                        Week {w}
-                      </option>
-                    ))}
-                  </select>
-                  <span aria-label="New match night" role="group">
-                    <LocalDatetimeField
-                      name="night"
-                      tsName="nightTs"
-                      timeZone={LEAGUE_CONFIG.timeZone}
-                      className="h-8 rounded-md border border-line bg-surface-2/50 px-2 text-xs text-fg"
-                    />
-                  </span>
-                  <label className="flex items-center gap-1.5 text-muted">
-                    <input type="checkbox" name="cascade" />
-                    shift later weeks too
-                  </label>
-                  {/* This had NO confirmation, and with the cascade ticked it
-                      retimes every LATER week too and deletes the check-ins on
-                      all of them — the widest-reaching unconfirmed control on
-                      the page. The times can be moved back; the check-ins
-                      cannot, so ten players per fixture have to be asked again.
-                      The dialog cannot know whether the cascade box is ticked
-                      (it is server-rendered), so it names both effects. */}
-                  <SubmitButton
-                    variant="secondary"
-                    size="sm"
-                    confirm={`Move this week's match night?\n\nEvery scheduled match in the week is retimed and its check-ins are cleared — players will have to check in again. Live and final matches stay on their recorded kickoff. If "shift later weeks too" is ticked, every later scheduled week moves by the same amount and loses its check-ins as well.`}
-                  >
-                    Move night
-                  </SubmitButton>
-                  <span className="w-full text-muted">
-                    Retimes every scheduled match in the week and clears its
-                    check-ins and any open reschedule proposals; the cascade
-                    keeps the weekly rhythm by moving later scheduled weeks by
-                    the same amount.
-                  </span>
-                </ActionForm>
-              ) : null;
-            })()}
             {/* Regular season, grouped by week — completed weeks collapse so
                 the enter-scores workflow starts at the week that needs it.
                 One ruled box: a bordered box per week spent a gap on each. */}
@@ -355,6 +370,28 @@ export function ScheduleControls({
             ) : null}
           </div>
         )}
+        {regularCount > 0 || moveNight ? (
+          <details className="group mt-3 rounded-lg border border-line px-3 py-1 text-sm">
+            <summary className="flex min-h-11 cursor-pointer list-none flex-wrap items-center gap-x-2 font-medium [&::-webkit-details-marker]:hidden">
+              Schedule tools
+              <span className="text-xs font-normal text-muted">
+                {regularCount > 0
+                  ? "move a match night, breaks, the season format and groups"
+                  : "move a match night"}
+              </span>
+              <span
+                aria-hidden
+                className="ml-auto text-muted transition-transform group-open:rotate-180"
+              >
+                ▾
+              </span>
+            </summary>
+            <div className="space-y-3 pb-3">
+              {moveNight}
+              {regularCount > 0 ? tools : null}
+            </div>
+          </details>
+        ) : null}
       </CardBody>
     </Card>
   );

@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { expect, test, type Page } from "@playwright/test";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
-import { expectNoHorizontalOverflow, trackPageErrors } from "../e2e-mid/helpers";
+import { expectNoHorizontalOverflow, openScheduleTools, trackPageErrors } from "../e2e-mid/helpers";
 
 // A ten-team league plays two groups of five (season-format.ts). The seeder
 // builds it the way the site would: an MMR-strength snake into groups A and B,
@@ -74,6 +74,7 @@ test("a ten-team regular season shows two group tables, the season plan and the 
 
   await page.goto("/api/auth/dev?name=Group%20Admin&admin=1");
   await page.goto("/admin/matches#adm-schedule");
+  await openScheduleTools(page);
   const box = page.getByRole("region", { name: "Season format" });
   await expect(box).toContainText("Season format · 10 teams");
   await expect(box.getByRole("heading", { name: "Group A", exact: true })).toBeVisible();

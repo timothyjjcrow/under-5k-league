@@ -22,6 +22,13 @@ actions: `src/app/actions/admin-discord.ts`.
   An env-only webhook shows a note and hides Remove (clearing the DB key can't
   touch env). Bot token and guild are env only (`DISCORD_BOT_TOKEN`,
   `DISCORD_GUILD_ID`) so no page can read a token back.
+- **Two admin cards, split by audience.** Discord notifications (Discord &
+  news tab, `discord-controls.tsx`) holds the league webhook (its status
+  first, the form folded once it works), the #schedule status card, the
+  Standin role and the bot checklist, which every "couldn't check" line
+  points at. Inhouse Discord (Inhouse tab, `inhouse-discord-controls.tsx`)
+  holds the inhouse channel and alerts webhooks, the ping role and the live
+  queue board. They were one card until 2026-11-24.
 - **Put every Discord write behind `discordMutationsAllowed()`**
   (`discord-mutation-policy.ts`). Vercel previews may carry production
   credentials, so posts, edits, deletes, role changes, joins and outbox
@@ -311,7 +318,7 @@ actions: `src/app/actions/admin-discord.ts`.
   a script can't spend the guild's role rate limit, which every player's
   opt-in and unlink share.
 - **The inhouse ban role ("Inhouse Banned", Tim, 2026-11-02)** is the
-  `inhouseBanRoleId` Setting, set on `/admin/inhouse-players` (a raw id or a
+  `inhouseBanRoleId` Setting, set on `/admin/inhouse` (Inhouse players) (a raw id or a
   pasted `<@&id>`; blank turns it off). `getInhouseBanRoleConfig` needs it,
   the token and guild, and Discord writes allowed here (so a preview or
   staging never claims a role was given); `setInhouseBanRole` is the ping

@@ -735,7 +735,7 @@ Every transition is a guarded claim; keep it that way (general rules:
   refuses a join whose approval changed since its read. The medal refusal
   ends by pointing at the ask ("An admin can approve you: ask on My
   account."). A medal is
-  corrected through `setPlayerRank` (on a signup) or `/admin/inhouse-players`
+  corrected through `setPlayerRank` (on a signup) or `/admin/inhouse` (Inhouse players)
   (anyone's, below). It is judged at the join only: a
   medal that changes while a player is queued or in a game removes nobody,
   and the requeues (`cancelLobby`, a failed ready check) only put back
@@ -760,7 +760,7 @@ Every transition is a guarded claim; keep it that way (general rules:
   card it reads "N MMR" over "from your signup" or "set by an admin" beside
   the positions, with "Joining at" kept for screen readers).
 - **An admin's inhouse MMR and medal (Tim, 2026-10-17): any player, signed
-  up for the league or not,** on `/admin/inhouse-players`, linked from the
+  up for the league or not,** on `/admin/inhouse` (Inhouse players), linked from the
   room's admin controls ("Admin: players' medal & MMR") and /admin's
   "Inhouse players". It lists the queue, the latest players and anyone else
   already rated, and finds a player by name (any case), Steam ID, or a
@@ -841,7 +841,7 @@ An admin bans a player from inhouse games for a length or for good, with a
 reason players see (Tim, 2026-11-02). Rules and words: `src/lib/inhouse-ban.ts`;
 writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
 `banFromInhouse`, `liftBanFromInhouse` and `saveInhouseBanRole` in
-`src/app/actions/inhouse-admin.ts`; page: `/admin/inhouse-players`.
+`src/app/actions/inhouse-admin.ts`; page: `/admin/inhouse` (Inhouse players).
 
 - **A ban is an `InhouseBan` row:** reason, `endsAt` (null is permanent),
   who banned (denormalised, like `AdminAction`), `liftedAt` and who lifted.
@@ -897,7 +897,7 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   "+N more" linking to the card; reasons are escaped like names.
 - **The Discord role (Tim's pick, 2026-11-02, over a Discord timeout or a
   server ban):** the bot gives a banned player the role in
-  `inhouseBanRoleId` (set on `/admin/inhouse-players`; blank leaves Discord
+  `inhouseBanRoleId` (set on `/admin/inhouse` (Inhouse players); blank leaves Discord
   alone) and takes it off when the ban ends or is lifted. The role's own
   channel permissions in Discord are what keep them out of the inhouse
   channels; the site only adds and removes it, through

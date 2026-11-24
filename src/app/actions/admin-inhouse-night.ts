@@ -34,7 +34,7 @@ function discordNote(publication: InhouseNightPublication): string {
     publication.posted === true
       ? "Posted in the inhouse channel."
       : publication.posted === false
-        ? "The inhouse channel post didn't go out: check the inhouse webhooks under Discord notifications."
+        ? "The inhouse channel post didn't go out: check the inhouse webhooks in Inhouse Discord, on the admin Inhouse tab."
         : "";
   const event = {
     created: "Added to the server's Discord events.",
@@ -127,7 +127,7 @@ export async function cancelInhouseNight(
   const parts = [`Inhouse night on ${when} cancelled: Home and the inhouse page no longer show it.`];
   if (withdrawn.posted === true) parts.push("The inhouse channel is told it's off.");
   if (withdrawn.posted === false) {
-    parts.push("The inhouse channel post didn't go out: check the inhouse webhooks under Discord notifications.");
+    parts.push("The inhouse channel post didn't go out: check the inhouse webhooks in Inhouse Discord, on the admin Inhouse tab.");
   }
   if (withdrawn.event === "deleted") parts.push("The Discord event is deleted.");
   if (withdrawn.event === "forbidden" || withdrawn.event === "failed") {

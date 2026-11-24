@@ -2,6 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
+import { nameMatchesQuery } from "@/lib/name-search";
 
 // The "Needs review" view of the admin signup list. The soft MMR limit is a
 // review threshold, not a block (over-limit players join the pool), and the
@@ -13,11 +14,15 @@ import { cn } from "@/lib/utils";
 // The rows are rendered on the server (they carry forms and streamed
 // Discord chips); this only decides which are shown. Hidden rows stay
 // mounted with `hidden`, so toggling never throws away a half-typed MMR edit.
+// Rows that carry a `name` can also be found by it: a season's signups run
+// to forty and more.
 
 export type SignupReviewRow = {
   key: string;
   needsReview: boolean;
   node: ReactNode;
+  /** What the search box matches, case-insensitively (the player's name). */
+  name?: string;
 };
 
 const segment = (active: boolean) =>
@@ -39,12 +44,38 @@ export function AdminSignupReview({
   rowClassName?: string;
 }) {
   const [onlyReview, setOnlyReview] = useState(false);
+  const [query, setQuery] = useState("");
   const reviewCount = rows.filter((r) => r.needsReview).length;
   // Nothing left to review (or a review emptied the list): show everyone,
   // never an empty list behind a pressed toggle.
   const filtering = onlyReview && reviewCount > 0;
+  // The search box shows once the list is long enough to need it.
+  const searchable = rows.length > 8 && rows.every((r) => r.name !== undefined);
+  const searching = searchable && query.trim() !== "";
+  const shown = (r: SignupReviewRow) =>
+    (!filtering || r.needsReview) && (!searching || nameMatchesQuery(r.name, query));
+  const shownCount = rows.filter(shown).length;
   return (
     <>
+      {searchable ? (
+        <div className="mb-2 flex flex-wrap items-center gap-2">
+          <input
+            type="search"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Find a player"
+            aria-label={`Find a player in ${label}`}
+            className="h-10 w-64 max-w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60 sm:h-9"
+          />
+          {searching ? (
+            <span role="status" className="text-xs text-muted">
+              {shownCount === 0
+                ? "No player by that name in this list."
+                : `${shownCount} of ${filtering ? reviewCount : rows.length} shown`}
+            </span>
+          ) : null}
+        </div>
+      ) : null}
       {reviewCount > 0 ? (
         <div className="mb-2">
           <div
@@ -82,7 +113,7 @@ export function AdminSignupReview({
         {rows.map((r) => (
           <li
             key={r.key}
-            hidden={filtering && !r.needsReview}
+            hidden={!shown(r)}
             className={rowClassName}
           >
             {r.node}

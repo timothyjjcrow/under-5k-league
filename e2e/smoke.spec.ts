@@ -228,8 +228,9 @@ test("removing a captain before any fixtures exist takes one plain confirm", asy
     confirms.push(dialog.message());
     void dialog.accept();
   });
+  // Captains are made in Signups and kept in Teams, both on People.
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/people",
   );
 
   const dendiRow = page

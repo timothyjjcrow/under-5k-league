@@ -141,11 +141,12 @@ function discordChaseNote(i: AdminPhaseInput): string {
 function captainMmrNote(i: AdminPhaseInput): string {
   const names = i.unverifiedCaptainMmrNames ?? [];
   if (names.length === 0) return "";
-  return ` Also: ${captainNameRun(names)} ${names.length === 1 ? "has" : "have"} unverified MMR that sets draft budgets. Check ${names.length === 1 ? "it" : "each"} with Edit medal & MMR on the Captains & draft card first; a medal that matches the MMR marks it verified.`;
+  return ` Also: ${captainNameRun(names)} ${names.length === 1 ? "has" : "have"} unverified MMR that sets draft budgets. Check ${names.length === 1 ? "it" : "each"} with Edit medal & MMR on the Teams card (People) first; a medal that matches the MMR marks it verified.`;
 }
 
 const JUMP = {
-  captains: { href: "#adm-captains", label: "Go to Captains & draft" },
+  signups: { href: "#adm-signups", label: "Go to Signups" },
+  draft: { href: "#adm-draft", label: "Go to Draft" },
   draftRoom: { href: "/draft", label: "Open the draft room" },
   schedule: { href: "#adm-schedule", label: "Go to Schedule & results" },
   phase: { href: "#adm-season", label: "Go to phase control" },
@@ -278,10 +279,10 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "Next step: designate captains.",
         detail:
-          "Enough players have signed up. Use “make captain” in the Eligible players list on the Captains & draft card. Each captain becomes a team." +
+          "Enough players have signed up. Use “make captain” in the Eligible players list on the Signups card (People). Each captain becomes a team." +
           (captainsLine ? ` ${captainsLine}` : ""),
         tone: "action",
-        jump: JUMP.captains,
+        jump: JUMP.signups,
       };
     }
     return {
@@ -292,7 +293,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
-      jump: JUMP.captains,
+      jump: JUMP.draft,
     };
   }
 
@@ -310,9 +311,9 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
       return {
         title: "The auction is PAUSED — nothing can sell.",
         detail:
-          "Clocks are parked and every captain is waiting. Press Resume on the Captains & draft card when the dispute is settled.",
+          "Clocks are parked and every captain is waiting. Press Resume on the Draft card when the dispute is settled.",
         tone: "warning",
-        jump: JUMP.captains,
+        jump: JUMP.draft,
       };
     }
     if (draftStatus === DRAFT_STATUS.COMPLETE) {
@@ -345,7 +346,7 @@ function phaseStep(i: AdminPhaseInput): AdminNextStep {
         captainMmrNote(i) +
         discordChaseNote(i),
       tone: "action",
-      jump: JUMP.captains,
+      jump: JUMP.draft,
     };
   }
 

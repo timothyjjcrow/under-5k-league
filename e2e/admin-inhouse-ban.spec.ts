@@ -64,6 +64,8 @@ test("an admin bans a queued player, /inhouse lists it, and a lift lets them bac
     await page.goto(
       `/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=${encodeURIComponent(`/admin/inhouse-players?q=${NAME}`)}`,
     );
+    // The old page forwards to the Inhouse tab, keeping the search.
+    await expect(page).toHaveURL(/\/admin\/inhouse\?q=[^#]+#adm-inhouse-players$/);
     await expect(page.getByRole("heading", { name: "Inhouse bans", exact: true })).toBeVisible();
     await expect(page.getByText("Nobody is banned.", { exact: true })).toBeVisible();
     const row = page.locator(`[data-inhouse-player="${user.id}"]`);
@@ -98,7 +100,7 @@ test("an admin bans a queued player, /inhouse lists it, and a lift lets them bac
     ).toBe(0);
 
     // The admin lifts it from the bans card; the player can queue again.
-    await page.goto("/admin/inhouse-players");
+    await page.goto("/admin/inhouse");
     const listed = page.locator(`[data-inhouse-ban="${ban.id}"]`);
     await expect(listed).toContainText(REASON);
     await listed.getByRole("button", { name: "Lift ban", exact: true }).click();

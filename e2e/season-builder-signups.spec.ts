@@ -4,7 +4,8 @@ import path from "node:path";
 import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "../e2e-mid/helpers";
 
 // The season builder during signups (season-builder.ts): the Season format
-// card sits between Phase and Captains & draft. The admin previews a captain
+// card on the Season tab, open until a layout is saved and folded to that
+// layout's line after. The admin previews a captain
 // count, picks a layout, saves it, sees /rules say the admins choose the
 // format, and resets it.
 // The season is put back on Recommended at the end, so the specs after this
@@ -83,9 +84,17 @@ test("an admin lays out the season during signups and saves it before the auctio
       "The admins choose each season's format before its schedule is made.",
     );
 
+    // Saved, the card folds to the layout's one line, and a link to it
+    // opens it. The dev server can reload a page on its first compile, so
+    // the visit repeats until the link has opened the card.
+    const formatCard = page.locator("#adm-format");
+    await expect(async () => {
+      await page.goto("/admin/season#adm-format");
+      await expect(formatCard).toContainText("Two groups, winner of each. Saved");
+      expect(await formatCard.evaluate((d) => (d as HTMLDetailsElement).open)).toBe(true);
+    }).toPass({ timeout: 30_000 });
     // Back to Recommended through the card.
-    await page.goto("/admin/season#adm-format");
-    const saved = page.locator("#adm-format").getByRole("region", { name: "Season builder" });
+    const saved = formatCard.getByRole("region", { name: "Season builder" });
     await expect(saved).toContainText("Custom · two groups, winner of each");
     await untilHydrated(page, saved);
     await saved.getByRole("button", { name: "Reset to Recommended" }).click();

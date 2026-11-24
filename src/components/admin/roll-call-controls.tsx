@@ -28,7 +28,7 @@ export function RollCallControls({ rollCall }: { rollCall: AdminRollCall }) {
             {view.slot
               ? "sees it on their own clock. "
               : "sees it exactly as typed: it doesn't read as one weekday and time on the league's clock, so it can't be converted to each player's clock. Write it like \"Saturdays at 2:00 PM\" and it will be. "}
-            Move the night under Season settings and everyone is asked again.
+            Move the night in Settings above and everyone is asked again.
           </p>
         ) : null}
         {rollCall.open && rollCall.openedAtMs ? (

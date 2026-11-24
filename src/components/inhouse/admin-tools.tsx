@@ -2,6 +2,7 @@
 
 import type { ReactNode } from "react";
 import Link from "@/components/app-link";
+import { adminHref } from "@/lib/admin-tabs";
 import { pushToast } from "@/components/toaster";
 import { LinkArrow, buttonClasses, textLink } from "@/components/ui";
 import { AdminQueueRemoval } from "@/components/inhouse/admin-queue-removal";
@@ -42,9 +43,9 @@ export function InhouseAdminTools({
           Admin
         </p>
         {/* Any player's inhouse MMR and medal, queued or not and signed up
-            for the league or not, are set on their own admin page, and
+            for the league or not, are set on the admin Inhouse tab, and
             inhouse bans are made and lifted there. */}
-        <Link href="/admin/inhouse-players" className={textLink("text-xs")}>
+        <Link href={adminHref("adm-inhouse-players")} className={textLink("text-xs")}>
           Players&apos; medal, MMR &amp; bans <LinkArrow />
         </Link>
       </div>

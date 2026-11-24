@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 import { POSTSEASON_DB_URL } from "../playwright.postseason.config";
-import { expectNoHorizontalOverflow, trackPageErrors, untilHydrated } from "../e2e-mid/helpers";
+import { expectNoHorizontalOverflow, openScheduleTools, trackPageErrors, untilHydrated } from "../e2e-mid/helpers";
 
 // The season builder after the auction (season-builder.ts): thirteen teams,
 // no schedule yet. The admin picks a layout, the preview says what it makes,
@@ -114,7 +114,10 @@ test("an admin lays out a thirteen-team season, generates it and moves only the 
   const built = await fixtureIds();
   expect(built).toHaveLength(36);
 
-  // The format box shows what was built, week for week as previewed.
+  // Once built, results lead the card and the builder folds under the weeks
+  // with the format box. The box shows what was built, week for week as
+  // previewed.
+  await openScheduleTools(page);
   const box = page.getByRole("region", { name: "Season format" });
   await expect(
     box.getByRole("list", { name: "Season plan" }).getByRole("listitem").filter({ hasText: "Grand final" }),

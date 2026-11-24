@@ -62,8 +62,9 @@ test("an admin sets a never-signed-up player's medal and inhouse MMR, and the qu
     );
 
     await page.goto(
-      `/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=${encodeURIComponent(`/admin/inhouse-players?q=${NAME}`)}`,
+      `/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=${encodeURIComponent(`/admin/inhouse?q=${NAME}`)}`,
     );
+    // Inhouse players is a card on the Inhouse tab.
     await expect(page.getByRole("heading", { name: "Inhouse players", exact: true })).toBeVisible();
     const row = page.locator(`[data-inhouse-player="${user.id}"]`);
     await expect(row.getByLabel("Divine 5", { exact: true })).toBeVisible();
@@ -94,7 +95,7 @@ test("an admin sets a never-signed-up player's medal and inhouse MMR, and the qu
 
     // The list shows them queued at it, on a phone with nothing scrolling sideways.
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto("/admin/inhouse-players");
+    await page.goto("/admin/inhouse");
     // Each player is listed once: the queue comes first.
     const queuedRow = page.locator(`[data-inhouse-player="${user.id}"]`);
     await expect(queuedRow.getByText("4,200", { exact: true })).toBeVisible();

@@ -44,7 +44,7 @@ async function ensureLiveDraftFixture(page: Page) {
       "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
     );
     await expect(
-      page.getByRole("heading", { name: "Captains & draft", exact: true }),
+      page.getByRole("heading", { name: "Draft", exact: true, level: 2 }),
     ).toBeVisible({ timeout: 20_000 });
     const pause = page.getByRole("button", { name: "Pause auction" });
     if (await pause.isVisible()) return;
@@ -56,6 +56,8 @@ async function ensureLiveDraftFixture(page: Page) {
       return;
     }
 
+    // Captains are made in Signups, on People; the auction starts on Season.
+    await page.goto("/admin/people");
     for (const name of ["Dendi", "Puppey"]) {
       const makeCaptain = page
         .getByRole("list", { name: "Eligible players" })
@@ -68,6 +70,7 @@ async function ensureLiveDraftFixture(page: Page) {
       }
     }
 
+    await page.goto("/admin/season");
     const start = page.getByRole("button", { name: "Start draft" });
     await expect(
       start,

@@ -184,7 +184,8 @@ test("an old admin link opens its folded card on its tab, clear of the header", 
   await expect(page).toHaveURL(/\/admin\/discord#adm-discord$/);
   const discord = page.locator("#adm-discord");
   await expect(discord).toHaveAttribute("open", "");
-  await expect(discord.locator("summary")).toBeInViewport();
+  // The card's own summary: the webhook form inside folds too.
+  await expect(discord.locator(":scope > summary")).toBeInViewport();
   // Clear of the 64px site header.
   expect((await discord.boundingBox())!.y).toBeGreaterThanOrEqual(64);
   await page.reload();

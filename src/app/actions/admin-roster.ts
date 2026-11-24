@@ -1635,7 +1635,7 @@ export async function releasePlayer(
     // offered in every standin dropdown and counted by the capacity math —
     // unless the admin also runs the remove step, which nothing else at this
     // point of use mentions.
-    "if they've left the league entirely, also remove their signup (Captains & draft) so they drop out of the free-agent and standin pools",
+    "if they've left the league entirely, also remove their signup (Signups, on the admin People tab) so they drop out of the free-agent and standin pools",
   ].filter(Boolean);
   return {
     message:

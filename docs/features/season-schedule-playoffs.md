@@ -39,7 +39,8 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   weeks) and every layout that fits the count (`formatAlternatives`). It judges
   with the same functions the actions use, so the preview can't promise a
   season the schedule won't build. During signups and the draft it is the
-  Season format card between Phase and Captains & draft, saving only, with a
+  Season format card on the admin Season tab (open until a layout is saved,
+  then folded to that layout's line, and folded from the auction on), saving only, with a
   preview count to try other captain counts; once the schedule card shows it
   moves into Schedule & results with First match night and Generate (only
   one builder renders). It is keyed by the stored format and the schedule
@@ -845,7 +846,7 @@ A break is a league night with no games, for a holiday (Tim's call,
   76561200107749376 and up). Prisma refuses to bind a larger value, so the
   whole query throws: every sign-in of such an account failed in
   `retireStaleDotaAccountClaims`, and so did every lookup through
-  `dotaAccountClaimWhere` (the /me override copy, the `/admin/inhouse-players`
+  `dotaAccountClaimWhere` (the /me override copy, the `/admin/inhouse` (Inhouse players)
   search, adding a team coach). Leave the legacy predicate or write out when
   `fitsLegacyDotaAccountColumn` says no (no stored value can match it). Never
   set the key to `undefined` instead: Prisma drops it, and the retire writes

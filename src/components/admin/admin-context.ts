@@ -84,10 +84,13 @@ export const loadAdminContext = cache(async () => {
     sections.set("adm-attention", "Needs attention");
     if (tonight.length > 0) sections.set("adm-tonight", "Tonight");
     sections.set("adm-season", "Phase");
-    if (formatCard) sections.set("adm-format", "Season format");
-    sections.set("adm-captains", "Captains & draft");
-    if (rollCallPhase(season.status)) sections.set("adm-roll-call", "Roll call");
+    sections.set("adm-settings", "Settings");
     sections.set("adm-league", "League id");
+    if (formatCard) sections.set("adm-format", "Season format");
+    sections.set("adm-draft", "Draft");
+    if (rollCallPhase(season.status)) sections.set("adm-roll-call", "Roll call");
+    sections.set("adm-teams", "Teams");
+    sections.set("adm-signups", "Signups");
     if (showTiebreakers) sections.set("adm-tiebreakers", "Tiebreakers");
     if (cards?.schedule) sections.set("adm-schedule", "Schedule & results");
     if (cards?.playoffs) sections.set("adm-playoffs", "Playoffs");
@@ -101,6 +104,7 @@ export const loadAdminContext = cache(async () => {
   sections.set("adm-medal-approvals", "Medal approvals");
   sections.set("adm-inhouse-night", "Inhouse night");
   sections.set("adm-inhouse-players", "Inhouse players");
+  sections.set("adm-inhouse-discord", "Inhouse Discord");
   sections.set("adm-discord", "Discord");
   sections.set("adm-news", "News");
   sections.set("adm-stream", "Match stream");

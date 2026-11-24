@@ -63,7 +63,7 @@ export function rollCallCannotOpen(input: {
     return "A match-night poll is still deciding the night. Close it and set the season's match night first.";
   }
   if (!input.night) {
-    return "Set the season's match night first, under Season settings.";
+    return "Set the season's match night first, in Settings on the Season tab.";
   }
   return null;
 }

@@ -29,6 +29,24 @@ export async function untilHydrated(page: Page, target: Locator): Promise<void> 
 }
 
 /**
+ * Opens Schedule & results' "Schedule tools" fold on /admin/matches (move a
+ * match night, breaks, the season builder and groups), which sits under the
+ * weeks once the round robin exists. Clicked after hydration: a fold flipped
+ * on the server HTML first is a hydration mismatch.
+ */
+export async function openScheduleTools(page: Page): Promise<void> {
+  const summary = page
+    .locator("#main #adm-schedule summary")
+    .filter({ hasText: "Schedule tools" });
+  await untilHydrated(page, summary);
+  const fold = summary.locator("xpath=..");
+  if (!(await fold.evaluate((d) => (d as HTMLDetailsElement).open))) {
+    await summary.click();
+  }
+  await expect(fold).toHaveAttribute("open", "");
+}
+
+/**
  * Tripwire for the exact failure class this suite exists to catch: a client
  * component that renders server-side but CRASHES in the browser (hydration
  * mismatch, undefined access in an effect). Attach before navigating; call

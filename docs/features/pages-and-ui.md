@@ -1259,20 +1259,50 @@ the filter rules are pure in `src/lib/player-pool.ts`
 - **The tab bar** (`AdminTabs`) wraps onto a second row on a phone instead
   of hiding tabs off the edge, pins under the site header from `lg`, and
   shows each tab's to-do count from Overview's list (its name reads
-  "People (1 to do)"). The four subpages (activity, health, data quality, inhouse players)
+  "People (1 to do)"). The three subpages (activity, health, data quality)
   show it without counts: they stay light, and the health page reads only
   its own service.
 - **Overview is triage:** the To-do card (`AdminAttention`: the next step,
   the missing-ticket warning, every Needs attention line and the matches to
   review, each linking to its card's tab), Tonight, and the phase card. The
   offseason shows one card pointing at Season.
+- **Season reads first.** Settings (`season-settings.tsx`) is one card of
+  rows, each the setting's name and current value, with Edit opening that
+  one form underneath (name, match night, soft MMR limit, draft settings and
+  clocks, series lengths); they used to fold away inside Overview's phase
+  card, which now keeps only the phase. The Season format card is open until
+  a layout is saved, then folds to that layout's line, and stays folded from
+  the auction on, when the team count is final.
+- **The auction is its own card on Season** (`draft-controls.tsx`): what it
+  can do now leads (on draft night Go to draft room, Pause or Resume, Void
+  live lot and Undo last sale; before it Start draft, Randomize order and
+  Refresh player data now, then the preflight), and Abort draft folds under
+  it while no result exists. Once the season has moved past the draft the
+  card folds to what it sold. Captains are made in Signups and kept in
+  Teams, both on People (`signup-controls.tsx`, `team-controls.tsx`); until
+  2026-11-24 one Captains & draft card held all three, so signup review sat
+  in a setup card all season and Abort sat under the season builder.
+- **Results lead Schedule & results once the round robin exists:** the
+  weeks come first (finished ones folded), and Schedule tools (Move a match
+  night, Breaks, the season builder and its groups) fold under them. Before
+  it exists the builder leads, since generating it is the job.
+- **After the auction, Teams is a compact list:** one ruled list instead of
+  a box per team, no draft-order number, the roster size instead of a
+  budget, and each team's tools on its own line wherever they fit.
+- **Inhouse holds everything inhouse:** the night, the Inhouse players card
+  (search any player by name, Steam ID or link; the queue and recent
+  players; each row's inhouse MMR, medal and ban), the Inhouse bans card,
+  and Inhouse Discord. `/admin/inhouse-players`, its own page until
+  2026-11-24, forwards there and keeps a search.
+- **A long list can be searched:** Signups' player list gets a name search
+  past eight rows (`nameMatchesQuery`), beside its Needs review filter.
 - **A link opens a folded card on arrival.** `AdminFrame` mounts
   `SectionHashReveal` (section-nav.tsx) for the tab's anchors with
   `openNested="marked"`: it opens and scrolls to the card the hash names,
   and inside it only a folded `AdminSection`, never a danger fold or an edit
   form. Every jump target carries `scroll-mt-40 lg:scroll-mt-56`.
 - **One file per card.** Each card and its helpers live in
-  `src/components/admin/` (`season-controls.tsx`, `captain-controls.tsx`,
+  `src/components/admin/` (`season-controls.tsx`, `draft-controls.tsx`,
   `schedule-controls.tsx` and so on), over the shared loader
   (`season-admin-data.ts`), the visibility predicates
   (`season-admin-rules.ts`) and `AdminSection`/`AdminAnchor`

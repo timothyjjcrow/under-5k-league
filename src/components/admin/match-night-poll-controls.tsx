@@ -227,8 +227,8 @@ function CurrentPoll({
                 {season
                   ? season.matchSchedule === winner.label
                     ? "It's already the season's Match night text. "
-                    : "Use as the season's match night fills the Match night box under Season settings. "
-                  : "Once a season is active, its Match night box under Season settings can carry the winner. "}
+                    : "Use as the season's match night fills the Match night box in Settings above. "
+                  : "Once a season is active, its Match night box in Settings can carry the winner. "}
                 {season?.fixturesNight
                   ? `This season's fixtures already kick off on ${season.fixturesNight}, and pages show that night while they do; to retime them, use Move a match night under Schedule & results.`
                   : "Fixtures generated later kick off on the first match night you pick when you generate the schedule."}

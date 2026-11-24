@@ -570,7 +570,7 @@ test("captain setup and draft preflight fit a phone viewport", async ({
     "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
   );
   await expect(
-    page.getByRole("heading", { name: "Captains & draft", level: 2 }),
+    page.getByRole("heading", { name: "Draft", exact: true, level: 2 }),
   ).toBeVisible();
   await expect(
     page.getByRole("heading", { name: "Draft preflight", level: 3 }),
@@ -581,6 +581,19 @@ test("captain setup and draft preflight fit a phone viewport", async ({
   await expect(
     page.getByRole("button", { name: "Start draft" }),
   ).toBeDisabled();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  // Captain setup itself (Teams, Signups) is on People.
+  await page.goto("/admin/people");
+  await expect(
+    page.getByRole("heading", { name: "Teams", exact: true, level: 2 }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Signups", exact: true, level: 2 }),
+  ).toBeVisible();
   expect(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= innerWidth,
