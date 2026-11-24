@@ -122,12 +122,12 @@ describe("the bot's messages", () => {
       playerName: "**boss**",
       rankTier: 75,
       note: "[click](https://x.y) @everyone",
-      adminUrl: "https://ggd2l.example/admin#adm-medal-approvals",
+      adminUrl: "https://ggd2l.example/admin/people#adm-medal-approvals",
     });
     expect(dm).not.toContain("**boss**");
     expect(dm).not.toContain("[click](");
     expect(dm).toContain("Divine 5");
-    expect(dm).toContain("https://ggd2l.example/admin#adm-medal-approvals");
+    expect(dm).toContain("https://ggd2l.example/admin/people#adm-medal-approvals");
   });
 
   it("tells the player the number they were approved at", () => {

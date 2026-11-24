@@ -567,7 +567,7 @@ test("captain setup and draft preflight fit a phone viewport", async ({
 }) => {
   await page.setViewportSize({ width: 375, height: 812 });
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
   );
   await expect(
     page.getByRole("heading", { name: "Captains & draft", level: 2 }),
@@ -581,6 +581,13 @@ test("captain setup and draft preflight fit a phone viewport", async ({
   await expect(
     page.getByRole("button", { name: "Start draft" }),
   ).toBeDisabled();
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= innerWidth,
+    ),
+  ).toBe(true);
+  // The automation runner is on System.
+  await page.goto("/admin/system");
   const runner = page.locator("#adm-automation");
   await expect(
     runner.getByRole("heading", { name: "Automation runner", level: 3 }),

@@ -1,3 +1,4 @@
+import { AdminTabs } from "@/components/admin/admin-frame";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import Link from "@/components/app-link";
 import { notFound, redirect } from "next/navigation";
@@ -85,15 +86,8 @@ export default async function ActivityPage({
       <PageTitle
         title="Admin activity"
         subtitle="Search recorded actions. Dates use UTC; logging is best-effort and may not capture every change."
-        action={
-          <Link
-            href="/admin#adm-activity"
-            className={buttonClasses("secondary", "sm")}
-          >
-            Back to admin
-          </Link>
-        }
       />
+      <AdminTabs active="system" />
       <Card>
         <CardBody>
           <form className="grid gap-3 text-sm sm:grid-cols-3" method="get">

@@ -51,7 +51,7 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
   page.on("dialog", (dialog) => dialog.accept());
   await page.setViewportSize({ width: 1366, height: 900 });
   await page.goto("/api/auth/dev?name=Tiebreaker%20Admin&admin=1");
-  await page.goto("/admin#playoffs");
+  await page.goto("/admin/matches#playoffs");
   const start = page.getByRole("button", {
     name: "Start playoffs",
     exact: true,
@@ -121,7 +121,7 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
     page.getByText("Playoff tiebreaker · Best of 1.", { exact: true }),
   ).toBeVisible();
 
-  await page.goto("/admin#adm-tiebreakers");
+  await page.goto("/admin/matches#adm-tiebreakers");
   const result = adminTiebreakers
     .locator("details")
     .filter({
@@ -155,7 +155,7 @@ test("a tied playoff place requires a BO1 weekend before the bracket starts", as
     .locator("#playoffs")
     .screenshot({ path: testInfo.outputPath("admin-tiebreaker-resolved.png") });
   await expectFinalTracker(page, [winnerName], [loserName]);
-  await page.goto("/admin#playoffs");
+  await page.goto("/admin/matches#playoffs");
   await start.click();
   // Once seeded, the card's repairs (Reset playoffs among them) fold into
   // "Fix the bracket" under the series.
@@ -201,7 +201,7 @@ for (const resetFinal of [false, true]) {
     page.on("dialog", (dialog) => dialog.accept());
     await page.setViewportSize({ width: 1366, height: 900 });
     await page.goto("/api/auth/dev?name=Tiebreaker%20Admin&admin=1");
-    await page.goto("/admin#playoffs");
+    await page.goto("/admin/matches#playoffs");
     const start = page.getByRole("button", { name: "Start playoffs", exact: true });
     await expect(start).toBeDisabled();
     await expect(page.locator("#playoffs")).toContainText("Opening bye drawn:");
@@ -265,9 +265,10 @@ for (const resetFinal of [false, true]) {
     await expectNoHorizontalOverflow(page, "three-team opening match context");
     await page.screenshot({ path: testInfo.outputPath("three-team-opening-match-mobile.png"), fullPage: true });
     await page.setViewportSize({ width: 1366, height: 900 });
+    // Overview's next step opens Tiebreakers on Matches.
     await page.goto("/admin");
-    await page.locator('a[href="#adm-tiebreakers"]').first().click();
-    await expect(page).toHaveURL(/#adm-tiebreakers$/);
+    await page.locator('a[href="/admin/matches#adm-tiebreakers"]').first().click();
+    await expect(page).toHaveURL(/\/admin\/matches#adm-tiebreakers$/);
     const adminTiebreakers = page.locator("#adm-tiebreakers");
     const adminBracket = adminTiebreakers.getByTestId("tiebreaker-bracket");
     const adminGame = (number: number) => adminBracket.locator(`[data-testid="tiebreaker-game"][data-game="${number}"]`);
@@ -394,13 +395,13 @@ for (const resetFinal of [false, true]) {
         await expect(third).toContainText("Out of playoffs");
         await expectFinalTracker(page, [], [thirdPlace]);
       }
-      await page.goto("/admin#adm-tiebreakers");
+      await page.goto("/admin/matches#adm-tiebreakers");
     }
     await expect(start).toBeEnabled();
     await expect(page.locator("#playoffs")).toContainText("The tiebreaker results have settled the playoff order.");
     await page.locator("#playoffs").screenshot({ path: testInfo.outputPath("three-team-resolved.png") });
     await expectFinalTracker(page, [firstPlace, secondPlace], [thirdPlace]);
-    await page.goto("/admin#playoffs");
+    await page.goto("/admin/matches#playoffs");
     await start.click();
     await expect(page.locator("#playoffs summary", { hasText: "Fix the bracket" })).toBeVisible();
     await page.goto("/schedule#playoff-bracket");

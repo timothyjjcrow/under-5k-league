@@ -38,12 +38,16 @@ async function signIn(page: Page, query: string, redirect: string) {
 }
 
 async function openNightSection(page: Page) {
-  const section = page.locator("#adm-inhouse-night");
-  await page
-    .getByRole("navigation", { name: "Admin sections" })
-    .getByRole("link", { name: "Inhouse night", exact: true })
-    .click();
-  await expect(section).toHaveAttribute("open", "");
+  // In #main: while a streamed section lands, React holds a hidden copy at
+  // the end of the body for a moment.
+  const section = page.locator("#main").locator("#adm-inhouse-night");
+  // A link to the folded card on Inhouse opens it (the tab's hash follower).
+  // Retried: the dev server reloads open pages while it compiles a route for
+  // the first time, which can land between the visit and the reveal.
+  await expect(async () => {
+    await page.goto("/admin/inhouse#adm-inhouse-night");
+    await expect(section).toHaveAttribute("open", "", { timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
   return section;
 }
 
@@ -56,7 +60,7 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
   const noErrors = trackPageErrors(page);
 
   // 1. Plan it with the suggested start and a note.
-  await signIn(page, ADMIN, "/admin");
+  await signIn(page, ADMIN, "/admin/inhouse");
   let section = await openNightSection(page);
   await expect(section.getByText("None planned", { exact: false }).first()).toBeVisible();
   await section.getByLabel("Note (optional)").fill(NOTE);
@@ -264,7 +268,7 @@ test("an admin plans an inhouse night that Home and the inhouse page show, then 
 
   // 6. Cancel it: the confirm counts who said they're in, it comes off Home
   //    and the calendar file is gone.
-  await signIn(page, ADMIN, "/admin");
+  await signIn(page, ADMIN, "/admin/inhouse");
   section = await openNightSection(page);
   await expect(section.getByText(NOTE)).toBeVisible();
   await expect(section.getByText("2 said they're in on the site.")).toBeVisible();

@@ -92,6 +92,15 @@ test("admin sees the league control panel", async ({ page }) => {
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
   await expect(page.getByText("phase control")).toBeVisible();
+  // Seven tabs on every admin page; the handoff is on Season.
+  const tabs = page.getByRole("navigation", { name: "Admin sections" });
+  await expect(tabs.getByRole("link")).toHaveCount(7);
+  await expect(tabs.getByRole("link", { name: "Overview" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
+  await tabs.getByRole("link", { name: /^Season\b/ }).click();
+  await expect(page).toHaveURL("/admin/season");
   await expect(
     page.getByRole("heading", { name: "Season handoff", exact: true }),
   ).toBeVisible();
@@ -122,7 +131,7 @@ test("a player confirms the draft schedule and admin sees the readiness change",
   // converts this league-time value to the epoch the confirmation action
   // later binds to its revision.
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
   );
   await page.getByLabel(/Draft night/).fill("2026-08-15T18:00");
   await page.getByRole("button", { name: "Set draft night" }).click();
@@ -220,7 +229,7 @@ test("removing a captain before any fixtures exist takes one plain confirm", asy
     void dialog.accept();
   });
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
   );
 
   const dendiRow = page
@@ -265,4 +274,13 @@ test("non-admin sees a clear restricted-access state", async ({ page }) => {
     page.getByText("You do not have administrator access"),
   ).toBeVisible();
   await expect(page.getByRole("link", { name: "Return to league home" })).toBeVisible();
+  // Every tab checks on its own, not just Overview.
+  for (const tab of ["/admin/season", "/admin/matches", "/admin/system"]) {
+    await page.goto(tab);
+    await expect(
+      page.getByRole("heading", { name: "Admin access required" }),
+      tab,
+    ).toBeVisible();
+    await expect(page.getByRole("navigation", { name: "Admin sections" })).toHaveCount(0);
+  }
 });

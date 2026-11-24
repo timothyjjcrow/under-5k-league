@@ -15,7 +15,7 @@ for (const [flag, games] of [["--three", 1], ["--all", 7]] as const) {
     const noErrors = trackPageErrors(page);
     page.on("dialog", (dialog) => dialog.accept());
     await page.goto("/api/auth/dev?name=Weekend%20Admin&admin=1");
-    await page.goto("/admin#playoffs");
+    await page.goto("/admin/matches#playoffs");
     await expect(page.getByRole("button", { name: "Start playoffs", exact: true })).toBeDisabled();
     await expect(page.locator("#playoffs")).toContainText("Up to 3 games per team");
     await page.getByRole("button", { name: "Schedule tiebreaker week", exact: true }).click();
@@ -40,7 +40,7 @@ for (const [flag, games] of [["--three", 1], ["--all", 7]] as const) {
     await matchLink.click();
     await expect(page.getByText("Playoff tiebreaker · Best of 1.", { exact: true })).toBeVisible();
     await expect(page.getByText(/The next game starts when both opponents are ready/)).toBeVisible();
-    await page.goto("/admin#adm-tiebreakers");
+    await page.goto("/admin/matches#adm-tiebreakers");
     const played = new Map<string, number>();
     for (let i = 0; i < games; i++) {
       const ready = admin.getByTestId("tiebreaker-game").filter({ has: page.getByText("Scheduled", { exact: true }) }).first();

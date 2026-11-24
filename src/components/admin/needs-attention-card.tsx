@@ -14,14 +14,15 @@ import {
   type LeagueDeliveryHealth,
 } from "@/lib/league-delivery";
 import { resolveChampionPresentation } from "@/lib/champion-presentation";
-import { MATCH_ANCHOR, matchAnchorPath } from "@/lib/match-anchors";
 import {
-  Card,
-  CardBody,
-  CardHeader,
-  LinkArrow,
-  textLink,
-} from "@/components/ui";
+  MATCH_ANCHOR,
+  adminMatchRowId,
+  matchAnchorPath,
+} from "@/lib/match-anchors";
+import { adminHref } from "@/lib/admin-tabs";
+import type { AdminNextStep } from "@/lib/admin-next-step";
+import { NextStepBanner } from "@/components/admin/next-step-banner";
+import { Card, CardBody, CardHeader, textLink } from "@/components/ui";
 import type { AdminData, Season } from "@/components/admin/season-admin-data";
 import {
   draftRostersReady,
@@ -31,17 +32,17 @@ import {
 } from "@/components/admin/season-admin-rules";
 
 /**
- * Every problem on the page as one list, each line linking to the control
- * that fixes it: season-wide alarms first, then the matches to review. All of
- * it is read from the database; the Discord line is the DB count of unlinked
- * players, and the membership details stream into the Discord reach card.
+ * Every problem the admin can act on, as one list, each line linking to the
+ * card that fixes it: season-wide alarms first, then the matches to review.
+ * All of it is read from the database; the Discord line is the DB count of
+ * unlinked players, and the membership details stream into the Discord reach
+ * card. The tab bar counts the same list (admin-context.ts).
  */
-export function AdminAttention({
+export function adminAttentionList({
   season,
   data,
   delivery,
   automation,
-  jumpItems,
 }: {
   season: Season;
   data: AdminData;
@@ -49,7 +50,6 @@ export function AdminAttention({
    *  here (leagueDeliveryAttention), linking to the Discord card. */
   delivery: LeagueDeliveryHealth | null;
   automation: string[];
-  jumpItems: { id: string; label: string }[];
 }) {
   const names = new Map(data.teams.map((team) => [team.id, team.name]));
   const fixture = (match: AdminData["matches"][number]) =>
@@ -131,10 +131,35 @@ export function AdminAttention({
     }),
   ];
   const matches = matchAttention(data.matches, data.teams);
-  // A section folded into the season record, or not shown this phase, has no
-  // jump target; its line still reads, just without a link.
-  const sectionLabel = new Map(jumpItems.map((item) => [`#${item.id}`, item.label]));
-  const standinsLabel = sectionLabel.get("#adm-standins");
+  return { items, matches };
+}
+
+/**
+ * Overview's To-do card: the next step, the missing league ticket, then
+ * every line of adminAttentionList and the matches to review. A line links
+ * to its card on whichever tab renders it (adminHref); a card this phase
+ * doesn't show (`sections` has no entry) leaves the line without a link.
+ */
+export function AdminAttention({
+  season,
+  data,
+  nextStep,
+  attention,
+  sections,
+}: {
+  season: Season;
+  data: AdminData;
+  nextStep: AdminNextStep | null;
+  attention: ReturnType<typeof adminAttentionList>;
+  /** The cards this request renders, by anchor, with their link names. */
+  sections: ReadonlyMap<string, string>;
+}) {
+  const names = new Map(data.teams.map((team) => [team.id, team.name]));
+  const fixture = (match: AdminData["matches"][number]) =>
+    `${names.get(match.homeTeamId ?? "") ?? "TBD"} vs ${names.get(match.awayTeamId ?? "") ?? "TBD"}`;
+  const matchById = new Map(data.matches.map((match) => [match.id, match]));
+  const { items, matches } = attention;
+  const standinsLabel = sections.get("adm-standins");
   return (
     <Card id="adm-attention" className="scroll-mt-40 lg:scroll-mt-56">
       <CardHeader
@@ -142,10 +167,11 @@ export function AdminAttention({
         title={attentionTitle(season.name, items.length + matches.length)}
       />
       <CardBody className="space-y-3">
+        {nextStep ? <NextStepBanner nextStep={nextStep} /> : null}
         {items.length > 0 ? (
           <ul className="space-y-2">
             {items.map((item) => {
-              const label = sectionLabel.get(item.href);
+              const label = sections.get(item.href.replace(/^#/, ""));
               return (
                 <li
                   key={item.key}
@@ -155,7 +181,7 @@ export function AdminAttention({
                   {label ? (
                     <>
                       {" "}
-                      <a href={item.href} className={textLink()}>
+                      <a href={adminHref(item.href)} className={textLink()}>
                         {label} →
                       </a>
                     </>
@@ -180,7 +206,7 @@ export function AdminAttention({
                 >
                   {/* The fixture opens the match page's Admin tools, where
                       it can be fixed; its row in Schedule & results or
-                      Playoffs here holds the same controls. */}
+                      Playoffs on Matches holds the same controls. */}
                   <span className="flex flex-wrap items-baseline gap-x-3 gap-y-2">
                     <Link
                       href={matchAnchorPath(item.id, MATCH_ANCHOR.admin)}
@@ -188,8 +214,8 @@ export function AdminAttention({
                     >
                       {fixture(matchById.get(item.id)!)}
                     </Link>
-                    <a href={`#adm-match-${item.id}`} className={textLink("text-xs")}>
-                      Result controls ↓
+                    <a href={adminHref(adminMatchRowId(item.id))} className={textLink("text-xs")}>
+                      Result controls →
                     </a>
                   </span>
                   <p className="mt-0.5 text-muted">
@@ -197,7 +223,7 @@ export function AdminAttention({
                     {item.uncovered > 0 && standinsLabel ? (
                       <>
                         {" "}
-                        <a href="#adm-standins" className={textLink()}>
+                        <a href={adminHref("adm-standins")} className={textLink()}>
                           {standinsLabel} →
                         </a>
                       </>
@@ -208,23 +234,6 @@ export function AdminAttention({
             </ul>
           </details>
         ) : null}
-        {/* inline-flex min-h-6: on 12px text TAP_SAFE alone left a 22px
-            target, under the 24px minimum. gap-y-2 keeps 8px between the
-            two links when they wrap. */}
-        <p className="flex flex-wrap gap-x-4 gap-y-2 text-xs">
-          <Link
-            href={`/admin/data-quality?season=${season.id}`}
-            className={textLink("inline-flex min-h-6 items-center")}
-          >
-            Check imported-game quality <LinkArrow />
-          </Link>
-          <Link
-            href={`/admin/health?season=${season.id}`}
-            className={textLink("inline-flex min-h-6 items-center")}
-          >
-            League health <LinkArrow />
-          </Link>
-        </p>
       </CardBody>
     </Card>
   );

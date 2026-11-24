@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import { Suspense } from "react";
 import Link from "@/components/app-link";
 import {
@@ -564,7 +565,7 @@ export function CaptainControls({
                           ? "the layout is the one saved in the season builder."
                           : "Recommended follows that count."
                       }`}{" "}
-                  <a href={formatBuilderAnchor(season, data)} className={textLink()}>
+                  <a href={adminHref(formatBuilderAnchor(season, data))} className={textLink()}>
                     Change it in Season format
                   </a>
                   .

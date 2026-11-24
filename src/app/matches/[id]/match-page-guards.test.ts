@@ -424,7 +424,8 @@ describe("match page admin tools", () => {
     expect(ADMIN).toContain(
       "<RevealHashTarget prefix={ADMIN_MATCH_ROW_PREFIX} />",
     );
-    expect(TOOLS).toContain("href={`/admin#${adminMatchRowId(match.id)}`}");
+    // The row lives on Matches; adminHref names that tab.
+    expect(TOOLS).toContain("href={adminHref(adminMatchRowId(match.id))}");
   });
 });
 

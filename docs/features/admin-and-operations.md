@@ -2,8 +2,9 @@
 
 How GGD2L is run and kept fast: admin actions and the panel's safety rails,
 caching and streaming, the live rooms' connection handling, and the release
-rules a code change must respect. Main files: `src/app/admin/page.tsx` and its cards in
-`src/components/admin/`, `src/app/actions/admin-*.ts`, `src/components/danger-submit.tsx`,
+rules a code change must respect. Main files: the admin tabs (`src/app/admin/*/page.tsx`,
+`src/lib/admin-tabs.ts`) and their cards in `src/components/admin/`,
+`src/app/actions/admin-*.ts`, `src/components/danger-submit.tsx`,
 `src/components/admin-match-tools.tsx`, `src/lib/admin-log.ts`,
 `src/lib/admin-next-step.ts`, `src/lib/cached-queries.ts`, `room-clock.tsx`.
 
@@ -116,11 +117,13 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx` and its c
   else prompts "start the playoffs" or "record the final". With
   `hasLeagueTicket: false` it adds a separate `ticketWarning` from Signups
   through the Playoffs (Valve wants ticket applications about 15 days ahead),
-  linking to `#adm-league`; the draft preflight shows the same "League
+  linking to the league id on Season (`adminHref("adm-league")`); the draft preflight shows the same "League
   ticket: not set" row. Nothing renders once a ticket is set.
-- **Every in-page `#adm-` link needs both an `AdminAnchor` and a jump-bar
-  entry** (checked by `admin-copy-guard.test.ts`), so a link never lands
-  nowhere and the jump bar can open a folded target.
+- **Every link to an admin card names a card the tab map places**
+  (`ADMIN_SECTION_TAB`): built with `adminHref` from anywhere, or a plain
+  `#adm-` hash only to a card on the same tab (checked by
+  `admin-copy-guard.test.ts`), so a link never lands nowhere and the tab's
+  hash follower can open a folded target.
 - **Every admin date/time box reads on the league's clock:**
   `<LocalDatetimeField timeZone={LEAGUE_CONFIG.timeZone}>` names the zone and
   shows the viewer's own time beside it ("= 11:00 your time", hidden when the
@@ -165,8 +168,8 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx` and its c
 
 - **Its own route, not a card on /admin.** /admin is the match-night console
   for the active season; health compares seasons, so it takes `?season=` and
-  sits beside `/admin/data-quality`, linked from Needs attention ("League
-  health", next to "Check imported-game quality"). The guard is the
+  sits beside `/admin/data-quality`, linked from System's League reports
+  ("League health", next to "Check imported-game quality"). The guard is the
   data-quality page's: signed out goes to `/login?next=`, a non-admin gets the
   same 404 as a missing page, the parameter goes through `singleSearchParam`
   (a repeated key is a 404), then `resolveSeasonScope` (an unknown id is a

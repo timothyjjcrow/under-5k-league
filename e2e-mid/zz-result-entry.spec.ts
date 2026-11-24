@@ -12,7 +12,7 @@ function resultRowForHref(page: Page, matchHref: string) {
 }
 
 async function reopenRecordedFixture(page: Page, matchHref: string) {
-  if (!page.url().endsWith("/admin")) await page.goto("/admin");
+  if (!page.url().endsWith("/admin/matches")) await page.goto("/admin/matches");
   const row = resultRowForHref(page, matchHref);
   const reopen = row.getByRole("button", { name: "Reopen for import" });
   if (!(await reopen.isVisible().catch(() => false))) return false;
@@ -32,7 +32,7 @@ test("admin result entry rejects partial play and supports a reversible no-game 
   test.slow();
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/api/auth/dev?name=Result%20Admin&admin=1");
-  await page.goto("/admin");
+  await page.goto("/admin/matches");
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
@@ -162,7 +162,7 @@ test("admin tools on the match page carry the admin row's controls and link back
   test.slow();
   const assertNoErrors = trackPageErrors(page);
   await page.goto("/api/auth/dev?name=Result%20Admin&admin=1");
-  await page.goto("/admin");
+  await page.goto("/admin/matches");
   const adminForm = page
     .getByRole("button", { name: "Save as final" })
     .first()
@@ -199,7 +199,7 @@ test("admin tools on the match page carry the admin row's controls and link back
   await tools
     .getByRole("link", { name: /^Open this match in the admin panel/ })
     .click();
-  await expect(page).toHaveURL(new RegExp(`/admin#adm-match-${matchId}$`));
+  await expect(page).toHaveURL(new RegExp(`/admin/matches#adm-match-${matchId}$`));
   await expect(page.locator(`#adm-match-${matchId}`)).toBeInViewport();
   assertNoErrors();
 });

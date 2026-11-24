@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import Link from "@/components/app-link";
 import { redirect } from "next/navigation";
@@ -142,7 +143,7 @@ export default async function DraftPage() {
             "The Regular season can't start without fixtures. Generate them in Schedule & results on the admin page.",
           control: (
             <Link
-              href="/admin#adm-schedule"
+              href={adminHref("adm-schedule")}
               className={buttonClasses("accent", "md")}
             >
               Generate the schedule first

@@ -47,10 +47,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capTwoPage.getByText("Playing").first()).toBeVisible();
 
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
   );
-  // exact: the panel also has a "Recent admin activity" heading, and a loose
-  // match resolves to both under strict mode.
+  // Captains & draft is on the Season tab. exact: a loose "Admin" matches
+  // other headings too, and resolves to several under strict mode.
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
@@ -79,6 +79,8 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
 
   // Close signups moves the season into DRAFT without starting the auction:
   // /draft must be a live waiting room for players, not a static dead end.
+  // It is on the phase card, on Overview.
+  await page.goto("/admin");
   await page.getByRole("button", { name: "Close signups", exact: true }).click();
   // The header nav gains "Teams" only once the season is in DRAFT — a
   // reliable signal that the phase move committed before we proceed.
@@ -166,7 +168,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toBeVisible();
   await expect(
     page.getByRole("link", { name: "Captains & draft setup on the admin panel" }),
-  ).toHaveAttribute("href", "/admin#adm-captains");
+  ).toHaveAttribute("href", "/admin/season#adm-captains");
   await page.getByRole("button", { name: "Start draft" }).click();
 
   // The parked player's page flips live via its own poll — NO reload.
@@ -204,7 +206,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "More controls" }),
-  ).toHaveAttribute("href", "/admin#adm-captains");
+  ).toHaveAttribute("href", "/admin/season#adm-captains");
 
   // --- The live auction, driven from the captains' own browsers ------------
 
@@ -419,14 +421,17 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // Back on the admin panel the draft is locked: no re-run button (a re-run
   // would reset budgets over drafted rosters), no captain management — just
   // the way into the live room, plus the night-of controls.
-  await page.goto("/admin");
-  // Both the next-step line under the title and the Captains & draft card
+  // Both the next step on Overview and the Captains & draft card on Season
   // lead into the live room.
-  for (const room of ["Open the draft room", "Go to draft room"]) {
-    const link = page.getByRole("link", { name: room });
-    await expect(link).toBeVisible();
-    await expect(link).toHaveAttribute("href", "/draft");
-  }
+  await page.goto("/admin");
+  await expect(page.getByRole("link", { name: "Open the draft room" })).toHaveAttribute(
+    "href",
+    "/draft",
+  );
+  await page.goto("/admin/season");
+  const room = page.getByRole("link", { name: "Go to draft room" });
+  await expect(room).toBeVisible();
+  await expect(room).toHaveAttribute("href", "/draft");
   await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(
     0,
   );

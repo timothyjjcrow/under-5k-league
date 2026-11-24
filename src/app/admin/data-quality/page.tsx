@@ -1,3 +1,4 @@
+import { AdminTabs } from "@/components/admin/admin-frame";
 import Link from "@/components/app-link";
 import { notFound, redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
@@ -8,7 +9,6 @@ import {
   Card,
   CardBody,
   PageTitle,
-  buttonClasses,
   textLink,
 } from "@/components/ui";
 
@@ -58,12 +58,8 @@ export default async function DataQualityPage({
       <PageTitle
         title="Imported-game quality"
         subtitle={`${season?.name ?? "All seasons"} · ${issues.length} of ${games.length} imported games have items to review.`}
-        action={
-          <Link href="/admin" className={buttonClasses("secondary", "sm")}>
-            Back to admin
-          </Link>
-        }
       />
+      <AdminTabs active="system" />
       <p className="text-sm text-muted">
         Different reports require different data. These diagnostics identify
         affected games without changing results. Inspect the match before using

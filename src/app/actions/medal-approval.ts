@@ -5,6 +5,7 @@
 // service writes the request; the admins hear about it from the bot, after
 // the commit and best-effort, and answer on /admin.
 
+import { adminHref } from "@/lib/admin-tabs";
 import { revalidatePath } from "next/cache";
 import { requireUser } from "@/lib/auth";
 import { str } from "@/lib/form";
@@ -44,7 +45,7 @@ export async function askForMedalApproval(
       playerName: asked.playerName,
       rankTier: asked.rankTier,
       note: asked.note,
-      adminUrl: `${resolveSiteUrl()}/admin#${MEDAL_APPROVALS_ANCHOR}`,
+      adminUrl: `${resolveSiteUrl()}${adminHref(MEDAL_APPROVALS_ANCHOR)}`,
     });
     for (const discordId of await adminDiscordIds()) {
       await sendDirectMessage(discordId, content);

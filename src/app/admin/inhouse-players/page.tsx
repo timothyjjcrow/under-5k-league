@@ -1,3 +1,4 @@
+import { AdminTabs } from "@/components/admin/admin-frame";
 import Link from "@/components/app-link";
 import { notFound, redirect } from "next/navigation";
 import { AdminInhouseRatingEditor } from "@/components/admin-inhouse-rating-editor";
@@ -78,16 +79,12 @@ export default async function InhousePlayersPage({
         title="Inhouse players"
         subtitle="Set any player's inhouse MMR and medal, signed up for the league or not, or ban them from inhouse games. Every inhouse join uses the MMR set here, over their league signup's and anything they type."
         action={
-          <>
-            <Link href="/inhouse" className={buttonClasses("secondary", "sm")}>
-              Inhouse room
-            </Link>
-            <Link href="/admin" className={buttonClasses("secondary", "sm")}>
-              Back to admin
-            </Link>
-          </>
+          <Link href="/inhouse" className={buttonClasses("secondary", "sm")}>
+            Inhouse room
+          </Link>
         }
       />
+      <AdminTabs active="inhouse" />
       <Card>
         <CardBody>
           <form method="get" role="search" className="flex flex-wrap items-end gap-2">

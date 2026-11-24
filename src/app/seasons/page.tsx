@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import { shareMetadata } from "@/lib/share-metadata";
 import { LEAGUE_CONFIG } from "@/lib/league-config";
 import Link from "@/components/app-link";
@@ -115,7 +116,7 @@ export default async function SeasonsPage() {
               return here to resume an archived season.
             </p>
             <Link
-              href="/admin#adm-new-season"
+              href={adminHref("adm-new-season")}
               className={textLink("text-sm")}
             >
               Review season handoff →

@@ -1171,13 +1171,18 @@ above, and POST is not implemented.
 
 ## 8. Admin tools
 
-`/admin` is a set of anchored cards behind a sticky jump bar. The route file
-(`src/app/admin/page.tsx`) loads the season and picks the cards' order; each card
-lives in its own file in `src/components/admin/`, over the shared loader
-(`season-admin-data.ts`) and visibility predicates (`season-admin-rules.ts`).
-Set-once cards are collapsed as `<details>`, and the three slow cards are
-Suspense-streamed. An `adminNextStep` banner (`src/lib/admin-next-step.ts`,
-pure, tested) says what to do next per phase — it exists because several
+`/admin` is seven fixed tabs, one route each (`src/lib/admin-tabs.ts`):
+Overview (`/admin`), Season, Matches, People, Inhouse, Discord & news and
+System. Each tab's route (`src/app/admin/<tab>/page.tsx`) gates the viewer
+and reads the shared `loadAdminContext()` (`src/components/admin/admin-context.ts`,
+cached per request), then renders its cards; each card lives in its own file
+in `src/components/admin/`, over the shared loader (`season-admin-data.ts`)
+and visibility predicates (`season-admin-rules.ts`). `ADMIN_SECTION_TAB` maps
+every card to its tab, `adminHref` builds every link to one, and Overview
+forwards old `/admin#card` links. Set-once cards are collapsed as `<details>`,
+and the slow cards are Suspense-streamed on their own tabs. An `adminNextStep`
+line (`src/lib/admin-next-step.ts`, pure, tested) at the top of Overview's
+To-do card says what to do next per phase — it exists because several
 transitions are silent (notably DRAFT→REGULAR_SEASON). Confirmation tiers:
 **plain** form, **confirm** (`<SubmitButton confirm>` → `window.confirm`), and
 **DangerSubmit** (`src/components/danger-submit.tsx`, type the exact

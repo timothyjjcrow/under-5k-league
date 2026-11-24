@@ -11,6 +11,14 @@ import {
 } from "../../../test/support/source-files";
 import { START_REGULAR_SEASON } from "../../lib/admin-next-step";
 import { adminMatchRowId } from "../../lib/match-anchors";
+import { MEDAL_APPROVALS_ANCHOR } from "../../lib/medal-approval";
+import {
+  ADMIN_SECTION_TAB,
+  ADMIN_TABS,
+  adminAnchorTarget,
+  adminTab,
+  type AdminTabId,
+} from "../../lib/admin-tabs";
 
 /**
  * Copy on /admin must not name a control that doesn't exist.
@@ -38,6 +46,26 @@ const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
 const ADMIN_PAGE = adminPageFiles();
 const adminPage = haystackOf(ADMIN_PAGE);
 const declaration = (name: string) => declarationSource(ADMIN_PAGE, name);
+
+/** A tab's route file (`/admin/matches` → src/app/admin/matches/page.tsx). */
+const tabPage = (tab: AdminTabId) => read(`src/app${adminTab(tab).path}/page.tsx`);
+/** Whether a tab's route imports an admin component file. */
+const tabImports = (tab: AdminTabId, path: string) =>
+  tabPage(tab).includes(`from "@/${path.replace(/^src\//, "").replace(/\.tsx?$/, "")}";`);
+/** Whether a tab renders a card's anchor: its route renders the id, or
+ *  imports an admin component that does. */
+function tabRendersAnchor(tab: AdminTabId, id: string): boolean {
+  const renders = (text: string) =>
+    text.includes(`id="${id}"`) ||
+    (id === MEDAL_APPROVALS_ANCHOR && text.includes("id={MEDAL_APPROVALS_ANCHOR}"));
+  if (renders(tabPage(tab))) return true;
+  return ADMIN_PAGE.some(
+    (file) =>
+      file.path.startsWith("src/components/admin/") &&
+      renders(file.text) &&
+      tabImports(tab, file.path),
+  );
+}
 
 /**
  * Every file that RENDERS an admin control: each page under /admin and the
@@ -313,7 +341,7 @@ describe("admin copy names only controls that exist", () => {
     const controls = declaration("DiscordControls");
     expect(controls).not.toContain("DiscordReachLine");
     expect(controls).not.toContain("ChaseCopy");
-    expect(page).toContain("<DiscordReachCard\n          seasonId={season.id}");
+    expect(page).toMatch(/<DiscordReachCard\s+seasonId=\{season\.id\}/);
     expect(page).toContain('<AdminAnchor id="adm-reach">');
   });
 
@@ -372,71 +400,76 @@ describe("admin copy names only controls that exist", () => {
     );
   });
 
-  // In-page links ("Set the league id →") point at collapsed sections. A
-  // plain hash only OPENS a collapsed section when the jump bar lists that id
-  // (SectionNav reveals on hashchange for its own items), so a link needs both
-  // the anchor and the jump-bar entry — otherwise it scrolls to a shut
-  // disclosure, or nowhere.
-  it("every in-page #adm- link lands on a section the jump bar can open", () => {
-    const page = adminPage;
-    const targets = [
-      ...new Set([...page.matchAll(/href="#(adm-[a-z-]+)"/g)].map((m) => m[1])),
-    ];
-    expect(targets).toContain("adm-league");
-    for (const id of targets) {
-      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
-      expect(
-        page.includes(`id: "${id}"`),
-        `#${id} is linked but missing from the jump bar, so the hash cannot open it`,
-      ).toBe(true);
+  // Every admin card lives on one tab (ADMIN_SECTION_TAB), and the forwarder
+  // and every link build their path from that map. A card the map puts on
+  // one tab but a route renders on another would send every link, every
+  // Discord message and every old bookmark to a tab without it.
+  it("every card the tab map names renders on that tab, and only there", () => {
+    expect(Object.keys(ADMIN_SECTION_TAB).length).toBeGreaterThanOrEqual(25);
+    for (const [id, tab] of Object.entries(ADMIN_SECTION_TAB)) {
+      const tabs = ADMIN_TABS.filter((t) => tabRendersAnchor(t.id, id)).map((t) => t.id);
+      expect(tabs, `#${id} should render on ${tab} only`).toEqual([tab]);
     }
   });
 
-  // The next-step line sits under the page title, far from every control, so
-  // each step links to the card it names. Same rule as the page's own links:
-  // the anchor must exist and be in the jump bar, or the hash lands on a shut
-  // section or nowhere.
-  it("every next-step link lands on a section the jump bar can open", () => {
-    const page = adminPage;
-    const nextStep = read("src/lib/admin-next-step.ts");
-    const targets = [
-      ...new Set(
-        [...nextStep.matchAll(/href: "#(adm-[a-z-]+)"/g)].map((m) => m[1]),
-      ),
-    ];
-    expect(targets).toContain("adm-schedule");
-    for (const id of targets) {
-      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
-      expect(
-        page.includes(`id: "${id}"`),
-        `#${id} is linked from the next step but missing from the jump bar`,
-      ).toBe(true);
-    }
-    expect(page).toContain("href={nextStep.jump.href}");
-  });
-
-  // Needs attention links every line to the section that fixes it. The page
-  // drops the link when that section is not in this render's jump bar, so a
-  // target that is NEVER in it would read as a line with no way to act.
-  it("every Needs attention link lands on a section the jump bar can open", () => {
-    const page = adminPage;
-    const attention = read("src/lib/admin-attention.ts");
-    const targets = [
-      ...new Set(
-        [...attention.matchAll(/href: "#(adm-[a-z-]+)"/g)].map((m) => m[1]),
-      ),
-    ];
-    expect(targets).toEqual(
-      expect.arrayContaining(["adm-automation", "adm-standins", "adm-reach"]),
+  // A link to a card is either built with adminHref (any page, any tab) or,
+  // inside a card, a plain "#adm-…" hash to a card on the SAME tab. Either
+  // way it must name a card the map places, or it lands nowhere.
+  it("every link to an admin card names a card the tab map places", () => {
+    const site = haystackOf(sourceFiles(["src/app/**/*.{ts,tsx}", "src/components/**/*.tsx", "src/lib/**/*.ts"], 100));
+    const viaHelper = [...site.matchAll(/adminHref\("(adm-[a-z-]+)"\)/g)].map((m) => m[1]);
+    const fromLibs = ["src/lib/admin-next-step.ts", "src/lib/admin-attention.ts", "src/components/admin/needs-attention-card.tsx", "src/components/admin/season-admin-rules.ts"]
+      .flatMap((f) => [...read(f).matchAll(/"#(adm-[a-z-]+)"/g)].map((m) => m[1]));
+    expect(fromLibs).toEqual(
+      expect.arrayContaining(["adm-schedule", "adm-standins", "adm-automation", "adm-reach", "adm-format"]),
     );
-    for (const id of targets) {
-      expect(page.includes(`id="${id}"`), `no element renders id="${id}"`).toBe(true);
-      expect(
-        page.includes(`id: "${id}"`),
-        `#${id} is linked from Needs attention but missing from the jump bar`,
-      ).toBe(true);
+    for (const id of new Set([...viaHelper, ...fromLibs])) {
+      expect(adminAnchorTarget(id), `#${id} is linked but no tab renders it`).not.toBeNull();
     }
-    expect(page).toContain("<a href={item.href} className={textLink()}>");
+    // Plain hashes stay on their own tab: the card holding one is rendered
+    // by the same tab as the card it names.
+    let plain = 0;
+    for (const file of ADMIN_PAGE.filter((f) => f.path.startsWith("src/components/admin/"))) {
+      for (const [, id] of file.text.matchAll(/href="#(adm-[a-z-]+)"/g)) {
+        plain += 1;
+        const owners = ADMIN_TABS.filter((t) => tabImports(t.id, file.path)).map((t) => t.id);
+        expect(owners, `${file.path} links #${id} without adminHref`).toEqual([ADMIN_SECTION_TAB[id]]);
+      }
+    }
+    expect(plain).toBeGreaterThanOrEqual(4);
+  });
+
+  // The next step and the to-do lines are written as "#adm-…" in pure lib
+  // code and rendered on Overview, away from every card but the phase.
+  it("the next step and every to-do line link through adminHref", () => {
+    expect(read("src/components/admin/next-step-banner.tsx")).toContain(
+      "href={adminHref(nextStep.jump.href)}",
+    );
+    expect(read("src/components/admin/next-step-banner.tsx")).toContain(
+      'href={adminHref("adm-league")}',
+    );
+    expect(read("src/components/admin/needs-attention-card.tsx")).toContain(
+      "<a href={adminHref(item.href)} className={textLink()}>",
+    );
+  });
+
+  // Each tab is its own route: it must check the viewer like /admin always
+  // has, give its Server Actions the same function budget, and say which tab
+  // it is so the bar marks it. Overview also forwards old /admin#card links.
+  it("every tab route gates admins, sets the function budget and marks its tab", () => {
+    expect(ADMIN_TABS.map((t) => t.id)).toEqual([
+      "overview", "season", "matches", "people", "inhouse", "discord", "system",
+    ]);
+    for (const tab of ADMIN_TABS) {
+      const page = tabPage(tab.id);
+      expect(page, tab.path).toContain("const ctx = await loadAdminContext();");
+      expect(page, tab.path).toContain(
+        `if (ctx.gate !== "admin") return <AdminGateScreen gate={ctx.gate} path="${tab.path}" />;`,
+      );
+      expect(page, tab.path).toContain("export const maxDuration = 60;");
+      expect(page, tab.path).toContain(`<AdminFrame tab="${tab.id}" counts={ctx.tabCounts}>`);
+    }
+    expect(tabPage("overview")).toContain("<AdminHashForwarder />");
   });
 
   // A jump (chip, next-step link, Needs attention link, news pager) opens
@@ -452,38 +485,6 @@ describe("admin copy names only controls that exist", () => {
     expect(declaration("AdminSection")).toContain("data-section-jump");
     // AdminSection is the only element that carries the attribute.
     expect(page.match(/^\s*data-section-jump$/gm)).toHaveLength(1);
-  });
-
-  // The sticky bar highlights the section in view. When the chips and the
-  // cards disagree on order, that highlight jumps backwards while the admin
-  // scrolls down, and the bar misdescribes the page.
-  it("the jump bar lists sections in the order the page renders them", () => {
-    const page = declaration("AdminPage");
-    const barStart = page.indexOf("const jumpItems");
-    const bar = page.slice(barStart, page.indexOf("\n  ];\n", barStart));
-    const body = page.slice(page.indexOf("return (", barStart));
-    // The in-season branches (the season-record branch comes first in both).
-    const seasonBar = bar.slice(bar.indexOf("...(tonight.length > 0"));
-    const season = body.slice(body.indexOf(") : season && data ? ("));
-    const inOrder = (hay: string, ...needles: string[]) => {
-      const at = needles.map((n) => hay.indexOf(n));
-      expect(at.every((i) => i >= 0), needles.join(" | ")).toBe(true);
-      expect(at, needles.join(" < ")).toEqual([...at].sort((a, b) => a - b));
-    };
-    // Signups and the draft phase lead with setting up; later phases put
-    // it after the season's working cards. Chips and cards branch on the
-    // same flag.
-    inOrder(seasonBar, "...(setupFirst ? [...setupItems, reachItem, ...rollCallItems] : [])", 'id: "adm-schedule"', 'id: "adm-standins"', "...(setupFirst ? [] : [reachItem, ...rollCallItems])", 'id: "adm-sync"', "...(setupFirst ? [] : setupItems)", 'id: "adm-league"');
-    inOrder(season, "{setupFirst ? (", "{seasonCard}", "{formatSetupCard}", "{captainsCard}", "{reachCard}", "{rollCallCard}", '<AdminAnchor id="adm-schedule">', '<AdminAnchor id="adm-standins">', "{setupFirst ? null : reachCard}", "{setupFirst ? null : rollCallCard}", "{syncCards}", "{setupFirst ? null : setupControls}", "<LeagueControls");
-    // During setup the Season format card sits between Phase and Captains,
-    // and so does its chip.
-    const setupItems = page.slice(page.indexOf("const setupItems"), page.indexOf("];", page.indexOf("const setupItems")));
-    inOrder(setupItems, 'id: "adm-season"', 'id: "adm-format"', 'id: "adm-captains"');
-    const setupFragment = page.slice(page.indexOf("const seasonCard"), page.indexOf("const setupControls"));
-    inOrder(setupFragment, '<AdminAnchor id="adm-season">', '<AdminAnchor id="adm-captains">');
-    // The evergreen sections after the season's own.
-    inOrder(bar, 'id: "adm-history"', 'id: "adm-automation"', 'id: "adm-discord"', 'id: "adm-activity"', 'id: "adm-poll"', 'id: "adm-news"', 'id: "adm-security"');
-    inOrder(body, '<AdminAnchor id="adm-history">', '<AdminAnchor id="adm-automation">', "<DiscordSection />", "<AdminActivity />", "<AdminMatchNightPoll", "<AdminNews ", "<SecurityControls />");
   });
 
   // Two admin links once sent the admin to /matches/<id>#admin-tools, an id
@@ -506,7 +507,7 @@ describe("admin copy names only controls that exist", () => {
       );
     }
     const page = adminPage;
-    expect(page).toContain("href={`#adm-match-${item.id}`}");
+    expect(page).toContain("href={adminHref(adminMatchRowId(item.id))}");
     // The row takes its id as a prop (the match page renders the same row
     // without one), and adminMatchRowId is the one place the prefix lives.
     expect(page).toContain("id={adminMatchRowId(m.id)}");

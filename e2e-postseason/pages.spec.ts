@@ -276,6 +276,10 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
       .getByText(/Use Return to regular season so the existing bracket/i)
       .first(),
   ).toBeVisible();
+  await expectNoHorizontalOverflow(page, "/admin phase control mid-playoffs");
+
+  // Schedule & results and Playoffs are on Matches.
+  await page.goto("/admin/matches");
   await expect(
     page.getByRole("button", { name: "Regenerate schedule", exact: true }),
   ).toHaveCount(0);
@@ -308,6 +312,10 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
       exact: true,
     }),
   ).toBeEnabled();
+  await expectNoHorizontalOverflow(page, "/admin/matches postseason controls");
+
+  // The handoff is on Season, locked until a champion is crowned.
+  await page.goto("/admin/season");
   await expect(
     page.getByRole("button", { name: "Open signups" }),
   ).toHaveCount(0);
@@ -316,7 +324,7 @@ test("postseason admin controls expose only safe phase and bracket recovery", as
   await expect(
     page.getByText("Need to cancel this unfinished season?", { exact: true }),
   ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/admin postseason controls");
+  await expectNoHorizontalOverflow(page, "/admin/season postseason handoff");
 
   assertNoErrors();
 });
@@ -690,7 +698,7 @@ test("after the final, Home says what's next and the champion's page shows the t
 
   // An admin sets the next season's signup date on the handoff card.
   await page.goto(
-    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin/season",
   );
   const when = new Date(Date.now() + 21 * 24 * 60 * 60 * 1000);
   const pad = (n: number) => String(n).padStart(2, "0");
@@ -713,7 +721,7 @@ test("after the final, Home says what's next and the champion's page shows the t
   await expectNoHorizontalOverflow(page, "/ complete with the next date");
 
   // Clearing it puts "coming soon" back.
-  await page.goto("/admin");
+  await page.goto("/admin/season");
   await page.getByRole("button", { name: "Clear date" }).click();
   await expect(
     page.getByText("Next season's date cleared: Home says coming soon"),
@@ -739,7 +747,7 @@ test("playoff matches link the league stream an admin sets", async ({
   ).toHaveCount(0);
 
   await page.goto(
-    "/api/auth/dev?name=Stream%20Admin&steamId=76561190000994001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Stream%20Admin&steamId=76561190000994001&admin=1&redirect=/admin/discord",
   );
   await page.locator("#adm-stream summary").click();
   await page.getByLabel("Stream link").fill("https://www.twitch.tv/ggd2l");
@@ -813,7 +821,7 @@ test("playoff matches link the league stream an admin sets", async ({
   await expectNoHorizontalOverflow(page, "/schedule live stream link");
 
   // Removing the link takes it off every match.
-  await page.goto("/admin");
+  await page.goto("/admin/discord");
   await page.locator("#adm-stream summary").click();
   await page.getByRole("button", { name: "Remove stream link" }).click();
   await expect(
@@ -834,11 +842,11 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto(
-    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin",
+    "/api/auth/dev?name=Handoff%20Admin&steamId=76561190000993001&admin=1&redirect=/admin/season",
   );
 
-  // Once the champion is crowned, the handoff leads the page: one form to
-  // open the next season, prefilled and stating what carries over.
+  // Once the champion is crowned, the handoff on Season is open: one form
+  // to open the next season, prefilled and stating what carries over.
   await expect(
     page.getByRole("heading", { name: "Season handoff", exact: true }),
   ).toBeVisible();
@@ -850,11 +858,6 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     page.getByText(/Carried over from Season 9 \(fixture\):/),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Open signups" })).toBeVisible();
-  // The finished season's own cards fold into one record section.
-  await expect(
-    page.getByRole("heading", { name: "Season 9 (fixture) record" }),
-  ).toBeVisible();
-  await expect(page.locator("#adm-record")).not.toHaveAttribute("open", "");
   // Archiving without opening the next season is folded away, for
   // reactivating an older season.
   await expect(
@@ -942,7 +945,10 @@ test("admin can enter a real offseason, browse it, and open the next season", as
     page.getByRole("button", { name: "↩ Reactivate for corrections" }),
   ).toBeEnabled();
 
+  // In the offseason Overview points at Season, which opens the next one.
   await page.goto("/admin");
+  await page.getByRole("link", { name: "Open a new season" }).click();
+  await expect(page).toHaveURL(/\/admin\/season#adm-new-season$/);
   await expect(
     page.getByRole("heading", { name: "Open a new season" }),
   ).toBeVisible();
@@ -950,6 +956,7 @@ test("admin can enter a real offseason, browse it, and open the next season", as
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Open signups" }).click();
   await expect(page.getByText(/Created Season 10 \(audit\)/)).toBeVisible();
+  await page.goto("/admin");
   await expect(
     page.getByText(/Season 10 \(audit\) — phase control/),
   ).toBeVisible();

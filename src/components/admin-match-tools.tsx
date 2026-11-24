@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import type { Prisma } from "@prisma/client";
 import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
@@ -1274,7 +1275,7 @@ export async function AdminMatchTools({
           ) : null}
           <p className="text-xs">
             <Link
-              href={`/admin#${adminMatchRowId(match.id)}`}
+              href={adminHref(adminMatchRowId(match.id))}
               className={textLink()}
             >
               Open this match in the admin panel <LinkArrow />

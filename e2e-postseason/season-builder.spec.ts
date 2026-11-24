@@ -54,7 +54,7 @@ test("an admin lays out a thirteen-team season, generates it and moves only the 
   const assertNoErrors = trackPageErrors(page);
   const assertNoHydrationErrors = trackHydrationErrors(page);
   page.on("dialog", (dialog) => dialog.accept());
-  await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin#adm-schedule")}`);
+  await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin/matches#adm-schedule")}`);
 
   const builder = page.getByRole("region", { name: "Season builder" });
   await expect(builder.getByRole("heading", { name: "Season builder · 13 teams" })).toBeVisible();

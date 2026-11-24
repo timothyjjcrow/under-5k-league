@@ -1,5 +1,5 @@
+import { AdminTabs } from "@/components/admin/admin-frame";
 import type { ReactNode } from "react";
-import Link from "@/components/app-link";
 import { notFound, redirect } from "next/navigation";
 import { getSessionUser } from "@/lib/auth";
 import { singleSearchParam } from "@/lib/search-params";
@@ -24,7 +24,6 @@ import {
   SectionTitle,
   StatCell,
   StatStrip,
-  buttonClasses,
 } from "@/components/ui";
 
 export const metadata = { title: "League health" };
@@ -51,15 +50,12 @@ export default async function LeagueHealthPage({
   // ?season= wins and an unknown id is a 404; without one, the active
   // season, else the most recent.
   const season = await resolveSeasonScope(seasonParam);
-  const back = (
-    <Link href="/admin" className={buttonClasses("secondary", "sm")}>
-      Back to admin
-    </Link>
-  );
+  const tabs = <AdminTabs active="system" />;
   if (!season) {
     return (
       <div className="space-y-6">
-        <PageTitle title="League health" action={back} />
+        <PageTitle title="League health" />
+        {tabs}
         <EmptyState
           title="No seasons yet"
           description="League health counts a season's signups, check-ins, standins and Discord posts once the first season is open."
@@ -81,8 +77,8 @@ export default async function LeagueHealthPage({
       <PageTitle
         title="League health"
         subtitle={`${season.name} · ${day(range.start)} to ${range.next ? day(range.end) : "today"}`}
-        action={back}
       />
+      {tabs}
       <p className="text-sm text-muted">
         Counts from this league&apos;s database, to compare seasons and spot
         trends. Nothing here names a player or changes anything.

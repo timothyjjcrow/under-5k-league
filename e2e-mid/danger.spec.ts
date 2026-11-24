@@ -20,7 +20,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 async function openWithdrawDialog(page: import("@playwright/test").Page) {
-  await page.goto("/admin");
+  // Captains & draft, which holds Withdraw team, is on the Season tab.
+  await page.goto("/admin/season");
   await page
     .getByText("🏳️ A team has quit the season", { exact: true })
     .click();
