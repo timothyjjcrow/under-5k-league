@@ -153,8 +153,7 @@ async function changeImportCandidate(
   }
 
   updateTag(AUTOMATION_GATE_TAG);
-  revalidatePath("/admin");
-  revalidatePath("/admin/activity");
+  revalidatePath("/admin", "layout");
   return {
     message: intent === "ignore"
       ? "Game excluded from automatic import. The reason is saved in admin history."

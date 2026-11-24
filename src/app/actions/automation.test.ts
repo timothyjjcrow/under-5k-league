@@ -73,7 +73,7 @@ describe("runMaintenanceNow", () => {
       summary: expect.stringContaining("completed: SUCCEEDED"),
       actor: ADMIN,
     });
-    expect(revalidatePath).toHaveBeenCalledWith("/admin");
+    expect(revalidatePath).toHaveBeenCalledWith("/admin", "layout");
     expect(updateTag).toHaveBeenCalledOnce();
     expect(updateTag).toHaveBeenCalledWith("automation-gate:v17");
     expect(result).toEqual({
@@ -88,7 +88,7 @@ describe("runMaintenanceNow", () => {
 
     expect(updateTag).toHaveBeenCalledWith("games");
     expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
-    expect(revalidatePath).toHaveBeenCalledWith("/admin");
+    expect(revalidatePath).toHaveBeenCalledWith("/admin", "layout");
     expect(result).toEqual({
       message: "Maintenance finished successfully — 2 games imported.",
     });

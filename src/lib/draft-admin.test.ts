@@ -172,16 +172,20 @@ describe("every Undo last sale form posts the sale its confirm names", () => {
     .filter((f) => f.code.includes("undoSaleConfirm("));
   const formCode = (path: string) =>
     forms.find((f) => f.path === path)?.code ?? "";
+  // /admin's form lives in one of its card files; which one may change.
+  const adminForms = forms.filter((f) =>
+    /^src\/(?:app|components)\/admin\//.test(f.path),
+  );
 
   it("finds both Undo surfaces (guard is not vacuous)", () => {
-    expect(forms.map((f) => f.path).sort()).toEqual([
-      "src/app/admin/page.tsx",
-      "src/components/draft-room.tsx",
-    ]);
+    expect(adminForms).toHaveLength(1);
+    expect(forms.map((f) => f.path).sort()).toEqual(
+      [adminForms[0].path, "src/components/draft-room.tsx"].sort(),
+    );
   });
 
   it("/admin names and posts the row undoSaleTarget picks", () => {
-    const src = formCode("src/app/admin/page.tsx");
+    const src = adminForms[0]?.code ?? "";
     expect(src).toContain("undoSaleTarget(");
     expect(src).toMatch(
       /expectedSaleMembershipId: lastAuctionSale\.membershipId/,

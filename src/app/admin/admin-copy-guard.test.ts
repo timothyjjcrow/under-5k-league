@@ -2,9 +2,12 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, expect } from "vitest";
 import {
+  adminPageFiles,
+  declarationSource,
   folderSourceFiles,
   haystackOf,
   sourceFiles,
+  stripLineComments,
 } from "../../../test/support/source-files";
 import { START_REGULAR_SEASON } from "../../lib/admin-next-step";
 import { adminMatchRowId } from "../../lib/match-anchors";
@@ -27,6 +30,14 @@ import { adminMatchRowId } from "../../lib/match-anchors";
  */
 const ROOT = join(__dirname, "..", "..", "..");
 const read = (p: string) => readFileSync(join(ROOT, p), "utf8");
+
+/**
+ * The admin page: its route file and the card files beside it
+ * (adminPageFiles), joined, and one card or helper by name wherever it lives.
+ */
+const ADMIN_PAGE = adminPageFiles();
+const adminPage = haystackOf(ADMIN_PAGE);
+const declaration = (name: string) => declarationSource(ADMIN_PAGE, name);
 
 /**
  * Every file that RENDERS an admin control: each page under /admin and the
@@ -209,7 +220,7 @@ describe("admin copy names only controls that exist", () => {
   // pins that the signup list actually hands it the season's limit, or the
   // flag silently never fires and the hint points at an empty review.
   it("the signup review reads the season's soft MMR limit", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     expect(page).toContain("regSignupFlags(p, season.maxMmr)");
     expect(page).toContain("<AdminSignupReview");
     expect(page.match(/maxMmr=\{season\.maxMmr\}/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
@@ -221,8 +232,7 @@ describe("admin copy names only controls that exist", () => {
   // signupRemovalBlockers is unit-tested; this pins that both remove forms
   // sit behind it, and that the confirms no longer describe the refusal.
   it("the signup lists offer remove only where withdrawSignup can take it", () => {
-    const page = read("src/app/admin/page.tsx");
-    const card = page.slice(page.indexOf("function CaptainControls("));
+    const card = declaration("CaptainControls");
     expect(card).toMatch(
       /const removalBlockers = signupRemovalBlockers\(\{\s*teams: data\.teams,\s*assignments: data\.assignments,\s*matches: data\.matches,\s*\}\)/,
     );
@@ -248,11 +258,8 @@ describe("admin copy names only controls that exist", () => {
   // disclosure, and both lists render through the same StandinMatchBlock
   // the match page's Admin tools card uses (admin-match-tools.tsx).
   it("the any-team standin booking stays reachable from the Standins card", () => {
-    const page = read("src/app/admin/page.tsx");
-    const card = page.slice(
-      page.indexOf("function StandinControls("),
-      page.indexOf("function AutomationTimestamp("),
-    );
+    // Comments quote the label too; only the rendered one counts.
+    const card = stripLineComments(declaration("StandinControls"));
     expect(card).toContain('"Assign any match"');
     expect(card).toContain("{problems.map(block)}");
     expect(card).toContain("{wkMatches.map(block)}");
@@ -268,11 +275,8 @@ describe("admin copy names only controls that exist", () => {
   // stuck game holds every feed import. leagueFeedWaitText and the attention
   // line are unit-tested; these pin that /admin actually shows them.
   it("the admin page names the feed games automatic feed imports wait on", () => {
-    const page = read("src/app/admin/page.tsx");
-    const card = page.slice(
-      page.indexOf("async function AutoSyncHealth("),
-      page.indexOf("function LeagueControls("),
-    );
+    const page = adminPage;
+    const card = declaration("AutoSyncHealth");
     expect(card).toContain("loadLeagueFeedWaiting(season.id)");
     expect(card).toContain("{leagueFeedWaitText(feedWaiting)}");
     expect(page).toContain("loadLeagueFeedWaiting(seasonId),");
@@ -305,11 +309,8 @@ describe("admin copy names only controls that exist", () => {
   // the collapsed settings section (a weekly people task, not configuration)
   // and render only inside its own streamed card.
   it("the reach funnel renders in its own card, not the Discord settings", () => {
-    const page = read("src/app/admin/page.tsx");
-    const controls = page.slice(
-      page.indexOf("function DiscordControls("),
-      page.indexOf("\n}\n", page.indexOf("function DiscordControls(")),
-    );
+    const page = adminPage;
+    const controls = declaration("DiscordControls");
     expect(controls).not.toContain("DiscordReachLine");
     expect(controls).not.toContain("ChaseCopy");
     expect(page).toContain("<DiscordReachCard\n          seasonId={season.id}");
@@ -321,7 +322,7 @@ describe("admin copy names only controls that exist", () => {
   // (it also lists every other unlinked signup), so the admin can find the
   // people the count is about.
   it("the reach card names the people Needs attention counts", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     expect(page).toContain(
       "rosterUnlinked={data ? unlinkedRosterFor(season, data) : null}",
     );
@@ -377,7 +378,7 @@ describe("admin copy names only controls that exist", () => {
   // the anchor and the jump-bar entry — otherwise it scrolls to a shut
   // disclosure, or nowhere.
   it("every in-page #adm- link lands on a section the jump bar can open", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     const targets = [
       ...new Set([...page.matchAll(/href="#(adm-[a-z-]+)"/g)].map((m) => m[1])),
     ];
@@ -396,7 +397,7 @@ describe("admin copy names only controls that exist", () => {
   // the anchor must exist and be in the jump bar, or the hash lands on a shut
   // section or nowhere.
   it("every next-step link lands on a section the jump bar can open", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     const nextStep = read("src/lib/admin-next-step.ts");
     const targets = [
       ...new Set(
@@ -418,7 +419,7 @@ describe("admin copy names only controls that exist", () => {
   // drops the link when that section is not in this render's jump bar, so a
   // target that is NEVER in it would read as a line with no way to act.
   it("every Needs attention link lands on a section the jump bar can open", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     const attention = read("src/lib/admin-attention.ts");
     const targets = [
       ...new Set(
@@ -444,14 +445,11 @@ describe("admin copy names only controls that exist", () => {
   // buttons, Assign any match and a news post's Edit form. On /admin only a
   // folded AdminSection opens with a jump.
   it("a jump opens only a folded section, never a card's own disclosures", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     const nav = read("src/components/section-nav.tsx");
     expect(page).toContain('openNested="marked"');
     expect(nav).toContain('"details[data-section-jump]"');
-    const adminSection = page.slice(page.indexOf("function AdminSection("));
-    expect(adminSection.slice(0, adminSection.indexOf("\n}\n"))).toContain(
-      "data-section-jump",
-    );
+    expect(declaration("AdminSection")).toContain("data-section-jump");
     // AdminSection is the only element that carries the attribute.
     expect(page.match(/^\s*data-section-jump$/gm)).toHaveLength(1);
   });
@@ -460,7 +458,7 @@ describe("admin copy names only controls that exist", () => {
   // cards disagree on order, that highlight jumps backwards while the admin
   // scrolls down, and the bar misdescribes the page.
   it("the jump bar lists sections in the order the page renders them", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = declaration("AdminPage");
     const barStart = page.indexOf("const jumpItems");
     const bar = page.slice(barStart, page.indexOf("\n  ];\n", barStart));
     const body = page.slice(page.indexOf("return (", barStart));
@@ -507,7 +505,7 @@ describe("admin copy names only controls that exist", () => {
         true,
       );
     }
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     expect(page).toContain("href={`#adm-match-${item.id}`}");
     // The row takes its id as a prop (the match page renders the same row
     // without one), and adminMatchRowId is the one place the prefix lives.
@@ -519,13 +517,13 @@ describe("admin copy names only controls that exist", () => {
   // The start-of-season step quotes the phase button by name. The label is
   // phaseAdvance's, so the check is that both pages render that name.
   it("the start-of-season step names the button the phase card and draft room render", () => {
-    expect(read("src/app/admin/page.tsx")).toContain("{advance.label}");
+    expect(adminPage).toContain("{advance.label}");
     expect(read("src/app/draft/page.tsx")).toContain(START_REGULAR_SEASON);
   });
 
   // The missing-ticket warning is only worth anything if the page wires it.
   it("the page renders the missing-ticket warning from the next step", () => {
-    const page = read("src/app/admin/page.tsx");
+    const page = adminPage;
     expect(page).toContain("hasLeagueTicket: !!season.dotaLeagueId");
     expect(page).toContain("nextStep.ticketWarning");
   });
@@ -535,8 +533,8 @@ describe("admin copy names only controls that exist", () => {
   // Playoffs card once printed every unplayed fixture ("3 still needed")
   // beside the others' "1 outstanding".
   it("the Playoffs card counts missing results from kickoff, like the others", () => {
-    const page = read("src/app/admin/page.tsx");
-    const card = page.slice(page.indexOf("function PlayoffControls("));
+    const page = adminPage;
+    const card = declaration("PlayoffControls");
     expect(card).toContain(
       "const dueRegular = regularSeasonStatus(regularResultsDue(data.matches, nowMs));",
     );
@@ -554,11 +552,7 @@ describe("admin copy names only controls that exist", () => {
   // Discord" to this card. With rosters but no active signups the card used
   // to answer "Nobody has signed up" and never name them.
   it("the Discord reach card names the unlinked roster Needs attention counts", () => {
-    const page = read("src/app/admin/page.tsx");
-    const card = page.slice(
-      page.indexOf("async function DiscordReachCard("),
-      page.indexOf("function DiscordReachLine("),
-    );
+    const card = declaration("DiscordReachCard");
     const noSignups = card.indexOf("Nobody has signed up for this season yet.");
     const rosterBranch = card.indexOf("rosterUnlinked && rosterUnlinked.length > 0 ? (");
     expect(rosterBranch).toBeGreaterThan(-1);

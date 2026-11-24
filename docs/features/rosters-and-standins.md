@@ -137,7 +137,8 @@ in `src/app/matches/[id]/`.
 - **Record roster tenure in the winning transaction:** `captureRosterTenure` on a
   signing, `closeRosterTenure` on a release (`src/lib/roster-history.ts`).
 - **The admin Roster moves card shows only forms that would work**
-  (`rosterMovesVisible`, `RosterMoves` in `src/app/admin/page.tsx`): sign needs a
+  (`rosterMovesVisible` in `src/components/admin/season-admin-rules.ts`,
+  `RosterMoves` in `src/components/admin/roster-moves.tsx`): sign needs a
   short team and a free agent, release a rostered non-captain, promote an
   unrostered STANDIN. DRAFT before the auction shows only Promote; a live auction
   hides the card. `shortTeams` (`admin-attention.ts`) skips withdrawn teams,

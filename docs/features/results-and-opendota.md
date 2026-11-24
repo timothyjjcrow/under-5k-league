@@ -266,7 +266,7 @@ Captain report, admin import, league feed and roster scan all end in
   Test: "a slow OpenDota costs the pass one lookup" in `result-sync.itest.ts`.
 - **Show the backoff.** A match in backoff looks exactly like "no games yet",
   so the admin "Automatic result sync" card (`AutoSyncHealth`,
-  `src/app/admin/page.tsx`) shows each in-window match's last scan, empty-scan
+  `src/components/admin/auto-sync-health.tsx`) shows each in-window match's last scan, empty-scan
   count and next check (pure `autoCheckStatus`/`autoCheckCopy`/
   `nextRosterScanAt`, tested), the feed throttle, the cursor, how many feed
   games the last pass set aside (`IGNORED` candidates with a

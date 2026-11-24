@@ -34,6 +34,7 @@ describe("public champion presentation wiring", () => {
     ).filter(
       (f) =>
         !f.path.startsWith("src/app/admin/") &&
+        !f.path.startsWith("src/components/admin/") &&
         !f.path.startsWith("src/components/admin-"),
     );
     // Four public <Bracket> call sites today (the dashboard has two, then

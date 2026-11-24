@@ -159,7 +159,7 @@ describe("news admin actions", () => {
     expect(vi.mocked(revalidatePath).mock.calls).toEqual([
       ["/"],
       ["/news"],
-      ["/admin"],
+      ["/admin", "layout"],
     ]);
     const audit = await prisma.adminAction.findFirstOrThrow();
     expect(audit).toMatchObject({

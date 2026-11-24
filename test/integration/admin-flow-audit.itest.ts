@@ -94,7 +94,13 @@ import {
   sessionFor,
   startDraftState,
 } from "./factories";
-import { sourceFile, stripLineComments } from "../support/source-files";
+import {
+  adminPageFiles,
+  declarationSource,
+  haystackOf,
+  sourceFile,
+  stripLineComments,
+} from "../support/source-files";
 
 const fd = (o: Record<string, string>) => {
   const f = new FormData();
@@ -930,7 +936,10 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
   // and log count them: standin-request-teardown.itest.ts), so the confirm
   // has to say so BEFORE the click, beside the bookings it already names.
   it("states the waiting standin requests it cancels in both Regenerate confirms on /admin", () => {
-    const page = stripLineComments(sourceFile("src/app/admin/page.tsx").text);
+    const page = stripLineComments(haystackOf(adminPageFiles()));
+    const card = stripLineComments(
+      declarationSource(adminPageFiles(), "ScheduleControls"),
+    );
     // Counted per render from the PENDING requests the page already loads,
     // on the regular-season fixtures only.
     expect(page).toMatch(/collateral: \{[^}]*\brequests\b[^}]*\}/);
@@ -942,9 +951,9 @@ describe("generateSchedule — the collateral must be named, not silent", () => 
     // One list of what a rebuild destroys, handed to both confirms that
     // rebuild: the season builder's Regenerate schedule and the format box's
     // Swap teams. The builder's Regenerate spreads it into its consequences.
-    const list = page.slice(page.indexOf("const regenerateConsequences = ["));
+    const list = card.slice(card.indexOf("const regenerateConsequences = ["));
     expect(list.slice(0, list.indexOf("];")).split(line).length - 1).toBe(1);
-    expect(page.match(/regenerateConsequences=\{regenerateConsequences\}/g)).toHaveLength(2);
+    expect(card.match(/regenerateConsequences=\{regenerateConsequences\}/g)).toHaveLength(2);
     const builder = stripLineComments(
       sourceFile("src/components/admin/season-format-builder.tsx").text,
     );

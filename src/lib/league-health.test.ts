@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import ts from "typescript";
-import { sourceFile } from "../../test/support/source-files";
+import {
+  adminPageSource,
+  sourceFile,
+} from "../../test/support/source-files";
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 import { announcementDedupeKey } from "./announcement-marker";
 import { checkinNudgeAnnouncementGroup } from "./availability";
@@ -605,7 +608,7 @@ describe("the /admin/health page", () => {
   });
 
   it("is linked from the admin page, beside the imported-game check", () => {
-    const admin = sourceFile("src/app/admin/page.tsx").text;
+    const admin = adminPageSource();
     const quality = admin.indexOf("Check imported-game quality <LinkArrow />");
     const health = admin.indexOf("href={`/admin/health?season=${season.id}`}");
     expect(quality).toBeGreaterThan(0);

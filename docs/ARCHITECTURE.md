@@ -1171,8 +1171,11 @@ above, and POST is not implemented.
 
 ## 8. Admin tools
 
-`/admin` (`src/app/admin/page.tsx`) is a set of anchored cards behind a sticky jump
-bar, with the set-once cards collapsed as `<details>` and the three slow cards
+`/admin` is a set of anchored cards behind a sticky jump bar. The route file
+(`src/app/admin/page.tsx`) loads the season and picks the cards' order; each card
+lives in its own file in `src/components/admin/`, over the shared loader
+(`season-admin-data.ts`) and visibility predicates (`season-admin-rules.ts`).
+Set-once cards are collapsed as `<details>`, and the three slow cards are
 Suspense-streamed. An `adminNextStep` banner (`src/lib/admin-next-step.ts`,
 pure, tested) says what to do next per phase — it exists because several
 transitions are silent (notably DRAFT→REGULAR_SEASON). Confirmation tiers:
