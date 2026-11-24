@@ -7,7 +7,7 @@ import {
   getDiscordReachFunnel,
 } from "@/lib/discord-roles";
 
-// The Start-draft button, shared by the Captains & draft card on /admin and
+// The Start-draft button, shared by the Draft card on /admin/season and
 // the draft room's waiting room. Both render THIS form over the same
 // startDraft server action, with the confirm built by startDraftConfirm
 // (draft-setup.ts) plus the Discord line below, so the start guards and the

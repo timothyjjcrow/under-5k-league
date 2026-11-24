@@ -87,7 +87,7 @@ describe("adminNextStep — unverified captain MMR", () => {
       "Also: Ana, Bo have unverified MMR that sets draft budgets.",
     );
     expect(s.detail).toContain(
-      "Check each with Edit medal & MMR on the Captains & draft card first",
+      "Check each with Edit medal & MMR on the Teams card (People) first",
     );
     const one = at({ ...ready, unverifiedCaptainMmrNames: ["Ana"] });
     expect(one.detail).toContain("Ana has unverified MMR");
@@ -571,12 +571,17 @@ describe("adminNextStep — league ticket", () => {
 // every step that asks for something links to the card that holds it.
 describe("adminNextStep — links to the control", () => {
   it("points each action at the card that holds its control", () => {
+    // Captains are made in Signups; the auction starts on the Draft card.
     expect(at({ playerCount: 10, minPlayers: 10 }).jump?.href).toBe(
-      "#adm-captains",
+      "#adm-signups",
     );
     expect(
       at({ playerCount: 10, minPlayers: 10, teamCount: 4 }).jump?.href,
-    ).toBe("#adm-captains");
+    ).toBe("#adm-draft");
+    expect(
+      at({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus: DRAFT_STATUS.PAUSED })
+        .jump?.href,
+    ).toBe("#adm-draft");
     expect(
       at({ seasonStatus: SEASON_STATUS.DRAFT, draftStatus: DRAFT_STATUS.IN_PROGRESS })
         .jump?.href,

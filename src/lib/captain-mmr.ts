@@ -73,7 +73,7 @@ export type UnverifiedCaptainMmr = {
   teamId: string;
   name: string;
   problem: CaptainMmrProblem;
-  /** One line for the captain's row on the Captains & draft card. */
+  /** One line for the captain's row on the admin Teams card. */
   reason: string;
   /** A few words for the Start-draft confirm, where every captain shares a line. */
   short: string;

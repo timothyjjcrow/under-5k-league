@@ -83,7 +83,7 @@ export default async function DraftPage() {
   }
 
   // Admins get Start draft in the waiting room: the same form, action and
-  // confirm as /admin's Captains & draft card (see admin-start-draft.tsx),
+  // confirm as the admin Draft card (see admin-start-draft.tsx),
   // loaded only for them and only while there is something to start. Once
   // the auction is finished, the room offers them the next step instead.
   const user = await getSessionUser();

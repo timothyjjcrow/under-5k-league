@@ -10,7 +10,11 @@ export function LeagueControls({ season }: { season: Season }) {
     <AdminSection
       id="adm-league"
       title="Dota league integration"
-      subtitle="Link a Valve league id to auto-import every league game."
+      subtitle={
+        season.dotaLeagueId
+          ? `League id ${season.dotaLeagueId}: league games import automatically.`
+          : "No league id yet. Link a Valve league id to auto-import every league game."
+      }
     >
       <CardBody className="space-y-3">
         {/* The manual sync used to hang off the card header. It can't ride the
@@ -94,9 +98,9 @@ export function LeagueControls({ season }: { season: Season }) {
           a few games imported before those were stored. It pauses when
           OpenDota refuses a
           request and while an auction is live. To refresh right away, use
-          the Refresh player data now button in{" "}
-          <a href="#adm-captains" className={textLink()}>
-            Captains &amp; draft
+          the Refresh player data now button on the{" "}
+          <a href="#adm-draft" className={textLink()}>
+            Draft card
           </a>
           .
         </p>

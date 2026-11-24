@@ -1,7 +1,7 @@
 import { DRAFT_STATUS, SEASON_STATUS } from "./constants";
 
 // The admin's live-draft controls, shared by the draft room's admin bar and the
-// Captains & draft card on /admin. Both surfaces offer the same Pause / Resume /
+// Draft card on /admin/season. Both surfaces offer the same Pause / Resume /
 // Void / Undo actions, and their confirm texts had drifted apart: the room's
 // Undo only named the sale, while /admin warned that undoing a FINISHED
 // auction puts every captain back on a live nomination clock. One definition

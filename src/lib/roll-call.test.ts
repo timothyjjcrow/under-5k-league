@@ -120,7 +120,7 @@ describe("rollCallLive and rollCallCannotOpen", () => {
     expect(rollCallCannotOpen({ status: "SIGNUPS", night, pollDecidesNight: false })).toBeNull();
     expect(rollCallCannotOpen({ status: "SIGNUPS", night, pollDecidesNight: true })).toMatch(/poll/);
     expect(rollCallCannotOpen({ status: "DRAFT", night: null, pollDecidesNight: false })).toMatch(
-      /Season settings/,
+      /Settings on the Season tab/,
     );
   });
 });

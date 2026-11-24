@@ -39,7 +39,8 @@ admin actions in `src/app/actions/admin-season.ts`, `admin-schedule-results.ts`,
   weeks) and every layout that fits the count (`formatAlternatives`). It judges
   with the same functions the actions use, so the preview can't promise a
   season the schedule won't build. During signups and the draft it is the
-  Season format card between Phase and Captains & draft, saving only, with a
+  Season format card on the admin Season tab (open until a layout is saved,
+  then folded to that layout's line, and folded from the auction on), saving only, with a
   preview count to try other captain counts; once the schedule card shows it
   moves into Schedule & results with First match night and Generate (only
   one builder renders). It is keyed by the stored format and the schedule

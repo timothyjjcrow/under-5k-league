@@ -188,7 +188,7 @@ section on `/admin`). Models: `MatchNightPoll`, `MatchNightBallot`.
   with the action) reads sent; the button used to stay, and a second press
   was refused. The close toast names the winner.
 - **"Use as the season's match night" reuses `setMatchSchedule`** and fills
-  the Match night box under Season settings. It never moves fixtures; when
+  the Match night box in Settings on the Season tab. It never moves fixtures; when
   fixtures already have kickoffs the card says pages show their night and
   points at Move a match night.
 - **Delete is a `DangerSubmit`** whose token is the poll's question, checked

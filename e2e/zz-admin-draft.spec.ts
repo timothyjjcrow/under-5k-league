@@ -47,10 +47,10 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(capTwoPage.getByText("Playing").first()).toBeVisible();
 
   await page.goto(
-    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
+    "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/people",
   );
-  // Captains & draft is on the Season tab. exact: a loose "Admin" matches
-  // other headings too, and resolves to several under strict mode.
+  // Captains are made in Signups, on the People tab. exact: a loose "Admin"
+  // matches other headings too, and resolves to several under strict mode.
   await expect(
     page.getByRole("heading", { name: "Admin", exact: true }),
   ).toBeVisible();
@@ -167,8 +167,8 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
       .getByText("in room", { exact: true }),
   ).toBeVisible();
   await expect(
-    page.getByRole("link", { name: "Captains & draft setup on the admin panel" }),
-  ).toHaveAttribute("href", "/admin/season#adm-captains");
+    page.getByRole("link", { name: "Draft setup on the admin panel" }),
+  ).toHaveAttribute("href", "/admin/season#adm-draft");
   await page.getByRole("button", { name: "Start draft" }).click();
 
   // The parked player's page flips live via its own poll — NO reload.
@@ -206,7 +206,7 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   ).toHaveCount(0);
   await expect(
     page.getByRole("link", { name: "More controls" }),
-  ).toHaveAttribute("href", "/admin/season#adm-captains");
+  ).toHaveAttribute("href", "/admin/season#adm-draft");
 
   // --- The live auction, driven from the captains' own browsers ------------
 
@@ -421,8 +421,8 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   // Back on the admin panel the draft is locked: no re-run button (a re-run
   // would reset budgets over drafted rosters), no captain management — just
   // the way into the live room, plus the night-of controls.
-  // Both the next step on Overview and the Captains & draft card on Season
-  // lead into the live room.
+  // Both the next step on Overview and the Draft card on Season lead into
+  // the live room, the Draft card first of all.
   await page.goto("/admin");
   await expect(page.getByRole("link", { name: "Open the draft room" })).toHaveAttribute(
     "href",
@@ -433,9 +433,6 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(room).toBeVisible();
   await expect(room).toHaveAttribute("href", "/draft");
   await expect(page.getByRole("button", { name: "Start draft" })).toHaveCount(
-    0,
-  );
-  await expect(page.getByRole("button", { name: "make captain" })).toHaveCount(
     0,
   );
   await expect(
@@ -450,5 +447,13 @@ test("admin runs draft night: captains nominate, bid, and get outbid in the brow
   await expect(
     page.getByRole("button", { name: "Undo last sale" }),
   ).toHaveCount(0);
+  // Captain management, on People, is locked with it.
+  await page.goto("/admin/people");
+  await expect(
+    page.getByRole("heading", { name: "Signups", level: 2 }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "make captain" })).toHaveCount(
+    0,
+  );
   assertAdminErrors();
 });

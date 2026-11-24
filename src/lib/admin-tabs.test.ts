@@ -34,7 +34,8 @@ describe("the admin tabs", () => {
 describe("adminHref", () => {
   it("links a card on the tab that renders it, with or without the #", () => {
     expect(adminHref("#adm-standins")).toBe("/admin/matches#adm-standins");
-    expect(adminHref("adm-captains")).toBe("/admin/season#adm-captains");
+    expect(adminHref("adm-draft")).toBe("/admin/season#adm-draft");
+    expect(adminHref("adm-signups")).toBe("/admin/people#adm-signups");
     expect(adminHref("adm-attention")).toBe("/admin#adm-attention");
     expect(adminHref(MEDAL_APPROVALS_ANCHOR)).toBe("/admin/people#adm-medal-approvals");
   });
@@ -48,6 +49,11 @@ describe("adminHref", () => {
   it("lands the one-page admin's retired anchors on the card that took over", () => {
     expect(adminHref("playoffs")).toBe("/admin/matches#adm-playoffs");
     expect(adminHref("adm-record")).toBe("/admin/matches#adm-schedule");
+    // Captains & draft split into Draft (Season) and Teams and Signups
+    // (People); an old link lands on the auction, and the phase card's
+    // settings fold on the Settings card.
+    expect(adminHref("adm-captains")).toBe("/admin/season#adm-draft");
+    expect(adminHref("adm-season-settings")).toBe("/admin/season#adm-settings");
   });
 
   it("passes a path through, like the next step's draft room link", () => {

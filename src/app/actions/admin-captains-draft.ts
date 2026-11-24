@@ -3,7 +3,7 @@
 // Admin actions for captains and the draft: add, remove, change and transfer
 // captains, the draft order, draft night, starting the auction and the
 // draft-night controls (pause, resume, undo a sale, void a lot, abort), plus
-// the "Sync ranks & stats" refresh on the Captains & draft card.
+// the "Sync ranks & stats" refresh on the admin Draft card.
 
 import { updateTag } from "next/cache";
 import { AUTOMATION_GATE_TAG } from "@/lib/automation-gate-constants";

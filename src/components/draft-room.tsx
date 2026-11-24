@@ -1461,7 +1461,7 @@ export function DraftRoom({
             </Link>
             {me.isAdmin && !adminStart ? (
               <Link
-                href={adminHref("adm-captains")}
+                href={adminHref("adm-draft")}
                 className={buttonClasses("accent", "sm")}
               >
                 Start it from the admin panel →
@@ -1469,7 +1469,7 @@ export function DraftRoom({
             ) : null}
           </div>
           {/* Admins start the auction right here: the same Start draft form
-              as the Captains & draft card (same action, same confirm), so a
+              as the admin Draft card (same action, same confirm), so a
               phone on draft night doesn't have to dig through /admin. The
               rest of setup stays one link away, on that card. */}
           {me.isAdmin && adminStart ? (
@@ -1489,8 +1489,8 @@ export function DraftRoom({
                   Start unavailable: {adminStart.blocker}
                 </p>
               ) : null}
-              <Link href={adminHref("adm-captains")} className={textLink("text-sm")}>
-                Captains &amp; draft setup on the admin panel
+              <Link href={adminHref("adm-draft")} className={textLink("text-sm")}>
+                Draft setup on the admin panel
               </Link>
             </div>
           ) : null}
@@ -2480,7 +2480,7 @@ function DraftAdminToolbar({
           </SubmitButton>
         </ActionForm>
       ) : null}
-      <Link href={adminHref("adm-captains")} className={textLink("text-sm")}>
+      <Link href={adminHref("adm-draft")} className={textLink("text-sm")}>
         More controls
       </Link>
     </section>

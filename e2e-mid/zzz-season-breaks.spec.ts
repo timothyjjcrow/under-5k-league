@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import { expect, test, type Page } from "@playwright/test";
 import { MID_DB_URL } from "../playwright.midseason.config";
-import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
+import { expectNoHorizontalOverflow, openScheduleTools, trackPageErrors } from "./helpers";
 import { matchNightForWeek } from "../src/lib/schedule";
 
 // Breaks (docs/features/season-schedule-playoffs.md#breaks): an admin skips a
@@ -41,6 +41,8 @@ test("an admin adds a break, the season plan shows it, and Remove puts it back",
   await db.season.update({ where: { id: season.id }, data: { firstMatchNight: anchor } });
   try {
     await page.goto(ADMIN);
+    // Breaks are a schedule tool, folded under the weeks.
+    await openScheduleTools(page);
     const box = page.getByRole("region", { name: "Breaks" });
     await expect(box).toContainText("No breaks: the league plays every week.");
     const select = box.getByRole("combobox", { name: "Night to skip" });
@@ -67,6 +69,7 @@ test("an admin adds a break, the season plan shows it, and Remove puts it back",
 
     await page.setViewportSize({ width: 1280, height: 900 });
     await page.goto("/admin/matches");
+    await openScheduleTools(page);
     acceptNextDialog(page);
     await page.getByRole("region", { name: "Breaks" }).getByRole("button", { name: "Remove" }).click();
     await expect(page.getByRole("status").filter({ hasText: "removed" })).toBeVisible();

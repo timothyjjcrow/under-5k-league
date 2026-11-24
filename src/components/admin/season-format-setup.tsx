@@ -2,7 +2,10 @@ import { MATCH_PHASE } from "@/lib/constants";
 import { SeasonFormatBuilder } from "@/components/admin/season-format-builder";
 import { parseBreakDates } from "@/lib/season-breaks";
 import { regularScheduleRevision } from "@/lib/schedule-revision";
-import { Card, CardBody, CardHeader } from "@/components/ui";
+import { CardBody } from "@/components/ui";
+import { knobsLabel } from "@/lib/season-builder";
+import { parseFormatConfig } from "@/lib/season-format";
+import { AdminSection } from "@/components/admin/admin-section";
 import type { AdminData, Season } from "@/components/admin/season-admin-data";
 import { seasonFormatEditState } from "@/components/admin/season-admin-rules";
 import { SeasonBreaks } from "@/components/admin/season-breaks-section";
@@ -11,7 +14,9 @@ import { SeasonBreaks } from "@/components/admin/season-breaks-section";
  * Signups and the draft: the season builder before any fixture exists, so
  * the layout is chosen while the captains (one per team) are picked, not
  * met for the first time after the auction. It only saves here; Generate
- * joins it in Schedule & results once the auction is complete.
+ * joins it in Schedule & results once the auction is complete. Open until a
+ * layout is saved; then it folds to that layout's one line, and it stays
+ * folded from the auction on, when the team count is final.
  */
 export function SeasonFormatSetup({
   season,
@@ -26,13 +31,21 @@ export function SeasonFormatSetup({
   const formatState = seasonFormatEditState(season, data);
   if (formatState.mode === "LOCKED") return null;
   const scheduleRevision = regularScheduleRevision(regularMatches.map((match) => match.id));
+  const stored = parseFormatConfig(season.formatConfig);
+  const summary =
+    stored.kind === "CUSTOM"
+      ? `${knobsLabel(stored.knobs)}. Saved; the schedule is built from it after the auction.`
+      : stored.kind === "UNREADABLE"
+        ? "Saved by a newer version of the site: save a layout here to replace it."
+        : "Recommended for the team count until you save a layout. Save it before the auction; the schedule is built from it afterwards.";
   return (
-    <Card>
-      <CardHeader
-        headingLevel={2}
-        title="Season format"
-        subtitle="How the season runs: one table or two groups, how often teams meet and how many make the playoffs. Save it before the auction; the schedule is built from it afterwards."
-      />
+    <AdminSection
+      id="adm-format"
+      title="Season format"
+      headingLevel={2}
+      subtitle={summary}
+      defaultOpen={stored.kind !== "CUSTOM" && !formatState.countFinal}
+    >
       <CardBody>
         <SeasonFormatBuilder
           placement="setup"
@@ -57,6 +70,6 @@ export function SeasonFormatSetup({
           <SeasonBreaks season={season} data={data} nowMs={nowMs} />
         </div>
       </CardBody>
-    </Card>
+    </AdminSection>
   );
 }

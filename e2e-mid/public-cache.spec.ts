@@ -197,7 +197,7 @@ test("warm public statistics refresh on the first read after real admin correcti
         // this regular-season fixture's /recap just redirects to Leaders.
         scouting: `/matches/${fixture.scoutingId}#match-scouting`,
       };
-      await page.goto(`/api/auth/dev?name=Public+cache+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin/season`);
+      await page.goto(`/api/auth/dev?name=Public+cache+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin/people`);
       await expect(page.getByRole("heading", { name: "Admin", exact: true })).toBeVisible();
       const rename = page.locator("form").filter({ has: page.locator(`input[name="teamId"][value="${fixture.homeId}"]`) })
         .filter({ has: page.locator('input[name="name"]') });

@@ -638,8 +638,7 @@ export function PlayoffControls({
         <p className="text-xs text-muted">
           New tiebreakers use BO1 knockouts, up to three games per team. Existing brackets keep their published format.
           Series lengths for the regular
-          season, playoffs and final are under Season settings on the phase
-          control card.
+          season, playoffs and final are in Settings on the Season tab.
         </p>
       </CardBody>
     </Card>

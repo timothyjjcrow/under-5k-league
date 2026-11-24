@@ -344,7 +344,7 @@ Tested in `test/integration/player-data-refresh.itest.ts`.
   draft room re-reads medals and names every poll. The admin button is hidden
   and refuses then too.
 - **One manual button.** "Refresh player data now" (`refreshPlayerData` in
-  `admin-captains-draft.ts`, Captains & draft card) refreshes Steam names,
+  `admin-captains-draft.ts`, the admin Draft card) refreshes Steam names,
   every active signup's medal, the stalest few scouting snapshots and a few
   games, stopping early if the first batch is all unreachable. Its toast names
   signups whose newly learned medal is above `HARD_MMR_CEILING` and removes

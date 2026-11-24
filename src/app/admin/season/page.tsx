@@ -8,9 +8,9 @@ import { getSetting, SETTING_KEYS } from "@/lib/settings";
 import { CardSkeleton } from "@/components/ui";
 import { loadAdminContext } from "@/components/admin/admin-context";
 import { AdminFrame, AdminGateScreen } from "@/components/admin/admin-frame";
-import { AdminAnchor } from "@/components/admin/admin-section";
+import { SeasonSettings } from "@/components/admin/season-settings";
 import { SeasonFormatSetup } from "@/components/admin/season-format-setup";
-import { CaptainControls } from "@/components/admin/captain-controls";
+import { DraftControls } from "@/components/admin/draft-controls";
 import { AdminRollCall } from "@/components/admin/roll-call-section";
 import { AdminMatchNightPoll } from "@/components/admin/match-night-poll-section";
 import { LeagueControls } from "@/components/admin/league-controls";
@@ -24,9 +24,11 @@ export const maxDuration = 60;
 
 /**
  * Season: setting the season up and handing it over, in the order it
- * happens. The season builder (while captains are picked), Captains & draft,
- * the roll call (signups and the draft), the match night poll, the league
- * id, then the handoff, which is the only card here in the offseason.
+ * happens. Its settings (read first, each with its own Edit), the league
+ * ticket, the season builder (while captains are picked, folded once
+ * saved), the Draft, the roll call (signups and the draft), the match night
+ * poll, then the handoff, which is the only card here in the offseason.
+ * Teams and signups are on People.
  */
 export default async function AdminSeasonPage() {
   const ctx = await loadAdminContext();
@@ -55,16 +57,12 @@ export default async function AdminSeasonPage() {
       : null;
   return (
     <AdminFrame tab="season" counts={ctx.tabCounts}>
+      {season && data ? <SeasonSettings season={season} data={data} /> : null}
+      {season ? <LeagueControls season={season} /> : null}
       {season && data && ctx.formatCard ? (
-        <AdminAnchor id="adm-format">
-          <SeasonFormatSetup season={season} data={data} nowMs={nowMs} />
-        </AdminAnchor>
+        <SeasonFormatSetup season={season} data={data} nowMs={nowMs} />
       ) : null}
-      {season && data && ctx.nextStep ? (
-        <AdminAnchor id="adm-captains">
-          <CaptainControls season={season} data={data} nowMs={nowMs} />
-        </AdminAnchor>
-      ) : null}
+      {season && data ? <DraftControls season={season} data={data} /> : null}
       {season && rollCallPhase(season.status) ? (
         <Suspense fallback={<CardSkeleton rows={3} />}>
           <AdminRollCall />
@@ -79,7 +77,6 @@ export default async function AdminSeasonPage() {
           fixturesNight={data ? fixturesMatchNightLabel(data.matches) : null}
         />
       </Suspense>
-      {season ? <LeagueControls season={season} /> : null}
       {handoffOpen ? (
         <OpenNextSeason
           season={season}

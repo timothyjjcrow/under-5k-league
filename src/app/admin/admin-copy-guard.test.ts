@@ -141,8 +141,9 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Schedule & results", rendered: 'title="Schedule & results"' },
   // The next step sends recovery work to the phase card's disclosure.
   { quoted: "Fix the phase", rendered: "Fix the phase" },
-  // The Playoffs card sends series lengths to the phase card's setup forms.
-  { quoted: "Season settings", rendered: "Season settings" },
+  // The Playoffs card, the roll call and the poll send series lengths and
+  // the match night to the Season tab's Settings card.
+  { quoted: "Settings on the Season tab", rendered: 'title="Settings"' },
   // Reset playoffs and Return to regular season live in this disclosure on
   // the Playoffs card, and the phase card's notes send admins there.
   { quoted: "Fix the bracket", rendered: "Fix the bracket" },
@@ -150,8 +151,12 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Roster moves", rendered: "Roster moves" },
   // The soft MMR limit's hint sends admins to the signup review filter.
   { quoted: "Needs review", rendered: "Needs review (" },
-  // releasePlayer's quitter note points at the signup remove control's card.
-  { quoted: "Captains & draft", rendered: "Captains & draft" },
+  // releasePlayer's quitter note points at the signup remove control's card,
+  // the next step at the cards that make captains, start the auction and
+  // check a captain's MMR.
+  { quoted: "Signups", rendered: 'title="Signups"' },
+  { quoted: "Draft card", rendered: 'title="Draft"' },
+  { quoted: "Teams card", rendered: 'title="Teams"' },
   // The unverified-captain-MMR confirm and next-step note send the admin to
   // this disclosure. The rendered form is the JSX entity, which the quoting
   // copy (a plain "&") can never satisfy on its own.
@@ -260,7 +265,7 @@ describe("admin copy names only controls that exist", () => {
   // signupRemovalBlockers is unit-tested; this pins that both remove forms
   // sit behind it, and that the confirms no longer describe the refusal.
   it("the signup lists offer remove only where withdrawSignup can take it", () => {
-    const card = declaration("CaptainControls");
+    const card = declaration("SignupControls");
     expect(card).toMatch(
       /const removalBlockers = signupRemovalBlockers\(\{\s*teams: data\.teams,\s*assignments: data\.assignments,\s*matches: data\.matches,\s*\}\)/,
     );

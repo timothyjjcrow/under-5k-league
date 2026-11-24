@@ -35,7 +35,7 @@ export const ADMIN_TABS: readonly AdminTab[] = [
     label: "Season",
     path: "/admin/season",
     subtitle:
-      "Set up the season: its format, captains and the draft, turnout, the league id and the handoff.",
+      "Set up the season: its settings, the league id, its format, the draft, turnout and the handoff.",
   },
   {
     id: "matches",
@@ -47,7 +47,8 @@ export const ADMIN_TABS: readonly AdminTab[] = [
     id: "people",
     label: "People",
     path: "/admin/people",
-    subtitle: "Roster moves, Discord links and medal-limit approvals.",
+    subtitle:
+      "Teams and captains, roster moves, signups, Discord links and medal-limit approvals.",
   },
   {
     id: "inhouse",
@@ -79,18 +80,21 @@ export const ADMIN_SECTION_TAB: Readonly<Record<string, AdminTabId>> = {
   "adm-attention": "overview",
   "adm-tonight": "overview",
   "adm-season": "overview",
+  "adm-settings": "season",
+  "adm-league": "season",
   "adm-format": "season",
-  "adm-captains": "season",
+  "adm-draft": "season",
   "adm-roll-call": "season",
   "adm-poll": "season",
-  "adm-league": "season",
   "adm-new-season": "season",
   "adm-tiebreakers": "matches",
   "adm-schedule": "matches",
   "adm-playoffs": "matches",
   "adm-standins": "matches",
   "adm-sync": "matches",
+  "adm-teams": "people",
   "adm-roster": "people",
+  "adm-signups": "people",
   "adm-reach": "people",
   // MEDAL_APPROVALS_ANCHOR (medal-approval.ts), spelled out so this file
   // stays free of the signup rules it imports; admin-tabs.test.ts pins it.
@@ -108,14 +112,17 @@ export const ADMIN_SECTION_TAB: Readonly<Record<string, AdminTabId>> = {
 };
 
 /**
- * Anchors the one-page admin used that no card carries any more, and where
- * they land now: the folded "<season> record" section held the finished
- * season's schedule, and /schedule linked the Playoffs card by a stray
- * `id="playoffs"`.
+ * Anchors no card carries any more, and where they land now: the folded
+ * "<season> record" section held the finished season's schedule, /schedule
+ * linked the Playoffs card by a stray `id="playoffs"`, Captains & draft split
+ * into Draft (Season) and Teams and Signups (People), and the season
+ * settings left the phase card for their own card on Season.
  */
 const RETIRED_ANCHORS: Readonly<Record<string, string>> = {
   "adm-record": "adm-schedule",
   playoffs: "adm-playoffs",
+  "adm-captains": "adm-draft",
+  "adm-season-settings": "adm-settings",
 };
 
 export function adminTab(id: AdminTabId): AdminTab {
