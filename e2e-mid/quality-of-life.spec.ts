@@ -170,9 +170,14 @@ test("an old admin link opens its folded card on its tab, clear of the header", 
       hydrationErrors.push(message.text());
   });
   await page.setViewportSize({ width: 390, height: 844 });
+  // Signed in on another page, so the old link below is a fresh page load,
+  // as a bookmark or a Discord message is. From /admin itself the visit
+  // would only change the hash, and on a slow first load Next's router
+  // starts after that change and writes its own /admin back over it.
   await page.goto(
-    "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin",
+    "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin/system",
   );
+  await expect(page).toHaveURL(/\/admin\/system$/);
   // A one-page admin link (a bookmark, a Discord message) is forwarded to
   // the card's tab, which opens the folded card and scrolls to it.
   await page.goto("/admin#adm-discord");
