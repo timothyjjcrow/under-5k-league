@@ -225,7 +225,7 @@ describe("pages that print the weekly night once fixtures exist", () => {
       // (pollDecidesNight).
       ["src/app/me/page.tsx", ": seasonMatchNightLabel(season, seasonFixtures)"],
       ["src/app/schedule/page.tsx", ": seasonMatchNightLabel(season, matches)"],
-      ["src/app/admin/page.tsx", "fixturesMatchNightLabel(data.matches)"],
+      ["src/app/admin/season/page.tsx", "fixturesMatchNightLabel(data.matches)"],
       ["src/app/how-it-works/page.tsx", ": seasonMatchNightLabel(season, fixtures)"],
       ["src/lib/link-preview.ts", "announcedMatchNight(season, season.fixtures)"],
     ] as const) {

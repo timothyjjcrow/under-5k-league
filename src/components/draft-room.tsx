@@ -1,5 +1,6 @@
 "use client";
 
+import { adminHref } from "@/lib/admin-tabs";
 import {
   useCallback,
   useEffect,
@@ -1460,7 +1461,7 @@ export function DraftRoom({
             </Link>
             {me.isAdmin && !adminStart ? (
               <Link
-                href="/admin#adm-captains"
+                href={adminHref("adm-captains")}
                 className={buttonClasses("accent", "sm")}
               >
                 Start it from the admin panel →
@@ -1488,7 +1489,7 @@ export function DraftRoom({
                   Start unavailable: {adminStart.blocker}
                 </p>
               ) : null}
-              <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+              <Link href={adminHref("adm-captains")} className={textLink("text-sm")}>
                 Captains &amp; draft setup on the admin panel
               </Link>
             </div>
@@ -2479,7 +2480,7 @@ function DraftAdminToolbar({
           </SubmitButton>
         </ActionForm>
       ) : null}
-      <Link href="/admin#adm-captains" className={textLink("text-sm")}>
+      <Link href={adminHref("adm-captains")} className={textLink("text-sm")}>
         More controls
       </Link>
     </section>

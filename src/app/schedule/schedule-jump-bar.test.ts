@@ -19,7 +19,9 @@ describe("the schedule jump bar", () => {
   });
 
   it("stops every hash-driven reveal when a page turns followHash off", () => {
-    const nav = read("src/components/section-nav.tsx");
+    // The bar itself: SectionHashReveal, above it, always follows the hash.
+    const file = read("src/components/section-nav.tsx");
+    const nav = file.slice(file.indexOf("export function SectionNav("));
     expect(nav).toContain("followHash = true,");
     const resolve = nav.slice(nav.indexOf("const resolveHash = () => {"));
     expect(resolve.slice(0, resolve.indexOf("\n    };"))).toMatch(

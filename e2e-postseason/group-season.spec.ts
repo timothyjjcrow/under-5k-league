@@ -73,7 +73,7 @@ test("a ten-team regular season shows two group tables, the season plan and the 
   );
 
   await page.goto("/api/auth/dev?name=Group%20Admin&admin=1");
-  await page.goto("/admin#adm-schedule");
+  await page.goto("/admin/matches#adm-schedule");
   const box = page.getByRole("region", { name: "Season format" });
   await expect(box).toContainText("Season format · 10 teams");
   await expect(box.getByRole("heading", { name: "Group A", exact: true })).toBeVisible();

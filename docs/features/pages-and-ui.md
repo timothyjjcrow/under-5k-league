@@ -1230,40 +1230,68 @@ the filter rules are pure in `src/lib/player-pool.ts`
 
 ## The admin page layout (`/admin`)
 
-- **One file per card.** `src/app/admin/page.tsx` loads the season, works
-  out which cards show and in what order, and renders the jump bar. Each card
-  and its helpers live in `src/components/admin/` (`season-controls.tsx`,
-  `captain-controls.tsx`, `schedule-controls.tsx` and so on), over the shared
-  loader (`season-admin-data.ts`), the visibility predicates
+- **Seven fixed tabs, one route each:** Overview (`/admin`), Season,
+  Matches, People, Inhouse, Discord & news and System
+  (`src/lib/admin-tabs.ts`, `ADMIN_TABS`). The tabs and their order never
+  change with the phase; a card only folds, opens or is absent, and a tab
+  with nothing this phase says why (Matches before the auction). Tim's call,
+  2026-11-23: the one page had reached ~25 cards and 22 jump chips whose
+  order moved between phases.
+- **One map says where every card lives** (`ADMIN_SECTION_TAB`, by anchor),
+  and every link to a card is built from it with `adminHref("adm-…")`: the
+  to-do card, Tonight, the draft room, /schedule, /seasons, the match page
+  and the medal-approval Discord message. Inside a card, a plain `#adm-…`
+  hash may only name a card on the same tab. `admin-copy-guard.test.ts`
+  checks that each mapped card renders on its tab and nowhere else, and
+  that every link names a mapped card.
+- **Old links still land.** `/admin#card` (bookmarks, Discord messages
+  already sent, pages cached before the tabs) is forwarded by
+  `AdminHashForwarder` on Overview to the card's tab, keeping the query and
+  the anchor (`adminForwardHref`). Retired anchors (`#adm-record`, the stray
+  `#playoffs`) land on the card that took over.
+- **Every tab is its own server page** that calls `loadAdminContext()`
+  (`src/components/admin/admin-context.ts`, cached per request) and, unless
+  `gate` is `"admin"`, returns `AdminGateScreen` (sign-in for nobody, an
+  access notice for a non-admin). Each sets `maxDuration = 60` like /admin
+  always has, since Server Actions inherit their page's budget, and renders
+  inside `AdminFrame tab="…"`. The copy guard fails a tab that skips any of
+  these.
+- **The tab bar** (`AdminTabs`) wraps onto a second row on a phone instead
+  of hiding tabs off the edge, pins under the site header from `lg`, and
+  shows each tab's to-do count from Overview's list (its name reads
+  "People (1 to do)"). The four subpages (activity, health, data quality, inhouse players)
+  show it without counts: they stay light, and the health page reads only
+  its own service.
+- **Overview is triage:** the To-do card (`AdminAttention`: the next step,
+  the missing-ticket warning, every Needs attention line and the matches to
+  review, each linking to its card's tab), Tonight, and the phase card. The
+  offseason shows one card pointing at Season.
+- **A link opens a folded card on arrival.** `AdminFrame` mounts
+  `SectionHashReveal` (section-nav.tsx) for the tab's anchors with
+  `openNested="marked"`: it opens and scrolls to the card the hash names,
+  and inside it only a folded `AdminSection`, never a danger fold or an edit
+  form. Every jump target carries `scroll-mt-40 lg:scroll-mt-56`.
+- **One file per card.** Each card and its helpers live in
+  `src/components/admin/` (`season-controls.tsx`, `captain-controls.tsx`,
+  `schedule-controls.tsx` and so on), over the shared loader
+  (`season-admin-data.ts`), the visibility predicates
   (`season-admin-rules.ts`) and `AdminSection`/`AdminAnchor`
-  (`admin-section.tsx`). A guard that pins the page reads the whole area
-  through `adminPageSource()`, and one card through `declarationSource()`,
-  so a card can move between files without a guard going blind.
+  (`admin-section.tsx`). A guard that pins the admin reads the whole area
+  through `adminPageSource()`, and one card through `declarationSource()`.
 - **Season-wide diagnostics are their own pages:** `/admin/data-quality` and
-  `/admin/health`, linked side by side from Needs attention (a `flex-wrap`
-  row with `gap-y-2`). League health is server-rendered `SectionTitle` and
-  `StatStrip` bands with a note list under each; see
+  `/admin/health`, linked side by side from System's League reports (a
+  `flex-wrap` row with `gap-y-2`). League health is server-rendered
+  `SectionTitle` and `StatStrip` bands with a note list under each; see
   [admin-and-operations](admin-and-operations.md#league-health-adminhealth).
-- **Anchors plus disclosure.** `AdminJump` (a `SectionNav`, sticky from `lg`)
-  jumps to `AdminAnchor` ids. Rarely touched cards (Discord, league id, news,
-  security, historical records, database performance, season handoff and
-  similar) are `AdminSection`: a `<details>` whose `<summary>` keeps the title
-  as a visible heading.
-- **The jump bar wraps from `lg`** (`SectionNav wrap`: a desktop mouse can't
-  scroll sideways; chips drop to `lg:min-h-9`) and hugs its chips from `sm`
-  (`sm:w-fit`). The wrapped sticky bar is up to ~135px tall, so every jump
-  target carries `scroll-mt-40 lg:scroll-mt-56`. A new anchor needs both.
-- **Chips follow the page's render order,** so the active chip only moves
-  forward on scroll. `setupFirst` (SIGNUPS or DRAFT) puts the Phase, Season
-  format (only while the schedule card is hidden), Captains & draft and
-  Discord reach chips AND cards first; later phases put them after the
-  working cards, and the season builder moves into Schedule & results. Chips and cards branch on the same flag, and
-  `admin-copy-guard.test.ts` ("the jump bar lists sections in the order the
-  page renders them") fails if the two orders drift.
+- **Rarely touched cards fold.** Discord, league id, news, security,
+  historical records, database performance, the season handoff and similar
+  are `AdminSection`: a `<details>` whose `<summary>` keeps the title as a
+  visible heading.
 - **Never put a `<button>` in a `<summary>`:** it toggles instead of
   submitting.
-- **The jump bar and cards share one visibility predicate**
-  (`rosterMovesVisible` and friends), so no chip points at a missing card.
+- **Links and cards share one visibility predicate**
+  (`rosterMovesVisible` and friends, gathered in `loadAdminContext`'s
+  `sections`), so a to-do never links to a card this phase doesn't show.
 - **Density:** cards sit 20px apart, and a folded `AdminSection` summary is
   set like `CardHeader` (`px-4 py-3`, same title and subtitle sizes), so a
   folded section and an open card share one left edge. The phase card's

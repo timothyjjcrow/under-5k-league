@@ -402,16 +402,16 @@ describe("adminMayAgreeToRequest", () => {
     const admin = haystackOf(adminFiles);
     const cards = admin.match(/<StandinControls\b[^>]*>/g) ?? [];
     expect(cards.length).toBeGreaterThan(0);
-    for (const card of cards) expect(card).toContain("viewerId={user.id}");
+    for (const card of cards) expect(card).toContain("viewerId={ctx.user.id}");
     const controls = declarationSource(adminFiles, "StandinControls");
     expect(controls).toMatch(/<StandinMatchBlock[\s\S]*?viewerId=\{viewerId\}/);
     expect(controls).toContain("teams={data.teams}");
   });
 });
 
-// A link from another page to /admin#adm-schedule must only render where
-// /admin renders that card, or it lands at the top of the page with no
-// matching section (the /schedule empty state showed it during signups).
+// A link from another page to the Schedule & results card (on Matches) must
+// only render where the admin renders that card, or it lands on a tab with
+// no matching section (the /schedule empty state showed it during signups).
 describe("links to the Schedule & results card", () => {
   it("/schedule's empty state asks adminSeasonCards before linking", () => {
     const page = readFileSync(

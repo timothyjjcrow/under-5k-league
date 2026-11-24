@@ -42,7 +42,7 @@ function adminForm(page: Page, team: string) {
 }
 
 async function recordFinal(page: Page, winner: string, loser: string) {
-  await page.goto("/admin");
+  await page.goto("/admin/matches");
   const form = adminForm(page, winner);
   await form
     .getByRole("spinbutton", { name: `${winner} series score`, exact: true })
@@ -62,7 +62,7 @@ async function recordFinal(page: Page, winner: string, loser: string) {
 }
 
 async function reopen(page: Page, matchHref: string) {
-  await page.goto("/admin");
+  await page.goto("/admin/matches");
   // Every /admin result row is its own jump target (adminMatchRowId).
   const row = page.locator(`#adm-match-${matchHref.split("/").pop()}`);
   const button = row.getByRole("button", { name: "Reopen for import" });
@@ -90,7 +90,7 @@ test("upsets, win streaks and record watch reach Home, the table, the preview an
   test.slow();
   const noErrors = trackPageErrors(page);
   await page.goto("/api/auth/dev?name=Upset%20Admin&admin=1");
-  await page.goto("/admin");
+  await page.goto("/admin/matches");
   const couriersHref = await adminForm(page, COURIERS)
     .getByRole("link", { name: "Wk 5" })
     .getAttribute("href");

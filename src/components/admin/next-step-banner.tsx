@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import { capacityInfo } from "@/lib/capacity";
 import { MATCH_PHASE, MATCH_STATUS } from "@/lib/constants";
 import { formatLeagueTime } from "@/lib/zoned-time";
@@ -105,7 +106,7 @@ export function NextStepBanner({ nextStep }: { nextStep: AdminNextStep }) {
         {nextStep.jump ? (
           <>
             {" "}
-            <a href={nextStep.jump.href} className={textLink("whitespace-nowrap")}>
+            <a href={adminHref(nextStep.jump.href)} className={textLink("whitespace-nowrap")}>
               {nextStep.jump.label} →
             </a>
           </>
@@ -114,11 +115,11 @@ export function NextStepBanner({ nextStep }: { nextStep: AdminNextStep }) {
       {/* A standing condition, not this phase's step: Valve needs about 15
           days to issue a ticket, so this shows from the first signup rather
           than surfacing when week 1 is already lost. The link opens the
-          collapsed league-id section (the jump bar reveals it on hash). */}
+          collapsed league-id section on Season, which opens on the hash. */}
       {nextStep.ticketWarning ? (
         <p className="rounded-lg border border-danger/40 bg-danger/10 px-3 py-2 text-sm text-fg">
           {nextStep.ticketWarning}{" "}
-          <a href="#adm-league" className={textLink()}>
+          <a href={adminHref("adm-league")} className={textLink()}>
             Set the league id →
           </a>
         </p>

@@ -1,3 +1,4 @@
+import { adminTab } from "@/lib/admin-tabs";
 import { listPage } from "@/lib/list-page";
 import { randomUUID } from "node:crypto";
 import Link from "@/components/app-link";
@@ -58,7 +59,7 @@ export async function AdminNews({
         <nav aria-label="Admin news pages" className="flex gap-3 text-sm">
           {page > 1 ? (
             <Link
-              href={`/admin?newsPage=${page - 1}#adm-news`}
+              href={`${adminTab("discord").path}?newsPage=${page - 1}#adm-news`}
               className={buttonClasses("secondary", "sm")}
             >
               ← Newer posts
@@ -66,7 +67,7 @@ export async function AdminNews({
           ) : null}
           {results.length > 20 ? (
             <Link
-              href={`/admin?newsPage=${page + 1}#adm-news`}
+              href={`${adminTab("discord").path}?newsPage=${page + 1}#adm-news`}
               className={buttonClasses("secondary", "sm")}
             >
               Older posts →

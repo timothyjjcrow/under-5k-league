@@ -23,14 +23,18 @@ async function signIn(page: Page, query: string, redirect: string) {
 }
 
 async function openPollSection(page: Page) {
-  const section = page.locator("#adm-poll");
-  await page
-    .getByRole("navigation", { name: "Admin sections" })
-    .getByRole("link", { name: "Match night poll", exact: true })
-    .click();
-  await expect(section).toHaveAttribute("open", "");
-  // The anchor jump opens the card before React reaches it: wait, or the
-  // first click lands on the server HTML and is lost.
+  // In #main: while a streamed section lands, React holds a hidden copy at
+  // the end of the body for a moment.
+  const section = page.locator("#main").locator("#adm-poll");
+  // A link to the folded card on Season opens it (the tab's hash follower).
+  // Retried: the dev server reloads open pages while it compiles a route for
+  // the first time, which can land between the visit and the reveal.
+  await expect(async () => {
+    await page.goto("/admin/season#adm-poll");
+    await expect(section).toHaveAttribute("open", "", { timeout: 5_000 });
+  }).toPass({ timeout: 60_000 });
+  // The hash opens the card before React reaches it: wait, or the first
+  // click lands on the server HTML and is lost.
   await untilHydrated(page, section.getByRole("button").first());
   return section;
 }
@@ -47,7 +51,7 @@ test.describe("on the league's clock", () => {
     const noErrors = trackPageErrors(page);
 
     // 1. The admin opens a poll; the grid fills itself.
-    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
+    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin/season");
     const section = await openPollSection(page);
     await section.getByLabel("Question").fill(QUESTION);
     await section.getByLabel(/Announce it on Discord/).uncheck();
@@ -158,7 +162,7 @@ test.describe("closing", () => {
     page,
   }) => {
     const noErrors = trackPageErrors(page);
-    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin");
+    await signIn(page, "name=Poll+Admin&steamId=76561190000994101&admin=1", "/admin/season");
     let section = await openPollSection(page);
     page.once("dialog", (dialog) => dialog.accept());
     await section.getByRole("button", { name: "Close voting now" }).click();
@@ -174,7 +178,7 @@ test.describe("closing", () => {
     // the earliest with a marked time on both sides, so it wins the tie.
     await expect(card.getByText(/^Saturdays at .+ time$/)).toBeVisible();
 
-    await page.goto("/admin");
+    await page.goto("/admin/season");
     section = await openPollSection(page);
     await section.getByRole("button", { name: "Delete poll" }).click();
     const dialog = page.getByRole("dialog");

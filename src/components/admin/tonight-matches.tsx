@@ -1,3 +1,5 @@
+import { adminHref } from "@/lib/admin-tabs";
+import { adminMatchRowId } from "@/lib/match-anchors";
 import Link from "@/components/app-link";
 import { MATCH_STATUS } from "@/lib/constants";
 import { autoCheckStatus } from "@/lib/result-sync";
@@ -11,9 +13,9 @@ import { AdminAnchor } from "@/components/admin/admin-section";
 import type { AdminData, Season } from "@/components/admin/season-admin-data";
 
 /**
- * Match night at the top of the page: each of tonight's fixtures with its
- * state, check-ins, standins and next automatic result check, and a jump to
- * its full result controls further down ("Result controls"). The fixture
+ * Match night on Overview: each of tonight's fixtures with its state,
+ * check-ins, standins and next automatic result check, and a link to its
+ * full result controls on Matches ("Result controls"). The fixture
  * name opens the public match page (rosters, check-ins, games), which has no
  * admin controls of its own.
  */
@@ -120,10 +122,10 @@ export function TonightMatches({
                   {check ? <AutoCheckLine check={check} /> : null}
                   {open ? (
                     <a
-                      href={`#adm-match-${m.id}`}
+                      href={adminHref(adminMatchRowId(m.id))}
                       className={textLink("inline-block text-xs")}
                     >
-                      Result controls ↓
+                      Result controls →
                     </a>
                   ) : null}
                 </li>

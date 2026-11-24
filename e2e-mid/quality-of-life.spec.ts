@@ -59,9 +59,9 @@ test("League health counts the season for admins, on a phone", async ({
   const noErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(
-    "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin",
+    "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin/system",
   );
-  // Linked from Needs attention, beside the imported-game check.
+  // Linked from System's League reports, beside the imported-game check.
   await page
     .getByRole("link", { name: "League health", exact: true })
     .click();
@@ -160,7 +160,7 @@ test("schedule selection survives reload and back navigation on a phone", async 
   noErrors();
 });
 
-test("admin jumps reveal closed sections clear of the sticky header", async ({
+test("an old admin link opens its folded card on its tab, clear of the header", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
@@ -173,16 +173,24 @@ test("admin jumps reveal closed sections clear of the sticky header", async ({
   await page.goto(
     "/api/auth/dev?name=QoL+Admin&steamId=76561190000991999&admin=1&redirect=/admin",
   );
+  // A one-page admin link (a bookmark, a Discord message) is forwarded to
+  // the card's tab, which opens the folded card and scrolls to it.
+  await page.goto("/admin#adm-discord");
+  await expect(page).toHaveURL(/\/admin\/discord#adm-discord$/);
+  const discord = page.locator("#adm-discord");
+  await expect(discord).toHaveAttribute("open", "");
+  await expect(discord.locator("summary")).toBeInViewport();
+  // Clear of the 64px site header.
+  expect((await discord.boundingBox())!.y).toBeGreaterThanOrEqual(64);
+  await page.reload();
+  await expect(discord).toHaveAttribute("open", "");
+  // A tab press opens its tab.
   await page
     .getByRole("navigation", { name: "Admin sections" })
-    .getByRole("link", { name: "Discord", exact: true })
+    // A tab with to-dos reads "System (1 to do)".
+    .getByRole("link", { name: /^System\b/ })
     .click();
-  await expect(page.locator("#adm-discord")).toHaveAttribute("open", "");
-  const bounds = await page.locator("#adm-discord").boundingBox();
-  expect(bounds!.y).toBeGreaterThanOrEqual(145);
-  expect(bounds!.y).toBeLessThan(250);
-  await page.reload();
-  await expect(page.locator("#adm-discord")).toHaveAttribute("open", "");
+  await expect(page).toHaveURL(/\/admin\/system$/);
   await page.goto("/admin/data-quality");
   await expect(
     page.getByRole("heading", { name: "Imported-game quality" }),

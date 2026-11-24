@@ -1,3 +1,4 @@
+import { adminTab } from "@/lib/admin-tabs";
 import { prisma } from "@/lib/prisma";
 import { LocalTime } from "@/components/local-time";
 import { formatLeagueMatchTime } from "@/lib/match-time";
@@ -51,7 +52,7 @@ export async function ImportProgress({ seasonId, page, query = {} }: {
       for (const item of Array.isArray(value) ? value : [value]) params.append(key, item);
     }
     params.set("importPage", String(target));
-    return `/admin?${params.toString()}#adm-sync`;
+    return `${adminTab("matches").path}?${params.toString()}#adm-sync`;
   }
   return (
     <section aria-label="Saved import progress" className="space-y-3 rounded-lg border border-line p-3">

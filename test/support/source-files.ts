@@ -123,13 +123,14 @@ export function homePageSource(): string {
 }
 
 /**
- * The admin page (`/admin`): the route file, which loads the season and picks
- * the order of the cards, plus the cards and their helpers in
- * src/components/admin. A guard that pins the admin page reads all of them,
- * so code moving between these files stays in view.
+ * The admin (`/admin` and its tabs): each tab's route file, which picks its
+ * cards and their order, the admin subpages, and the cards, the shared
+ * loader and the tab frame in src/components/admin. A guard that pins the
+ * admin reads all of them, so code moving between tabs or files stays in
+ * view.
  */
 const ADMIN_PAGE_SOURCES = [
-  "src/app/admin/page.tsx",
+  "src/app/admin/**/page.tsx",
   "src/components/admin/**/*.{ts,tsx}",
 ] as const;
 

@@ -39,7 +39,7 @@ test("an admin lays out the season during signups and saves it before the auctio
   try {
     const assertNoErrors = trackPageErrors(page);
     const assertNoHydrationErrors = trackHydrationErrors(page);
-    await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin#adm-format")}`);
+    await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin/season#adm-format")}`);
 
     const card = page.locator("#adm-format");
     await expect(card.getByRole("heading", { name: "Season format", level: 2 })).toBeVisible();
@@ -84,7 +84,7 @@ test("an admin lays out the season during signups and saves it before the auctio
     );
 
     // Back to Recommended through the card.
-    await page.goto("/admin#adm-format");
+    await page.goto("/admin/season#adm-format");
     const saved = page.locator("#adm-format").getByRole("region", { name: "Season builder" });
     await expect(saved).toContainText("Custom · two groups, winner of each");
     await untilHydrated(page, saved);

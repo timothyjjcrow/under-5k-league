@@ -77,6 +77,74 @@ export function SectionReady() {
 }
 
 /**
+ * SectionNav's hash-following without the chips: on arrival, after load and
+ * fonts, and on back, forward or a same-page link, open and scroll to the
+ * section the URL's hash names when it is one of `ids`. For a page whose own
+ * navigation lives elsewhere (the admin tabs), so a link to a folded section
+ * from another tab, the site or Discord still opens it.
+ */
+export function SectionHashReveal({
+  ids,
+  openNested = "first",
+}: {
+  ids: readonly string[];
+  /** Which disclosure inside a target opens with it (see NestedReveal). */
+  openNested?: NestedReveal;
+}) {
+  // A stable key, so a fresh array of the same ids doesn't rerun the effect.
+  const key = ids.join(" ");
+  useEffect(() => {
+    const known = new Set(key.split(" "));
+    const initialHash = window.location.hash.slice(1);
+    let mounted = true;
+    // The element last opened, not just its id: a streamed section can be
+    // replaced by a fresh, folded copy after the first reveal, and that copy
+    // must open too. A section the admin folds again keeps its element, so
+    // it stays folded.
+    let revealed: Element | null = null;
+    const resolveHash = () => {
+      const id = window.location.hash.slice(1);
+      if (!id || !known.has(id)) return;
+      const target = document.getElementById(id);
+      if (!target || target === revealed) return;
+      if (revealSection(id, false, openNested)) revealed = target;
+    };
+    // Streamed sections may arrive after hydration.
+    const mutations = new MutationObserver(resolveHash);
+    mutations.observe(document.body, { childList: true, subtree: true });
+    resolveHash();
+    // A reload with a hash can restore the old scroll position after the
+    // first reveal; reapply the same destination once layout settles.
+    const revealAfterPaint = () => {
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        if (!mounted) return;
+        const id = window.location.hash.slice(1);
+        if (id === initialHash && known.has(id)) revealSection(id, false, openNested);
+      }));
+    };
+    if (document.readyState === "complete") revealAfterPaint();
+    else window.addEventListener("load", revealAfterPaint, { once: true });
+    void document.fonts.ready.then(revealAfterPaint);
+    const onHashChange = () => {
+      revealed = null;
+      resolveHash();
+    };
+    window.addEventListener("hashchange", onHashChange);
+    window.addEventListener("popstate", onHashChange);
+    window.addEventListener("section-ready", resolveHash);
+    return () => {
+      mounted = false;
+      mutations.disconnect();
+      window.removeEventListener("load", revealAfterPaint);
+      window.removeEventListener("hashchange", onHashChange);
+      window.removeEventListener("popstate", onHashChange);
+      window.removeEventListener("section-ready", resolveHash);
+    };
+  }, [key, openNested]);
+  return null;
+}
+
+/**
  * Native anchors remain usable before hydration; enhanced jumps open details.
  *
  * `sticky` pins the bar under the 64px header from desktop width (`lg`) up.

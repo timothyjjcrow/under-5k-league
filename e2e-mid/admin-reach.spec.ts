@@ -30,7 +30,7 @@ test("Discord reach is its own card, outside the Discord settings", async ({
   });
   try {
     await page.goto(
-      "/api/auth/dev?name=Reach+Admin&steamId=76561190000994001&admin=1&redirect=/admin",
+      "/api/auth/dev?name=Reach+Admin&steamId=76561190000994001&admin=1&redirect=/admin/people",
     );
     const reach = page.locator("#adm-reach");
     await expect(
@@ -38,14 +38,18 @@ test("Discord reach is its own card, outside the Discord settings", async ({
     ).toBeVisible();
     await expect(reach).toContainText("registered players have linked Discord");
     await expect(reach).toContainText(member.user.name);
-    await expect(page.locator("#adm-discord")).not.toContainText(
-      "registered players have linked Discord",
-    );
     await expect(
       page
         .getByRole("navigation", { name: "Admin sections" })
-        .getByRole("link", { name: "Discord reach", exact: true }),
-    ).toHaveAttribute("href", "#adm-reach");
+        // A tab with to-dos reads "People (1 to do)".
+        .getByRole("link", { name: /^People\b/ }),
+    ).toHaveAttribute("aria-current", "page");
+    // The funnel is a people task: it stays out of the Discord settings.
+    await page.goto("/admin/discord");
+    await expect(page.locator("#adm-discord")).toHaveCount(1);
+    await expect(page.locator("#adm-discord")).not.toContainText(
+      "registered players have linked Discord",
+    );
     noErrors();
   } finally {
     await db.registration.delete({ where: { id: registration.id } });

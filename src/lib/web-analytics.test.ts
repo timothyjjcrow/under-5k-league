@@ -52,7 +52,7 @@ describe("the admin Website traffic link", () => {
   );
 
   it("is rendered on /admin", () => {
-    expect(callers.map((f) => f.path)).toContain("src/app/admin/page.tsx");
+    expect(callers.map((f) => f.path)).toContain("src/app/admin/system/page.tsx");
   });
 
   it("renders only inside a siteAnalyticsEnabled() branch", () => {

@@ -271,31 +271,47 @@ test("mobile schedule has no horizontal page overflow", async ({ page }) => {
 // few px wider than macOS's — a tripwire you can only reproduce in CI is one you
 // cannot act on.
 test("mobile admin panel has no horizontal page overflow", async ({ page }) => {
-  // SLOW because of the DEV SERVER, not the assertion: /admin is by far the
-  // heaviest route in the app, this is the suite's only visit to it, and the
-  // first visit is what compiles it. Alone the page loads in ~5s; as test 29
-  // of 30 on a warm-but-busy dev server the same navigation has repeatedly
-  // taken >30s and failed on `page.goto`, which reads as an overflow
-  // regression and is not one. Triple the budget rather than chase compile
-  // time — the thing under test is the LAYOUT below.
-  test.slow();
+  // SLOW because of the DEV SERVER, not the assertion: this is the suite's
+  // only visit to most admin tabs, and each first visit compiles its route.
+  // Alone a tab loads in ~5s; late in the run on a warm-but-busy dev server
+  // a navigation has taken >30s and failed on `page.goto`, which reads as an
+  // overflow regression and is not one. The budget covers all seven tabs;
+  // the thing under test is the LAYOUT below.
+  test.setTimeout(300_000);
   const assertNoErrors = trackPageErrors(page);
   await page.setViewportSize({ width: 360, height: 812 });
   await page.goto("/api/auth/dev?name=Overflow%20Admin&admin=1");
-  await page.goto("/admin");
-  // exact: the page also has a "Recent admin activity" heading, and a loose
-  // match resolves to both under strict mode.
-  await expect(
-    page.getByRole("heading", { name: "Admin", exact: true }),
-  ).toBeVisible();
-  // The Discord card loads behind its own <Suspense> (it makes several calls
-  // to Discord, and awaiting them inline blocked the whole page). A streamed
-  // section that throws renders nothing and leaves the rest of the page
-  // looking fine — so assert it actually arrives, not just that /admin does.
-  await expect(
-    page.getByRole("heading", { name: "Discord notifications" }),
-  ).toBeVisible();
-  await expectNoHorizontalOverflow(page, "/admin");
+  for (const path of [
+    "/admin",
+    "/admin/season",
+    "/admin/matches",
+    "/admin/people",
+    "/admin/inhouse",
+    "/admin/discord",
+    "/admin/system",
+  ]) {
+    await page.goto(path);
+    // exact: a tab also has headings like "Recent admin activity", and a
+    // loose match resolves to several under strict mode.
+    await expect(
+      page.getByRole("heading", { name: "Admin", exact: true }),
+      path,
+    ).toBeVisible();
+    // Every tab is in the bar on a phone: it wraps instead of scrolling
+    // tabs out of sight.
+    const tabs = page.getByRole("navigation", { name: "Admin sections" }).getByRole("link");
+    await expect(tabs).toHaveCount(7);
+    for (const tab of await tabs.all()) await expect(tab, path).toBeInViewport();
+    if (path === "/admin/discord") {
+      // The Discord card loads behind its own <Suspense> (it makes several
+      // calls to Discord). A streamed section that throws renders nothing
+      // and leaves the rest of the page looking fine, so assert it arrives.
+      await expect(
+        page.getByRole("heading", { name: "Discord notifications" }),
+      ).toBeVisible();
+    }
+    await expectNoHorizontalOverflow(page, path);
+  }
   assertNoErrors();
 });
 

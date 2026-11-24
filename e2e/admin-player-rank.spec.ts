@@ -129,7 +129,7 @@ for (const viewport of [
         },
       });
       await page.goto(
-        "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+        "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
       );
       await expect(page.getByRole("heading", { name: "Admin", exact: true })).toBeVisible();
 
@@ -168,7 +168,7 @@ for (const viewport of [
       });
       await db.season.update({ where: { id: season.id }, data: { status: "REGULAR_SEASON" } });
       expect((await page.request.post("/api/test/cache")).ok()).toBe(true);
-      await page.goto("/admin");
+      await page.goto("/admin/season");
       await saveRank(page, player, 4700, 64);
       await page.reload();
       const postdraftCaptain = await openEditor(page, captain.name);

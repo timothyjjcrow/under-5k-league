@@ -127,7 +127,7 @@ test("admins see saved import states without downloading provider payloads", asy
   await withImportCandidates(async (payloadMarker) => {
     const noErrors = trackPageErrors(page);
     const response = await page.goto(
-      `/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin`,
+      `/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin/matches`,
     );
     const panel = page.getByRole("region", { name: "Saved import progress" });
     await expect(panel).toBeVisible();
@@ -159,12 +159,6 @@ test("admins see saved import states without downloading provider payloads", asy
     await expect(row(GAME_IDS.retryable)).toContainText(waiting);
     await expect(row(GAME_IDS.pending)).not.toContainText(waiting);
     await expect(row(GAME_IDS.ready)).not.toContainText(waiting);
-    // A game in review never clears alone, so Needs attention names it too.
-    await expect(
-      page.getByText(
-        `Automatic league-feed imports are waiting on game ${GAME_IDS.review}, which needs review. Under Saved import progress, press Retry next sync or Ignore this game.`,
-      ),
-    ).toBeVisible();
     await expectPayloadPrivate(page, response, payloadMarker);
 
     for (const width of [390, 1440]) {
@@ -177,6 +171,17 @@ test("admins see saved import states without downloading provider payloads", asy
     await expect(row(GAME_IDS.ready)).toContainText("Details saved");
     await expect(row(GAME_IDS.review)).toContainText("Review needed");
     await expectPayloadPrivate(page, reloaded, payloadMarker);
+
+    // A game in review never clears alone, so Overview's to-do names it too
+    // and links to the import review on Matches.
+    await page.goto("/admin");
+    const todo = page
+      .locator("#adm-attention li")
+      .filter({
+        hasText: `Automatic league-feed imports are waiting on game ${GAME_IDS.review}, which needs review. Under Saved import progress, press Retry next sync or Ignore this game.`,
+      });
+    await expect(todo).toBeVisible();
+    await expect(todo.getByRole("link")).toHaveAttribute("href", "/admin/matches#adm-sync");
     noErrors();
   });
 });
@@ -219,7 +224,7 @@ test("admin retries saved details and ignores an unwanted game with a durable re
   await withImportCandidates(async (payloadMarker) => {
     const noErrors = trackPageErrors(page);
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.goto(`/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin`);
+    await page.goto(`/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=/admin/matches`);
     const panel = page.getByRole("region", { name: "Saved import progress" });
     const review = panel.getByRole("listitem").filter({ has: page.getByText(`Game ${GAME_IDS.review}`, { exact: true }) });
     await expect(review).toContainText("Review needed");
@@ -273,7 +278,7 @@ test("all review items remain reachable beyond 25 candidates and paging preserve
     });
     try {
       await db.importCandidate.createMany({ data: extraRows });
-      await page.goto(`/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=${encodeURIComponent("/admin?newsPage=2")}`);
+      await page.goto(`/api/auth/dev?name=Import+progress+admin&steamId=${ADMIN_STEAM_ID}&admin=1&redirect=${encodeURIComponent("/admin/matches?newsPage=2")}`);
       const panel = page.getByRole("region", { name: "Saved import progress" });
       const paging = panel.getByRole("navigation", { name: "Import progress pages" });
       await expect(panel).toContainText("55 games are waiting");
@@ -284,7 +289,7 @@ test("all review items remain reachable beyond 25 candidates and paging preserve
       const seen = new Set(await panel.getByText(/^Game \d+$/).allTextContents());
       for (const target of [2, 3]) {
         const next = paging.getByRole("link", { name: "Next import items", exact: true });
-        await expect(next).toHaveAttribute("href", `/admin?newsPage=2&importPage=${target}#adm-sync`);
+        await expect(next).toHaveAttribute("href", `/admin/matches?newsPage=2&importPage=${target}#adm-sync`);
         await next.click();
         await expect(paging).toContainText(`Page ${target} of 3`);
         for (const name of await panel.getByText(/^Game \d+$/).allTextContents()) seen.add(name);

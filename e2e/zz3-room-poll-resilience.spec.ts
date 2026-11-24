@@ -41,7 +41,7 @@ async function ensureLiveDraftFixture(page: Page) {
   page.on("dialog", acceptDialog);
   try {
     await page.goto(
-      "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin",
+      "/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season",
     );
     await expect(
       page.getByRole("heading", { name: "Captains & draft", exact: true }),

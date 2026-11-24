@@ -202,7 +202,7 @@ async function setPaused(browser: Browser, paused: boolean) {
   const context = await browser.newContext({ baseURL: BASE });
   const page = await context.newPage();
   page.on("dialog", (d) => d.accept());
-  await page.goto("/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin");
+  await page.goto("/api/auth/dev?name=Admin&steamId=76561190000000001&admin=1&redirect=/admin/season");
   const pause = page.getByRole("button", { name: "Pause auction" });
   const resume = page.getByRole("button", { name: "Resume auction" });
   await expect(pause.or(resume).first()).toBeVisible({ timeout: 20_000 });

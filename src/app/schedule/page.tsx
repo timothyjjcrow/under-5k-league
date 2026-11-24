@@ -1,3 +1,4 @@
+import { adminHref } from "@/lib/admin-tabs";
 import { seasonPageMetadata } from "@/lib/link-preview-metadata";
 import { AddToCalendar } from "@/components/add-to-calendar";
 import { resolveSiteUrl } from "@/lib/site-url";
@@ -813,7 +814,7 @@ export default async function SchedulePage() {
               championPresentation.championTeamId
             ) ? (
               <Link
-                href="/admin#playoffs"
+                href={adminHref("adm-playoffs")}
                 className={buttonClasses("secondary", "sm")}
               >
                 Open playoff controls →
@@ -906,7 +907,7 @@ export default async function SchedulePage() {
                   }).schedule ? (
                     <Link
                       key="admin"
-                      href="/admin#adm-schedule"
+                      href={adminHref("adm-schedule")}
                       className={textLink("text-sm")}
                     >
                       Open schedule controls →
@@ -1218,7 +1219,7 @@ export default async function SchedulePage() {
           </div>
           {viewer?.role === "ADMIN" ? (
             <Link
-              href="/admin#adm-schedule"
+              href={adminHref("adm-schedule")}
               className="shrink-0 text-xs text-info hover:underline"
             >
               Set times →

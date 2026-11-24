@@ -11,7 +11,7 @@ import { matchNightForWeek } from "../src/lib/schedule";
 
 // Hard-wired to this suite's disposable SQLite database.
 const db = new PrismaClient({ datasources: { db: { url: MID_DB_URL } } });
-const ADMIN = "/api/auth/dev?name=Break+Admin&steamId=76561190000995301&admin=1&redirect=/admin";
+const ADMIN = "/api/auth/dev?name=Break+Admin&steamId=76561190000995301&admin=1&redirect=/admin/matches";
 
 test.afterAll(async () => {
   await db.$disconnect();
@@ -66,7 +66,7 @@ test("an admin adds a break, the season plan shows it, and Remove puts it back",
     await expectNoHorizontalOverflow(page, "/schedule with a break");
 
     await page.setViewportSize({ width: 1280, height: 900 });
-    await page.goto("/admin");
+    await page.goto("/admin/matches");
     acceptNextDialog(page);
     await page.getByRole("region", { name: "Breaks" }).getByRole("button", { name: "Remove" }).click();
     await expect(page.getByRole("status").filter({ hasText: "removed" })).toBeVisible();

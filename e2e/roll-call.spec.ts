@@ -43,10 +43,10 @@ test("an admin opens the roll call and a player locks in for the match night fro
   try {
     const assertAdminErrors = trackPageErrors(page);
     page.on("dialog", (dialog) => dialog.accept());
-    await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin")}`);
+    await page.goto(`${ADMIN_LOGIN}&redirect=${encodeURIComponent("/admin/season")}`);
     const section = page.locator("#adm-roll-call");
-    // Set, not clicked: a toggle races the jump bar, which opens a section
-    // itself when the page lands on its anchor.
+    // Set, not clicked: a toggle races the tab's hash follower, which opens
+    // a section itself when the page lands on its anchor.
     await section.evaluate((details) => {
       (details as HTMLDetailsElement).open = true;
     });

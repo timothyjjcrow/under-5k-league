@@ -3,7 +3,7 @@ import { expectNoHorizontalOverflow, trackPageErrors } from "./helpers";
 
 // stage.ts leaves one LIVE 1–0 series inside the result window and retimes the
 // rest of the open week to three hours from now: a match night in progress.
-test("Tonight leads /admin on match night and jumps to each result row", async ({
+test("Tonight leads Overview on match night and opens each result row on Matches", async ({
   page,
 }) => {
   const noErrors = trackPageErrors(page);
@@ -17,8 +17,8 @@ test("Tonight leads /admin on match night and jumps to each result row", async (
   await expect(
     page
       .getByRole("navigation", { name: "Admin sections" })
-      .getByRole("link", { name: "Tonight", exact: true }),
-  ).toBeVisible();
+      .getByRole("link", { name: "Overview", exact: true }),
+  ).toHaveAttribute("aria-current", "page");
 
   const rows = tonight.getByTestId("admin-tonight-match");
   const live = rows.filter({ hasText: "Live · 1–0" });
@@ -32,17 +32,19 @@ test("Tonight leads /admin on match night and jumps to each result row", async (
     rows.filter({ hasText: "First automatic check" }).first(),
   ).toBeVisible();
 
-  const jump = live.getByRole("link", { name: "Result controls ↓" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expectNoHorizontalOverflow(page, "admin tonight");
+
+  // The row's controls are on Matches, inside its folded week.
+  const jump = live.getByRole("link", { name: "Result controls →" });
   const target = await jump.getAttribute("href");
-  expect(target).toMatch(/^#adm-match-/);
+  expect(target).toMatch(/^\/admin\/matches#adm-match-/);
   await jump.click();
-  const row = page.locator(target!);
+  await expect(page).toHaveURL(new RegExp(`${target!.replace(/[/#]/g, "\\$&")}$`));
+  const row = page.locator(`#${target!.split("#")[1]}`);
   await expect(row).toBeInViewport();
   await expect(row.getByRole("button", { name: "Save ruling" })).toBeVisible();
   await expect(row.getByTestId("auto-check")).toBeVisible();
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expectNoHorizontalOverflow(page, "admin tonight");
   noErrors();
 });
 
@@ -58,12 +60,16 @@ test("Needs attention titles itself by count and links each line to its section"
     /: (all clear|1 thing needs attention|\d+ things need attention)$/,
   );
   await expect(card).not.toContainText("match-night checklist");
-  for (const href of await card
-    .locator('a[href^="#"]')
-    .evaluateAll((links) => links.map((link) => link.getAttribute("href")))) {
-    // A section, or a match's own row (#adm-match-<id>).
-    expect(href).toMatch(/^#adm-[a-z0-9-]+$/);
-    await expect(page.locator(href!)).toHaveCount(1);
+  const hrefs = await card
+    .locator('a[href*="#adm-"]')
+    .evaluateAll((links) => links.map((link) => link.getAttribute("href")));
+  expect(hrefs.length).toBeGreaterThan(0);
+  // Each line opens its card, or a match's own row (#adm-match-<id>), on
+  // the tab that renders it.
+  for (const href of new Set(hrefs)) {
+    expect(href).toMatch(/^\/admin(\/[a-z]+)?#adm-[a-z0-9-]+$/);
+    await page.goto(href!);
+    await expect(page.locator(`#${href!.split("#")[1]}`), href!).toHaveCount(1);
   }
   noErrors();
 });

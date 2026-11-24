@@ -588,7 +588,7 @@ describe("the /admin/health page", () => {
     // comes through loadLeagueHealth.
     expect(importsOf(page, "page.tsx").sort()).toEqual(
       [
-        "@/components/app-link",
+        "@/components/admin/admin-frame",
         "@/components/season-scope",
         "@/components/ui",
         "@/lib/auth",
@@ -610,7 +610,9 @@ describe("the /admin/health page", () => {
   it("is linked from the admin page, beside the imported-game check", () => {
     const admin = adminPageSource();
     const quality = admin.indexOf("Check imported-game quality <LinkArrow />");
-    const health = admin.indexOf("href={`/admin/health?season=${season.id}`}");
+    // The active season's, when there is one (System's League reports).
+    const health = admin.indexOf("href={`/admin/health${query}`}");
+    expect(admin).toContain('const query = ctx.season ? `?season=${ctx.season.id}` : "";');
     expect(quality).toBeGreaterThan(0);
     expect(health).toBeGreaterThan(quality);
     // In the same paragraph: no closing </p> between the two.
