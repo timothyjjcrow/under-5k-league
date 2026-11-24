@@ -16,7 +16,7 @@ function refreshAutomationSurfaces(imported: number) {
     updateTag("games");
     revalidatePath("/", "layout");
   }
-  revalidatePath("/admin");
+  revalidatePath("/admin", "layout");
 }
 
 export async function runMaintenanceNow(

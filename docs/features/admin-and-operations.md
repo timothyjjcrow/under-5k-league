@@ -2,8 +2,8 @@
 
 How GGD2L is run and kept fast: admin actions and the panel's safety rails,
 caching and streaming, the live rooms' connection handling, and the release
-rules a code change must respect. Main files: `src/app/admin/page.tsx`,
-`src/app/actions/admin-*.ts`, `src/components/danger-submit.tsx`,
+rules a code change must respect. Main files: `src/app/admin/page.tsx` and its cards in
+`src/components/admin/`, `src/app/actions/admin-*.ts`, `src/components/danger-submit.tsx`,
 `src/components/admin-match-tools.tsx`, `src/lib/admin-log.ts`,
 `src/lib/admin-next-step.ts`, `src/lib/cached-queries.ts`, `room-clock.tsx`.
 
@@ -277,6 +277,12 @@ rules a code change must respect. Main files: `src/app/admin/page.tsx`,
   cache route) use `revalidateTag("games", { expire: 0 })`. `revalidatePath`
   alone does not clear the tag. Team renames bust it too (record matchups
   embed team names). The TTL only backstops outside writes.
+- **Refresh the whole admin area, never one admin page:**
+  `revalidatePath("/admin", "layout")` (or `refresh()`). Next updates the page
+  an admin is looking at after a server action only when it matches the
+  revalidated path, so a bare `revalidatePath("/admin")` left a press on
+  another admin page looking like it did nothing
+  (`admin-refresh-guard.test.ts`).
 - **Tick countdowns in a leaf** (`useSecondsLeft`/`useElapsedMs`,
   `room-clock.tsx`) so only the clock text re-renders every 250ms; never a
   room-level `forceTick`.

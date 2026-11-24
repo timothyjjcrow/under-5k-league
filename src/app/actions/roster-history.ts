@@ -10,7 +10,7 @@ export async function captureRosterHistoryAction(): Promise<ActionResult> {
   try { actor = await requireAdmin(); } catch { return { error: "Not authorized" }; }
   try {
     const result = await backfillRosterTenures({ actorId: actor.id, limit: 50 });
-    revalidatePath("/admin");
+    revalidatePath("/admin", "layout");
     revalidatePath("/players", "layout");
     return { ok: true, message: `Captured ${result.captured} surviving memberships and reconciled ${result.reconciled} missing memberships; ${result.remaining} remaining. Unknown historical dates and ratings remain unknown.` };
   } catch (error) {

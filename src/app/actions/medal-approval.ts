@@ -35,7 +35,7 @@ export async function askForMedalApproval(
   const asked = await askMedalApproval(viewer, str(formData, "note"));
   if (!asked.ok) return { error: asked.error };
   revalidatePath("/me");
-  revalidatePath("/admin");
+  revalidatePath("/admin", "layout");
   // Each admin who must answer, by DM, after the response: a slow or
   // closed Discord never holds up the player's toast, and the request is on
   // /admin either way.

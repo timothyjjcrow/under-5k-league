@@ -86,7 +86,9 @@ note before changing that area: it is required reading, not background.
   `src/app/page.tsx` plus `src/components/home/` (the shared hero and one view
   per phase). The match page is the folder `src/app/matches/[id]/`: `load.ts`
   loads once, then one file per card (`lobby-panel.tsx` and `lobby-access.ts`
-  for the lobby bot).
+  for the lobby bot). `/admin` is `src/app/admin/page.tsx` (loads the season,
+  picks the order) plus one file per card in `src/components/admin/`; its
+  source guards read them through `adminPageSource()`.
 - **Engines:** the draft is `draft-service.ts` (`/api/draft/*`,
   `draft-room.tsx`, receipts in `draft-history.ts`); inhouse is
   `inhouse-service.ts` (`POST /api/inhouse`, `inhouse-room.tsx`); scrims are

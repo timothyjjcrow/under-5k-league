@@ -123,6 +123,59 @@ export function homePageSource(): string {
 }
 
 /**
+ * The admin page (`/admin`): the route file, which loads the season and picks
+ * the order of the cards, plus the cards and their helpers in
+ * src/components/admin. A guard that pins the admin page reads all of them,
+ * so code moving between these files stays in view.
+ */
+const ADMIN_PAGE_SOURCES = [
+  "src/app/admin/page.tsx",
+  "src/components/admin/**/*.{ts,tsx}",
+] as const;
+
+/** Every admin page source file (see ADMIN_PAGE_SOURCES). */
+export function adminPageFiles(): SourceFile[] {
+  return sourceFiles(ADMIN_PAGE_SOURCES, 30);
+}
+
+/** Every admin page source file's text, joined (see ADMIN_PAGE_SOURCES). */
+export function adminPageSource(): string {
+  return haystackOf(adminPageFiles());
+}
+
+/**
+ * One top-level declaration's text, from whichever of `files` declares it:
+ * from its `function name(`, `const name` or `type name` line to the next
+ * top-level declaration, or the end of that file. For a guard that pins one
+ * card or helper wherever it moves. Throws unless exactly one file declares
+ * it, so a renamed or duplicated declaration fails loudly instead of handing
+ * the guard an empty string.
+ */
+export function declarationSource(
+  files: readonly SourceFile[],
+  name: string,
+): string {
+  const start = new RegExp(
+    `^(?:export )?(?:default )?(?:async )?(?:function ${name}\\(|(?:const|type|interface) ${name}\\b)`,
+    "m",
+  );
+  const found = files.filter((f) => start.test(f.text));
+  if (found.length !== 1) {
+    throw new Error(
+      `Source guard expected one top-level declaration of ${name}, found ` +
+        `${found.length} (${found.map((f) => f.path).join(", ") || "none"}). ` +
+        `Re-point the guard before trusting it.`,
+    );
+  }
+  const text = found[0].text;
+  const from = text.search(start);
+  const next = /^(?:export )?(?:default )?(?:async )?(?:function|const|let|type|interface|class) /m;
+  const rest = text.slice(from + 1);
+  const end = rest.search(next);
+  return end < 0 ? text.slice(from) : text.slice(from, from + 1 + end);
+}
+
+/**
  * The text with whole-line comments dropped. Guards look for literals that the
  * comments explaining them also QUOTE; stripping comment lines keeps the
  * explanation without letting it satisfy (or trip) the guard.

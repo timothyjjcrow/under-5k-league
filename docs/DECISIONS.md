@@ -192,7 +192,7 @@ the current shape, not tidiness.
 
 | Date | Rejected | Reason | Revisit when |
 | --- | --- | --- | --- |
-| 2026-07-30 | Splitting `src/app/admin/page.tsx` into card components. | Already structured for its size (jump bar, anchors, disclosures). The July source-guard reason no longer holds. | It blocks real work. |
+| 2026-07-30 | Splitting `src/app/admin/page.tsx` into card components (rejected in July). | Done 2026-11-23: at 8,161 lines it blocked splitting /admin into tabs (Tim's call, 2026-11-23). Each card moved unchanged into its own file in `src/components/admin/`; `page.tsx` keeps loading the season and picking the order, and the admin source guards read the area through `adminPageSource()` and one card through `declarationSource()`. |
 | 2026-10-14 | Moving `getInhouseState`'s view assembly out of `inhouse-service.ts` (revisited). | It blocked real work on 2026-10-14: the room snapshot needed the reads apart from the view. They were split in place, with no claim moved: `loadInhouseRoomRows` (the room's shared reads), `loadViewerExtras` and the pure `buildInhouseState`. Moving those to another file is still only for looks. | Moving the file would unblock real work. |
 | 2026-07-30 | Domain subfolders for `src/lib`. | A pure rename, and ratchet claim ids embed file paths. | Claim ids stop embedding paths. |
 | 2026-07-30 | One phase-label map for header, footer and dashboard. | The surfaces word the phase differently on purpose. Since 2026-09 the maps live together in `src/lib/season-copy.ts` and the public surfaces share `seasonPhaseLabel`; admin and history keep their own maps. | The surfaces should say the same thing. |

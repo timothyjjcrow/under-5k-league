@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { REPO_ROOT } from "../../test/support/source-files";
+import {
+  REPO_ROOT,
+  adminPageFiles,
+  declarationSource,
+  haystackOf,
+} from "../../test/support/source-files";
 import {
   adminMayAgreeToRequest,
   adminSeasonCards,
@@ -393,14 +398,12 @@ describe("adminMayAgreeToRequest", () => {
     expect(matchPage).toMatch(/<AdminMatchTools[^>]*?viewerId=\{viewer\.id\}/);
     // /admin: every Standins card gets the signed-in admin, and its teams
     // are whole Team rows (captainId included).
-    const admin = readFileSync(
-      path.join(REPO_ROOT, "src/app/admin/page.tsx"),
-      "utf8",
-    );
+    const adminFiles = adminPageFiles();
+    const admin = haystackOf(adminFiles);
     const cards = admin.match(/<StandinControls\b[^>]*>/g) ?? [];
     expect(cards.length).toBeGreaterThan(0);
     for (const card of cards) expect(card).toContain("viewerId={user.id}");
-    const controls = admin.slice(admin.indexOf("function StandinControls("));
+    const controls = declarationSource(adminFiles, "StandinControls");
     expect(controls).toMatch(/<StandinMatchBlock[\s\S]*?viewerId=\{viewerId\}/);
     expect(controls).toContain("teams={data.teams}");
   });

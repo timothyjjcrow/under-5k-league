@@ -28,8 +28,10 @@ import {
  * DangerSubmit call site whose token is a magic word.
  */
 const UI = sourceFiles(["src/app/**/*.tsx", "src/components/**/*.tsx"], 80);
-/** Every page under /admin, joined (so the admin page can be split). */
-const admin = haystackOf(UI.filter((f) => f.path.startsWith("src/app/admin/")));
+/** Every page under /admin and the admin card components, joined. */
+const admin = haystackOf(
+  UI.filter((f) => /^src\/(?:app|components)\/admin\//.test(f.path)),
+);
 const seasons = sourceFile("src/app/seasons/page.tsx").text;
 const danger = sourceFile("src/components/danger-submit.tsx").text;
 

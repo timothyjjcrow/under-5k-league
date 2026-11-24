@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminPageSource,
   folderSourceFiles,
   haystackOf,
   sourceFile,
@@ -337,7 +338,7 @@ describe("match page admin tools", () => {
   const TOOLS = stripLineComments(
     sourceFile("src/components/admin-match-tools.tsx").text,
   );
-  const ADMIN = stripLineComments(sourceFile("src/app/admin/page.tsx").text);
+  const ADMIN = stripLineComments(adminPageSource());
 
   it("renders for admins on the active season, above the games", () => {
     expect(PAGE).toMatch(

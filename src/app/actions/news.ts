@@ -26,7 +26,7 @@ const NEWS_CREATE_REQUEST_PREFIX = "newsPostRequest:";
 function refreshNewsSurfaces() {
   revalidatePath("/");
   revalidatePath("/news");
-  revalidatePath("/admin");
+  revalidatePath("/admin", "layout");
 }
 
 function validRecordId(value: string): boolean {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { sourceFile, stripLineComments } from "../../test/support/source-files";
+import {
+  adminPageSource,
+  sourceFile,
+  stripLineComments,
+} from "../../test/support/source-files";
 import {
   FREE_AGENT_ACQUISITION,
   FREE_AGENT_OVER_RULE_FIELD,
@@ -309,7 +313,7 @@ describe("the copy", () => {
 });
 
 describe("the sign form renders the control the copy names", () => {
-  const page = stripLineComments(sourceFile("src/app/admin/page.tsx").text);
+  const page = stripLineComments(adminPageSource());
   it("has the checkbox, by its field name and its exact label", () => {
     expect(FREE_AGENT_OVER_RULE_LABEL).toBe(
       `Sign over the ${STANDIN_MMR_ALLOWANCE}-MMR rule`,

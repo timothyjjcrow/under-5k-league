@@ -103,7 +103,7 @@ describe("saved import progress commands", () => {
     expect(saved.revision).toBe(candidate.revision + 1);
     expect(fetch).not.toHaveBeenCalled();
     expect(updateTag).toHaveBeenCalledWith(AUTOMATION_GATE_TAG);
-    expect(revalidatePath).toHaveBeenCalledWith("/admin");
+    expect(revalidatePath).toHaveBeenCalledWith("/admin", "layout");
     expect(await prisma.adminAction.findFirst()).toMatchObject({ action: "retryImportCandidate", actorName: "Progress administrator", seasonId: candidate.seasonId });
   });
 

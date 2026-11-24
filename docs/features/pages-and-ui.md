@@ -1230,6 +1230,15 @@ the filter rules are pure in `src/lib/player-pool.ts`
 
 ## The admin page layout (`/admin`)
 
+- **One file per card.** `src/app/admin/page.tsx` loads the season, works
+  out which cards show and in what order, and renders the jump bar. Each card
+  and its helpers live in `src/components/admin/` (`season-controls.tsx`,
+  `captain-controls.tsx`, `schedule-controls.tsx` and so on), over the shared
+  loader (`season-admin-data.ts`), the visibility predicates
+  (`season-admin-rules.ts`) and `AdminSection`/`AdminAnchor`
+  (`admin-section.tsx`). A guard that pins the page reads the whole area
+  through `adminPageSource()`, and one card through `declarationSource()`,
+  so a card can move between files without a guard going blind.
 - **Season-wide diagnostics are their own pages:** `/admin/data-quality` and
   `/admin/health`, linked side by side from Needs attention (a `flex-wrap`
   row with `gap-y-2`). League health is server-rendered `SectionTitle` and

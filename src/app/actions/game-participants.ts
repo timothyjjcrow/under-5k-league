@@ -29,7 +29,7 @@ export async function correctGameIdentityAction(_prev: ActionResult, form: FormD
       revalidatePath(`/matches/${result.matchId}`);
       revalidatePath("/players", "layout");
       revalidatePath("/hall-of-fame");
-      revalidatePath("/admin");
+      revalidatePath("/admin", "layout");
     }
     return { ok: true, message: result.changed ? "Player attribution corrected and audited." : "That attribution is already current." };
   } catch (error) {
@@ -45,7 +45,7 @@ export async function backfillGameParticipantsAction(_prev: ActionResult, form: 
       actorId: actor.id, seasonId: str(form, "seasonId").trim() || undefined,
       cursor: str(form, "cursor").trim() || undefined, limit: 20,
     });
-    revalidatePath("/admin");
+    revalidatePath("/admin", "layout");
     return { ok: true, message: `Indexed ${result.rebuilt} games; ${result.invalid} incomplete box scores kept out of public stats; ${result.remaining} remaining.` };
   } catch (error) {
     return { error: actionErrorMessage(error, "Could not finish this indexing batch — try again.", "PARTICIPANT_BACKFILL") };
