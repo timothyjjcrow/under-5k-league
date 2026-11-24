@@ -846,7 +846,7 @@ A break is a league night with no games, for a holiday (Tim's call,
   76561200107749376 and up). Prisma refuses to bind a larger value, so the
   whole query throws: every sign-in of such an account failed in
   `retireStaleDotaAccountClaims`, and so did every lookup through
-  `dotaAccountClaimWhere` (the /me override copy, the `/admin/inhouse-players`
+  `dotaAccountClaimWhere` (the /me override copy, the `/admin/inhouse` (Inhouse players)
   search, adding a team coach). Leave the legacy predicate or write out when
   `fitsLegacyDotaAccountColumn` says no (no stored value can match it). Never
   set the key to `undefined` instead: Prisma drops it, and the retire writes

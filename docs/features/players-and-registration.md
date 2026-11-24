@@ -142,7 +142,7 @@ Main files: `saveRegistration` (`src/app/actions/registration.ts`),
   automatic write. Inhouse `joinQueue` also trusts it as-is, up to the
   ceiling, and judges the medal on every join, a signup's included
   (`inhouse.md`, "The MMR cap"). An admin's inhouse MMR beats it at the
-  queue, and `/admin/inhouse-players` sets the same manual medal for anyone,
+  queue, and `/admin/inhouse` (Inhouse players) sets the same manual medal for anyone,
   a player with no signup or any player once the season is over, when
   `setPlayerRank` refuses (`inhouse.md`, "An admin's inhouse MMR and
   medal").

@@ -54,13 +54,15 @@ export const ADMIN_TABS: readonly AdminTab[] = [
     id: "inhouse",
     label: "Inhouse",
     path: "/admin/inhouse",
-    subtitle: "The inhouse night, and every player's inhouse MMR, medal and bans.",
+    subtitle:
+      "The inhouse night, every player's inhouse MMR, medal and bans, and inhouse on Discord.",
   },
   {
     id: "discord",
     label: "Discord & news",
     path: "/admin/discord",
-    subtitle: "Discord notifications, league news and the match stream link.",
+    subtitle:
+      "League announcements and the Discord bot, league news and the match stream link.",
   },
   {
     id: "system",
@@ -101,6 +103,7 @@ export const ADMIN_SECTION_TAB: Readonly<Record<string, AdminTabId>> = {
   "adm-medal-approvals": "people",
   "adm-inhouse-night": "inhouse",
   "adm-inhouse-players": "inhouse",
+  "adm-inhouse-discord": "inhouse",
   "adm-discord": "discord",
   "adm-news": "discord",
   "adm-stream": "discord",

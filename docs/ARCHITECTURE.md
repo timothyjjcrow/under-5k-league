@@ -530,7 +530,7 @@ The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 
 1. **Queue** — `joinQueue` (MMR trust chain: an admin's inhouse MMR
-   (`User.inhouseMmr`, set on `/admin/inhouse-players`) > league registration >
+   (`User.inhouseMmr`, set on `/admin/inhouse` (Inhouse players)) > league registration >
    clamped typed value > last lobby snapshot; the MMR cap, `inhouse-mmr-cap.ts`,
    refuses a Divine 3+ medal or an MMR over `HARD_MMR_CEILING`) into the
    userId-unique `InhouseQueueEntry`. Presence is heartbeat-based (`lastSeenAt`, refreshed
@@ -1202,7 +1202,8 @@ season/team name) — reserved for exactly the five actions with no in-app undo.
 | Automation runner (evergreen) | Persisted last attempt/success/source/duration, failure streak, safe issue/deferred codes, active/expired lease signal, and expected one-minute/four-minute-stale cadence. **Run maintenance now** is admin-only and uses the same lease as cron: it can recover an expired owner but is visibly disabled and cannot force or overlap an active run. This card remains available in every phase and offseason. |
 | Auto-sync health           | Read-only: per-match scan state, league throttle, cursor, league-feed games set aside, private-data players                                                                                                                                                                                                                                                                                                                                                                             |
 | Dota league integration    | `setLeagueId`, `syncLeagueAction`, history backfills; player data refreshes itself hourly (`refreshPlayerDataAutomatically`)                                                                                                                                                                                                                                                                                                                                                           |
-| Discord (streamed)         | Webhook set/clear ×4 (league / inhouse board / inhouse alerts / status card; board- and card-webhook moves attempt teardown, alert moves never touch the board), ping role, Standin role + "Sync Standin role now", test sends, board and status card post/update/remove/interrupted-post recovery, ping-health checklist + reach count                                                                                                                                                                                                                                              |
+| Discord notifications (Discord & news, streamed) | League and status-card webhook set/clear (status first, the league form folded once it works), Standin role + "Sync Standin role now", test sends, status card post/update/remove/interrupted-post recovery, the bot checklist |
+| Inhouse Discord (Inhouse, streamed) | Inhouse board and alerts webhook set/clear (board-webhook moves attempt teardown, alert moves never touch the board), ping role, the queue board's post/remove/interrupted-post recovery |
 | Admin activity (streamed)  | `recentAdminActions(40)` — the append-only `AdminAction` log (coverage is partial; see the log's call sites)                                                                                                                                                                                                                                                                                                                                                                           |
 | Roll call                  | `openRollCall` / `closeRollCall` (confirm, real counts; signups and the draft only, refused while no night is set or a match-night poll decides it) over the season settings' stale-form claim (`src/app/actions/admin-season.ts`); who is in, who isn't, and the stragglers as Discord mentions |
 | Match night poll           | `createMatchNightPoll` (self-filling grid: ticked days × hourly starts, default every day noon–6 PM league time; closing time; optional Discord post), `closeMatchNightPoll` (confirm), `setMatchNightPollClosing` (extend/reopen), `announceMatchNightPollResult` (once per close), `deleteMatchNightPoll` (`DangerSubmit`, the question), and the winner into the Match night box via `setMatchSchedule` (`src/app/actions/admin-match-night-poll.ts`)                                                                                                     |
@@ -1224,9 +1225,10 @@ box-score issues) and `/admin/health` (one season's signups and seats, check-in
 rate, standin bookings and their lead time, Discord links and posts, and new
 accounts per week, as counts; `?season=` picks any season;
 `league-health-service.ts` over the pure `league-health.ts`).
-Off-page with edits of its own: `/admin/inhouse-players`, any player's inhouse
-MMR and medal, signed up for the league or not (`setInhouseRating` over
-`inhouse-rating-service.ts`; [inhouse](features/inhouse.md#queue)).
+The Inhouse tab's Inhouse players card sets any player's inhouse MMR and
+medal, signed up for the league or not (`setInhouseRating` over
+`inhouse-rating-service.ts`; [inhouse](features/inhouse.md#queue)), and makes
+or lifts inhouse bans; `/admin/inhouse-players` forwards there.
 
 ## 9. External integrations
 

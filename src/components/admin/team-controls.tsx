@@ -33,6 +33,7 @@ import {
 } from "@/components/ui";
 import { AdminAnchor } from "@/components/admin/admin-section";
 import { selectCls } from "@/components/admin/admin-fields";
+import { cn } from "@/lib/utils";
 import type { AdminData, Season } from "@/components/admin/season-admin-data";
 
 /**
@@ -76,6 +77,11 @@ export function TeamControls({
     !setupOpen &&
     data.draft?.status !== DRAFT_STATUS.IN_PROGRESS &&
     data.draft?.status !== DRAFT_STATUS.PAUSED;
+  // Then the list is compact: one ruled list instead of a box per team, no
+  // draft-order number, and each row's tools (Edit team, the captain's medal
+  // and MMR, Hand over captaincy) on the team's own line wherever it fits.
+  // An opened tool takes the row's full width.
+  const compact = auctionOver;
 
   return (
     <AdminAnchor id="adm-teams">
@@ -93,7 +99,7 @@ export function TeamControls({
             <h3 className="mb-2 text-sm font-medium text-muted">
               Captains ({data.teams.length})
             </h3>
-            <div className="space-y-2">
+            <div className={compact ? "divide-y divide-line rounded-lg border border-line" : "space-y-2"}>
               {data.teams.length === 0 ? (
                 <p className="text-sm text-muted">
                   {setupOpen
@@ -120,7 +126,7 @@ export function TeamControls({
                   return data.teams.map((t) => (
                     <div
                       key={t.id}
-                      className="rounded-lg border border-line px-3 py-2 text-sm"
+                      className={cn("px-3 py-2 text-sm", compact ? "flex flex-wrap items-center gap-x-4 gap-y-1" : "rounded-lg border border-line")}
                     >
                       {/* Wraps on a phone: the budget + remove drop to their
                           own line once the name's basis-48 can't fit beside
@@ -131,11 +137,13 @@ export function TeamControls({
                           the team: a Steam-less captain's avatar is only
                           initials, which named the link "RR" to a screen
                           reader and nobody at all to a sighted admin. */}
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                      <div className={cn("flex flex-wrap items-center gap-x-2 gap-y-1", compact && "min-w-0 flex-1 basis-72")}>
                         <span className="flex min-w-0 flex-1 basis-48 items-center gap-2">
-                          <span className="w-5 shrink-0 text-center text-xs text-muted">
-                            {t.draftOrder + 1}
-                          </span>
+                          {compact ? null : (
+                            <span className="w-5 shrink-0 text-center text-xs text-muted">
+                              {t.draftOrder + 1}
+                            </span>
+                          )}
                           <TeamCrest
                             name={t.name}
                             seed={t.id}
@@ -252,7 +260,7 @@ export function TeamControls({
                         /* Its own line, not beside the budget badge: that row
                            is already at its phone-width limit, and the reason
                            has to be readable without a hover. */
-                        <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
+                        <p className="mt-1.5 flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted">
                           <Badge tone="accent" className="shrink-0">
                             unverified MMR
                           </Badge>
@@ -264,7 +272,7 @@ export function TeamControls({
                       {/* The row's disclosures share one line, and the one
                           opened takes the full width under it: stacked, their
                           summaries took up to four lines a team. */}
-                      <div className="mt-1.5 flex flex-wrap items-start gap-x-4 gap-y-1.5 empty:hidden [&>details]:mt-0 [&>details[open]]:basis-full">
+                      <div className={cn("flex flex-wrap items-start gap-x-4 gap-y-1.5 empty:hidden [&>details]:mt-0 [&>details[open]]:basis-full", compact ? "has-[details[open]]:basis-full" : "mt-1.5")}>
                       {season.status !== SEASON_STATUS.COMPLETE ? (
                         <details className="mt-1.5">
                           <summary className="cursor-pointer text-xs text-muted hover:text-fg">
@@ -398,7 +406,7 @@ export function TeamControls({
                       ) : null}
                       </div>
                       {t.withdrawn ? (
-                        <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <div className="mt-1.5 flex basis-full flex-wrap items-center gap-2">
                           <Badge>withdrew</Badge>
                           {teamWithdrawalLocked ? (
                             <span className="text-xs text-muted">

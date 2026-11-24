@@ -104,6 +104,7 @@ export const loadAdminContext = cache(async () => {
   sections.set("adm-medal-approvals", "Medal approvals");
   sections.set("adm-inhouse-night", "Inhouse night");
   sections.set("adm-inhouse-players", "Inhouse players");
+  sections.set("adm-inhouse-discord", "Inhouse Discord");
   sections.set("adm-discord", "Discord");
   sections.set("adm-news", "News");
   sections.set("adm-stream", "Match stream");

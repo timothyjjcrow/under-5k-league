@@ -1259,7 +1259,7 @@ the filter rules are pure in `src/lib/player-pool.ts`
 - **The tab bar** (`AdminTabs`) wraps onto a second row on a phone instead
   of hiding tabs off the edge, pins under the site header from `lg`, and
   shows each tab's to-do count from Overview's list (its name reads
-  "People (1 to do)"). The four subpages (activity, health, data quality, inhouse players)
+  "People (1 to do)"). The three subpages (activity, health, data quality)
   show it without counts: they stay light, and the health page reads only
   its own service.
 - **Overview is triage:** the To-do card (`AdminAttention`: the next step,
@@ -1286,6 +1286,14 @@ the filter rules are pure in `src/lib/player-pool.ts`
   weeks come first (finished ones folded), and Schedule tools (Move a match
   night, Breaks, the season builder and its groups) fold under them. Before
   it exists the builder leads, since generating it is the job.
+- **After the auction, Teams is a compact list:** one ruled list instead of
+  a box per team, no draft-order number, the roster size instead of a
+  budget, and each team's tools on its own line wherever they fit.
+- **Inhouse holds everything inhouse:** the night, the Inhouse players card
+  (search any player by name, Steam ID or link; the queue and recent
+  players; each row's inhouse MMR, medal and ban), the Inhouse bans card,
+  and Inhouse Discord. `/admin/inhouse-players`, its own page until
+  2026-11-24, forwards there and keeps a search.
 - **A long list can be searched:** Signups' player list gets a name search
   past eight rows (`nameMatchesQuery`), beside its Needs review filter.
 - **A link opens a folded card on arrival.** `AdminFrame` mounts

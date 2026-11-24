@@ -133,6 +133,9 @@ const REFERENCED_CONTROLS: Array<{ quoted: string; rendered: string }> = [
   { quoted: "Discord reach", rendered: "Discord reach" },
   // The couldn't-check line and the signup chip send admins to its checklist.
   { quoted: "Discord notifications", rendered: "Discord notifications" },
+  // The inhouse night's toast and the bot checklist send inhouse channel and
+  // ping role fixes to the Inhouse tab's card.
+  { quoted: "Inhouse Discord", rendered: 'title="Inhouse Discord"' },
   { quoted: "Start playoffs", rendered: "Start playoffs" },
   { quoted: "Reset playoffs", rendered: "Reset playoffs" },
   { quoted: "Move a match night", rendered: "Move a match night" },

@@ -3,14 +3,6 @@ import {
   clearDiscordWebhook,
   testDiscordWebhook,
   discardWaitingDiscordPosts,
-  setInhouseWebhook,
-  clearInhouseWebhook,
-  setInhouseAlertWebhook,
-  clearInhouseAlertWebhook,
-  setInhousePingRole,
-  testInhouseWebhook,
-  postInhouseBoard,
-  deleteInhouseBoard,
   setLeagueStatusWebhook,
   clearLeagueStatusWebhook,
   postLeagueStatusCard,
@@ -30,10 +22,6 @@ import {
 } from "@/lib/league-delivery";
 import { maskWebhookUrl } from "@/lib/discord";
 import { discordMutationsAllowed } from "@/lib/discord-mutation-policy";
-import {
-  getInhouseBoardStatus,
-  type InhouseBoardStatus,
-} from "@/lib/inhouse-board-service";
 import {
   getLeagueStatusCardStatus,
   type LeagueStatusCardStatus,
@@ -75,7 +63,7 @@ function PingHealthLines({
     {
       ok: health.hasRole,
       label: "Ping role chosen",
-      fix: "Paste the role id into the field above.",
+      fix: "Set the inhouse ping role in Inhouse Discord, on the Inhouse tab.",
     },
     {
       ok: health.botInGuild,
@@ -238,9 +226,8 @@ export async function DiscordSection() {
   // Resolve it server-side only to derive a boolean + a masked fingerprint.
   const dbWebhook = (await getSetting(SETTING_KEYS.DISCORD_WEBHOOK_URL)) ?? "";
   const activeWebhook = dbWebhook || process.env.DISCORD_WEBHOOK_URL || "";
-  const [board, statusCard, pingHealth, delivery, standinRole] =
+  const [statusCard, pingHealth, delivery, standinRole] =
     await Promise.all([
-      getInhouseBoardStatus(),
       getLeagueStatusCardStatus(),
       getPingHealth(),
       loadLeagueDeliveryHealth().catch(() => null),
@@ -256,7 +243,6 @@ export async function DiscordSection() {
         // can't touch it, so we hide that button and say where it lives.
         envManaged: !dbWebhook && !!process.env.DISCORD_WEBHOOK_URL,
       }}
-      board={board}
       statusCard={statusCard}
       pingHealth={pingHealth}
       standinRole={standinRole}
@@ -339,7 +325,6 @@ function LeagueDeliveryLine({
 function DiscordControls({
   status,
   delivery,
-  board,
   statusCard,
   pingHealth,
   standinRole,
@@ -347,7 +332,6 @@ function DiscordControls({
 }: {
   status: { configured: boolean; masked: string; envManaged: boolean };
   delivery: LeagueDeliveryHealth | null;
-  board: InhouseBoardStatus;
   statusCard: LeagueStatusCardStatus;
   pingHealth: PingHealth;
   standinRole: StandinRoleStatus;
@@ -359,7 +343,7 @@ function DiscordControls({
     <AdminSection
       id="adm-discord"
       title="Discord notifications"
-      subtitle="Configure league announcements and the Standin role, plus the year-round inhouse queue board, alerts, and ping role."
+      subtitle="League announcements, the #schedule status card, the Standin role and the bot checklist. The inhouse channel, queue board and ping role are on the Inhouse tab."
       // Opens itself when league posts are stuck: in the offseason there is
       // no Needs attention card to say so. A post Discord refused does not
       // open it; the queue already dropped that post, and the card lists it
@@ -412,50 +396,70 @@ function DiscordControls({
           <LeagueDeliveryLine health={delivery} paused={paused} />
         ) : null}
 
-        <ActionForm
-          action={setDiscordWebhook}
-          className="flex flex-wrap items-end gap-2"
+        {/* Status first: with a working webhook the form folds, since it is
+            set once. It stays open while there is none, or while Discord
+            refuses the saved one. */}
+        <details
+          open={!configured || paused}
+          className="group rounded-lg border border-line px-3 py-1 text-sm"
         >
-          <div className="min-w-0 flex-1">
-            <label
-              htmlFor="discordWebhookUrl"
-              className="mb-1 block text-xs text-muted"
+          <summary className="flex min-h-11 cursor-pointer list-none items-center font-medium [&::-webkit-details-marker]:hidden">
+            {configured ? "Change or remove the webhook" : "Set the webhook"}
+            <span
+              aria-hidden
+              className="ml-auto text-muted transition-transform group-open:rotate-180"
             >
-              {configured ? "Replace webhook URL" : "Webhook URL"}
-            </label>
-            <input
-              id="discordWebhookUrl"
-              name="discordWebhookUrl"
-              type="url"
-              autoComplete="off"
-              placeholder="https://discord.com/api/webhooks/…"
-              className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-            />
-          </div>
-          <SubmitButton variant="secondary" size="sm">
-            Save webhook
-          </SubmitButton>
-        </ActionForm>
-
-        {configured && !envManaged ? (
-          <ActionForm action={clearDiscordWebhook}>
-            <SubmitButton
-              variant="ghost"
-              size="sm"
-              confirm="Turn off Discord announcements? This removes the saved webhook."
-            >
-              Remove webhook
+              ▾
+            </span>
+          </summary>
+          <div className="space-y-3 pb-3">
+          <ActionForm
+            action={setDiscordWebhook}
+            className="flex flex-wrap items-end gap-2"
+          >
+            <div className="min-w-0 flex-1">
+              <label
+                htmlFor="discordWebhookUrl"
+                className="mb-1 block text-xs text-muted"
+              >
+                {configured ? "Replace webhook URL" : "Webhook URL"}
+              </label>
+              <input
+                id="discordWebhookUrl"
+                name="discordWebhookUrl"
+                type="url"
+                autoComplete="off"
+                placeholder="https://discord.com/api/webhooks/…"
+                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
+              />
+            </div>
+            <SubmitButton variant="secondary" size="sm">
+              Save webhook
             </SubmitButton>
           </ActionForm>
-        ) : null}
 
-        <p className="text-xs text-muted">
-          In Discord:{" "}
-          <b>Server Settings → Integrations → Webhooks → New Webhook</b>, pick
-          the announcements channel, copy the URL and paste it here. For
-          security the saved URL is never shown again — paste a new one to
-          replace it, or Remove to turn announcements off.
-        </p>
+          {configured && !envManaged ? (
+            <ActionForm action={clearDiscordWebhook}>
+              <SubmitButton
+                variant="ghost"
+                size="sm"
+                confirm="Turn off Discord announcements? This removes the saved webhook."
+              >
+                Remove webhook
+              </SubmitButton>
+            </ActionForm>
+          ) : null}
+
+          <p className="text-xs text-muted">
+            In Discord:{" "}
+            <b>Server Settings → Integrations → Webhooks → New Webhook</b>, pick
+            the announcements channel, copy the URL and paste it here. For
+            security the saved URL is never shown again — paste a new one to
+            replace it, or Remove to turn announcements off.
+          </p>
+          </div>
+        </details>
+
         <p className="text-xs text-muted">
           <b>Who gets pinged:</b> league posts mention only the people each
           post is for, such as a captain who needs cover, a booked standin,
@@ -470,326 +474,15 @@ function DiscordControls({
           mutationsAllowed={mutationsAllowed}
         />
 
-        <div className="space-y-3 border-t border-line pt-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">Inhouse channel</span>
-            {board.separateChannel ? (
-              <Badge tone="success">Separate</Badge>
-            ) : (
-              <Badge tone="neutral">Same as above</Badge>
-            )}
-            {board.separateChannel ? (
-              <span className="font-mono text-xs text-muted">
-                {board.inhouseMasked}
-              </span>
-            ) : null}
-            <ActionForm action={testInhouseWebhook}>
-              <SubmitButton
-                variant="ghost"
-                size="sm"
-                disabled={!mutationsAllowed}
-              >
-                Test
-              </SubmitButton>
-            </ActionForm>
-          </div>
-
-          <ActionForm
-            action={setInhouseWebhook}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <div className="min-w-0 flex-1">
-              <label
-                htmlFor="inhouseWebhookUrl"
-                className="mb-1 block text-xs text-muted"
-              >
-                {board.separateChannel
-                  ? "Replace inhouse webhook URL"
-                  : "Inhouse webhook URL (optional)"}
-              </label>
-              <input
-                id="inhouseWebhookUrl"
-                name="inhouseWebhookUrl"
-                type="url"
-                autoComplete="off"
-                placeholder="https://discord.com/api/webhooks/…"
-                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-              />
-            </div>
-            <SubmitButton variant="secondary" size="sm">
-              Save
-            </SubmitButton>
-          </ActionForm>
-
-          {board.separateChannel ? (
-            <ActionForm action={clearInhouseWebhook}>
-              <SubmitButton
-                variant="ghost"
-                size="sm"
-                confirm="Send inhouse posts back to the league channel? The queue board will be removed."
-              >
-                Use the league channel instead
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">Alerts channel</span>
-            {board.alertsSeparate ? (
-              <Badge tone="success">Separate</Badge>
-            ) : (
-              <Badge tone="neutral">Same as the board</Badge>
-            )}
-            {board.alertsSeparate ? (
-              <span className="font-mono text-xs text-muted">
-                {board.alertsMasked}
-              </span>
-            ) : null}
-          </div>
-
-          <ActionForm
-            action={setInhouseAlertWebhook}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <div className="min-w-0 flex-1">
-              <label
-                htmlFor="inhouseAlertWebhookUrl"
-                className="mb-1 block text-xs text-muted"
-              >
-                {board.alertsSeparate
-                  ? "Replace alerts webhook URL"
-                  : "Alerts webhook URL (optional)"}
-              </label>
-              <input
-                id="inhouseAlertWebhookUrl"
-                name="inhouseAlertWebhookUrl"
-                type="url"
-                autoComplete="off"
-                placeholder="https://discord.com/api/webhooks/…"
-                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-              />
-            </div>
-            <SubmitButton variant="secondary" size="sm">
-              Save
-            </SubmitButton>
-          </ActionForm>
-
-          {board.alertsSeparate ? (
-            <ActionForm action={clearInhouseAlertWebhook}>
-              <SubmitButton variant="ghost" size="sm">
-                Send alerts to the board channel instead
-              </SubmitButton>
-            </ActionForm>
-          ) : null}
-
-          <p className="text-xs text-muted">
-            {board.alertsSeparate ? (
-              <>
-                The board&apos;s channel now holds <b>only the board</b> — queue
-                pings, &ldquo;match found&rdquo; and results post in the alerts
-                channel instead.
-              </>
-            ) : (
-              <>
-                <b>Alerts currently share the board&apos;s channel.</b> The
-                board is read at a glance from the bottom of its channel, so
-                every ping and result pushes it out of view. Make a webhook in a
-                separate channel (e.g. <b>#inhouse-chat</b>) and paste it here
-                to keep the board channel board-only.
-              </>
-            )}
-          </p>
-
-          <ActionForm
-            action={setInhousePingRole}
-            className="flex flex-wrap items-end gap-2"
-          >
-            <div className="min-w-0 flex-1">
-              <label
-                htmlFor="inhousePingRoleId"
-                className="mb-1 block text-xs text-muted"
-              >
-                Ping role {board.pingRoleId ? "" : "(optional)"}
-              </label>
-              <input
-                id="inhousePingRoleId"
-                name="inhousePingRoleId"
-                type="text"
-                autoComplete="off"
-                defaultValue={board.pingRoleId ?? ""}
-                placeholder="Role id, or paste @the-role"
-                className="h-10 w-full rounded-lg border border-line bg-surface-2/50 px-3 text-sm outline-none focus:border-accent/60"
-              />
-            </div>
-            <SubmitButton variant="secondary" size="sm">
-              Save role
-            </SubmitButton>
-          </ActionForm>
-
+        {/* The bot every Discord feature rides: the ping role, members
+            joining on link, role grants, the inhouse night's event. Other
+            pages' "couldn't check" lines send admins here. */}
+        <div className="space-y-2 border-t border-line pt-3">
+          <p className="text-sm font-medium">Bot checklist</p>
           <PingHealthLines
             health={pingHealth}
             mutationsAllowed={mutationsAllowed}
           />
-
-          <p className="text-xs text-muted">
-            {board.pingRoleId ? (
-              <>
-                <b>The ping role is on.</b> Three inhouse posts ping this role:
-                the queue filling up, and the inhouse night&apos;s planned and
-                start posts. &ldquo;Match found&rdquo; mentions only the ten
-                players in the lobby, and board edits never notify anyone.
-              </>
-            ) : (
-              <>
-                <b>No ping role set</b>, so the &ldquo;queue is
-                filling&rdquo; post pings nobody. Set a role here and that post
-                and the inhouse night&apos;s planned and start posts will ping
-                it. Board edits never notify anyone.
-              </>
-            )}{" "}
-            Make the role <b>self-assignable</b> (Server Settings → Onboarding,
-            or a Channels &amp; Roles picker) — a ping people can&apos;t opt out
-            of gets the channel muted, which is worse than silence. With or
-            without a role, the ten players are mentioned when their match is
-            found, if they&apos;ve linked Discord on their profile.
-          </p>
-
-          <p className="text-xs text-muted">
-            A Discord webhook only ever posts to the channel it was made in.
-            Make one in <b>#inhouse</b> and paste it here to send the queue
-            board, &ldquo;match found&rdquo;, the queue ping and inhouse results
-            there — leaving signups, draft night and match results in the
-            channel above. Leave this blank and everything shares one channel.
-          </p>
-        </div>
-
-        <div className="space-y-3 border-t border-line pt-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <span className="font-medium">Live queue board</span>
-            {board.posted ? (
-              board.stranded ? (
-                <Badge tone="danger">Stranded</Badge>
-              ) : (
-                <Badge tone="success">Posted</Badge>
-              )
-            ) : board.postingStuck ? (
-              <Badge tone="danger">Post interrupted</Badge>
-            ) : board.posting ? (
-              <Badge tone="accent">Posting…</Badge>
-            ) : (
-              <Badge tone="neutral">Not posted</Badge>
-            )}
-            {board.posted ? (
-              <span className="font-mono text-xs text-muted">
-                msg {board.messageHint}
-              </span>
-            ) : null}
-            {board.posted && board.failures > 0 ? (
-              <Badge tone="danger">
-                {board.failures} failed edit{board.failures === 1 ? "" : "s"}
-              </Badge>
-            ) : null}
-            {board.posted && board.lastEdit ? (
-              <span className="text-xs text-muted">
-                · last edit{" "}
-                <LocalTime
-                  ts={new Date(board.lastEdit).getTime()}
-                  variant="full"
-                  initial={formatLeagueMatchTime(new Date(board.lastEdit), "full")}
-                />
-              </span>
-            ) : null}
-          </div>
-
-          {board.posted ? (
-            <p className="text-xs text-muted">
-              Queue right now: <b>{board.liveState}</b> —{" "}
-              {board.inSync
-                ? "the board is showing this."
-                : "the board hasn't caught up yet. It updates within about a minute."}
-            </p>
-          ) : null}
-
-          {board.stranded ? (
-            <p className="text-xs text-danger">
-              The board belongs to a different webhook than the one configured
-              now — it can no longer be updated or deleted from here. Remove it
-              here, delete the message by hand in the old channel, then post a
-              new one.
-            </p>
-          ) : null}
-
-          {board.postingStuck ? (
-            <p className="text-xs text-danger">
-              The server stopped while it was posting this board, so it never
-              saved a Discord message id. Check the channel for an untracked
-              board first; then clear this interrupted post below and delete any
-              orphaned message by hand before posting again.
-            </p>
-          ) : board.posting ? (
-            <p className="text-xs text-muted">
-              Discord is creating the message. Reload in a moment; a second post
-              is blocked while this short lease is active.
-            </p>
-          ) : null}
-
-          {board.posted && board.failures > 0 ? (
-            <p className="text-xs text-danger">
-              Discord has rejected the last {board.failures} edit
-              {board.failures === 1 ? "" : "s"} — the channel is showing a count
-              the site already knows is out of date. Check the webhook.
-            </p>
-          ) : null}
-
-          <div className="flex flex-wrap gap-2">
-            {board.posted ? (
-              <ActionForm action={deleteInhouseBoard}>
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  disabled={!mutationsAllowed}
-                  confirm="Delete the queue board message from Discord?"
-                >
-                  Remove board
-                </SubmitButton>
-              </ActionForm>
-            ) : board.postingStuck ? (
-              <ActionForm action={deleteInhouseBoard}>
-                <SubmitButton
-                  variant="ghost"
-                  size="sm"
-                  disabled={!mutationsAllowed}
-                  confirm="Clear the interrupted board post? First check Discord and delete any board message that may have been created, because the site never received its message id."
-                >
-                  Clear interrupted post
-                </SubmitButton>
-              </ActionForm>
-            ) : board.posting ? null : (
-              <ActionForm action={postInhouseBoard}>
-                <SubmitButton
-                  variant="secondary"
-                  size="sm"
-                  // Gated on the INHOUSE webhook, which is what the board
-                  // actually posts through — a league that configured only the
-                  // inhouse one had a working board behind a disabled button.
-                  disabled={
-                    !mutationsAllowed || (!configured && !board.separateChannel)
-                  }
-                >
-                  Post queue board
-                </SubmitButton>
-              </ActionForm>
-            )}
-          </div>
-
-          <p className="text-xs text-muted">
-            Posts <b>one</b> message showing who&apos;s in the inhouse queue and
-            rewrites it in place as players come and go — a live count with no
-            new messages, ever. Editing a message doesn&apos;t notify anyone, so{" "}
-            <b>pin it</b> (right-click → Pin Message) or it will scroll away.
-            The separate queue ping (fired once the queue reaches 4 players) is
-            what actually alerts people; this board just shows the state.
-          </p>
         </div>
 
         <LeagueStatusCardControls
