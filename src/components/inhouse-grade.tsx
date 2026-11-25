@@ -214,7 +214,9 @@ export function GradeBreakdown({ view }: { view: GradeView }) {
         {view.partial ? (
           <p className="text-[11px] text-muted">
             OpenDota hadn’t parsed the replay when this game was graded, so
-            damage taken, stuns, wards, stacks and laning aren’t in it.
+            damage taken, stuns, wards, stacks and laning aren’t in it. The
+            site grades the game again once the replay is parsed (it checks
+            for a day).
           </p>
         ) : null}
       </div>

@@ -791,7 +791,10 @@ export function gradeRule(): string {
     `is against GGD2L inhouse players in the same role within ` +
     `${GRADE.MMR_SPREAD} MMR. The best grade is MVP (a win adds ` +
     `${GRADE.MVP_WIN_BONUS}), and the best player of the other role gets Top ` +
-    `core or Top support.`
+    `core or Top support. A game that ends before OpenDota has parsed its ` +
+    `replay is graded without damage taken, stuns, wards, stacks and laning, ` +
+    `then graded again once the replay is parsed, so its grades and MVP can ` +
+    `still change that day.`
   );
 }
 

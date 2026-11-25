@@ -73,6 +73,7 @@ import { duelWorkPending, runDuelWorkerSteps } from "./inhouse-duel-service";
 import { syncInhouseBanRoles } from "./inhouse-ban-service";
 import { deliverPendingLeagueAnnouncements } from "./discord";
 import { refreshPlayerDataAutomatically } from "./player-data-refresh";
+import { regradeDueInhouseGame } from "./inhouse-regrade-service";
 import { recordLeagueFeedWait } from "./league-feed-wait-service";
 import {
   recordScrimGamesFromFeed,
@@ -1444,6 +1445,21 @@ export async function runResultSync(
     } catch (error) {
       issues.push(RESULT_SYNC_ISSUE.NOTIFICATIONS);
       logStepFailure("standin-role", error);
+    }
+  }
+
+  // An inhouse game graded before OpenDota parsed its replay is graded again
+  // once the replay is in (inhouse-regrade-service.ts): one OpenDota call at
+  // most per pass, on the schedule its marker books, so it stays cheap even
+  // while result sync is watching a lobby.
+  if (!canStartWork(options)) {
+    skipped.push(RESULT_SYNC_SKIPPED.INHOUSE);
+  } else {
+    try {
+      await regradeDueInhouseGame(Date.now(), options);
+    } catch (error) {
+      issues.push(RESULT_SYNC_ISSUE.INHOUSE);
+      logStepFailure("inhouse-regrade", error);
     }
   }
 

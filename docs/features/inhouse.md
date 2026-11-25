@@ -1313,7 +1313,8 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   `BASELINE_GAMES` completed games, ordered by `[createdAt, id]`, never
   `completedAt`, which old rows lack and Postgres sorts first), no network.
   It is best-effort: a failure records the result ungraded. A stored grade
-  never moves, whatever the baseline does later.
+  never moves, whatever the baseline does later, except for the one re-grade
+  below.
 - **The MVP is the best grade among linked players, plus `MVP_WIN_BONUS` for
   a win** (ties: more kills, fewer deaths, lower user id). The best player of
   the other role gets Top core or Top support. Highlights (most damage,
@@ -1329,7 +1330,25 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   stacks and laning exist only once OpenDota has parsed the replay
   (`OpenDotaMatch.version`). `inhouseBoxStats` leaves those keys absent (not
   zero) on a basic payload, and a game graded without them is `partial`
-  (its breakdown says so). Nothing re-grades it later yet.
+  (its breakdown says so). The match summary reaches OpenDota within
+  minutes of the game ending, so most results land before the parse does.
+- **A partial game is graded again once the replay is parsed**
+  (`inhouse-regrade.ts`, `inhouse-regrade-service.ts`). `applyResult` books
+  a marker (Setting `inhouse-regrade:<lobby id>`, value `match:resultAt:tries`)
+  in its result transaction; the worker asks OpenDota at
+  `INHOUSE_REGRADE_CHECK_MINUTES` after the result (10 minutes to a day,
+  seven calls at most), one game per pass, and the gate wakes for the next
+  check (`inhouseRegradeWakeAtMs`). Once a payload has damage taken,
+  `withParsedStats` refreshes every stat beyond K/D/A on the stored lines
+  (matched by side and hero) and `gradeInhouseResult` grades the game again,
+  so its MVP, Top core/support and highlights can change. The write
+  re-asserts COMPLETED, the marker's match and the exact stored box score
+  (a void, a new result or another pass landing first wins), stamps the
+  result cursor and publishes the room. The site never asks OpenDota to
+  parse: every inhouse game in the 2026-11-24 sample was parsed on its own.
+  **Discord is not told:** the result post went out with the early grade,
+  and the post links the game's box score, which shows the final one. After
+  the last check a game keeps its partial grade.
 - **New box-score fields are optional and checked one by one.**
   `parseInhouseBox` keeps a line on its core fields and drops only a bad
   extra or grade (`normalizePlayerGrade`), so a stored oddity never hides a

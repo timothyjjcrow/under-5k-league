@@ -65,6 +65,13 @@ vi.mock("@/lib/dota", async (importOriginal) => {
 });
 import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
 import { isGradedBox, parseInhouseBox } from "@/lib/inhouse-box";
+import {
+  INHOUSE_REGRADE_CHECK_MINUTES,
+  inhouseRegradeKey,
+  inhouseRegradeValue,
+  parseInhouseRegrade,
+} from "@/lib/inhouse-regrade";
+import { regradeDueInhouseGame } from "@/lib/inhouse-regrade-service";
 
 // Discord sends are best-effort network calls — stub the sender (formatters
 // stay real) so tests can assert what would have been announced.
@@ -4934,3 +4941,251 @@ describe.skipIf(!ON_POSTGRES)(
     });
   },
 );
+
+// ---------------------------------------------------------------------------
+
+describe("inhouse — grading again once OpenDota parses the replay", () => {
+  const MATCH_ID = 7000000501;
+
+  /** The replay's extra stats on a basic payload: what a parse adds. */
+  function parsed(match: ReturnType<typeof fakeMatch>) {
+    return {
+      ...match,
+      version: 21,
+      players: match.players.map((p, i) => ({
+        ...p,
+        damage_taken: {
+          npc_dota_hero_axe: 9000 + i * 1500,
+          npc_dota_creep_goodguys_melee: 4000,
+        },
+        stuns: 10 + i,
+        obs_placed: i % 5 >= 3 ? 9 : 1,
+        sen_placed: i % 5 >= 3 ? 6 : 0,
+        observer_kills: 1,
+        sentry_kills: 0,
+        camps_stacked: i % 5 >= 3 ? 4 : 0,
+        towers_killed: 1,
+        roshans_killed: 0,
+        lane_efficiency_pct: 60 + i,
+        life_state_dead: 90,
+        firstblood_claimed: i === 0 ? 1 : 0,
+        multi_kills: (i === 0 ? { "2": 2 } : {}) as Record<string, number>,
+      })),
+    };
+  }
+
+  /** A game recorded from the summary alone, as most results land. */
+  async function recordUnparsed() {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    const basic = fakeMatch({
+      matchId: MATCH_ID,
+      team1,
+      team2,
+      radiantWin: true,
+      startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+    });
+    mockRecent.mockResolvedValue([MATCH_ID]);
+    mockMatch.mockResolvedValue(basic);
+    expect((await autoDetectResult(players[0].session)).ok).toBe(true);
+    const done = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobby.id },
+    });
+    mockMatch.mockReset();
+    mockMatch.mockResolvedValue(basic);
+    return { admin, players, lobby: done, basic };
+  }
+
+  async function marker(lobbyId: string) {
+    const row = await prisma.setting.findUnique({
+      where: { key: inhouseRegradeKey(lobbyId) },
+    });
+    return row ? parseInhouseRegrade(row.key, row.value) : null;
+  }
+
+  async function storedBox(lobbyId: string) {
+    const row = await prisma.inhouseLobby.findUniqueOrThrow({
+      where: { id: lobbyId },
+      select: { boxScore: true },
+    });
+    return row.boxScore;
+  }
+
+  it("books a re-grade when the result lands unparsed, waits for the replay, then grades the game again", async () => {
+    const { lobby, basic } = await recordUnparsed();
+    const before = parseInhouseBox(lobby.boxScore);
+    expect(before.every((l) => l.grade?.partial)).toBe(true);
+    const booked = await marker(lobby.id);
+    expect(booked).toEqual({
+      lobbyId: lobby.id,
+      dotaMatchId: String(MATCH_ID),
+      resultAtMs: lobby.completedAt!.getTime(),
+      tries: 0,
+    });
+    const at = (minutes: number) => booked!.resultAtMs + minutes * 60_000;
+
+    // Before the first check nothing asks OpenDota.
+    expect(await regradeDueInhouseGame(at(5))).toBe("idle");
+    expect(mockMatch).not.toHaveBeenCalled();
+
+    // Still unparsed at ten minutes: the next check is booked.
+    expect(await regradeDueInhouseGame(at(10))).toBe("waiting");
+    expect(mockMatch).toHaveBeenCalledWith(String(MATCH_ID), {});
+    expect((await marker(lobby.id))?.tries).toBe(1);
+    expect(await storedBox(lobby.id)).toBe(lobby.boxScore);
+    expect(await regradeDueInhouseGame(at(20))).toBe("idle");
+
+    // The replay is in by the second check: every line is graded with it.
+    mockMatch.mockResolvedValue(parsed(basic));
+    const cursor = await getSetting(SETTING_KEYS.RESULT_CHANGED_AT);
+    expect(await regradeDueInhouseGame(at(30))).toBe("regraded");
+    const after = parseInhouseBox(await storedBox(lobby.id));
+    expect(isGradedBox(after)).toBe(true);
+    expect(after.every((l) => l.grade?.partial === false)).toBe(true);
+    expect(after.every((l) => typeof l.damageTaken === "number")).toBe(true);
+    expect(after.filter((l) => l.grade?.awards.includes("mvp"))).toHaveLength(1);
+    // Who played what, and the K/D/A, are the result's, untouched.
+    const core = (l: (typeof after)[number]) =>
+      [l.userId, l.team, l.isRadiant, l.heroId, l.kills, l.deaths, l.assists, l.netWorth];
+    expect(after.map(core)).toEqual(before.map(core));
+    expect(await marker(lobby.id)).toBeNull();
+    expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(cursor);
+    // Discord heard of the result once; a re-grade posts nothing.
+    expect(await prisma.inhouseAnnouncement.count({ where: { lobbyId: lobby.id } })).toBe(1);
+    expect(await regradeDueInhouseGame(at(60))).toBe("idle");
+  });
+
+  it("books nothing for a game whose replay was parsed when the result landed", async () => {
+    const admin = sessionFor(await makeUser("Admin", "ADMIN"));
+    const { players, lobby } = await runToInProgress(admin);
+    const { team1, team2 } = await teamAccounts(lobby.id);
+    mockRecent.mockResolvedValue([MATCH_ID]);
+    mockMatch.mockResolvedValue(
+      parsed(
+        fakeMatch({
+          matchId: MATCH_ID,
+          team1,
+          team2,
+          radiantWin: false,
+          startTime: Math.floor(lobby.createdAt.getTime() / 1000) + 120,
+        }),
+      ),
+    );
+    expect((await autoDetectResult(players[0].session)).ok).toBe(true);
+    const box = parseInhouseBox(await storedBox(lobby.id));
+    expect(box.every((l) => l.grade?.partial === false)).toBe(true);
+    expect(await marker(lobby.id)).toBeNull();
+  });
+
+  it("keeps the partial grade once the last check finds no replay", async () => {
+    const { lobby } = await recordUnparsed();
+    const booked = (await marker(lobby.id))!;
+    const last = INHOUSE_REGRADE_CHECK_MINUTES.length - 1;
+    await prisma.setting.update({
+      where: { key: inhouseRegradeKey(lobby.id) },
+      data: { value: inhouseRegradeValue({ ...booked, tries: last }) },
+    });
+    expect(
+      await regradeDueInhouseGame(
+        booked.resultAtMs + INHOUSE_REGRADE_CHECK_MINUTES[last] * 60_000,
+      ),
+    ).toBe("gave-up");
+    expect(await marker(lobby.id)).toBeNull();
+    expect(await storedBox(lobby.id)).toBe(lobby.boxScore);
+  });
+
+  it("drops the re-grade of a voided game without asking OpenDota", async () => {
+    const { admin, lobby } = await recordUnparsed();
+    expect((await voidLastResult(admin)).ok).toBe(true);
+    const booked = (await marker(lobby.id))!;
+    expect(
+      await regradeDueInhouseGame(booked.resultAtMs + 10 * 60_000),
+    ).toBe("dropped");
+    expect(mockMatch).not.toHaveBeenCalled();
+    expect(await marker(lobby.id)).toBeNull();
+  });
+
+  // The write re-asserts the game it graded: still COMPLETED, still this
+  // match, still this exact box score. A rival lands in the seam between
+  // OpenDota's answer and the write; each removes one of the three.
+  const rivals: [string, (lobbyId: string) => Promise<void>][] = [
+    [
+      "the game left COMPLETED",
+      async (lobbyId) => {
+        await prisma.inhouseLobby.update({
+          where: { id: lobbyId },
+          data: { status: INHOUSE_STATUS.CANCELLED },
+        });
+      },
+    ],
+    [
+      "the game now holds another match",
+      async (lobbyId) => {
+        await prisma.inhouseLobby.update({
+          where: { id: lobbyId },
+          data: { dotaMatchId: String(MATCH_ID + 1) },
+        });
+      },
+    ],
+    [
+      "another pass rewrote the box score",
+      async (lobbyId) => {
+        const box = parseInhouseBox(await storedBox(lobbyId));
+        await prisma.inhouseLobby.update({
+          where: { id: lobbyId },
+          data: { boxScore: JSON.stringify(box.map((l) => ({ ...l, name: "rival" }))) },
+        });
+      },
+    ],
+  ];
+  for (const [name, rival] of rivals) {
+    it(`writes nothing when ${name} first`, async () => {
+      const { lobby, basic } = await recordUnparsed();
+      const booked = (await marker(lobby.id))!;
+      mockMatch.mockResolvedValue(parsed(basic));
+      let fired = false;
+      let rivalBox = "";
+      setRaceHook(
+        onceAt("inhouse.regradeInhouseGame.beforeWrite", async () => {
+          fired = true;
+          await rival(lobby.id);
+          rivalBox = await storedBox(lobby.id);
+        }),
+      );
+      expect(await regradeDueInhouseGame(booked.resultAtMs + 10 * 60_000)).toBe(
+        "lost",
+      );
+      expect(fired).toBe(true);
+      expect(await storedBox(lobby.id)).toBe(rivalBox);
+      expect(
+        parseInhouseBox(await storedBox(lobby.id)).every((l) => l.grade?.partial),
+      ).toBe(true);
+    });
+  }
+
+  it("books the next check only over the marker it read", async () => {
+    const { lobby } = await recordUnparsed();
+    const booked = (await marker(lobby.id))!;
+    const theirs = inhouseRegradeValue({ ...booked, tries: 3 });
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.regradeInhouseGame.beforeNextCheck", async () => {
+        fired = true;
+        await prisma.setting.update({
+          where: { key: inhouseRegradeKey(lobby.id) },
+          data: { value: theirs },
+        });
+      }),
+    );
+    expect(await regradeDueInhouseGame(booked.resultAtMs + 10 * 60_000)).toBe(
+      "lost",
+    );
+    expect(fired).toBe(true);
+    expect(
+      (await prisma.setting.findUniqueOrThrow({
+        where: { key: inhouseRegradeKey(lobby.id) },
+      })).value,
+    ).toBe(theirs);
+  });
+});

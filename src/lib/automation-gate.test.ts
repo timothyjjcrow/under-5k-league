@@ -159,6 +159,7 @@ function inputs(
     openDuels: [],
     inhouseBans: [],
     inhouseBanRoleOn: false,
+    inhouseRegrades: [],
     repairableInhouseResult: false,
     leagueOutbox: [],
     inhouseOutboxes: [],
@@ -187,7 +188,7 @@ describe("computeAutomationGateSnapshot", () => {
 
     expect(AUTOMATION_GATE_HARD_HORIZON_MS).toBe(60 * 60_000);
     expect(snapshot).toEqual({
-      version: 17,
+      version: 18,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -281,7 +282,7 @@ describe("computeAutomationGateSnapshot", () => {
     );
 
     expect(snapshot).toEqual({
-      version: 17,
+      version: 18,
       computedAtMs: NOW,
       nextWakeAtMs: Number.MAX_SAFE_INTEGER,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS,
@@ -1078,6 +1079,29 @@ describe("computeAutomationGateSnapshot", () => {
           NOW,
         ),
       ).toMatchObject({ reason: null });
+    });
+
+    it("wakes for a game's next re-grade check, and at once for a marker it cannot read", () => {
+      const resultAtMs = NOW - 5 * MIN;
+      const marker = (tries: number) => ({
+        key: "inhouse-regrade:lobby-1",
+        value: `8123456789:${resultAtMs}:${tries}`,
+      });
+      // The first check, ten minutes after the result.
+      expect(
+        computeAutomationGateSnapshot(inputs({ inhouseRegrades: [marker(0)] }), NOW),
+      ).toMatchObject({ nextWakeAtMs: resultAtMs + 10 * MIN, reason: "INHOUSE" });
+      // The third, an hour after it.
+      expect(
+        computeAutomationGateSnapshot(inputs({ inhouseRegrades: [marker(2)] }), NOW),
+      ).toMatchObject({ nextWakeAtMs: resultAtMs + 60 * MIN, reason: "INHOUSE" });
+      // The worker deletes a malformed row on its next pass.
+      expect(
+        computeAutomationGateSnapshot(
+          inputs({ inhouseRegrades: [{ key: "inhouse-regrade:lobby-1", value: "?" }] }),
+          NOW,
+        ),
+      ).toMatchObject({ nextWakeAtMs: NOW, reason: "INHOUSE" });
     });
 
     it("runs every pass while a duel is live: the bot's reads and the lobby create retry", () => {
@@ -2330,7 +2354,7 @@ describe("cached decision boundary", () => {
     await expect(getAutomationGateDecision(NOW)).resolves.toEqual({ run: true });
 
     cacheMocks.cached.mockResolvedValueOnce({
-      version: 17,
+      version: 18,
       computedAtMs: NOW,
       nextWakeAtMs: NOW + 1,
       hardWakeAtMs: NOW + AUTOMATION_GATE_HARD_HORIZON_MS + 1,

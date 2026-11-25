@@ -530,7 +530,9 @@ Each result is graded as it lands: `gradeInhouseResult`
 (`src/lib/inhouse-grade-service.ts`) over the pure `src/lib/player-grades.ts`
 stamps every box-score line's grade, the MVP and the highlights;
 `src/lib/inhouse-grade-view.ts` and `src/components/inhouse-grade.tsx` show
-them.
+them. A game graded before OpenDota parsed its replay books a re-grade
+(`src/lib/inhouse-regrade.ts`); the worker's `regradeDueInhouseGame`
+(`src/lib/inhouse-regrade-service.ts`) grades it again once the replay is in.
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 

@@ -43,6 +43,11 @@ import {
 import { inhouseBoxStats, type InhouseBoxPlayer } from "./inhouse-box";
 import { gradeInhouseResult } from "./inhouse-grade-service";
 import {
+  inhouseRegradeKey,
+  inhouseRegradeValue,
+  needsInhouseRegrade,
+} from "./inhouse-regrade";
+import {
   canStartOpenDotaFetch,
   fetchOpenDotaMatch,
   fetchRecentMatchIds,
@@ -2245,6 +2250,19 @@ async function applyResult(
   // The durable announcement commits with COMPLETED, so a process death after
   // this transaction can no longer erase the result itself.
   const resultContent = inhouseResultAnnouncementContent({ ...r, lobbyId });
+  // Graded before OpenDota parsed the replay: book the re-grade
+  // (inhouse-regrade.ts), durable with the result. Hoisted like the two above.
+  const regrade = needsInhouseRegrade(r.boxScore)
+    ? {
+        key: inhouseRegradeKey(lobbyId),
+        value: inhouseRegradeValue({
+          lobbyId,
+          dotaMatchId: r.dotaMatchId,
+          resultAtMs: completedAt.getTime(),
+          tries: 0,
+        }),
+      }
+    : null;
 
   let claimed: boolean;
   try {
@@ -2293,6 +2311,13 @@ async function applyResult(
           resultMatchId: r.dotaMatchId,
         },
       });
+      if (regrade) {
+        await tx.setting.upsert({
+          where: { key: regrade.key },
+          create: regrade,
+          update: { value: regrade.value },
+        });
+      }
       await stampResultChange(tx);
       return true;
     });
@@ -2303,6 +2328,8 @@ async function applyResult(
     throw e;
   }
   if (!claimed) return "closed";
+  // The re-grade's first check is new automated work: wake the worker for it.
+  if (regrade) invalidateAutomationGateBestEffort();
 
   // Exact process-death seam: everything above is committed, while the Elo
   // stamp has not started. The heartbeat reconciler must be able to finish
