@@ -217,9 +217,11 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     // A graded game: every player's grade, the awards, and how a grade was made.
     await page.goto(`/inhouse/history?game=${lobbyId(101)}`);
     const gradedGame = page.locator(`#result-${lobbyId(101)}`);
+    // Graded before the replay was parsed: every chip says it is early.
     await expect(
-      gradedGame.getByRole("img", { name: /^Grade .+ out of 100$/ }),
+      gradedGame.getByRole("img", { name: /^Early grade .+ out of 100$/ }),
     ).toHaveCount(11); // ten lines, plus the MVP's chip in the row summary
+    await expect(gradedGame.getByText("Early grades", { exact: true })).toBeVisible();
     await expect(gradedGame.getByText("MVP", { exact: true }).first()).toBeVisible();
     const firstBreakdown = gradedGame.getByText("How this grade was made").first();
     await firstBreakdown.click();
@@ -234,7 +236,7 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
     await expect(
       page
         .locator(`#result-${lobbyId(0)}`)
-        .getByRole("img", { name: /^Grade / }),
+        .getByRole("img", { name: /grade .+ out of 100/i }),
     ).toHaveCount(0);
 
     await page.goto("/inhouse");

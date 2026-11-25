@@ -6,9 +6,10 @@
 import { heroById } from "./heroes";
 import {
   inhouseGameMvp,
+  inhouseGradeStatus,
   inhouseRoleAward,
-  isGradedBox,
   parseInhouseBox,
+  type InhouseGradeStatus,
 } from "./inhouse-box";
 import { gradeView, type GradeView } from "./inhouse-grade-view";
 import { GRADE_AWARDS, type GradeLetter } from "./player-grades";
@@ -120,6 +121,8 @@ export type ResultCardGrades = {
   mine: (GradeView & { heroName: string | null }) | null;
   /** The game's Top core or Top support. */
   roleAward: { label: string; userId: string; name: string } | null;
+  /** Early (waiting on the replay), graded again with it, or final. */
+  status: InhouseGradeStatus;
 };
 
 /**
@@ -134,7 +137,8 @@ export function resultCardGrades(o: {
   durationSecs: number | null;
 }): ResultCardGrades | null {
   const box = parseInhouseBox(o.boxScore);
-  if (!isGradedBox(box)) return null;
+  const status = inhouseGradeStatus(box);
+  if (!status) return null;
   const byUser: ResultCardGrades["byUser"] = {};
   for (const line of box) {
     if (line.userId && line.grade) {
@@ -158,5 +162,6 @@ export function resultCardGrades(o: {
             name: role.line.name,
           }
         : null,
+    status,
   };
 }

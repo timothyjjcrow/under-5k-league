@@ -9,6 +9,7 @@ import {
   AwardChips,
   GradeBreakdown,
   GradeChip,
+  GradeStatusNote,
   letterLabel,
 } from "@/components/inhouse-grade";
 
@@ -136,7 +137,12 @@ export function ResultCard({
       {mine ? (
         <div className="mt-3 rounded-lg border border-line bg-surface/60 px-3 py-2.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
-            <GradeChip letter={mine.letter} score={mine.score} size="lg" />
+            <GradeChip
+              letter={mine.letter}
+              score={mine.score}
+              size="lg"
+              early={mine.partial}
+            />
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold">
                 Your grade{mine.heroName ? ` on ${mine.heroName}` : ""}
@@ -150,6 +156,7 @@ export function ResultCard({
             </div>
           </div>
           <AwardChips awards={mine.awards} className="mt-2" />
+          <GradeStatusNote status={grades?.status ?? null} className="mt-2" />
           <GradeBreakdown view={mine} />
         </div>
       ) : null}
@@ -203,6 +210,7 @@ export function ResultCard({
                         <GradeChip
                           letter={grades.byUser[p.userId].letter}
                           score={grades.byUser[p.userId].score}
+                          early={grades.status === "early"}
                           className="ml-auto"
                         />
                       ) : null}

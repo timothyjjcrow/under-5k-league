@@ -77,11 +77,24 @@ import { regradeDueInhouseGame } from "@/lib/inhouse-regrade-service";
 // stay real) so tests can assert what would have been announced.
 vi.mock("@/lib/discord", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/discord")>();
-  return { ...actual, sendInhouseDiscordMessage: vi.fn(async () => true) };
+  const send = vi.fn(async (_content: string) => true);
+  return {
+    ...actual,
+    sendInhouseDiscordMessage: send,
+    // Result posts keep their message id (postInhouseResultMessage) so the
+    // re-grade can edit them: route them through the same send mock, so
+    // every assertion on it still sees each post.
+    postInhouseResultMessage: async (content: string) =>
+      (await send(content)) ? { id: "1300000000000000001" } : null,
+    editInhouseResultMessage: vi.fn(async () => "ok" as const),
+  };
 });
 // Inhouse posts to its OWN webhook (getInhouseWebhookUrl) so a league can
 // keep pick-up traffic out of the league-announcement channel.
-import { sendInhouseDiscordMessage } from "@/lib/discord";
+import {
+  editInhouseResultMessage,
+  sendInhouseDiscordMessage,
+} from "@/lib/discord";
 
 // `logAdminAction` resolves the actor from the session rather than a parameter,
 // and there is no cookie jar here to read — without this, the audit write fails
@@ -99,6 +112,7 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 const mockRecent = vi.mocked(fetchRecentMatchIds);
 const mockMatch = vi.mocked(fetchOpenDotaMatch);
 const mockSend = vi.mocked(sendInhouseDiscordMessage);
+const mockEdit = vi.mocked(editInhouseResultMessage);
 
 afterEach(() => {
   setRaceHook(null);
@@ -1102,10 +1116,10 @@ describe("inhouse — finding + recording the game from player IDs", () => {
     const post = await prisma.inhouseAnnouncement.findFirstOrThrow({
       where: { lobbyId: lobby.id },
     });
-    expect(post.content).toContain(
-      `MVP: **${mvps[0].name}**`,
-    );
+    // Graded before the replay: the post says the awards are early.
+    expect(post.content).toContain(`MVP so far: **${mvps[0].name}**`);
     expect(post.content).toContain(`, ${mvps[0].grade!.letter} ${mvps[0].grade!.score}.`);
+    expect(post.content).toContain("Final grades once OpenDota parses the replay.");
     expect(post.content).toContain(`/inhouse/history?game=${lobby.id}`);
   });
 
@@ -2914,7 +2928,7 @@ describe("inhouse — Elo deltas + result announcement", () => {
       .filter((m) => m.includes("Inhouse result"));
     expect(resultSends).toHaveLength(1);
     expect(resultSends[0]).toMatch(/Radiant win 30–20/);
-    expect(resultSends[0]).toMatch(/MVP:/);
+    expect(resultSends[0]).toMatch(/MVP so far:/);
     expect(resultSends[0]).toContain("opendota.com/matches/7000000021");
     expect(
       await prisma.inhouseAnnouncement.findUnique({
@@ -4997,6 +5011,20 @@ describe("inhouse — grading again once OpenDota parses the replay", () => {
     return { admin, players, lobby: done, basic };
   }
 
+  const POST_ID = "1300000000000000001";
+
+  beforeEach(() => {
+    mockEdit.mockClear();
+  });
+
+  /** The stored text of the game's Discord result post. */
+  async function earlyPost(lobbyId: string) {
+    const post = await prisma.inhouseAnnouncement.findFirstOrThrow({
+      where: { lobbyId, kind: INHOUSE_ANNOUNCEMENT_KIND.RESULT },
+    });
+    return post.content;
+  }
+
   async function marker(lobbyId: string) {
     const row = await prisma.setting.findUnique({
       where: { key: inhouseRegradeKey(lobbyId) },
@@ -5022,7 +5050,10 @@ describe("inhouse — grading again once OpenDota parses the replay", () => {
       dotaMatchId: String(MATCH_ID),
       resultAtMs: lobby.completedAt!.getTime(),
       tries: 0,
+      // The result post went out at once and the marker kept its id.
+      messageId: POST_ID,
     });
+    await expect(earlyPost(lobby.id)).resolves.toContain("MVP so far: **");
     const at = (minutes: number) => booked!.resultAtMs + minutes * 60_000;
 
     // Before the first check nothing asks OpenDota.
@@ -5049,7 +5080,20 @@ describe("inhouse — grading again once OpenDota parses the replay", () => {
     const core = (l: (typeof after)[number]) =>
       [l.userId, l.team, l.isRadiant, l.heroId, l.kills, l.deaths, l.assists, l.netWorth];
     expect(after.map(core)).toEqual(before.map(core));
+    // Marked, so the site says the grades came with the replay.
+    expect(after.every((l) => l.grade?.regraded === true)).toBe(true);
     expect(await marker(lobby.id)).toBeNull();
+    // The Discord post is edited in place to the final grades, and the
+    // stored text matches what it now says.
+    expect(mockEdit).toHaveBeenCalledTimes(1);
+    const [editedId, edited] = mockEdit.mock.calls[0];
+    expect(editedId).toBe(POST_ID);
+    const mvp = after.find((l) => l.grade?.awards.includes("mvp"))!;
+    expect(edited).toContain(`MVP: **${mvp.name}**`);
+    expect(edited).toContain(`, ${mvp.grade!.letter} ${mvp.grade!.score}.`);
+    expect(edited).not.toContain("so far");
+    expect(edited).not.toContain("Final grades once");
+    await expect(earlyPost(lobby.id)).resolves.toBe(edited);
     expect(await getSetting(SETTING_KEYS.RESULT_CHANGED_AT)).not.toBe(cursor);
     // Discord heard of the result once; a re-grade posts nothing.
     expect(await prisma.inhouseAnnouncement.count({ where: { lobbyId: lobby.id } })).toBe(1);
@@ -5093,6 +5137,61 @@ describe("inhouse — grading again once OpenDota parses the replay", () => {
     ).toBe("gave-up");
     expect(await marker(lobby.id)).toBeNull();
     expect(await storedBox(lobby.id)).toBe(lobby.boxScore);
+    // The early grade is now final: the post drops its "so far".
+    expect(mockEdit).toHaveBeenCalledTimes(1);
+    const [editedId, edited] = mockEdit.mock.calls[0];
+    expect(editedId).toBe(POST_ID);
+    expect(edited).toContain("MVP: **");
+    expect(edited).not.toContain("so far");
+    expect(edited).not.toContain("Final grades once");
+  });
+
+  it("sends a result post held up by Discord with the final grades, once they are in", async () => {
+    mockSend.mockResolvedValue(false);
+    const { lobby, basic } = await recordUnparsed();
+    const booked = (await marker(lobby.id))!;
+    // Discord refused it: no post, so no id on the marker.
+    expect(booked.messageId).toBeNull();
+    mockMatch.mockResolvedValue(parsed(basic));
+    expect(await regradeDueInhouseGame(booked.resultAtMs + 10 * 60_000)).toBe(
+      "regraded",
+    );
+    expect(mockEdit).not.toHaveBeenCalled();
+    mockSend.mockClear();
+    mockSend.mockResolvedValue(true);
+    await deliverInhouseAnnouncements({
+      lobbyId: lobby.id,
+      now: new Date(Date.now() + 60 * 60_000),
+    });
+    const sent = mockSend.mock.calls
+      .map(([m]) => String(m))
+      .filter((m) => m.includes("Inhouse result:"));
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toContain("MVP: **");
+    expect(sent[0]).not.toContain("so far");
+  });
+
+  it("keeps the post's id over a check booked while it was being saved", async () => {
+    let fired = false;
+    setRaceHook(
+      onceAt("inhouse.rememberInhouseResultPost.beforeWrite", async () => {
+        fired = true;
+        // A re-grade check books its next try between the read and the write.
+        const row = (await prisma.setting.findFirstOrThrow({
+          where: { key: { startsWith: "inhouse-regrade:" } },
+        }))!;
+        const read = parseInhouseRegrade(row.key, row.value)!;
+        await prisma.setting.update({
+          where: { key: row.key },
+          data: { value: inhouseRegradeValue({ ...read, tries: 2 }) },
+        });
+      }),
+    );
+    const { lobby } = await recordUnparsed();
+    expect(fired).toBe(true);
+    const kept = (await marker(lobby.id))!;
+    expect(kept.tries).toBe(2);
+    expect(kept.messageId).toBe(POST_ID);
   });
 
   it("drops the re-grade of a voided game without asking OpenDota", async () => {

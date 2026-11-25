@@ -72,6 +72,8 @@ export type GradeView = {
   mmr: { label: string; value: string; typical: string; beats: string }[];
   awards: GradeAwardView[];
   partial: boolean;
+  /** Graded again once the replay was parsed. */
+  regraded: boolean;
 };
 
 function areaValue(
@@ -224,6 +226,7 @@ export function gradeView(
     mmr,
     awards: awardViews(g.awards),
     partial: g.partial,
+    regraded: g.regraded === true,
   };
 }
 

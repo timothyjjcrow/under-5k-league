@@ -716,7 +716,11 @@ function ResultSummaryLine({
             {mvp.heroId ? ` · ${heroById(mvp.heroId)?.name ?? ""}` : ""}
           </span>
           {mvp.grade ? (
-            <GradeChip letter={mvp.grade.letter} score={mvp.grade.score} />
+            <GradeChip
+              letter={mvp.grade.letter}
+              score={mvp.grade.score}
+              early={mvp.grade.partial}
+            />
           ) : null}
         </span>
       ) : null}

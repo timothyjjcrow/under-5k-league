@@ -160,6 +160,7 @@ async function InhouseCareer({ userId }: { userId: string }) {
                     <GradeChip
                       letter={line.grade.letter}
                       score={line.grade.score}
+                      early={line.grade.partial}
                     />
                   ) : null}
                 </span>

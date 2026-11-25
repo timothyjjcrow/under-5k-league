@@ -1346,13 +1346,38 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   (a void, a new result or another pass landing first wins), stamps the
   result cursor and publishes the room. The site never asks OpenDota to
   parse: every inhouse game in the 2026-11-24 sample was parsed on its own.
-  **Discord is not told:** the result post went out with the early grade,
-  and the post links the game's box score, which shows the final one. After
-  the last check a game keeps its partial grade.
+  It logs which check found the replay (`[inhouse-regrade] regraded with the
+  replay at check N, M min after the result`), so the schedule can be trimmed
+  to what parses actually need. After the last check a game keeps its partial
+  grade (`[inhouse-regrade] no parsed replay after M min`).
+- **OpenDota cost is bounded:** seven calls at most per early-graded game,
+  and one call per worker pass whatever the number waiting. The box's 3,000
+  free calls a day are shared by both leagues; on the busiest day of
+  2026-10-27..11-25 the counted calls were about 860, and 12 US inhouse games
+  in a day would add at most 84.
+- **The Discord result post says "so far" and is edited in place.** An early
+  post words the awards "MVP so far" / "Top support so far" and ends "Final
+  grades once OpenDota parses the replay." (`inhouseResultMessage`'s
+  `early`, defaulting to `needsInhouseRegrade`). The outbox posts results
+  with `?wait=true` (`postInhouseResultMessage`) and puts the message id on
+  the game's re-grade marker by CAS (`rememberInhouseResultPost`, seam
+  `inhouse.rememberInhouseResultPost.beforeWrite`). The re-grade's
+  transaction rewrites the RESULT row's stored text, so a post Discord held
+  up goes out with the final grades, and after the commit it PATCHes the
+  sent post (`editInhouseResultMessage`; edits notify nobody). When the
+  checks give up it edits the post once more to drop "so far". Both edits
+  are best-effort: a refused edit leaves the early post standing.
 - **New box-score fields are optional and checked one by one.**
   `parseInhouseBox` keeps a line on its core fields and drops only a bad
   extra or grade (`normalizePlayerGrade`), so a stored oddity never hides a
   player.
+- **Early grades are marked where they show.** `inhouseGradeStatus`
+  (`inhouse-box.ts`) reads a graded game as `early` (any line `partial`),
+  `regraded` (graded again with the replay: the re-grade stamps
+  `grade.regraded`) or `final`. An early `GradeChip` has a dashed border
+  and reads "Early grade …" to a screen reader; `GradeStatusNote` says
+  "Early grades" with what is missing above the box score and in the room's
+  result card, and "Updated with the replay." once it was graded again.
 - **Where grades show:** each box-score line (grade chip, awards, the extra
   stats, "How this grade was made"), the room's result card (the viewer's
   grade, its parts and awards, everyone's letter), the MVP's chip on

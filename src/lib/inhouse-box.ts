@@ -230,6 +230,23 @@ export function isGradedBox(box: readonly InhouseBoxPlayer[]): boolean {
   return linked.length > 0 && linked.every((p) => p.grade);
 }
 
+/**
+ * Where a graded game's grades stand: `early` while they wait on OpenDota's
+ * replay parse (and for good, once the re-grade gives up), `regraded` once
+ * they were graded again with the replay, `final` when the first grade
+ * already had it. Null for a game without grades.
+ */
+export type InhouseGradeStatus = "early" | "regraded" | "final";
+
+export function inhouseGradeStatus(
+  box: readonly InhouseBoxPlayer[],
+): InhouseGradeStatus | null {
+  if (!isGradedBox(box)) return null;
+  if (box.some((p) => p.grade?.partial)) return "early";
+  if (box.some((p) => p.grade?.regraded)) return "regraded";
+  return "final";
+}
+
 /** The line holding an award in a graded game, or null. */
 export function lineWithAward(
   box: readonly InhouseBoxPlayer[],

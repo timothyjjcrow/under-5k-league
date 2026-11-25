@@ -9,7 +9,7 @@ import {
 } from "@/components/ui";
 import {
   inhouseGameMvp,
-  isGradedBox,
+  inhouseGradeStatus,
   type InhouseBoxPlayer as BoxPlayer,
 } from "@/lib/inhouse-box";
 import { heroById } from "@/lib/heroes";
@@ -19,6 +19,7 @@ import {
   AwardChips,
   GradeBreakdown,
   GradeChip,
+  GradeStatusNote,
 } from "@/components/inhouse-grade";
 import { parseEloDeltas } from "@/lib/inhouse-stats";
 import { cn, formatNetWorth } from "@/lib/utils";
@@ -56,7 +57,8 @@ export function InhouseBoxScore({
   const dire = players.filter((p) => !p.isRadiant);
   // The graded MVP, or the impact-points MVP for a game from before grades.
   const mvpId = inhouseGameMvp(players, radiantWin);
-  const graded = isGradedBox(players);
+  const gradeStatus = inhouseGradeStatus(players);
+  const graded = gradeStatus !== null;
   const dur = lobby.durationSecs ?? 0;
   const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
   const maxNet = Math.max(1, ...players.map((p) => p.netWorth ?? 0));
@@ -75,6 +77,7 @@ export function InhouseBoxScore({
         </p>
       ) : null}
       <InhouseNetWorthBar radiantNet={radiantNet} direNet={direNet} />
+      <GradeStatusNote status={gradeStatus} className="md:col-span-2" />
       {players.length > 0 ? (
         <SideBox
           label="Radiant"
@@ -291,6 +294,7 @@ function SideBox({
                           <GradeChip
                             letter={view.letter}
                             score={view.score}
+                            early={view.partial}
                             className="ml-auto"
                           />
                         ) : null}
@@ -304,6 +308,7 @@ function SideBox({
                           <GradeChip
                             letter={view.letter}
                             score={view.score}
+                            early={view.partial}
                             className="ml-auto"
                           />
                         ) : null}

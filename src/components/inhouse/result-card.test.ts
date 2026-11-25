@@ -110,6 +110,7 @@ describe("ResultCard grades", () => {
     mmr: [],
     awards: [{ key: "eyes" as const, emoji: "👁️", label: "All-seeing", desc: "Most wards placed in the game" }],
     partial: false,
+    regraded: false,
   };
   const graded: LastResult = {
     ...full,
@@ -117,6 +118,7 @@ describe("ResultCard grades", () => {
       byUser: { me: { letter: "A-", score: 74 }, r1: { letter: "S", score: 91 } },
       mine: view,
       roleAward: { label: "Top core", userId: "r1", name: "Name r1" },
+      status: "final",
     },
   };
 
@@ -129,6 +131,25 @@ describe("ResultCard grades", () => {
     expect(html).toContain('aria-label="Grade S, 91 out of 100"');
     expect(html).toContain("Top core");
     expect(html).toContain("How this grade was made");
+  });
+
+  it("marks early grades, and says when they were graded again with the replay", () => {
+    const early = render({
+      ...graded,
+      grades: { ...graded.grades!, status: "early", mine: { ...view, partial: true } },
+    });
+    expect(early).toContain("Early grades");
+    expect(early).toContain('aria-label="Early grade A minus, 74 out of 100"');
+    expect(early).toContain('aria-label="Early grade S, 91 out of 100"');
+    expect(early).toContain("border-dashed");
+    expect(render(graded)).not.toContain("Early grade");
+    expect(render(graded)).not.toContain("Updated with the replay");
+    const again = render({
+      ...graded,
+      grades: { ...graded.grades!, status: "regraded", mine: { ...view, regraded: true } },
+    });
+    expect(again).toContain("Updated with the replay.");
+    expect(again).not.toContain("Early grade");
   });
 
   it("shows none of it for an ungraded game or an old slot's reply", () => {

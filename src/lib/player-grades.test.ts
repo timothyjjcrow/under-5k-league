@@ -374,6 +374,17 @@ describe("normalizePlayerGrade", () => {
     expect(normalizePlayerGrade(JSON.parse(JSON.stringify(grade)))).toEqual(grade);
   });
 
+  it("keeps the mark of a grade made again with the replay, and nothing else there", () => {
+    expect(normalizePlayerGrade({ ...grade, regraded: true })).toEqual({
+      ...grade,
+      regraded: true,
+    });
+    expect(normalizePlayerGrade({ ...grade, regraded: "yes" })).not.toHaveProperty(
+      "regraded",
+    );
+    expect(grade).not.toHaveProperty("regraded");
+  });
+
   it("reads a malformed grade as no grade", () => {
     expect(normalizePlayerGrade(null)).toBeNull();
     expect(normalizePlayerGrade([])).toBeNull();

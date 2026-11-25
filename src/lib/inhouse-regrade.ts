@@ -33,12 +33,18 @@ export type InhouseRegradeMarker = {
   resultAtMs: number;
   /** Checks already made. */
   tries: number;
+  /**
+   * The Discord result post, once the outbox has sent it, so the re-grade
+   * can edit it in place. Null until then.
+   */
+  messageId: string | null;
 };
 
-const VALUE = /^(\d+):(\d+):(\d+)$/;
+const VALUE = /^(\d+):(\d+):(\d+)(?::(\d+))?$/;
 
 export function inhouseRegradeValue(m: InhouseRegradeMarker): string {
-  return `${m.dotaMatchId}:${m.resultAtMs}:${m.tries}`;
+  const post = m.messageId ? `:${m.messageId}` : "";
+  return `${m.dotaMatchId}:${m.resultAtMs}:${m.tries}${post}`;
 }
 
 /** The marker in a Setting row, or null when the row is not a valid one. */
@@ -55,7 +61,7 @@ export function parseInhouseRegrade(
   if (!Number.isSafeInteger(resultAtMs) || !Number.isSafeInteger(tries)) {
     return null;
   }
-  return { lobbyId, dotaMatchId: m[1], resultAtMs, tries };
+  return { lobbyId, dotaMatchId: m[1], resultAtMs, tries, messageId: m[4] ?? null };
 }
 
 /** The next check, or null once every check has been made. */

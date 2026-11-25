@@ -2,6 +2,7 @@
 // breakdown. No hooks, so the server box score and the room's client result
 // card both render them.
 
+import type { InhouseGradeStatus } from "@/lib/inhouse-box";
 import type { GradeAwardView, GradeView } from "@/lib/inhouse-grade-view";
 import type { GradeLetter } from "@/lib/player-grades";
 import { letterTone } from "@/lib/player-grades";
@@ -31,30 +32,41 @@ export function letterLabel(letter: GradeLetter): string {
 const spokenLetter = (letter: GradeLetter) =>
   letter.replace("+", " plus").replace("-", " minus");
 
-/** The grade as a chip: the letter, and the score out of 100 beside it. */
+/**
+ * The grade as a chip: the letter, and the score out of 100 beside it. An
+ * early grade (made before OpenDota parsed the replay) gets a dashed border
+ * and says so to a screen reader.
+ */
 export function GradeChip({
   letter,
   score,
   size = "sm",
+  early = false,
   className,
 }: {
   letter: GradeLetter;
   score: number;
   size?: "sm" | "lg";
+  early?: boolean;
   className?: string;
 }) {
   const s = letter === "S";
   return (
     <span
       role="img"
-      aria-label={`Grade ${spokenLetter(letter)}, ${score} out of 100`}
-      title={`Grade ${letterLabel(letter)}: ${score} out of 100`}
+      aria-label={`${early ? "Early grade" : "Grade"} ${spokenLetter(letter)}, ${score} out of 100`}
+      title={
+        early
+          ? `Early grade ${letterLabel(letter)}: ${score} out of 100. It updates once OpenDota parses the replay.`
+          : `Grade ${letterLabel(letter)}: ${score} out of 100`
+      }
       className={cn(
         "inline-flex shrink-0 items-baseline gap-1 rounded border font-display font-bold tabular-nums",
         size === "lg" ? "px-2 py-0.5 text-2xl leading-8" : "px-1.5 text-xs leading-5",
         s
           ? "border-accent bg-accent/20 text-accent"
           : TONE_CHIP[letterTone(letter)],
+        early && "border-dashed",
         className,
       )}
     >
@@ -70,6 +82,44 @@ export function GradeChip({
       </span>
     </span>
   );
+}
+
+/**
+ * Says where a game's grades stand, in a line above them: early while they
+ * wait on the replay, graded again once it came. Nothing for a game whose
+ * first grade already had the replay.
+ */
+export function GradeStatusNote({
+  status,
+  className,
+}: {
+  status: InhouseGradeStatus | null;
+  className?: string;
+}) {
+  if (status === "early") {
+    return (
+      <p className={cn("text-xs text-muted", className)}>
+        <span className="mr-1.5 inline-block rounded border border-dashed border-line px-1.5 font-semibold text-fg/80">
+          Early grades
+        </span>
+        OpenDota hasn’t parsed the replay yet, so damage taken, stuns, wards,
+        stacks and laning aren’t counted. Grades and awards update once it is
+        (the site checks for a day).
+      </p>
+    );
+  }
+  if (status === "regraded") {
+    return (
+      <p className={cn("text-xs text-muted", className)}>
+        <span className="mr-1.5 font-semibold text-fg/80">
+          Updated with the replay.
+        </span>
+        Graded again once OpenDota parsed it, with damage taken, stuns, wards,
+        stacks and laning counted.
+      </p>
+    );
+  }
+  return null;
 }
 
 /** The awards a player earned this game, as small chips. */

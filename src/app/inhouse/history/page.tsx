@@ -335,6 +335,7 @@ export default async function InhouseHistoryPage({
                                 <GradeChip
                                   letter={mvp.grade.letter}
                                   score={mvp.grade.score}
+                                  early={mvp.grade.partial}
                                 />
                               ) : null}
                             </div>

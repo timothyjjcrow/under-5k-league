@@ -6,6 +6,7 @@ import {
   inhouseBoxStats,
   inhouseGameMvp,
   inhouseRoleAward,
+  inhouseGradeStatus,
   isGradedBox,
   parseInhouseBox,
   type InhouseBoxPlayer,
@@ -189,5 +190,17 @@ describe("inhouse box stats and grades", () => {
     // One linked line without a grade is not a graded game either.
     const mixed = graded.map((l, i) => (i === 3 ? box[3] : l));
     expect(isGradedBox(mixed)).toBe(false);
+  });
+
+  it("says whether a game's grades are early, graded again, or final", () => {
+    expect(inhouseGradeStatus(box)).toBeNull();
+    expect(inhouseGradeStatus(graded)).toBe("final");
+    const early = graded.map((l) => ({ ...l, grade: { ...l.grade, partial: true } }));
+    expect(inhouseGradeStatus(early)).toBe("early");
+    const again = graded.map((l) => ({
+      ...l,
+      grade: { ...l.grade, regraded: true as const },
+    }));
+    expect(inhouseGradeStatus(again)).toBe("regraded");
   });
 });

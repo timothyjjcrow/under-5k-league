@@ -543,6 +543,12 @@ export type PlayerGrade = {
   awards: GradeAwardKey[];
   /** True when the replay wasn't parsed yet: the parsed-only areas are out. */
   partial: boolean;
+  /**
+   * Set when the game was graded again once its replay was parsed
+   * (inhouse-regrade-service.ts), so the site can say the grades changed.
+   * Absent on a game graded in full the first time.
+   */
+  regraded?: true;
 };
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
@@ -769,6 +775,7 @@ export function normalizePlayerGrade(v: unknown): PlayerGrade | null {
     vsMmr,
     awards: keys(g.awards, AWARD_KEYS) as GradeAwardKey[],
     partial: g.partial === true,
+    ...(g.regraded === true ? { regraded: true as const } : {}),
   };
 }
 

@@ -2260,6 +2260,7 @@ async function applyResult(
           dotaMatchId: r.dotaMatchId,
           resultAtMs: completedAt.getTime(),
           tries: 0,
+          messageId: null,
         }),
       }
     : null;

@@ -11,6 +11,7 @@ import {
   needsInhouseRegrade,
   parseInhouseRegrade,
   withParsedStats,
+  type InhouseRegradeMarker,
 } from "./inhouse-regrade";
 import { gradeGame } from "./player-grades";
 
@@ -71,16 +72,24 @@ function graded(box: InhouseBoxPlayer[]): InhouseBoxPlayer[] {
 }
 
 describe("the re-grade marker", () => {
-  const marker = {
+  const marker: InhouseRegradeMarker = {
     lobbyId: "lobby-1",
     dotaMatchId: "8123456789",
     resultAtMs: 1_790_000_000_000,
     tries: 2,
+    messageId: null,
   };
 
   it("round-trips through its Setting row and refuses anything else", () => {
     const key = inhouseRegradeKey(marker.lobbyId);
     expect(parseInhouseRegrade(key, inhouseRegradeValue(marker))).toEqual(marker);
+    // With the Discord post's id once the outbox has sent it.
+    const posted = { ...marker, messageId: "1311111111111111111" };
+    expect(inhouseRegradeValue(posted)).toBe(
+      "8123456789:1790000000000:2:1311111111111111111",
+    );
+    expect(parseInhouseRegrade(key, inhouseRegradeValue(posted))).toEqual(posted);
+    expect(parseInhouseRegrade(key, "8123456789:1790000000000:2:")).toBeNull();
     expect(parseInhouseRegrade(key, "8123456789:x:2")).toBeNull();
     expect(parseInhouseRegrade(key, "")).toBeNull();
     expect(parseInhouseRegrade("inhouse-regrade:", inhouseRegradeValue(marker))).toBeNull();
