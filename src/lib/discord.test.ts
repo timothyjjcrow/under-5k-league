@@ -1400,6 +1400,25 @@ describe("inhouse messages", () => {
     expect(msg).toContain("opendota.com/matches/8412345678");
   });
 
+  it("adds grades, the role award and the game's own box score link when graded", () => {
+    const msg = inhouseResultMessage({
+      winnerSide: "Radiant",
+      radiantScore: 52,
+      direScore: 43,
+      durationSecs: 63 * 60 + 18,
+      mvpName: "Timo",
+      mvpHero: "Grimstroke",
+      mvpGrade: "S 91",
+      roleAward: { label: "Top core", name: "Kev", hero: "Windranger", grade: "A 79" },
+      lobbyId: "lobby1",
+      dotaMatchId: "8412345678",
+    });
+    expect(msg).toContain("MVP: **Timo** (Grimstroke), S 91.");
+    expect(msg).toContain("Top core: **Kev** (Windranger), A 79.");
+    expect(msg).toContain("/inhouse/history?game=lobby1#result-lobby1");
+    expect(msg).toContain("opendota.com/matches/8412345678");
+  });
+
   it("omits the MVP clause when nobody in the box score is a member", () => {
     const msg = inhouseResultMessage({
       winnerSide: "Radiant",
@@ -2984,6 +3003,8 @@ describe("no player-supplied name can inject markdown", () => {
       durationSecs: 2000,
       mvpName: EVIL,
       mvpHero: "Pudge",
+      mvpGrade: "S 91",
+      roleAward: { label: "Top support", name: EVIL, hero: "Lion", grade: "A 80" },
       dotaMatchId: "123",
     }),
     weekReminderMessage({

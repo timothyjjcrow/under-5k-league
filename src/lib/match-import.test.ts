@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { sanitizeBenchmarks } from "./benchmarks";
 import {
   buildPlayers,
   claimsGame,
@@ -6,7 +7,6 @@ import {
   eligibleCompetingMeetingKickoffs,
   isWithinLeagueResultWindow,
   pickSeriesGames,
-  sanitizeBenchmarks,
 } from "./match-import";
 import {
   DETECT_WINDOW_AFTER_MS,

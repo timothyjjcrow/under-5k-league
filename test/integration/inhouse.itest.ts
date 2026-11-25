@@ -64,6 +64,7 @@ vi.mock("@/lib/dota", async (importOriginal) => {
   };
 });
 import { fetchOpenDotaMatch, fetchRecentMatchIds } from "@/lib/dota";
+import { isGradedBox, parseInhouseBox } from "@/lib/inhouse-box";
 
 // Discord sends are best-effort network calls — stub the sender (formatters
 // stay real) so tests can assert what would have been announced.
@@ -1082,6 +1083,23 @@ describe("inhouse — finding + recording the game from player IDs", () => {
     expect(box.filter((b) => b.team === 1)).toHaveLength(5);
     expect(box.filter((b) => b.team === 2)).toHaveLength(5);
     expect(box.every((b) => b.userId !== null)).toBe(true); // all 10 mapped to users
+
+    // Every line was graded as the result landed, with one MVP, and the
+    // Discord post names that MVP with their grade.
+    const graded = parseInhouseBox(done.boxScore);
+    expect(isGradedBox(graded)).toBe(true);
+    const mvps = graded.filter((b) => b.grade?.awards.includes("mvp"));
+    expect(mvps).toHaveLength(1);
+    // The basic payload has no parsed replay: graded, and marked partial.
+    expect(graded.every((b) => b.grade?.partial)).toBe(true);
+    const post = await prisma.inhouseAnnouncement.findFirstOrThrow({
+      where: { lobbyId: lobby.id },
+    });
+    expect(post.content).toContain(
+      `MVP: **${mvps[0].name}**`,
+    );
+    expect(post.content).toContain(`, ${mvps[0].grade!.letter} ${mvps[0].grade!.score}.`);
+    expect(post.content).toContain(`/inhouse/history?game=${lobby.id}`);
   });
 
   it("records the game from a pasted match id without changing player-ID validation", async () => {

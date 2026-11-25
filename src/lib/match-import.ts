@@ -14,6 +14,7 @@ import {
   type OpenDotaFetchOptions,
 } from "./dota";
 import { effectiveDotaAccountId } from "./dota-account";
+import { sanitizeBenchmarks } from "./benchmarks";
 import {
   NO_PLAYER_ITEMS,
   playerItemsFromOpenDota,
@@ -584,27 +585,6 @@ export async function gatherTeamAccounts(
   }
 
   return { accountMap, homeSet, awaySet, teamSize: season?.teamSize ?? 5 };
-}
-
-/**
- * Keep only benchmark entries whose percentile is a real number — OpenDota
- * occasionally sends nulls/objects with missing pct, and an empty map is
- * stored as null so old and new lines degrade the same way. Exported for tests.
- */
-export function sanitizeBenchmarks(
-  raw: OpenDotaPlayer["benchmarks"],
-): Record<string, { raw: number | null; pct: number }> | null {
-  if (!raw || typeof raw !== "object") return null;
-  const out: Record<string, { raw: number | null; pct: number }> = {};
-  for (const [key, v] of Object.entries(raw)) {
-    if (!v || typeof v.pct !== "number" || !Number.isFinite(v.pct)) continue;
-    out[key] = {
-      raw: typeof v.raw === "number" && Number.isFinite(v.raw) ? v.raw : null,
-      // OpenDota pct is 0..1; clamp defensively so stored data is always sane.
-      pct: Math.min(1, Math.max(0, v.pct)),
-    };
-  }
-  return Object.keys(out).length > 0 ? out : null;
 }
 
 /** Shape a fetched game's players into the stored box-score JSON lines. */

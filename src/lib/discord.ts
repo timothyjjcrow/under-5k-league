@@ -909,17 +909,35 @@ export function inhouseResultMessage(m: {
   radiantScore: number;
   direScore: number;
   durationSecs: number;
-  /** Best line of the game (null when nobody in the box score is a member). */
+  /** The game's MVP (null when nobody in the box score is a member). */
   mvpName: string | null;
   mvpHero: string | null;
+  /** The MVP's grade, "S 91", when the game was graded. */
+  mvpGrade?: string | null;
+  /** A graded game's Top core or Top support. */
+  roleAward?: {
+    label: string;
+    name: string;
+    hero: string | null;
+    grade: string;
+  } | null;
+  /** Links the game's own box score and grades when known. */
+  lobbyId?: string | null;
   dotaMatchId: string;
 }): string {
   const mins = Math.floor(m.durationSecs / 60);
   const secs = String(m.durationSecs % 60).padStart(2, "0");
   const mvp = m.mvpName
-    ? ` MVP: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
+    ? ` MVP: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}${m.mvpGrade ? `, ${m.mvpGrade}` : ""}.`
     : "";
-  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
+  const role = m.roleAward
+    ? ` ${m.roleAward.label}: **${name(m.roleAward.name)}**${m.roleAward.hero ? ` (${m.roleAward.hero})` : ""}, ${m.roleAward.grade}.`
+    : "";
+  const site = resolveSiteUrl();
+  const boxLink = m.lobbyId
+    ? `Grades + box score: <${site}/inhouse/history?game=${encodeURIComponent(m.lobbyId)}#result-${encodeURIComponent(m.lobbyId)}>`
+    : `Box score + ladder: <${site}/inhouse>`;
+  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp}${role} ${boxLink} · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
 }
 
 /**

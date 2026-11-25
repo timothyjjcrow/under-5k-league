@@ -18,7 +18,7 @@ import {
   type BoardSnapshot,
   type BoardStats,
 } from "./inhouse-board";
-import { gameMvp } from "./achievements";
+import { inhouseGameMvp, parseInhouseBox } from "./inhouse-box";
 import { heroById } from "./heroes";
 import {
   loadInhouseLadderSummary,
@@ -446,26 +446,14 @@ async function readBoardStats(summary: InhouseLadderSummary): Promise<BoardStats
   let mvpName: string | null = null;
   let mvpHero: string | null = null;
   if (last?.boxScore) {
-    try {
-      // Mirrors BoxScorePlayer in inhouse-service (the shape applyResult stores).
-      const box = JSON.parse(last.boxScore) as {
-        userId: string | null;
-        name: string | null;
-        isRadiant: boolean;
-        heroId: number;
-        kills: number;
-        deaths: number;
-        assists: number;
-        netWorth: number | null;
-      }[];
-      const radiantWin = last.winnerTeam === last.radiantTeam;
-      const id = gameMvp(box, radiantWin);
-      const line = id ? box.find((b) => b.userId === id) : null;
-      mvpName = line?.name ?? null;
-      mvpHero = line ? (heroById(line.heroId)?.name ?? null) : null;
-    } catch {
-      // Malformed box score — show the result without an MVP, never a guess.
-    }
+    // parseInhouseBox drops a malformed line rather than throw: an unreadable
+    // box score shows the result without an MVP, never a guess.
+    const box = parseInhouseBox(last.boxScore);
+    const radiantWin = last.winnerTeam === last.radiantTeam;
+    const id = box.length ? inhouseGameMvp(box, radiantWin) : null;
+    const line = id ? box.find((b) => b.userId === id) : null;
+    mvpName = line?.name ?? null;
+    mvpHero = line ? (heroById(line.heroId)?.name ?? null) : null;
   }
 
   // rankInhouse drops provisionals — never crown someone with <5 games.

@@ -40,7 +40,8 @@ import {
   noShowReason,
   resultVoidedReason,
 } from "./inhouse-end-reason";
-import type { InhouseBoxPlayer } from "./inhouse-box";
+import { inhouseBoxStats, type InhouseBoxPlayer } from "./inhouse-box";
+import { gradeInhouseResult } from "./inhouse-grade-service";
 import {
   canStartOpenDotaFetch,
   fetchOpenDotaMatch,
@@ -108,8 +109,10 @@ import { buildDuelState } from "./inhouse-duel";
 import { loadDuelRoomRows } from "./inhouse-duel-room";
 import { runAfterResponse } from "./after-response";
 import {
+  resultCardGrades,
   resultCardMvp,
   resultCardTeams,
+  type ResultCardGrades,
   type ResultCardTeam,
 } from "./inhouse-result-card";
 import { raceHook } from "./race-hook";
@@ -2138,6 +2141,9 @@ function buildResult(
       netWorth: pl.net_worth ?? null,
       gpm: pl.gold_per_min ?? null,
       lastHits: pl.last_hits ?? null,
+      // Damage, healing, wards, stuns and the rest the grade reads
+      // (gradeInhouseResult stamps the grade itself in applyResult).
+      ...inhouseBoxStats(pl),
     };
   });
 
@@ -2190,8 +2196,16 @@ const LOBBY_CLOSED_WHILE_FETCHING =
  */
 async function applyResult(
   lobbyId: string,
-  r: BuiltResult,
+  built: BuiltResult,
 ): Promise<ApplyOutcome> {
+  // Every player's post-game grade, the MVP and the game's highlights,
+  // stamped on the box score before the transaction opens (a database read
+  // for the MMR comparison, no network). Best-effort: it returns the box
+  // ungraded rather than fail the result.
+  const r: BuiltResult = {
+    ...built,
+    boxScore: await gradeInhouseResult(lobbyId, built),
+  };
   // The claim AND the teamFixes loop commit together, as one transaction.
   //
   // The claim on its own would commit a COMPLETED lobby still carrying the
@@ -2230,7 +2244,7 @@ async function applyResult(
   const completedAt = new Date();
   // The durable announcement commits with COMPLETED, so a process death after
   // this transaction can no longer erase the result itself.
-  const resultContent = inhouseResultAnnouncementContent(r);
+  const resultContent = inhouseResultAnnouncementContent({ ...r, lobbyId });
 
   let claimed: boolean;
   try {
@@ -3519,9 +3533,10 @@ export async function loadInhouseRoomRows(nowMs: number = Date.now()) {
         radiantScore: true,
         direScore: true,
         eloDeltas: true,
-        // The result card: both sides by name, and the MVP from the box
-        // score. A handful of rows, only inside the banner window.
+        // The result card: both sides by name, and the MVP and grades from
+        // the box score. A handful of rows, only inside the banner window.
         boxScore: true,
+        durationSecs: true,
         players: {
           orderBy: [{ pickIndex: "asc" }, { id: "asc" }],
           select: {
@@ -3889,6 +3904,8 @@ export function buildInhouseState(
     teams: [ResultCardTeam, ResultCardTeam];
     /** The game's MVP from its box score, or null (never a guess). */
     mvp: { userId: string; name: string; hero: string | null } | null;
+    /** Everyone's grade and the viewer's own; null for an ungraded game. */
+    grades: ResultCardGrades | null;
   } = null;
   if (viewer) {
     // The newest game in the window that the viewer played. A newest game
@@ -3932,6 +3949,11 @@ export function buildInhouseState(
         mvp: resultCardMvp({
           boxScore: recent.boxScore,
           radiantWin: recent.winnerTeam === recent.radiantTeam,
+        }),
+        grades: resultCardGrades({
+          boxScore: recent.boxScore,
+          viewerId: viewer.id,
+          durationSecs: recent.durationSecs,
         }),
       };
     }

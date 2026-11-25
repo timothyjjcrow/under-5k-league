@@ -154,6 +154,7 @@ const recentGame = (
     Object.fromEntries(ids.map((u, i) => [u, i < 5 ? 25 : -25])),
   ),
   boxScore: "[]",
+  durationSecs: 2400,
   players: ids.map((userId, i) => ({
     userId,
     team: i < 5 ? 1 : 2,

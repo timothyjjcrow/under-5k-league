@@ -27,6 +27,7 @@ const full: LastResult = {
     { isRadiant: false, won: true, players: [player("d1", 14, true), player("me", 14)] },
   ],
   mvp: { userId: "me", name: "Name me", hero: "Lion" },
+  grades: null,
 };
 
 const render = (result: LastResult, queued: string[] = [], runItBack = true) =>
@@ -91,3 +92,51 @@ describe("ResultCard", () => {
     expect(html).not.toContain("back in the queue");
   });
 });
+
+describe("ResultCard grades", () => {
+  const view = {
+    letter: "A-" as const,
+    score: 74,
+    tone: "success" as const,
+    role: "Support" as const,
+    heroName: "Lion",
+    parts: [
+      { key: "game" as const, label: "This game", note: "n", score: 80, letter: "A" as const, tone: "success" as const, weight: "50%" },
+      { key: "hero" as const, label: "On Lion", note: "n", score: 60, letter: "B-" as const, tone: "accent" as const, weight: "25%" },
+      { key: "mmr" as const, label: "For their MMR", note: "n", score: null, letter: null, tone: "muted" as const, weight: "25%" },
+    ],
+    areas: [],
+    hero: [],
+    mmr: [],
+    awards: [{ key: "eyes" as const, emoji: "👁️", label: "All-seeing", desc: "Most wards placed in the game" }],
+    partial: false,
+  };
+  const graded: LastResult = {
+    ...full,
+    grades: {
+      byUser: { me: { letter: "A-", score: 74 }, r1: { letter: "S", score: 91 } },
+      mine: view,
+      roleAward: { label: "Top core", userId: "r1", name: "Name r1" },
+    },
+  };
+
+  it("shows the viewer's grade, its parts, their awards and everyone's letter", () => {
+    const html = render(graded);
+    expect(html).toContain("Your grade on Lion");
+    expect(html).toContain('aria-label="Grade A minus, 74 out of 100"');
+    expect(html).toContain("This game A · On Lion B\u2212");
+    expect(html).toContain("All-seeing");
+    expect(html).toContain('aria-label="Grade S, 91 out of 100"');
+    expect(html).toContain("Top core");
+    expect(html).toContain("How this grade was made");
+  });
+
+  it("shows none of it for an ungraded game or an old slot's reply", () => {
+    for (const result of [full, { ...full, grades: undefined } as unknown as LastResult]) {
+      const html = render(result);
+      expect(html).not.toContain("Your grade");
+      expect(html).not.toContain("out of 100");
+    }
+  });
+});
+

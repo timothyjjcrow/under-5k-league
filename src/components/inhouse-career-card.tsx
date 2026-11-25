@@ -12,6 +12,7 @@ import {
   KDA,
   textLink,
 } from "@/components/ui";
+import { GradeChip } from "@/components/inhouse-grade";
 import { INHOUSE_STATUS } from "@/lib/constants";
 import { heroById } from "@/lib/heroes";
 import { parseInhouseBox } from "@/lib/inhouse-box";
@@ -153,6 +154,12 @@ async function InhouseCareer({ userId }: { userId: string }) {
                       deaths={line.deaths}
                       assists={line.assists}
                       className="shrink-0 text-xs"
+                    />
+                  ) : null}
+                  {line?.grade ? (
+                    <GradeChip
+                      letter={line.grade.letter}
+                      score={line.grade.score}
                     />
                   ) : null}
                 </span>

@@ -7,9 +7,19 @@ import {
   PlayerLink,
   textLink,
 } from "@/components/ui";
-import { type InhouseBoxPlayer as BoxPlayer } from "@/lib/inhouse-box";
+import {
+  inhouseGameMvp,
+  isGradedBox,
+  type InhouseBoxPlayer as BoxPlayer,
+} from "@/lib/inhouse-box";
 import { heroById } from "@/lib/heroes";
-import { gameMvp } from "@/lib/achievements";
+import { gradeView, inhouseStatBits } from "@/lib/inhouse-grade-view";
+import { gradeRuleShort } from "@/lib/player-grades";
+import {
+  AwardChips,
+  GradeBreakdown,
+  GradeChip,
+} from "@/components/inhouse-grade";
 import { parseEloDeltas } from "@/lib/inhouse-stats";
 import { cn, formatNetWorth } from "@/lib/utils";
 
@@ -44,8 +54,9 @@ export function InhouseBoxScore({
     lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
   const radiant = players.filter((p) => p.isRadiant);
   const dire = players.filter((p) => !p.isRadiant);
-  // Best line of the game — same tested MVP math the league box scores use.
-  const mvpId = gameMvp(players, radiantWin);
+  // The graded MVP, or the impact-points MVP for a game from before grades.
+  const mvpId = inhouseGameMvp(players, radiantWin);
+  const graded = isGradedBox(players);
   const dur = lobby.durationSecs ?? 0;
   const durStr = `${Math.floor(dur / 60)}:${String(dur % 60).padStart(2, "0")}`;
   const maxNet = Math.max(1, ...players.map((p) => p.netWorth ?? 0));
@@ -73,6 +84,8 @@ export function InhouseBoxScore({
           maxNet={maxNet}
           mvpId={mvpId}
           deltas={deltas}
+          allPlayers={players}
+          durationSecs={lobby.durationSecs}
         />
       ) : (
         <RosterSummary
@@ -90,6 +103,8 @@ export function InhouseBoxScore({
           maxNet={maxNet}
           mvpId={mvpId}
           deltas={deltas}
+          allPlayers={players}
+          durationSecs={lobby.durationSecs}
         />
       ) : (
         <RosterSummary
@@ -100,6 +115,11 @@ export function InhouseBoxScore({
           deltas={deltas}
         />
       )}
+      {graded ? (
+        <p className="text-[11px] text-muted md:col-span-2">
+          {gradeRuleShort()}
+        </p>
+      ) : null}
       {Object.keys(deltas).length > 0 ? (
         <p className="text-[11px] text-muted md:col-span-2">
           Elo changes shown as recorded when this result landed.
@@ -176,6 +196,8 @@ function SideBox({
   maxNet,
   mvpId,
   deltas,
+  allPlayers,
+  durationSecs,
 }: {
   label: string;
   win: boolean;
@@ -184,6 +206,9 @@ function SideBox({
   maxNet: number;
   mvpId: string | null;
   deltas: Record<string, number>;
+  /** Both sides: a grade's breakdown reads the whole game. */
+  allPlayers: BoxPlayer[];
+  durationSecs: number | null;
 }) {
   const isRadiant = label === "Radiant";
   const hasNet = players.some((p) => p.netWorth != null);
@@ -221,6 +246,11 @@ function SideBox({
           const hero = heroById(p.heroId);
           const nwPct =
             p.netWorth != null ? Math.round((p.netWorth / maxNet) * 100) : 0;
+          const view = gradeView(p, allPlayers, {
+            durationSecs,
+            heroName: hero?.name ?? null,
+          });
+          const bits = inhouseStatBits(p);
           return (
             <li
               key={i}
@@ -247,7 +277,7 @@ function SideBox({
                         >
                           {p.name ?? "Unknown"}
                         </PlayerLink>
-                        {p.userId === mvpId ? (
+                        {p.userId === mvpId && !view ? (
                           <span
                             role="img"
                             aria-label="Match MVP"
@@ -257,10 +287,26 @@ function SideBox({
                             🏅
                           </span>
                         ) : null}
+                        {view ? (
+                          <GradeChip
+                            letter={view.letter}
+                            score={view.score}
+                            className="ml-auto"
+                          />
+                        ) : null}
                       </span>
                     ) : (
-                      <span className="truncate text-sm text-muted">
-                        {p.name ?? "Unknown"}
+                      <span className="flex min-w-0 items-center gap-1.5">
+                        <span className="truncate text-sm text-muted">
+                          {p.name ?? "Unknown"}
+                        </span>
+                        {view ? (
+                          <GradeChip
+                            letter={view.letter}
+                            score={view.score}
+                            className="ml-auto"
+                          />
+                        ) : null}
                       </span>
                     )}
                     <div className="flex flex-wrap items-center gap-x-2 text-[11px] text-muted">
@@ -307,6 +353,15 @@ function SideBox({
                   ) : null}
                 </div>
               </div>
+              {view && view.awards.length > 0 ? (
+                <AwardChips awards={view.awards} className="mt-1.5" />
+              ) : null}
+              {bits.length > 0 ? (
+                <p className="mt-1 text-[11px] tabular-nums text-muted">
+                  {bits.join(" · ")}
+                </p>
+              ) : null}
+              {view ? <GradeBreakdown view={view} /> : null}
             </li>
           );
         })}

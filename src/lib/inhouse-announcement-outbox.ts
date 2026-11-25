@@ -6,9 +6,14 @@ import {
   inhouseResultVoidedMessage,
   sendInhouseDiscordMessage,
 } from "./discord";
-import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
+import {
+  inhouseGameMvp,
+  inhouseRoleAward,
+  parseInhouseBox,
+  type InhouseBoxPlayer,
+} from "./inhouse-box";
+import { GRADE_AWARDS } from "./player-grades";
 import { inhouseEloDeltasFor, toFinishedLobby } from "./inhouse-stats";
-import { gameMvp } from "./achievements";
 import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
@@ -49,6 +54,8 @@ type InhouseResultAnnouncementSource = {
   durationSecs: number;
   dotaMatchId: string;
   boxScore: InhouseBoxPlayer[];
+  /** The lobby, so the post links its own box score and grades. */
+  lobbyId?: string;
 };
 
 /** The single result renderer used by both the live path and crash recovery. */
@@ -56,10 +63,13 @@ export function inhouseResultAnnouncementContent(
   result: InhouseResultAnnouncementSource,
 ): string {
   const radiantWin = result.winnerTeam === result.radiantTeam;
-  const mvpId = gameMvp(result.boxScore, radiantWin);
+  const mvpId = inhouseGameMvp(result.boxScore, radiantWin);
   const mvp = mvpId
     ? result.boxScore.find((player) => player.userId === mvpId)
     : null;
+  const role = inhouseRoleAward(result.boxScore);
+  const gradeText = (line: InhouseBoxPlayer) =>
+    line.grade ? `${line.grade.letter} ${line.grade.score}` : null;
   return inhouseResultMessage({
     winnerSide: radiantWin ? "Radiant" : "Dire",
     radiantScore: result.radiantScore,
@@ -67,6 +77,17 @@ export function inhouseResultAnnouncementContent(
     durationSecs: result.durationSecs,
     mvpName: mvp?.name ?? null,
     mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
+    mvpGrade: mvp ? gradeText(mvp) : null,
+    roleAward:
+      role?.line.name && role.line.grade
+        ? {
+            label: GRADE_AWARDS[role.award].label,
+            name: role.line.name,
+            hero: heroById(role.line.heroId)?.name ?? null,
+            grade: gradeText(role.line) ?? "",
+          }
+        : null,
+    lobbyId: result.lobbyId ?? null,
     dotaMatchId: result.dotaMatchId,
   });
 }
@@ -210,6 +231,7 @@ async function reconcileOneResult(
             durationSecs: source.durationSecs,
             dotaMatchId: source.dotaMatchId,
             boxScore,
+            lobbyId: source.id,
           });
 
           // Re-assert both the exact source result and the missing/current
