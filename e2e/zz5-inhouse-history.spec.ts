@@ -2,6 +2,7 @@ import { test, expect } from "@playwright/test";
 import { PrismaClient } from "@prisma/client";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { gradeGame } from "../src/lib/player-grades";
 
 // Explicitly pinned to Playwright's disposable database, never an .env URL.
 const db = new PrismaClient({
@@ -16,6 +17,27 @@ async function invalidateResults() {
     create: { key: "resultChangedAt", value: String(Date.now()) },
     update: { value: String(Date.now()) },
   });
+}
+
+/** Grade a fixture box score the way applyResult does (no MMR baseline). */
+function graded<
+  T extends {
+    userId: string;
+    isRadiant: boolean;
+    heroId: number;
+    kills: number;
+    deaths: number;
+    assists: number;
+  },
+>(box: T[], winner: number) {
+  const grades = gradeGame(box, {
+    // Team 1 is always Radiant here.
+    radiantWin: winner === 1,
+    durationSecs: 2500,
+    mmrByUser: new Map(),
+    baseline: [],
+  });
+  return box.map((line, i) => ({ ...line, grade: grades[i] }));
 }
 
 async function cleanFixture() {
@@ -94,7 +116,12 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
           durationSecs: 2500,
           radiantScore: 42,
           direScore: 31,
-          boxScore: index === 100 ? "[]" : JSON.stringify(box),
+          // The newest game is graded the way applyResult grades one; the
+          // rest are from before grades.
+          boxScore:
+            index === 100
+              ? "[]"
+              : JSON.stringify(index === 101 ? graded(box, winner) : box),
           eloDeltas: JSON.stringify(
             Object.fromEntries(
               users.map((user, player) => [
@@ -186,6 +213,31 @@ test("history retains pagination, shareable box scores, legacy rosters and admin
         .locator(`#result-${lobbyId(100)}`)
         .getByRole("link", { name: names[9], exact: true }),
     ).toBeVisible();
+
+    // A graded game: every player's grade, the awards, and how a grade was made.
+    await page.goto(`/inhouse/history?game=${lobbyId(101)}`);
+    const gradedGame = page.locator(`#result-${lobbyId(101)}`);
+    // Graded before the replay was parsed: every chip says it is early.
+    await expect(
+      gradedGame.getByRole("img", { name: /^Early grade .+ out of 100$/ }),
+    ).toHaveCount(11); // ten lines, plus the MVP's chip in the row summary
+    await expect(gradedGame.getByText("Early grades", { exact: true })).toBeVisible();
+    await expect(gradedGame.getByText("MVP", { exact: true }).first()).toBeVisible();
+    const firstBreakdown = gradedGame.getByText("How this grade was made").first();
+    await firstBreakdown.click();
+    await expect(gradedGame.getByText("This game", { exact: true }).first()).toBeVisible();
+    await expect(
+      gradedGame.getByText(/OpenDota hadn’t parsed the replay/).first(),
+    ).toBeVisible();
+    await page.getByText("How post-game grades and the MVP work").click();
+    await expect(page.getByText(/Every player gets a grade out of 100/)).toBeVisible();
+    // A game from before grades shows none.
+    await page.goto(`/inhouse/history?game=${lobbyId(0)}`);
+    await expect(
+      page
+        .locator(`#result-${lobbyId(0)}`)
+        .getByRole("img", { name: /grade .+ out of 100/i }),
+    ).toHaveCount(0);
 
     await page.goto("/inhouse");
     const ladder = page.getByRole("region", { name: "Inhouse ladder" });

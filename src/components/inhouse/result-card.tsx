@@ -5,6 +5,13 @@ import { cn } from "@/lib/utils";
 import { resultCardRequeued } from "@/lib/inhouse-result-card";
 import type { InhouseState } from "@/lib/inhouse-service";
 import { sideMeta } from "@/components/inhouse/shared";
+import {
+  AwardChips,
+  GradeBreakdown,
+  GradeChip,
+  GradeStatusNote,
+  letterLabel,
+} from "@/components/inhouse-grade";
 
 type LastResult = NonNullable<InhouseState["lastResult"]>;
 
@@ -39,6 +46,9 @@ export function ResultCard({
   // its headline alone, as the one-line banner did, and never throws.
   const teams = Array.isArray(result.teams) ? result.teams : [];
   const mvp = result.mvp ?? null;
+  // Absent on an old slot's reply too, and null for an ungraded game.
+  const grades = result.grades ?? null;
+  const mine = grades?.mine ?? null;
   const requeued = resultCardRequeued(teams, queuedUserIds);
   return (
     <section
@@ -82,6 +92,14 @@ export function ResultCard({
                   {mvp.hero ? ` (${mvp.hero})` : ""}
                 </>
               ) : null}
+              {grades?.roleAward ? (
+                <>
+                  {` · ${grades.roleAward.label} `}
+                  <span className="font-medium text-fg">
+                    {grades.roleAward.name}
+                  </span>
+                </>
+              ) : null}
               {" · "}
               <a
                 href={`#result-${result.lobbyId}`}
@@ -115,6 +133,33 @@ export function ResultCard({
           </button>
         </span>
       </div>
+
+      {mine ? (
+        <div className="mt-3 rounded-lg border border-line bg-surface/60 px-3 py-2.5">
+          <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
+            <GradeChip
+              letter={mine.letter}
+              score={mine.score}
+              size="lg"
+              early={mine.partial}
+            />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold">
+                Your grade{mine.heroName ? ` on ${mine.heroName}` : ""}
+              </p>
+              <p className="text-xs text-muted">
+                {mine.parts
+                  .filter((p) => p.letter)
+                  .map((p) => `${p.label} ${letterLabel(p.letter!)}`)
+                  .join(" · ")}
+              </p>
+            </div>
+          </div>
+          <AwardChips awards={mine.awards} className="mt-2" />
+          <GradeStatusNote status={grades?.status ?? null} className="mt-2" />
+          <GradeBreakdown view={mine} />
+        </div>
+      ) : null}
 
       {/* Both sides, Radiant first, captain first: who gained and who lost. */}
       {teams.length > 0 ? (
@@ -161,6 +206,14 @@ export function ResultCard({
                           </span>
                         ) : null}
                       </span>
+                      {grades?.byUser[p.userId] ? (
+                        <GradeChip
+                          letter={grades.byUser[p.userId].letter}
+                          score={grades.byUser[p.userId].score}
+                          early={grades.status === "early"}
+                          className="ml-auto"
+                        />
+                      ) : null}
                       {p.eloDelta !== null ? (
                         <span
                           className={cn(

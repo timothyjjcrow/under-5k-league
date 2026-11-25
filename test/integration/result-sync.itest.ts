@@ -70,11 +70,18 @@ import {
 // series announcement can be asserted on.
 vi.mock("@/lib/discord", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/discord")>();
+  const send = vi.fn(async (_content: string) => true);
   return {
     ...actual,
     getWebhookUrl: vi.fn(async () => "https://discord.test/hook"),
     sendDiscordMessage: vi.fn(async () => true),
-    sendInhouseDiscordMessage: vi.fn(async () => true),
+    sendInhouseDiscordMessage: send,
+    // Result posts keep their message id (postInhouseResultMessage) so the
+    // re-grade can edit them: route them through the same send mock, so
+    // every assertion on it still sees each post.
+    postInhouseResultMessage: async (content: string) =>
+      (await send(content)) ? { id: "1300000000000000001" } : null,
+    editInhouseResultMessage: vi.fn(async () => "ok" as const),
     deliverPendingLeagueAnnouncements: vi.fn(async () => ({
       attempted: 0,
       delivered: 0,

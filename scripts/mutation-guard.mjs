@@ -388,6 +388,7 @@ const FILES = [
   "src/lib/inhouse-ban-service.ts",
   "src/lib/medal-approval-service.ts",
   "src/lib/season-break-service.ts",
+  "src/lib/inhouse-regrade-service.ts",
 ];
 
 /** Every guarded claim in one source file, plus its source text. */

@@ -148,6 +148,28 @@ export type OpenDotaPlayer = {
   tower_damage?: number;
   hero_healing?: number;
   benchmarks?: Record<string, OpenDotaBenchmark> | null;
+  // Parsed-replay fields: present only once OpenDota has parsed the replay
+  // (OpenDotaMatch.version is set), absent on a basic payload. Inhouse
+  // grades read them through inhouseBoxStats (inhouse-box.ts).
+  /** Damage taken, keyed by its source unit ("npc_dota_hero_axe", creeps…). */
+  damage_taken?: Record<string, number> | null;
+  /** Seconds of stun applied to enemy heroes. */
+  stuns?: number | null;
+  obs_placed?: number | null;
+  sen_placed?: number | null;
+  /** Enemy observer and sentry wards destroyed. */
+  observer_kills?: number | null;
+  sentry_kills?: number | null;
+  camps_stacked?: number | null;
+  towers_killed?: number | null;
+  roshans_killed?: number | null;
+  /** Share of the lane's available gold earned in the first 10 minutes, 0..100. */
+  lane_efficiency_pct?: number | null;
+  /** Seconds spent dead. */
+  life_state_dead?: number | null;
+  firstblood_claimed?: number | null;
+  /** Multi-kills by size ({"2": 3, "3": 1} = three double kills, one triple). */
+  multi_kills?: Record<string, number> | null;
   // End-of-game items (ids, 0 for an empty slot), on every payload, parsed
   // replay or not. Read through playerItemsFromOpenDota (player-items.ts).
   item_0?: number;
@@ -176,6 +198,8 @@ export type OpenDotaMatch = {
   // reads them.
   game_mode?: number;
   lobby_type?: number;
+  /** Set once OpenDota has parsed the replay; null or absent before. */
+  version?: number | null;
   players: OpenDotaPlayer[];
 };
 

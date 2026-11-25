@@ -526,6 +526,14 @@ per-instance snapshot `inhouse-room-cache.ts` and the version token
 `inhouse-room-version.ts`), the client in
 `src/components/inhouse-room.tsx` (poll loop and actions) with one file per
 stage under `src/components/inhouse/`, one dispatch endpoint `POST /api/inhouse`.
+Each result is graded as it lands: `gradeInhouseResult`
+(`src/lib/inhouse-grade-service.ts`) over the pure `src/lib/player-grades.ts`
+stamps every box-score line's grade, the MVP and the highlights;
+`src/lib/inhouse-grade-view.ts` and `src/components/inhouse-grade.tsx` show
+them. A game graded before OpenDota parsed its replay books a re-grade
+(`src/lib/inhouse-regrade.ts`); the worker's `regradeDueInhouseGame`
+(`src/lib/inhouse-regrade-service.ts`) grades it again once the replay is in
+and edits the game's Discord result post in place.
 The mode remains available through signup, draft, season play, playoffs,
 completion, and the real no-active-season offseason.
 

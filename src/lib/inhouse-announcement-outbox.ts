@@ -4,11 +4,24 @@ import { INHOUSE_STATUS } from "./constants";
 import {
   inhouseResultMessage,
   inhouseResultVoidedMessage,
+  postInhouseResultMessage,
   sendInhouseDiscordMessage,
 } from "./discord";
-import { parseInhouseBox, type InhouseBoxPlayer } from "./inhouse-box";
+import {
+  inhouseRegradeKey,
+  inhouseRegradeValue,
+  needsInhouseRegrade,
+  parseInhouseRegrade,
+} from "./inhouse-regrade";
+import { raceHook } from "./race-hook";
+import {
+  inhouseGameMvp,
+  inhouseRoleAward,
+  parseInhouseBox,
+  type InhouseBoxPlayer,
+} from "./inhouse-box";
+import { GRADE_AWARDS } from "./player-grades";
 import { inhouseEloDeltasFor, toFinishedLobby } from "./inhouse-stats";
-import { gameMvp } from "./achievements";
 import { databaseNow } from "./database-time";
 import { heroById } from "./heroes";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
@@ -39,7 +52,12 @@ const RECOVERY_WINDOW_MS = 60 * 60_000;
 const DEFAULT_RECOVERY_LIMIT = 4;
 const MAX_RECOVERY_LIMIT = 20;
 
-type Send = (content: string) => Promise<boolean>;
+/**
+ * A webhook send: `true` when Discord accepted it, `{ id }` when it accepted
+ * it and said which message it made (result posts keep it, so the re-grade
+ * can edit them), `false` for anything else.
+ */
+type Send = (content: string) => Promise<boolean | { id: string }>;
 
 type InhouseResultAnnouncementSource = {
   winnerTeam: number;
@@ -49,6 +67,14 @@ type InhouseResultAnnouncementSource = {
   durationSecs: number;
   dotaMatchId: string;
   boxScore: InhouseBoxPlayer[];
+  /** The lobby, so the post links its own box score and grades. */
+  lobbyId?: string;
+  /**
+   * Word the awards as "so far" with final grades to follow. Defaults to
+   * whether the box score still waits on the replay (needsInhouseRegrade);
+   * the re-grade passes false when it gives up, so the post reads as final.
+   */
+  early?: boolean;
 };
 
 /** The single result renderer used by both the live path and crash recovery. */
@@ -56,10 +82,13 @@ export function inhouseResultAnnouncementContent(
   result: InhouseResultAnnouncementSource,
 ): string {
   const radiantWin = result.winnerTeam === result.radiantTeam;
-  const mvpId = gameMvp(result.boxScore, radiantWin);
+  const mvpId = inhouseGameMvp(result.boxScore, radiantWin);
   const mvp = mvpId
     ? result.boxScore.find((player) => player.userId === mvpId)
     : null;
+  const role = inhouseRoleAward(result.boxScore);
+  const gradeText = (line: InhouseBoxPlayer) =>
+    line.grade ? `${line.grade.letter} ${line.grade.score}` : null;
   return inhouseResultMessage({
     winnerSide: radiantWin ? "Radiant" : "Dire",
     radiantScore: result.radiantScore,
@@ -67,8 +96,52 @@ export function inhouseResultAnnouncementContent(
     durationSecs: result.durationSecs,
     mvpName: mvp?.name ?? null,
     mvpHero: mvp ? (heroById(mvp.heroId)?.name ?? null) : null,
+    mvpGrade: mvp ? gradeText(mvp) : null,
+    roleAward:
+      role?.line.name && role.line.grade
+        ? {
+            label: GRADE_AWARDS[role.award].label,
+            name: role.line.name,
+            hero: heroById(role.line.heroId)?.name ?? null,
+            grade: gradeText(role.line) ?? "",
+          }
+        : null,
+    lobbyId: result.lobbyId ?? null,
     dotaMatchId: result.dotaMatchId,
+    early: result.early ?? needsInhouseRegrade(result.boxScore),
   });
+}
+
+/** The production result sender: posts and keeps the message id. */
+async function sendResultKeepingId(content: string): Promise<boolean | { id: string }> {
+  return (await postInhouseResultMessage(content)) ?? false;
+}
+
+/**
+ * Put a sent result post's id on the game's re-grade marker, so the re-grade
+ * can edit the post once the replay is parsed. Nothing to do when the game
+ * has no marker (it was graded in full, or the re-grade already finished).
+ * Rewrites only the marker it read: a re-grade check booking its next try
+ * in between makes it read again.
+ */
+async function rememberInhouseResultPost(
+  lobbyId: string,
+  dotaMatchId: string,
+  messageId: string,
+): Promise<void> {
+  const key = inhouseRegradeKey(lobbyId);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const row = await prisma.setting.findUnique({ where: { key } });
+    const marker = row ? parseInhouseRegrade(row.key, row.value) : null;
+    if (!row || !marker || marker.dotaMatchId !== dotaMatchId) return;
+    await raceHook("inhouse.rememberInhouseResultPost.beforeWrite");
+    const value = inhouseRegradeValue({ ...marker, messageId });
+    const kept = await prisma.setting.updateMany({
+      where: { key, value: row.value },
+      data: { value },
+    });
+    if (kept.count === 1) return;
+  }
 }
 
 export type InhouseAnnouncementDeliveryOptions = {
@@ -210,6 +283,7 @@ async function reconcileOneResult(
             durationSecs: source.durationSecs,
             dotaMatchId: source.dotaMatchId,
             boxScore,
+            lobbyId: source.id,
           });
 
           // Re-assert both the exact source result and the missing/current
@@ -470,7 +544,11 @@ export async function deliverInhouseAnnouncements(
   // fresh event being skipped when the application host is slightly behind.
   const now = options.now ?? (await databaseNow());
   const limit = Math.max(1, Math.min(options.limit ?? DEFAULT_LIMIT, 20));
-  const send = options.send ?? sendInhouseDiscordMessage;
+  const sendFor = (kind: string): Send =>
+    options.send ??
+    (kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT
+      ? sendResultKeepingId
+      : sendInhouseDiscordMessage);
   let attempted = 0;
   let delivered = 0;
   // Cancellations do not consume the network-attempt limit. Cap all state
@@ -535,8 +613,11 @@ export async function deliverInhouseAnnouncements(
       progressed = true;
 
       let accepted = false;
+      let messageId: string | null = null;
       try {
-        accepted = await send(deliverableInhouseContent(event));
+        const sent = await sendFor(event.kind)(deliverableInhouseContent(event));
+        accepted = sent !== false;
+        if (typeof sent === "object") messageId = sent.id;
       } catch {
         // The canonical sender resolves false, but keep the outbox safe for an
         // injected/custom sender that rejects. Never serialize an error here:
@@ -561,6 +642,24 @@ export async function deliverInhouseAnnouncements(
           },
         });
         if (completed.count === 1) delivered += 1;
+        if (
+          messageId &&
+          event.kind === INHOUSE_ANNOUNCEMENT_KIND.RESULT &&
+          event.resultMatchId
+        ) {
+          try {
+            await rememberInhouseResultPost(
+              event.lobbyId,
+              event.resultMatchId,
+              messageId,
+            );
+          } catch {
+            // Best-effort: the post stands; only its later edit is lost.
+            console.error(
+              "[inhouse-announcement] keeping the result post id failed (POST_ID_FAILED)",
+            );
+          }
+        }
       } else {
         // A result can be voided while its webhook request is in flight. If the
         // send failed, do not put that stale result back on the queue; cancelling

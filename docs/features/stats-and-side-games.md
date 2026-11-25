@@ -18,8 +18,10 @@ league news. Rules are pure and tested in `src/lib/` (`fantasy.ts`,
   Fame all use it. Explain it with `impactPointsRule()`, which is built from
   the weights so copy can't quote stale numbers.
 - **`gameMvp`** (`achievements.ts`): best impact line among mapped players,
-  then kills, fewer deaths, user id. League box scores and every inhouse
-  surface use it. **`achievementsFor`** is the profile trophy case over all
+  then kills, fewer deaths, user id. League box scores use it. Inhouse games
+  are graded instead (a grade out of 100 per player, the MVP the best grade:
+  [inhouse](inhouse.md#post-game-grades-and-the-mvp)); an inhouse game from
+  before grades still falls back to `gameMvp`. **`achievementsFor`** is the profile trophy case over all
   seasons: Match MVP ×N, Deathless (5+ kills, 0 deaths), Killing spree (15+
   kills), Playmaker (20+ assists), Tycoon (600+ GPM), Veteran (10 games),
   Centurion (100 career kills).

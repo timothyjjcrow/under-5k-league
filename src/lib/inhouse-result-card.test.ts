@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
+import game from "../../test/fixtures/opendota-inhouse-game.json";
+import type { OpenDotaPlayer } from "./dota";
+import { inhouseBoxStats } from "./inhouse-box";
 import {
+  resultCardGrades,
   resultCardMvp,
   resultCardRequeued,
   resultCardTeams,
 } from "./inhouse-result-card";
+import { gradeGame } from "./player-grades";
 
 const roster = (radiantTeam: 1 | 2 = 1) => ({
   players: [
@@ -109,3 +114,51 @@ describe("resultCardRequeued", () => {
     expect(resultCardRequeued(teams, [])).toEqual({ back: 0, total: 4 });
   });
 });
+
+describe("resultCardGrades", () => {
+  const lines = (game.players as unknown as OpenDotaPlayer[]).map((p, i) => ({
+    userId: `u${i}`,
+    name: `P${i}`,
+    team: p.isRadiant ? 1 : 2,
+    isRadiant: !!p.isRadiant,
+    heroId: p.hero_id,
+    kills: p.kills,
+    deaths: p.deaths,
+    assists: p.assists,
+    netWorth: p.net_worth ?? null,
+    gpm: p.gold_per_min ?? null,
+    lastHits: p.last_hits ?? null,
+    ...inhouseBoxStats(p),
+  }));
+  const grades = gradeGame(lines, {
+    radiantWin: game.radiant_win,
+    durationSecs: game.duration,
+    mmrByUser: new Map(),
+    baseline: [],
+  });
+  const graded = JSON.stringify(lines.map((l, i) => ({ ...l, grade: grades[i] })));
+
+  it("gives every graded player's letter, the viewer's full grade and the role award", () => {
+    const out = resultCardGrades({ boxScore: graded, viewerId: "u4", durationSecs: game.duration })!;
+    expect(Object.keys(out.byUser)).toHaveLength(10);
+    expect(out.byUser.u4).toEqual({ letter: grades[4].letter, score: grades[4].score });
+    expect(out.mine?.letter).toBe(grades[4].letter);
+    expect(out.mine?.heroName).toBeTruthy();
+    expect(out.roleAward?.label).toMatch(/^Top (core|support)$/);
+    // The MVP the card already shows agrees with the grades.
+    const mvp = resultCardMvp({ boxScore: graded, radiantWin: game.radiant_win })!;
+    expect(grades[Number(mvp.userId.slice(1))].awards).toContain("mvp");
+  });
+
+  it("has no view of its own for someone who wasn't in the box score", () => {
+    expect(resultCardGrades({ boxScore: graded, viewerId: "nobody", durationSecs: game.duration })?.mine).toBeNull();
+  });
+
+  it("is null for a game from before grades", () => {
+    expect(
+      resultCardGrades({ boxScore: JSON.stringify(lines), viewerId: "u4", durationSecs: game.duration }),
+    ).toBeNull();
+    expect(resultCardGrades({ boxScore: "nope", viewerId: "u4", durationSecs: null })).toBeNull();
+  });
+});
+

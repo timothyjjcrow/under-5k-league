@@ -22,6 +22,10 @@ import { inhouseBoardNeedsSync } from "./inhouse-board-service";
 import { duelWorkerWakeAtMs } from "./inhouse-duel";
 import { inhouseBanWakeAtMs, type InhouseBanRoleRow } from "./inhouse-ban";
 import { loadUnsettledInhouseBans } from "./inhouse-ban-service";
+import {
+  INHOUSE_REGRADE_PREFIX,
+  inhouseRegradeWakeAtMs,
+} from "./inhouse-regrade";
 import { getGuildConfig } from "./discord-roles";
 import { prisma } from "./prisma";
 import { parseSingleTiebreakerSlot, parseTiebreakerStage } from "./tiebreaker-format";
@@ -227,6 +231,11 @@ export type AutomationGateInputs = {
    */
   inhouseBans: InhouseBanRoleRow[];
   inhouseBanRoleOn: boolean;
+  /**
+   * The re-grade markers of games graded before OpenDota parsed their replay
+   * (inhouse-regrade.ts). Their wake is inhouseRegradeWakeAtMs.
+   */
+  inhouseRegrades: Array<{ key: string; value: string }>;
   repairableInhouseResult: boolean;
   leagueOutbox: Array<{
     id: string;
@@ -916,6 +925,11 @@ export function computeAutomationGateSnapshot(
   );
   if (banWakeAt !== null) addCandidate(candidates, nowMs, banWakeAt, "INHOUSE");
 
+  const regradeWakeAt = inhouseRegradeWakeAtMs(inputs.inhouseRegrades, nowMs);
+  if (regradeWakeAt !== null) {
+    addCandidate(candidates, nowMs, regradeWakeAt, "INHOUSE");
+  }
+
   if (inputs.leagueDeliveryAvailable && inputs.leagueOutbox.length > 0) {
     for (const row of inputs.leagueOutbox) {
       outboxWakeAt(
@@ -1406,6 +1420,7 @@ export async function loadAutomationGateSnapshot(
     leagueOutbox,
     inhouseOutboxes,
     inhouseBans,
+    inhouseRegrades,
   ] = await Promise.all([
     prisma.setting.findMany({
       where: {
@@ -1544,6 +1559,13 @@ export async function loadAutomationGateSnapshot(
     }),
     // Bans are rare; only the unsettled ones can wake the worker.
     loadUnsettledInhouseBans(),
+    // At most a day's games carry one; the cap only bounds a pile-up.
+    prisma.setting.findMany({
+      where: { key: { startsWith: INHOUSE_REGRADE_PREFIX } },
+      orderBy: { key: "asc" },
+      take: 100,
+      select: { key: true, value: true },
+    }),
   ]);
 
   const settings = Object.fromEntries(
@@ -1600,6 +1622,7 @@ export async function loadAutomationGateSnapshot(
       duelQueue,
       openDuels,
       inhouseBans,
+      inhouseRegrades,
       // getInhouseBanRoleConfig's three pieces, from the settings read here.
       inhouseBanRoleOn:
         discordMutationsAllowed() &&

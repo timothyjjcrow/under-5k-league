@@ -1400,6 +1400,25 @@ describe("inhouse messages", () => {
     expect(msg).toContain("opendota.com/matches/8412345678");
   });
 
+  it("adds grades, the role award and the game's own box score link when graded", () => {
+    const msg = inhouseResultMessage({
+      winnerSide: "Radiant",
+      radiantScore: 52,
+      direScore: 43,
+      durationSecs: 63 * 60 + 18,
+      mvpName: "Timo",
+      mvpHero: "Grimstroke",
+      mvpGrade: "S 91",
+      roleAward: { label: "Top core", name: "Kev", hero: "Windranger", grade: "A 79" },
+      lobbyId: "lobby1",
+      dotaMatchId: "8412345678",
+    });
+    expect(msg).toContain("MVP: **Timo** (Grimstroke), S 91.");
+    expect(msg).toContain("Top core: **Kev** (Windranger), A 79.");
+    expect(msg).toContain("/inhouse/history?game=lobby1#result-lobby1");
+    expect(msg).toContain("opendota.com/matches/8412345678");
+  });
+
   it("omits the MVP clause when nobody in the box score is a member", () => {
     const msg = inhouseResultMessage({
       winnerSide: "Radiant",
@@ -1413,6 +1432,36 @@ describe("inhouse messages", () => {
     expect(msg).not.toContain("MVP");
     expect(msg).toContain("Radiant win 30–5");
     expect(msg).toContain("10:00");
+  });
+
+  it("calls an early grade's awards early, and says final grades follow", () => {
+    const base = {
+      winnerSide: "Dire" as const,
+      radiantScore: 12,
+      direScore: 31,
+      durationSecs: 1800,
+      mvpName: "Ash",
+      mvpHero: "Axe",
+      mvpGrade: "B+ 68",
+      roleAward: { label: "Top support", name: "Rin", hero: "Lion", grade: "B 63" },
+      lobbyId: "lobby1",
+      dotaMatchId: "8412345678",
+    };
+    const early = inhouseResultMessage({ ...base, early: true });
+    expect(early).toContain("MVP so far: **Ash** (Axe), B+ 68.");
+    expect(early).toContain("Top support so far: **Rin** (Lion), B 63.");
+    expect(early).toContain(
+      "B 63. Final grades once OpenDota parses the replay. Grades + box score:",
+    );
+    // The edit, once the replay is in, reads as final.
+    const final = inhouseResultMessage({ ...base, early: false });
+    expect(final).toContain("MVP: **Ash** (Axe), B+ 68.");
+    expect(final).not.toContain("so far");
+    expect(final).not.toContain("Final grades once");
+    // No awards to call early: no note either.
+    expect(
+      inhouseResultMessage({ ...base, mvpName: null, roleAward: null, early: true }),
+    ).not.toContain("Final grades once");
   });
 });
 
@@ -2984,6 +3033,8 @@ describe("no player-supplied name can inject markdown", () => {
       durationSecs: 2000,
       mvpName: EVIL,
       mvpHero: "Pudge",
+      mvpGrade: "S 91",
+      roleAward: { label: "Top support", name: EVIL, hero: "Lion", grade: "A 80" },
       dotaMatchId: "123",
     }),
     weekReminderMessage({

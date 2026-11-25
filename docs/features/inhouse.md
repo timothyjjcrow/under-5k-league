@@ -1287,6 +1287,106 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
   failed. Otherwise players get told to fix a privacy setting that is fine.
   Keep `fetchRecentMatchIds`' `null` (failed) distinct from `[]` (empty).
 
+## Post-game grades and the MVP
+
+- **Every player gets a grade out of 100 and a letter (S, A+ … D)** from
+  `gradeGame` (`src/lib/player-grades.ts`, weights in `GRADE`, letters in
+  `GRADE_LETTERS`). Half is this game against the others in their role
+  (kill participation, survival, and their two best role areas), a quarter
+  is OpenDota's per-hero benchmarks (this game against everyone's on that
+  hero worldwide), and a quarter is GGD2L inhouse players in the same role
+  within `MMR_SPREAD` of their MMR (widened once to `MMR_SPREAD_WIDE`, left
+  out below `MMR_MIN_SAMPLE` lines a metric). A missing part drops out and
+  the rest scale up. Per-hero averages by MMR bracket aren't on any free API
+  (OpenDota's benchmarks are worldwide), which is why the MMR part is
+  GGD2L's own games.
+- **Roles are net worth:** each side's two lowest are supports
+  (`assignRoles`; it matched OpenDota's position guess on 572 of 600 lines in
+  the 2026-11-24 sample and needs no parsed replay). Cores are judged on hero
+  damage, buildings, farm, frontline (hero damage taken per life, so feeding
+  never reads as tanking), control and laning; supports on vision, healing,
+  control, stacking, frontline and hero damage. Only the best two count, so
+  a carry can't stack farm, damage and towers.
+- **Graded once, when the result lands, and stored on the line.**
+  `applyResult` calls `gradeInhouseResult` (`inhouse-grade-service.ts`)
+  before its transaction: a database read for the MMR baseline (the last
+  `BASELINE_GAMES` completed games, ordered by `[createdAt, id]`, never
+  `completedAt`, which old rows lack and Postgres sorts first), no network.
+  It is best-effort: a failure records the result ungraded. A stored grade
+  never moves, whatever the baseline does later, except for the one re-grade
+  below.
+- **The MVP is the best grade among linked players, plus `MVP_WIN_BONUS` for
+  a win** (ties: more kills, fewer deaths, lower user id). The best player of
+  the other role gets Top core or Top support. Highlights (most damage,
+  Demolisher, Frontline, Healer, All-seeing, Lockdown, Farmer, Untouchable,
+  First blood, Ultra kill, Rampage) go to every line, unlinked ones too; two
+  tied share one, three or more tied get none.
+- **Every inhouse surface reads the MVP through `inhouseGameMvp`**
+  (`inhouse-box.ts`): the stored grade's MVP when every linked line is
+  graded, otherwise the impact-points `gameMvp` it always had, so games from
+  before grades keep the MVP Discord announced. League box scores still use
+  `gameMvp` and impact points.
+- **Parsed-replay stats may be missing.** Damage taken, stuns, wards,
+  stacks and laning exist only once OpenDota has parsed the replay
+  (`OpenDotaMatch.version`). `inhouseBoxStats` leaves those keys absent (not
+  zero) on a basic payload, and a game graded without them is `partial`
+  (its breakdown says so). The match summary reaches OpenDota within
+  minutes of the game ending, so most results land before the parse does.
+- **A partial game is graded again once the replay is parsed**
+  (`inhouse-regrade.ts`, `inhouse-regrade-service.ts`). `applyResult` books
+  a marker (Setting `inhouse-regrade:<lobby id>`, value `match:resultAt:tries`)
+  in its result transaction; the worker asks OpenDota at
+  `INHOUSE_REGRADE_CHECK_MINUTES` after the result (10 minutes to a day,
+  seven calls at most), one game per pass, and the gate wakes for the next
+  check (`inhouseRegradeWakeAtMs`). Once a payload has damage taken,
+  `withParsedStats` refreshes every stat beyond K/D/A on the stored lines
+  (matched by side and hero) and `gradeInhouseResult` grades the game again,
+  so its MVP, Top core/support and highlights can change. The write
+  re-asserts COMPLETED, the marker's match and the exact stored box score
+  (a void, a new result or another pass landing first wins), stamps the
+  result cursor and publishes the room. The site never asks OpenDota to
+  parse: every inhouse game in the 2026-11-24 sample was parsed on its own.
+  It logs which check found the replay (`[inhouse-regrade] regraded with the
+  replay at check N, M min after the result`), so the schedule can be trimmed
+  to what parses actually need. After the last check a game keeps its partial
+  grade (`[inhouse-regrade] no parsed replay after M min`).
+- **OpenDota cost is bounded:** seven calls at most per early-graded game,
+  and one call per worker pass whatever the number waiting. The box's 3,000
+  free calls a day are shared by both leagues; on the busiest day of
+  2026-10-27..11-25 the counted calls were about 860, and 12 US inhouse games
+  in a day would add at most 84.
+- **The Discord result post says "so far" and is edited in place.** An early
+  post words the awards "MVP so far" / "Top support so far" and ends "Final
+  grades once OpenDota parses the replay." (`inhouseResultMessage`'s
+  `early`, defaulting to `needsInhouseRegrade`). The outbox posts results
+  with `?wait=true` (`postInhouseResultMessage`) and puts the message id on
+  the game's re-grade marker by CAS (`rememberInhouseResultPost`, seam
+  `inhouse.rememberInhouseResultPost.beforeWrite`). The re-grade's
+  transaction rewrites the RESULT row's stored text, so a post Discord held
+  up goes out with the final grades, and after the commit it PATCHes the
+  sent post (`editInhouseResultMessage`; edits notify nobody). When the
+  checks give up it edits the post once more to drop "so far". Both edits
+  are best-effort: a refused edit leaves the early post standing.
+- **New box-score fields are optional and checked one by one.**
+  `parseInhouseBox` keeps a line on its core fields and drops only a bad
+  extra or grade (`normalizePlayerGrade`), so a stored oddity never hides a
+  player.
+- **Early grades are marked where they show.** `inhouseGradeStatus`
+  (`inhouse-box.ts`) reads a graded game as `early` (any line `partial`),
+  `regraded` (graded again with the replay: the re-grade stamps
+  `grade.regraded`) or `final`. An early `GradeChip` has a dashed border
+  and reads "Early grade …" to a screen reader; `GradeStatusNote` says
+  "Early grades" with what is missing above the box score and in the room's
+  result card, and "Updated with the replay." once it was graded again.
+- **Where grades show:** each box-score line (grade chip, awards, the extra
+  stats, "How this grade was made"), the room's result card (the viewer's
+  grade, its parts and awards, everyone's letter), the MVP's chip on
+  `/inhouse` and `/inhouse/history`, the profile's inhouse card, and the
+  Discord result post (MVP and role award with grades, linking the game's
+  own box score). `gradeRule()` explains it on `/inhouse/history`;
+  `gradeRuleShort()` sits under graded box scores. Both are built from
+  `GRADE`.
+
 ## Completion, Elo and publication
 
 - **`applyResult` commits COMPLETED, `teamFixes`, `completedAt`, the result
@@ -1303,8 +1403,9 @@ writes and reads: `src/lib/inhouse-ban-service.ts`; actions:
 - **`matchStartTime` is Valve's start time,** so history, profiles and the
   board date a game by when it was played (`inhousePlayedAt`).
 - **Publication is a durable outbox** (`inhouse-announcement-outbox.ts`, one
-  row per `[lobbyId, kind]`). `inhouseResultMessage` (score, duration, `gameMvp`
-  MVP, OpenDota link) goes to the inhouse ALERT webhook; a failed send stays
+  row per `[lobbyId, kind]`). `inhouseResultMessage` (score, duration, the
+  `inhouseGameMvp` MVP with its grade, the role award, links to the game's box
+  score and OpenDota) goes to the inhouse ALERT webhook; a failed send stays
   PENDING for the worker.
 - **Keep result recovery above the worker's idle early return.** `syncInhouse`
   (`result-sync-service.ts`) runs `reconcileMissingInhouseResultAnnouncements`

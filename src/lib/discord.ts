@@ -909,17 +909,46 @@ export function inhouseResultMessage(m: {
   radiantScore: number;
   direScore: number;
   durationSecs: number;
-  /** Best line of the game (null when nobody in the box score is a member). */
+  /** The game's MVP (null when nobody in the box score is a member). */
   mvpName: string | null;
   mvpHero: string | null;
+  /** The MVP's grade, "S 91", when the game was graded. */
+  mvpGrade?: string | null;
+  /** A graded game's Top core or Top support. */
+  roleAward?: {
+    label: string;
+    name: string;
+    hero: string | null;
+    grade: string;
+  } | null;
+  /** Links the game's own box score and grades when known. */
+  lobbyId?: string | null;
   dotaMatchId: string;
+  /**
+   * Graded before OpenDota parsed the replay: the awards read "so far" and
+   * the post says final grades follow. The re-grade edits it in place
+   * (inhouse-regrade-service.ts).
+   */
+  early?: boolean;
 }): string {
   const mins = Math.floor(m.durationSecs / 60);
   const secs = String(m.durationSecs % 60).padStart(2, "0");
+  const soFar = m.early ? " so far" : "";
   const mvp = m.mvpName
-    ? ` MVP: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}.`
+    ? ` MVP${soFar}: **${name(m.mvpName)}**${m.mvpHero ? ` (${m.mvpHero})` : ""}${m.mvpGrade ? `, ${m.mvpGrade}` : ""}.`
     : "";
-  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp} Box score + ladder: <${resolveSiteUrl()}/inhouse> · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
+  const role = m.roleAward
+    ? ` ${m.roleAward.label}${soFar}: **${name(m.roleAward.name)}**${m.roleAward.hero ? ` (${m.roleAward.hero})` : ""}, ${m.roleAward.grade}.`
+    : "";
+  const early =
+    m.early && (m.mvpName || m.roleAward)
+      ? " Final grades once OpenDota parses the replay."
+      : "";
+  const site = resolveSiteUrl();
+  const boxLink = m.lobbyId
+    ? `Grades + box score: <${site}/inhouse/history?game=${encodeURIComponent(m.lobbyId)}#result-${encodeURIComponent(m.lobbyId)}>`
+    : `Box score + ladder: <${site}/inhouse>`;
+  return `🏁 **Inhouse result: ${m.winnerSide} win ${m.radiantScore}–${m.direScore}** in ${mins}:${secs}.${mvp}${role}${early} ${boxLink} · <https://www.opendota.com/matches/${m.dotaMatchId}>`;
 }
 
 /**
@@ -2773,6 +2802,27 @@ export async function sendInhouseDiscordMessage(
   mentions?: MentionAllowlist,
 ): Promise<boolean> {
   return sendTo(await getInhouseAlertWebhookUrl(), content, mentions);
+}
+
+/**
+ * Post an inhouse result and keep its message id, so the re-grade can edit
+ * it once OpenDota parses the replay. Same webhook and the same blanket
+ * mention block as sendInhouseDiscordMessage; null on any failure.
+ */
+export async function postInhouseResultMessage(
+  content: string,
+): Promise<{ id: string } | null> {
+  const url = await getInhouseAlertWebhookUrl();
+  return url ? postWebhookMessage(url, { content }) : null;
+}
+
+/** Rewrite an inhouse result post in place (no notification). */
+export async function editInhouseResultMessage(
+  messageId: string,
+  content: string,
+): Promise<WebhookEditResult> {
+  const url = await getInhouseAlertWebhookUrl();
+  return url ? patchWebhookMessage(url, messageId, { content }) : "failed";
 }
 
 /**

@@ -93,7 +93,9 @@ actions: `src/app/actions/admin-discord.ts`.
   edit or delete; it pings @everyone only when the admin ticks the box, and
   edits never re-ping); inhouse alerts (`sendInhouseDiscordMessage`, direct and
   best-effort; the queue and match-found pings are sent after the response). Inhouse results and voids have their own outbox
-  (`inhouse-announcement-outbox.ts`, see `docs/features/inhouse.md`).
+  (`inhouse-announcement-outbox.ts`, see `docs/features/inhouse.md`). A
+  result posts with `?wait=true` (`postInhouseResultMessage`) so the
+  re-grade can edit it once the replay is parsed (`editInhouseResultMessage`).
 - **Pin API v10** (`webhookApiUrl`); unversioned routes ride deprecated v6.
   **Validate URLs with `normalizeDiscordWebhookUrl`**; `runtimeWebhookUrl`'s
   loopback exception is test-only, never widen it.

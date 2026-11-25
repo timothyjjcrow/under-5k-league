@@ -6,7 +6,9 @@ import { Fragment, Suspense } from "react";
 import { getSessionUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { HARD_MMR_CEILING, INHOUSE, INHOUSE_STATUS } from "@/lib/constants";
+import { GradeChip } from "@/components/inhouse-grade";
 import {
+  inhouseGameMvp,
   parseInhouseBox,
   type InhouseBoxPlayer as BoxPlayer,
 } from "@/lib/inhouse-box";
@@ -18,7 +20,6 @@ import {
   type InhouseMonthRecord,
 } from "@/lib/inhouse-stats";
 import { heroById } from "@/lib/heroes";
-import { gameMvp } from "@/lib/achievements";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import { formatMmrRange, mmrRangeForRankTier, rankMedalName } from "@/lib/rank";
 import { loadBoardStats } from "@/lib/inhouse-board-service";
@@ -685,7 +686,7 @@ function ResultSummaryLine({
 }) {
   const radiantWin =
     lobby.winnerTeam != null && lobby.winnerTeam === lobby.radiantTeam;
-  const mvpId = gameMvp(players, radiantWin);
+  const mvpId = inhouseGameMvp(players, radiantWin);
   const mvp = players.find((p) => p.userId === mvpId);
   const dur = lobby.durationSecs ?? 0;
   const playedAt = inhousePlayedAt(lobby);
@@ -709,9 +710,18 @@ function ResultSummaryLine({
         {radiantWin ? "Radiant" : "Dire"} victory
       </Badge>
       {mvp?.name ? (
-        <span className="min-w-0 truncate text-xs text-muted">
-          <span aria-hidden>🏅</span> {mvp.name}
-          {mvp.heroId ? ` · ${heroById(mvp.heroId)?.name ?? ""}` : ""}
+        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted">
+          <span className="min-w-0 truncate">
+            <span aria-hidden>🏅</span> {mvp.name}
+            {mvp.heroId ? ` · ${heroById(mvp.heroId)?.name ?? ""}` : ""}
+          </span>
+          {mvp.grade ? (
+            <GradeChip
+              letter={mvp.grade.letter}
+              score={mvp.grade.score}
+              early={mvp.grade.partial}
+            />
+          ) : null}
         </span>
       ) : null}
       <span className="ml-auto flex shrink-0 items-center gap-3 text-xs text-muted">

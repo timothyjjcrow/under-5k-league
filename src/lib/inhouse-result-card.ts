@@ -3,9 +3,16 @@
 // buildInhouseState from the rows the room already reads for the banner
 // window, rendered by the room.
 
-import { gameMvp } from "./achievements";
 import { heroById } from "./heroes";
-import { parseInhouseBox } from "./inhouse-box";
+import {
+  inhouseGameMvp,
+  inhouseGradeStatus,
+  inhouseRoleAward,
+  parseInhouseBox,
+  type InhouseGradeStatus,
+} from "./inhouse-box";
+import { gradeView, type GradeView } from "./inhouse-grade-view";
+import { GRADE_AWARDS, type GradeLetter } from "./player-grades";
 
 export type ResultCardPlayer = {
   userId: string;
@@ -85,7 +92,7 @@ export function resultCardMvp(o: {
 }): { userId: string; name: string; hero: string | null } | null {
   const box = parseInhouseBox(o.boxScore);
   if (box.length === 0) return null;
-  const id = gameMvp(box, o.radiantWin);
+  const id = inhouseGameMvp(box, o.radiantWin);
   const line = id ? box.find((b) => b.userId === id) : null;
   if (!id || !line?.name) return null;
   return { userId: id, name: line.name, hero: heroById(line.heroId)?.name ?? null };
@@ -105,4 +112,56 @@ export function resultCardRequeued(
   let back = 0;
   for (const id of roster) if (queued.has(id)) back += 1;
   return { back, total: roster.size };
+}
+
+export type ResultCardGrades = {
+  /** Every graded player's letter and score, by user id. */
+  byUser: Record<string, { letter: GradeLetter; score: number }>;
+  /** The viewer's own grade and how it was made; null when they have none. */
+  mine: (GradeView & { heroName: string | null }) | null;
+  /** The game's Top core or Top support. */
+  roleAward: { label: string; userId: string; name: string } | null;
+  /** Early (waiting on the replay), graded again with it, or final. */
+  status: InhouseGradeStatus;
+};
+
+/**
+ * The grades a finished game shows its ten in the room: everyone's letter,
+ * the viewer's full grade, and the role award. Null for a game from before
+ * grades (or one whose grading failed): the card then shows what it always
+ * did.
+ */
+export function resultCardGrades(o: {
+  boxScore: string;
+  viewerId: string;
+  durationSecs: number | null;
+}): ResultCardGrades | null {
+  const box = parseInhouseBox(o.boxScore);
+  const status = inhouseGradeStatus(box);
+  if (!status) return null;
+  const byUser: ResultCardGrades["byUser"] = {};
+  for (const line of box) {
+    if (line.userId && line.grade) {
+      byUser[line.userId] = { letter: line.grade.letter, score: line.grade.score };
+    }
+  }
+  const mineLine = box.find((line) => line.userId === o.viewerId) ?? null;
+  const heroName = mineLine ? (heroById(mineLine.heroId)?.name ?? null) : null;
+  const view = mineLine
+    ? gradeView(mineLine, box, { durationSecs: o.durationSecs, heroName })
+    : null;
+  const role = inhouseRoleAward(box);
+  return {
+    byUser,
+    mine: view ? { ...view, heroName } : null,
+    roleAward:
+      role?.line.userId && role.line.name
+        ? {
+            label: GRADE_AWARDS[role.award].label,
+            userId: role.line.userId,
+            name: role.line.name,
+          }
+        : null,
+    status,
+  };
 }

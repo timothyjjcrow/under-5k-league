@@ -3,8 +3,9 @@ import Link from "@/components/app-link";
 import { prisma } from "@/lib/prisma";
 import { getSessionUser } from "@/lib/auth";
 import { INHOUSE_STATUS } from "@/lib/constants";
-import { parseInhouseBox } from "@/lib/inhouse-box";
-import { gameMvp } from "@/lib/achievements";
+import { inhouseGameMvp, parseInhouseBox } from "@/lib/inhouse-box";
+import { GradeChip } from "@/components/inhouse-grade";
+import { gradeRule } from "@/lib/player-grades";
 import { heroById } from "@/lib/heroes";
 import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
@@ -135,7 +136,7 @@ export default async function InhouseHistoryPage({
   const rows = displayedLobbies.map((l) => {
     const players = parseInhouseBox(l.boxScore);
     const radiantWin = l.winnerTeam != null && l.winnerTeam === l.radiantTeam;
-    const mvpId = players.length ? gameMvp(players, radiantWin) : null;
+    const mvpId = players.length ? inhouseGameMvp(players, radiantWin) : null;
     const mvp = mvpId ? players.find((p) => p.userId === mvpId) : null;
     const sides = inhouseHistorySides(
       sidesByLobby.get(l.id) ?? [],
@@ -193,6 +194,23 @@ export default async function InhouseHistoryPage({
           </Link>
         }
       />
+
+      {/* What every game's grades mean, built from the weights themselves. */}
+      <details className="group rounded-[var(--radius)] border border-line bg-surface/80 px-4 py-3 text-sm">
+        <summary className="flex min-h-6 cursor-pointer list-none items-center justify-between gap-3 font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/60 [&::-webkit-details-marker]:hidden">
+          How post-game grades and the MVP work
+          <span
+            aria-hidden
+            className="text-muted transition-transform group-open:rotate-180 motion-reduce:transition-none"
+          >
+            ▾
+          </span>
+        </summary>
+        <p className="mt-2 text-muted">{gradeRule()}</p>
+        <p className="mt-2 text-muted">
+          Games played before grades keep the MVP they were given.
+        </p>
+      </details>
 
       {/* Shared, bounded result details stay within the archive card on phones. */}
       <Card className="overflow-hidden">
@@ -312,6 +330,13 @@ export default async function InhouseHistoryPage({
                                 <span className="hidden truncate sm:inline">
                                   · {mvpHero.name}
                                 </span>
+                              ) : null}
+                              {mvp.grade ? (
+                                <GradeChip
+                                  letter={mvp.grade.letter}
+                                  score={mvp.grade.score}
+                                  early={mvp.grade.partial}
+                                />
                               ) : null}
                             </div>
                           ) : null}
