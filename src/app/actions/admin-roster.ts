@@ -82,7 +82,7 @@ import {
   promoteGateError,
   withdrawGateError,
 } from "@/lib/registration";
-import { approvedMedalMmr } from "@/lib/medal-approval";
+import { approvalCoversMedal } from "@/lib/medal-approval";
 import { loadMedalApproval } from "@/lib/medal-approval-service";
 import type { ActionResult } from "@/lib/action-result";
 import {
@@ -515,8 +515,7 @@ export async function reinstateSignup(
   // nothing warned when the same admin later reinstated one.
   // An admin's approval over the medal limit (medal-approval.ts) is that
   // review already done.
-  const approved =
-    approvedMedalMmr(await loadMedalApproval(reg.userId)) !== null;
+  const approved = approvalCoversMedal(await loadMedalApproval(reg.userId));
   const warn =
     !approved && medalProvesIneligible(reg.user.rankTier)
       ? ` ⚠️ their medal (${rankMedalName(reg.user.rankTier)}) is above the ${HARD_MMR_CEILING} ceiling — review before the draft.`

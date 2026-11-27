@@ -36,7 +36,7 @@ function parsePlayoffArchive(raw: string | null): ArchivedPlayoffGame[] {
  *  both render through SignupRowMeta. */
 const SIGNUP_ROW_INCLUDE = {
   user: {
-    include: { medalApproval: { select: { status: true, mmr: true } } },
+    include: { medalApproval: { select: { status: true, mmr: true, reason: true } } },
   },
 } as const;
 

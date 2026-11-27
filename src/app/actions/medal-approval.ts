@@ -1,7 +1,8 @@
 "use server";
 
 // The player's half of medal approvals (medal-approval.ts): "Ask an admin to
-// approve" on /me, for a player whose medal is over the league's line. The
+// approve" on /me, for a player whose medal is over the league's line or
+// whose account the smurf check flags (smurf-check.ts). The
 // service writes the request; the admins hear about it from the bot, after
 // the commit and best-effort, and answer on /admin.
 
@@ -46,6 +47,8 @@ export async function askForMedalApproval(
       rankTier: asked.rankTier,
       note: asked.note,
       adminUrl: `${resolveSiteUrl()}${adminHref(MEDAL_APPROVALS_ANCHOR)}`,
+      reason: asked.reason,
+      signals: asked.signals,
     });
     for (const discordId of await adminDiscordIds()) {
       await sendDirectMessage(discordId, content);

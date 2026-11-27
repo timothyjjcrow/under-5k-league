@@ -68,7 +68,17 @@ import {
 } from "@/lib/dota-account";
 import { retireStaleDotaAccountClaims } from "@/lib/dota-account-service";
 import { clampMmrToRank, formatMmrRange, rankMedalName } from "@/lib/rank";
-import { approvedMedalMmr, approvedMmrKeptNote } from "@/lib/medal-approval";
+import {
+  approvalCoversMedal,
+  approvalStanding,
+  approvedMedalMmr,
+  approvedMmrKeptNote,
+} from "@/lib/medal-approval";
+import {
+  smurfRefusesSignup,
+  smurfSignalsFromStored,
+  smurfSignupRefusal,
+} from "@/lib/smurf-check";
 import { loadMedalApproval } from "@/lib/medal-approval-service";
 import { clampHeroList } from "@/lib/heroes";
 import { serializeRoles } from "@/lib/roles";
@@ -320,8 +330,12 @@ export async function saveRegistration(
   // ACTIVE signup keeps its own (admins correct it with setRegistrationMmr).
   // Either way the number is kept, not typed, so the typed-MMR ceiling
   // doesn't judge it and the medal clamp doesn't move it. Re-read inside the
-  // write's transaction below: one removed in between refuses the save.
-  const approvedMmr = approvedMedalMmr(await loadMedalApproval(user.id));
+  // write's transaction below: one removed in between refuses the save. Any
+  // approval sets the number and clears the smurf check; only one asked for
+  // the medal lets a medal over the line in (approvalCoversMedal).
+  const approval = await loadMedalApproval(user.id);
+  const approvedMmr = approvedMedalMmr(approval);
+  const coversMedal = approvalCoversMedal(approval);
   const mmrKept =
     approvedMmr !== null ||
     keepsStoredMmr({
@@ -333,7 +347,7 @@ export async function saveRegistration(
     const keep =
       existing?.status === REGISTRATION_STATUS.ACTIVE ? existing.mmr : approvedMmr;
     if (formData.has("mmr") && str(formData, "mmr").trim() !== "" && mmr !== keep) {
-      lockedMmrNote = approvedMmrKeptNote(keep);
+      lockedMmrNote = approvedMmrKeptNote(keep, approval?.reason);
     }
     mmr = keep;
   } else if (existing && mmrKept) {
@@ -370,6 +384,7 @@ export async function saveRegistration(
       rankTier: true,
       rankTierManual: true,
       discordId: true,
+      pubStats: true,
     },
   });
   let rankTier = dbUser?.rankTier ?? null;
@@ -388,7 +403,7 @@ export async function saveRegistration(
     // what tells the gate which of the two this submit is.
     existingStatus: existing?.status ?? null,
     mmrKept,
-    medalApproved: approvedMmr !== null,
+    medalApproved: coversMedal,
   };
   // Refuse what no medal could change (an MMR over the ceiling, player
   // signups closed) before the provider call: a refused submit stores
@@ -462,6 +477,24 @@ export async function saveRegistration(
   // under the ceiling, so gating post-clamp would admit any overstated lie).
   const gateError = registrationGate({ ...gateFacts, rankTier });
   if (gateError) return { error: gateError };
+  // The smurf check (smurf-check.ts; Tim, 2026-11-27), at admission like
+  // the medal: the player's stored OpenDota snapshot, judged with the medal
+  // as it now stands (a higher medal expects more games), so after the
+  // fetch above. It makes no call of its own: login fills a missing
+  // snapshot, and none, or one with no visible games, flags nobody. Any
+  // admin approval clears it; the transaction re-reads that approval. A
+  // refusal re-renders /me, whose card then offers the ask.
+  const smurfFound = smurfSignalsFromStored(dbUser?.pubStats, rankTier);
+  if (
+    smurfRefusesSignup({
+      signals: smurfFound,
+      existingStatus: existing?.status ?? null,
+      approved: approvedMmr !== null,
+    })
+  ) {
+    revalidatePath("/me");
+    return { error: smurfSignupRefusal(smurfFound) };
+  }
 
   // Draft-night lock: while the auction is LIVE or PAUSED, an existing signup
   // can't change anything the engine is actively selling from. Three doors,
@@ -574,12 +607,15 @@ export async function saveRegistration(
   // `status`, so the ratchet's claim id (saveRegistration::status#1) is
   // untouched and its protecting test still kills the mutant.
   // An approved player is let in by the approval, which the transaction
-  // re-reads, so their medal claims nothing here.
-  const medalIneligible =
-    approvedMmr === null && medalProvesIneligible(rankTier);
-  const statusClaim = medalIneligible
-    ? REGISTRATION_STATUS.ACTIVE
-    : { not: REGISTRATION_STATUS.REMOVED };
+  // re-reads, so their medal claims nothing here. The smurf check's
+  // findings bar a re-admission the same way: a flagged player got this far
+  // only through the ACTIVE exemption.
+  const medalIneligible = !coversMedal && medalProvesIneligible(rankTier);
+  const smurfBarred = approvedMmr === null && smurfFound.length > 0;
+  const statusClaim =
+    medalIneligible || smurfBarred
+      ? REGISTRATION_STATUS.ACTIVE
+      : { not: REGISTRATION_STATUS.REMOVED };
   // A type change or a return from WITHDRAWN is a new season commitment. Keep
   // confirmations through ordinary profile edits, but never let a former
   // standin/rejoined player inherit an old "ready" badge.
@@ -680,7 +716,7 @@ export async function saveRegistration(
               : Promise.resolve(null),
             tx.medalApproval.findUnique({
               where: { userId: user.id },
-              select: { status: true, mmr: true },
+              select: { status: true, mmr: true, reason: true },
             }),
           ]);
 
@@ -704,11 +740,12 @@ export async function saveRegistration(
           if (!currentUser || currentUser.rankTier !== rankTier) {
             throw new RegistrationIdentityChangedError();
           }
-          // The medal approval the save judged, still the one standing: one
-          // removed since would admit a player over the line nobody let in,
-          // and one granted since would store a typed number over the
-          // admin's.
-          if (approvedMedalMmr(currentApproval) !== approvedMmr) {
+          // The approval the save judged, still the one standing: one
+          // removed since would admit a player over the line, or one the
+          // smurf check flagged, that nobody let in, and one granted or
+          // re-asked since would store a typed number over the admin's.
+          const standing = approvalStanding(currentApproval);
+          if (standing.mmr !== approvedMmr || standing.coversMedal !== coversMedal) {
             throw new RegistrationApprovalChangedError();
           }
           // The Discord account the signup rule judged, still the one linked:
@@ -807,7 +844,7 @@ export async function saveRegistration(
         revalidatePath("/me");
         return {
           error:
-            "An admin changed your medal limit approval while you submitted — reload and try again.",
+            "An admin changed your approval while you submitted — reload and try again.",
         };
       }
       if (error instanceof RegistrationRosterChangedError) {
@@ -820,7 +857,9 @@ export async function saveRegistration(
         return {
           error: medalIneligible
             ? "Your signup isn't active any more, and your medal is above the league's MMR ceiling — an admin has to put you back in the pool."
-            : existing
+            : smurfBarred
+              ? "Your signup isn't active any more, and the smurf check needs an admin to look at your account before you sign up again — ask on this page."
+              : existing
               ? "An admin removed your signup for this season — message them if you think that's a mistake."
               : "That signup changed while you submitted — reload before trying again.",
         };

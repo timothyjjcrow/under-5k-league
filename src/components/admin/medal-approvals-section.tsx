@@ -20,11 +20,11 @@ export async function MedalApprovalsSection() {
   return (
     <AdminSection
       id={MEDAL_APPROVALS_ANCHOR}
-      title="Medal limit approvals"
+      title="Medal limit and smurf checks"
       subtitle={
         pending > 0
-          ? `${pending} ${pending === 1 ? "player asks" : "players ask"} to play over the medal limit.`
-          : "Let a player over the medal limit sign up and join inhouses, at an MMR you set."
+          ? `${pending} ${pending === 1 ? "player waits" : "players wait"} for an admin to approve or decline them.`
+          : "Let a player over the medal limit, or one the smurf check flagged, sign up and join inhouses, at an MMR you set."
       }
       defaultOpen={pending > 0}
     >

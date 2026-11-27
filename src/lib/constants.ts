@@ -55,6 +55,18 @@ export const MEDAL_APPROVAL_STATUS = {
   DECLINED: "DECLINED",
 } as const;
 
+/**
+ * Why a player asked an admin to approve them (MedalApproval.reason): a
+ * medal over the league's line, or the smurf check (smurf-check.ts). Any
+ * approval sets the MMR they play at and clears the smurf check; only a
+ * MEDAL one lets a medal over the line in.
+ */
+export const APPROVAL_REASON = {
+  MEDAL: "MEDAL",
+  SMURF: "SMURF",
+} as const;
+export type ApprovalReason = (typeof APPROVAL_REASON)[keyof typeof APPROVAL_REASON];
+
 export const DRAFT_STATUS = {
   NOT_STARTED: "NOT_STARTED",
   IN_PROGRESS: "IN_PROGRESS",

@@ -100,6 +100,7 @@ describe("rule P: who publishes the inhouse room's changes", () => {
     // Reads, pure helpers and writers that publish their own commits.
     const SAFE = new Set([
       "loadInhouseJoinFacts",
+      "hasFinishedInhouse",
       "loadInhouseRoomRows",
       "loadViewerExtras",
       "buildInhouseState",

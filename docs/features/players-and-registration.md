@@ -1,7 +1,8 @@
 # Players, registration and team identity
 
 Joining a GGD2L season on `/me`, the Discord a signup needs, medal-checked
-MMR, the uncapped pool and its `/players` scouting rows, the profile Seasons
+MMR, medal approvals and the smurf check, the uncapped pool and its
+`/players` scouting rows, the profile Seasons
 card, `/players/compare`, and team names, logos, crest colours and jerseys.
 Main files: `saveRegistration` (`src/app/actions/registration.ts`),
 `src/lib/registration.ts`, `signup-discord.ts`, `rank.ts`, `capacity.ts`,
@@ -221,6 +222,77 @@ season-independent).
 - Tests: `medal-approval.test.ts`, `test/integration/medal-approval.itest.ts`
   (the seams `medalApproval.{ask,approve,decline,remove}.beforeWrite`,
   `registration.saveRegistration.beforeWrite`, `inhouse.joinQueue.beforeWrite`).
+
+## Smurf check
+
+When a player first joins, a league signup or their first inhouse, their Dota
+account is read for obvious signs of a smurf, and a flagged account waits for
+an admin the way a medal over the line does (Tim, 2026-11-27). Rules in
+`src/lib/smurf-check.ts` (pure); the request is the medal approval's row with
+`MedalApproval.reason` SMURF and its findings in `signals`.
+
+- **What it finds** (`smurfSignals`), from the player's stored OpenDota
+  snapshot (`User.pubStats`) and medal:
+  - **Too few games for the medal** (`smurfMinGames`): under 150 games
+    with no medal up to Archon, under 300 at Legend, 500 at Ancient, 800 at
+    Divine or Immortal.
+  - **A win streak:** 17 or more wins in their newest 20 matchmaking games
+    (`SMURF_WIN_STREAK_WINS`).
+  - **Ranked lobbies a whole medal above theirs:** the ranked lobby average
+    (`pubLobbyRead`, 10+ ranked games) at least 1,000 over their medal's
+    middle, with at most half their games in a party (`SMURF_LOBBY_GAP_MMR`).
+- **Calibrated on real accounts, keep it "obvious".** On 2026-11-27 the
+  rules ran read-only over every stored snapshot: 13 of 219 US and 8 of 87
+  Europe accounts with visible games were flagged, nearly all players an
+  earlier review had already called a suspect or an admin had removed. A
+  win streak alone at 15 or 16 flagged veterans with thousands of games, and
+  "fewer than 500 games at Legend+" flagged accounts whose medal matched
+  their lobbies at a 50% win rate; both were tightened before shipping.
+  Re-run the calibration (one read-only `SELECT` of `pubStats` and
+  `rankTier`, then `smurfSignals` over it) before loosening a threshold.
+- **It makes no OpenDota call.** The gates and the pages read the stored
+  snapshot: login fills a missing one (`ensurePubStats`) and the hourly
+  player data refresh keeps it within about a week. **Unknown never flags
+  anyone:** no snapshot, or one with no visible games (match data private),
+  passes, as the medal rule does for no medal. A source guard in
+  `smurf-check.test.ts` keeps `fetch` and `dota.ts` out of the module.
+- **Judged at admission, like the medal.** `saveRegistration` judges it
+  after the final `registrationGate` (with the medal as it now stands, since
+  a higher medal expects more games) for a new signup or one returning from
+  WITHDRAWN or REMOVED, players and standins alike (`smurfRefusesSignup`). An
+  ACTIVE signup is never re-judged: the admin signup list flags it instead
+  ("smurf check", `signupFlags`), so an admin hears of a player admitted
+  before the check, or whose numbers changed since. The write claims ACTIVE
+  for a flagged player, as for a medal over the line, so a withdrawal landing
+  mid-submit isn't revived (`saveRegistration::status#1`). The inhouse side
+  judges a player who has never finished an inhouse game, 5v5 or 1v1
+  (`smurfRefusesInhouse`, `hasFinishedInhouse`), inside `inhouseJoinRefusal`
+  after the medal and the number, so the 5v5 join, the 1v1 join
+  (`duelMmrRefusal`) and `/inhouse`'s offer all read one rule. An admin's
+  inhouse MMR (`User.inhouseMmr`) passes it: that admin already chose their
+  number.
+- **The player asks on /me, admins answer in the same list.** /me's card
+  reads "Smurf check" with what it found (`smurfCheckLine`) where the check
+  would stop them (`medalApprovalView`'s `smurfMatters`), with the same Ask
+  and note. `askMedalApproval` picks the reason (`approvalAskPlan`: a medal
+  over the line first) and stores the findings, the bot DMs each admin what
+  the check found, and /admin's "Medal limit and smurf checks" shows a "Smurf
+  check" badge and the findings, with the Approve box starting where their
+  ranked lobbies put them (`smurfSuggestedMmr`).
+- **Any approval sets the MMR and clears the check; only a MEDAL one lets a
+  medal over the line in** (`approvalCoversMedal`). Every read of an
+  approval selects `reason` (`MedalApprovalFacts` requires it), and the
+  signup's and the join's in-transaction re-reads compare both facts
+  (`approvalStanding`). A smurf check's approval whose player's medal later
+  climbs past Divine 3 is refused by the medal rule; their card asks again,
+  and the ask turns the row into a fresh medal request
+  (`askMedalApproval::status#1` claims the APPROVED status it read). An admin
+  approving a smurf request whose medal is over the line now records it as
+  the medal's (`reasonOnApprove`).
+- Tests: `smurf-check.test.ts`, `medal-approval.test.ts`,
+  `inhouse-mmr-cap.test.ts`, `test/integration/smurf-check.itest.ts` (the
+  seams `registration.saveRegistration.beforeWrite`,
+  `medalApproval.ask.beforeWrite`, `inhouse.joinQueue.beforeWrite`).
 
 ## Returning players
 

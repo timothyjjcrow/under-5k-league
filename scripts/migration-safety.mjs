@@ -40,6 +40,8 @@ export const MIGRATION_SHA256 = Object.freeze({
     "0c62d7ebd8dabcf8792fcdc4a083541ab3cc941a59ec27875da538f5bfb28705",
   "20261122120000_season_breaks":
     "b6036b32319d227b5e6d3644592594a49d0a5f8df3a29bd263cc62abb7df261d",
+  "20261127120000_smurf_check":
+    "f37a40a7633ac2a7dc1d663c30fccadde766b730e195a5069fc1c3c7e3c0a175",
   "20260927000000_review_followups":
     "2c53b367b55dc02d2d837791ab67bfcb075ffb635be6d2bba73a839e076387b9",
   "20260925020000_historical_participation":

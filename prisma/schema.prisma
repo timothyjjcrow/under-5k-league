@@ -990,6 +990,13 @@ model MedalApproval {
   // rewrite who decided.
   decidedById   String?
   decidedByName String?
+  // Why they asked (APPROVAL_REASON): MEDAL, a medal over the line, or SMURF,
+  // the smurf check (smurf-check.ts). Any approval sets the MMR they play at
+  // and clears the smurf check; only a MEDAL one lets a medal over the line in.
+  reason        String    @default("MEDAL")
+  // The smurf check's findings when they asked (serializeSmurfSignals), so
+  // the admin reads what it found then; "" for a medal request.
+  signals       String    @default("")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

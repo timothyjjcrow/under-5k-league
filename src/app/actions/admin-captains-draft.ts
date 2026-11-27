@@ -86,7 +86,7 @@ import {
   recordAnnouncementCovered,
 } from "@/lib/announcement-marker";
 import { medalProvesIneligible } from "@/lib/registration";
-import { approvedMedalMmr } from "@/lib/medal-approval";
+import { approvalCoversMedal } from "@/lib/medal-approval";
 import type { ActionResult } from "@/lib/action-result";
 import {
   carriedTeamIdentity,
@@ -1846,7 +1846,7 @@ export async function refreshPlayerData(
             select: {
               name: true,
               rankTier: true,
-              medalApproval: { select: { status: true, mmr: true } },
+              medalApproval: { select: { status: true, mmr: true, reason: true } },
             },
           },
         },
@@ -1855,7 +1855,7 @@ export async function refreshPlayerData(
   const overCeiling = flagged.filter(
     (r) =>
       medalProvesIneligible(r.user.rankTier) &&
-      approvedMedalMmr(r.user.medalApproval) === null,
+      !approvalCoversMedal(r.user.medalApproval),
   );
   const warning = overCeiling.length
     ? ` ⚠️ ${overCeiling.length} signup(s) now have a medal above the ${HARD_MMR_CEILING} ceiling: ${overCeiling
