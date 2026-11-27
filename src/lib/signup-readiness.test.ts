@@ -130,6 +130,21 @@ describe("signupFlags", () => {
     expect(key(73, true)).not.toContain("over-medal-line");
     expect(key(72)).not.toContain("over-medal-line");
   });
+
+  it("flags a signup the smurf check finds something on, until an admin approves the account", () => {
+    const smurfSignals = [
+      { key: "young-account" as const, line: "only 190 games on the account, few for a Legend 5 medal" },
+    ];
+    const flags = signupFlags({ ...baseReg, mmr: 3700, rankTier: 55 }, { smurfSignals });
+    expect(flags.map((f) => f.key)).toEqual(["smurf-check"]);
+    expect(flags[0].detail).toBe(
+      "The smurf check finds: only 190 games on the account, few for a Legend 5 medal. They're still signed up: look at the account, and fix their MMR or remove them before the draft.",
+    );
+    expect(signupNeedsReview(flags, true)).toBe(true);
+    expect(
+      signupFlags({ ...baseReg, mmr: 3700, rankTier: 55 }, { smurfSignals, approved: true }),
+    ).toEqual([]);
+  });
 });
 
 describe("signupNeedsReview", () => {

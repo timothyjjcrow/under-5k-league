@@ -734,7 +734,12 @@ Every transition is a guarded claim; keep it that way (general rules:
   the approval inside its Serializable transaction, before any write, and
   refuses a join whose approval changed since its read. The medal refusal
   ends by pointing at the ask ("An admin can approve you: ask on My
-  account."). A medal is
+  account."). Only a medal approval lets a medal or a number over the line
+  in (`approvalCoversMedal`): a smurf check's approval sets the number and
+  nothing more. Last, the smurf check (`players-and-registration.md`, "Smurf
+  check"): a player who has never finished an inhouse, 5v5 or 1v1, whose
+  stored OpenDota snapshot it flags, is refused until an admin approves them
+  or sets their inhouse MMR (`inhouseJoinRefusal`'s `smurf`). A medal is
   corrected through `setPlayerRank` (on a signup) or `/admin/inhouse` (Inhouse players)
   (anyone's, below). It is judged at the join only: a
   medal that changes while a player is queued or in a game removes nobody,

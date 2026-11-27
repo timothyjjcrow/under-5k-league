@@ -6,6 +6,26 @@ import { HARD_MMR_CEILING } from "./constants";
 import { MEDAL_APPROVAL_ASK_HINT } from "./medal-approval";
 import { rankMedalName } from "./rank";
 import { medalProvesIneligible } from "./registration";
+import {
+  smurfInhouseRefusal,
+  smurfRefusesInhouse,
+  type SmurfSignal,
+} from "./smurf-check";
+
+/**
+ * The smurf check's facts for a join (smurf-check.ts; Tim, 2026-11-27): what
+ * it finds on the account, and what lets a player past it. Absent: no
+ * check, as every older caller has it.
+ */
+export type InhouseSmurfFacts = {
+  signals: readonly SmurfSignal[];
+  /** They have finished an inhouse game (5v5 or 1v1): already in. */
+  playedInhouse: boolean;
+  /** Any admin approval stands (approvedMedalMmr), either reason. */
+  approved: boolean;
+  /** User.inhouseMmr as the chain reads it: an admin chose their number. */
+  adminMmr: number | null;
+};
 
 /**
  * Where the MMR a queue join stores came from (joinQueue's trust chain): an
@@ -88,20 +108,41 @@ const MMR_FORMAT = new Intl.NumberFormat("en-US");
  * player asks for (medal-approval.ts; Tim, 2026-11-21): neither the medal
  * nor the number refuses them, since the admin chose the number they play
  * at, over the line or not.
+ *
+ * Last, the smurf check (`smurf`): a player who has never finished an
+ * inhouse, whose account it flags, waits for an admin (smurfRefusesInhouse).
  */
 export function inhouseJoinRefusal({
   mmr,
   source,
   rankTier,
   approved = false,
+  smurf,
 }: {
   mmr: number;
   source: InhouseMmrSource;
   rankTier: number | null | undefined;
-  /** An admin approved them over the medal limit (approvedMedalMmr). */
+  /** An admin approved them over the medal limit (approvalCoversMedal). */
   approved?: boolean;
+  smurf?: InhouseSmurfFacts;
 }): string | null {
   if (approved) return null;
+  const capRefusal = inhouseCapRefusal({ mmr, source, rankTier });
+  if (capRefusal) return capRefusal;
+  if (smurf && smurfRefusesInhouse(smurf)) return smurfInhouseRefusal(smurf.signals);
+  return null;
+}
+
+/** The medal and the number, judged against the league's line. */
+function inhouseCapRefusal({
+  mmr,
+  source,
+  rankTier,
+}: {
+  mmr: number;
+  source: InhouseMmrSource;
+  rankTier: number | null | undefined;
+}): string | null {
   const cap = `Inhouses are for players up to ${MMR_FORMAT.format(HARD_MMR_CEILING)} MMR, the same as the league`;
   if (medalProvesIneligible(rankTier)) {
     return `${cap}: your ${rankMedalName(rankTier)} medal puts you above it. ${MEDAL_APPROVAL_ASK_HINT}`;
@@ -129,23 +170,40 @@ export function inhouseJoinRefusal({
 export function inhouseJoinRefusalBeforeTyping({
   adminMmr,
   approvedMmr = null,
+  coversMedal,
   signupMmr,
   rankTier,
+  smurfSignals = [],
+  playedInhouse = true,
 }: {
   /** User.inhouseMmr: null = no admin number. */
   adminMmr: number | null;
-  /** approvedMedalMmr: null = no approval over the medal limit. */
+  /** approvedMedalMmr: null = no admin approval (either reason). */
   approvedMmr?: number | null;
+  /** approvalCoversMedal; absent reads as "any approval does", the rule
+   *  before the smurf check's approvals existed. */
+  coversMedal?: boolean;
   /** The newest league signup's MMR, 0 = none. */
   signupMmr: number;
   rankTier: number | null | undefined;
+  /** What the smurf check finds on the account (smurf-check.ts). */
+  smurfSignals?: readonly SmurfSignal[];
+  /** They have finished an inhouse game; absent: yes (no smurf check). */
+  playedInhouse?: boolean;
 }): string | null {
   const fixed = inhouseFixedMmr({ adminMmr, approvedMmr, signupMmr });
-  // With no fixed number only the medal can refuse before typing.
+  // With no fixed number only the medal (and the smurf check, which reads
+  // no number) can refuse before typing.
   return inhouseJoinRefusal({
     mmr: fixed?.mmr ?? 0,
     source: fixed?.source ?? "signup",
     rankTier,
-    approved: approvedMmr !== null,
+    approved: coversMedal ?? approvedMmr !== null,
+    smurf: {
+      signals: smurfSignals,
+      playedInhouse,
+      approved: approvedMmr !== null,
+      adminMmr: adminInhouseMmr(adminMmr),
+    },
   });
 }

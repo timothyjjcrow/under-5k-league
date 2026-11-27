@@ -1,5 +1,6 @@
 import { Suspense } from "react";
-import { approvedMedalMmr } from "@/lib/medal-approval";
+import { approvalCoversMedal, approvedMedalMmr } from "@/lib/medal-approval";
+import { smurfSignalsFromStored } from "@/lib/smurf-check";
 import { type GuildMembership } from "@/lib/discord-roles";
 import { membershipChipView, signupFlags } from "@/lib/signup-readiness";
 import { DiscordTag } from "@/components/discord-tag";
@@ -19,7 +20,9 @@ export function regSignupFlags(reg: AdminData["players"][number], maxMmr: number
     },
     {
       maxMmr,
-      medalApproved: approvedMedalMmr(reg.user.medalApproval) !== null,
+      medalApproved: approvalCoversMedal(reg.user.medalApproval),
+      smurfSignals: smurfSignalsFromStored(reg.user.pubStats, reg.user.rankTier),
+      approved: approvedMedalMmr(reg.user.medalApproval) !== null,
     },
   );
 }

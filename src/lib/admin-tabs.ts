@@ -48,7 +48,7 @@ export const ADMIN_TABS: readonly AdminTab[] = [
     label: "People",
     path: "/admin/people",
     subtitle:
-      "Teams and captains, roster moves, signups, Discord links and medal-limit approvals.",
+      "Teams and captains, roster moves, signups, Discord links, and medal-limit and smurf checks.",
   },
   {
     id: "inhouse",

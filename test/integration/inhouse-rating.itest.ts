@@ -164,8 +164,12 @@ describe("an admin's inhouse MMR and medal, signup or not", () => {
     expect(await loadInhouseJoinFacts(user.id)).toEqual({
       adminMmr: 4100,
       approvedMmr: null,
+      coversMedal: false,
       signupMmr: 2000,
       rankTier: 11,
+      // No stored snapshot: the smurf check finds nothing.
+      smurfSignals: [],
+      playedInhouse: true,
     });
     expect(await joinQueue(sessionFor(user), 3000)).toEqual({ ok: true });
     expect(await queuedMmr(user.id)).toBe(4100);

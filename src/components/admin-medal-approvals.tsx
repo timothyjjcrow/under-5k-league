@@ -6,12 +6,13 @@ import {
   declineMedalApproval,
   removeMedalApprovalAction,
 } from "@/app/actions/admin-medal-approvals";
-import { HARD_MMR_CEILING, MEDAL_APPROVAL_STATUS } from "@/lib/constants";
-import { formatLeagueMatchTime } from "@/lib/match-time";
 import {
-  defaultApprovalMmr,
-  MEDAL_APPROVAL_MMR_MAX,
-} from "@/lib/medal-approval";
+  APPROVAL_REASON,
+  HARD_MMR_CEILING,
+  MEDAL_APPROVAL_STATUS,
+} from "@/lib/constants";
+import { formatLeagueMatchTime } from "@/lib/match-time";
+import { MEDAL_APPROVAL_MMR_MAX } from "@/lib/medal-approval";
 import type { MedalApprovalAdminRow } from "@/lib/medal-approval-service";
 import { rankMedalName } from "@/lib/rank";
 
@@ -27,9 +28,10 @@ function When({ at }: { at: Date }) {
   );
 }
 
-/** Approve at an MMR: the number starts at the medal's floor. */
+/** Approve at an MMR: the number starts at the medal's floor, or for a
+ *  smurf check where their ranked lobbies put them (row.suggestedMmr). */
 function ApproveForm({ row }: { row: MedalApprovalAdminRow }) {
-  const start = defaultApprovalMmr(row.user.rankTier ?? row.askedRankTier);
+  const start = row.suggestedMmr;
   const boxId = `medal-approval-mmr-${row.id}`;
   return (
     <ActionForm
@@ -69,7 +71,7 @@ function RemoveForm({ row }: { row: MedalApprovalAdminRow }) {
         variant="ghost"
         confirm={
           approved
-            ? `Remove ${row.user.name}'s approval? Their medal is checked again at signup and at every inhouse join. A signup or queue spot they already have stays.`
+            ? `Remove ${row.user.name}'s approval? The medal limit and the smurf check judge them again at signup and when they join inhouses. A signup or queue spot they already have stays.`
             : `Remove ${row.user.name}'s request? They can ask again.`
         }
       >
@@ -80,10 +82,11 @@ function RemoveForm({ row }: { row: MedalApprovalAdminRow }) {
 }
 
 /**
- * /admin's Medal limit approvals (medal-approval.ts): every request from a
- * player over the medal line, pending first. Pending: approve at an MMR or
- * decline. Declined: still approvable. Approved: the number and who set it.
- * Every row can be removed.
+ * /admin's Medal limit and smurf checks (medal-approval.ts, smurf-check.ts):
+ * every request from a player over the medal line or flagged by the smurf
+ * check, pending first. Pending: approve at an MMR or decline. Declined:
+ * still approvable. Approved: the number and who set it. Every row can be
+ * removed.
  */
 export function AdminMedalApprovals({ rows }: { rows: MedalApprovalAdminRow[] }) {
   return (
@@ -98,6 +101,16 @@ export function AdminMedalApprovals({ rows }: { rows: MedalApprovalAdminRow[] })
         on Inhouse players, and they can&apos;t change it themselves. A player
         already signed up for the season stays signed up either way, so for
         them approving only opens inhouses and later signups.
+      </p>
+      <p className="text-sm text-muted">
+        The smurf check reads a new signup&apos;s and a first-time inhouse
+        player&apos;s OpenDota numbers: too few games for their medal, 17 or
+        more wins in their last 20 matchmaking games, or ranked games a whole
+        medal above theirs. A flagged player asks here the same way, with
+        what it found. Approving one sets the MMR they play at (the box
+        starts where their ranked games put them) and lets them in; it
+        doesn&apos;t let a medal over the line in. Private match data flags
+        nobody.
       </p>
       {rows.length === 0 ? (
         <p className="text-sm text-muted">No requests yet.</p>
@@ -120,6 +133,9 @@ export function AdminMedalApprovals({ rows }: { rows: MedalApprovalAdminRow[] })
                     {row.user.name}
                   </PlayerLink>
                   <span className="text-xs text-muted">{rankMedalName(medal)}</span>
+                  <Badge>
+                    {row.reason === APPROVAL_REASON.SMURF ? "Smurf check" : "Medal limit"}
+                  </Badge>
                   {row.status === MEDAL_APPROVAL_STATUS.PENDING ? (
                     <Badge tone="accent">Waiting</Badge>
                   ) : row.status === MEDAL_APPROVAL_STATUS.APPROVED ? (
@@ -146,6 +162,15 @@ export function AdminMedalApprovals({ rows }: { rows: MedalApprovalAdminRow[] })
                     </>
                   ) : null}
                 </p>
+                {row.signals.length > 0 ? (
+                  <ul className="list-disc space-y-0.5 pl-5 text-sm">
+                    {row.signals.map((signal) => (
+                      <li key={signal.key} className="[overflow-wrap:anywhere]">
+                        {signal.line.charAt(0).toUpperCase() + signal.line.slice(1)}
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
                 {row.note ? (
                   <p className="text-sm [overflow-wrap:anywhere]">
                     &ldquo;{row.note}&rdquo;

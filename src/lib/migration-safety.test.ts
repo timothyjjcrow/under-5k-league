@@ -184,6 +184,7 @@ describe("migration SQL safety gate", () => {
       "20261115120000_standin_offer",
       "20261121120000_medal_approval",
       "20261122120000_season_breaks",
+      "20261127120000_smurf_check",
     ]);
   });
 

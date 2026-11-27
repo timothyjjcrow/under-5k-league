@@ -1,9 +1,10 @@
 "use server";
 
 // The admin's half of medal approvals (medal-approval.ts): approve a player
-// over the medal limit at the MMR they play at, decline, or remove a row,
-// from /admin's "Medal limit approvals". Auth, parse, the service's guarded
-// write, the log, then the player's DM after the commit, best-effort.
+// over the medal limit, or one the smurf check flagged, at the MMR they play
+// at, decline, or remove a row, from /admin's "Medal limit and smurf checks".
+// Auth, parse, the service's guarded write, the log, then the player's DM
+// after the commit, best-effort.
 
 import { logAdminAction } from "@/lib/admin-log";
 import { str } from "@/lib/form";
@@ -32,6 +33,7 @@ async function tellPlayer(
   discordId: string | null,
   approved: boolean,
   mmr: number | null,
+  reason: string,
 ): Promise<void> {
   if (!discordId) return;
   await runAfterResponse(() =>
@@ -41,6 +43,7 @@ async function tellPlayer(
         approved,
         mmr,
         meUrl: `${resolveSiteUrl()}/me#${MEDAL_APPROVAL_CARD_ANCHOR}`,
+        reason,
       }),
     ),
   );
@@ -64,10 +67,17 @@ export async function approveMedalApproval(
   refresh();
   await logAdminAction({
     action: "approveMedalApproval",
-    summary: medalApprovalLogSummary("approve", decided.name, parsed.mmr),
+    summary: medalApprovalLogSummary(
+      "approve",
+      decided.name,
+      parsed.mmr,
+      decided.reason,
+    ),
   });
-  await tellPlayer(decided.discordId, true, parsed.mmr);
-  return { message: medalApprovedMessage(decided.name, parsed.mmr) };
+  await tellPlayer(decided.discordId, true, parsed.mmr, decided.reason);
+  return {
+    message: medalApprovedMessage(decided.name, parsed.mmr, decided.reason),
+  };
 }
 
 /** Decline a pending request. */
@@ -82,13 +92,19 @@ export async function declineMedalApproval(
   refresh();
   await logAdminAction({
     action: "declineMedalApproval",
-    summary: medalApprovalLogSummary("decline", decided.name),
+    summary: medalApprovalLogSummary(
+      "decline",
+      decided.name,
+      undefined,
+      decided.reason,
+    ),
   });
-  await tellPlayer(decided.discordId, false, null);
+  await tellPlayer(decided.discordId, false, null, decided.reason);
   return { message: medalDeclinedMessage(decided.name) };
 }
 
-/** Remove a request or an approval: the player is judged by medal again. */
+/** Remove a request or an approval: the medal and the smurf check judge
+ *  the player again. */
 export async function removeMedalApprovalAction(
   _prev: ActionResult,
   formData: FormData,

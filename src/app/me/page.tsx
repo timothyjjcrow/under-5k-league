@@ -100,8 +100,21 @@ import { MmrField } from "@/components/mmr-field";
 import { SavedSignupForm } from "@/components/saved-signup-form";
 import { ReturningJoinCard } from "@/components/returning-join-card";
 import { MedalApprovalCard } from "@/components/medal-approval-card";
-import { approvedMedalLine, medalApprovalView } from "@/lib/medal-approval";
+import {
+  approvalCoversMedal,
+  approvedMedalLine,
+  approvedMedalMmr,
+  medalApprovalView,
+} from "@/lib/medal-approval";
 import { loadMedalApproval } from "@/lib/medal-approval-service";
+import {
+  smurfRefusesInhouse,
+  smurfRefusesSignup,
+  smurfSignalPhrase,
+  smurfSignalsFromStored,
+} from "@/lib/smurf-check";
+import { adminInhouseMmr } from "@/lib/inhouse-mmr-cap";
+import { hasFinishedInhouse } from "@/lib/inhouse-service";
 import { AwayDatesCard } from "@/components/away-dates-card";
 import { listAwayFixtures } from "@/lib/availability-service";
 import {
@@ -276,15 +289,45 @@ export default async function MePage({
   // medal that rose later doesn't undo that). An admin's approval over the
   // medal limit (medal-approval.ts) lifts the block and sets the MMR: the box
   // shows the approved number, disabled, as saveRegistration stores it.
+  // The smurf check (smurf-check.ts) reads the same stored snapshot the
+  // signup and the inhouse join judge. Its card shows when it would stop
+  // them somewhere: this season's signup, or their first inhouse (asked
+  // only when it finds something).
+  const smurfFound = smurfSignalsFromStored(
+    dbUser?.pubStats ?? null,
+    dbUser?.rankTier ?? null,
+  );
+  const playedInhouse =
+    smurfFound.length === 0 || (await hasFinishedInhouse(user.id));
+  const smurfMatters =
+    smurfRefusesSignup({
+      signals: smurfFound,
+      existingStatus: reg?.status ?? null,
+      approved: false,
+    }) ||
+    smurfRefusesInhouse({
+      signals: smurfFound,
+      playedInhouse,
+      approved: false,
+      adminMmr: adminInhouseMmr(dbUser?.inhouseMmr),
+    });
   const medalView = medalApprovalView({
     rankTier: dbUser?.rankTier ?? null,
     approval: medalApproval,
+    signals: smurfFound,
+    smurfMatters,
   });
   const approvedMmr = medalView.kind === "approved" ? medalView.mmr : null;
+  const approvalReasonNow = medalView.kind === "approved" ? medalView.reason : undefined;
   const medalBlocked = medalRefusesSignup({
     rankTier: dbUser?.rankTier ?? null,
     existingStatus: reg?.status ?? null,
-    medalApproved: approvedMmr !== null,
+    medalApproved: approvalCoversMedal(medalApproval),
+  });
+  const smurfBlocked = smurfRefusesSignup({
+    signals: smurfFound,
+    existingStatus: reg?.status ?? null,
+    approved: approvedMedalMmr(medalApproval) !== null,
   });
   const mmrLead = mmrLeadLine(dbUser?.rankTier ?? null);
   // After the draft a player's own signup MMR is fixed (saveRegistration
@@ -346,7 +389,12 @@ export default async function MePage({
   // saveRegistration as the form. Null when that can't be offered honestly
   // (the medal or last season's MMR is over the ceiling): the form says why.
   const returningPlan =
-    season && !reg && previous && !medalBlocked && approvedMmr === null
+    season &&
+    !reg &&
+    previous &&
+    !medalBlocked &&
+    !smurfBlocked &&
+    approvedMmr === null
       ? returningJoinPlan({
           seasonName: season.name,
           previous,
@@ -979,6 +1027,12 @@ export default async function MePage({
                         take your signup unless an admin approves you (see
                         Over the medal limit).
                       </p>
+                    ) : smurfBlocked ? (
+                      <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-danger">
+                        The smurf check found {smurfSignalPhrase(smurfFound)},
+                        so your signup waits for an admin to look at your
+                        account (see Smurf check).
+                      </p>
                     ) : mmrLead && !mmrBoxLocked ? (
                       <p id="mmr-lead" className="mb-1.5 mt-0.5 text-xs text-muted">
                         {mmrLead}
@@ -1010,11 +1064,12 @@ export default async function MePage({
                         approvedMmr !== null && !mmrLocked
                           ? approvedMedalLine(
                               isRegistered && reg ? reg.mmr : approvedMmr,
+                              approvalReasonNow,
                             )
                           : undefined
                       }
                       describedBy={
-                        medalBlocked || (mmrLead && !mmrBoxLocked)
+                        medalBlocked || smurfBlocked || (mmrLead && !mmrBoxLocked)
                           ? "mmr-lead"
                           : undefined
                       }

@@ -178,7 +178,10 @@ describe("the MMR cap's call sites", () => {
     expect(fixed).toBeGreaterThan(facts);
     expect(refusal).toBeGreaterThan(fixed);
     // The approval is the one exemption, and it is judged with the rest.
-    expect(body.slice(refusal, refusal + 160)).toContain("approved: approvedMmr !== null");
+    // Only a medal approval lets the medal in; any approval clears the
+    // smurf check, judged in the same call.
+    expect(body.slice(refusal, refusal + 160)).toContain("approved: coversMedal");
+    expect(body.slice(refusal, refusal + 260)).toContain("approved: approvedMmr !== null");
     expect(body.indexOf("if (refusal) return { ok: false, error: refusal };")).toBeGreaterThan(refusal);
     // The positions save and the queue write both come after it.
     expect(body.indexOf("setInhouseRoles(viewer, roles)")).toBeGreaterThan(refusal);
@@ -248,5 +251,52 @@ describe("an admin's approval over the medal limit", () => {
     expect(
       inhouseJoinRefusalBeforeTyping({ ...facts, approvedMmr: 5420 }),
     ).toBeNull();
+  });
+
+  it("doesn't take a smurf check's approval for one over the medal limit", () => {
+    const facts = { adminMmr: null, signupMmr: 0, rankTier: 75 };
+    expect(
+      inhouseJoinRefusalBeforeTyping({ ...facts, approvedMmr: 4200, coversMedal: false }),
+    ).toMatch(/Divine 5 medal puts you above it/);
+    expect(
+      inhouseJoinRefusalBeforeTyping({ ...facts, approvedMmr: 5420, coversMedal: true }),
+    ).toBeNull();
+  });
+});
+
+describe("the smurf check at the inhouse queue", () => {
+  const signals = [{ key: "young-account" as const, line: "only 99 games on the account" }];
+  const facts = { adminMmr: null, signupMmr: 0, rankTier: 35, smurfSignals: signals };
+
+  it("stops a first-time player the check flags, before anything is typed", () => {
+    expect(inhouseJoinRefusalBeforeTyping({ ...facts, playedInhouse: false })).toMatch(
+      /^New inhouse players get a smurf check, .*only 99 games on the account\. Ask on My account/,
+    );
+  });
+
+  it("lets in a player who has played, one an admin approved, and one an admin set a number for", () => {
+    expect(inhouseJoinRefusalBeforeTyping({ ...facts, playedInhouse: true })).toBeNull();
+    expect(
+      inhouseJoinRefusalBeforeTyping({
+        ...facts,
+        playedInhouse: false,
+        approvedMmr: 3200,
+        coversMedal: false,
+      }),
+    ).toBeNull();
+    expect(
+      inhouseJoinRefusalBeforeTyping({ ...facts, playedInhouse: false, adminMmr: 3200 }),
+    ).toBeNull();
+  });
+
+  it("judges the medal and the number first, so their words win", () => {
+    expect(
+      inhouseJoinRefusal({
+        mmr: 5200,
+        source: "typed",
+        rankTier: 35,
+        smurf: { signals, playedInhouse: false, approved: false, adminMmr: null },
+      }),
+    ).toMatch(/you entered 5,200/);
   });
 });

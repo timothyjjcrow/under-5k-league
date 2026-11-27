@@ -451,7 +451,7 @@ describe("the league signup", () => {
       }),
     );
     expect(await saveRegistration({}, form({ type: "PLAYER" }))).toEqual({
-      error: expect.stringMatching(/changed your medal limit approval/),
+      error: expect.stringMatching(/changed your approval/),
     });
     expect(fired).toBe(true);
     expect(
@@ -504,7 +504,7 @@ describe("the inhouse queue", () => {
     );
     expect(await joinQueue(sessionFor(player), 0)).toEqual({
       ok: false,
-      error: expect.stringMatching(/changed your medal limit approval/),
+      error: expect.stringMatching(/changed your approval/),
     });
     expect(fired).toBe(true);
     expect(await prisma.inhouseQueueEntry.count()).toBe(0);

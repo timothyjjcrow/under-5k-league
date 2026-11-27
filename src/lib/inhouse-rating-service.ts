@@ -270,7 +270,7 @@ async function loadRows(ids: string[]): Promise<InhouseRatingRow[]> {
         rankTier: true,
         rankTierManual: true,
         inhouseMmr: true,
-        medalApproval: { select: { status: true, mmr: true } },
+        medalApproval: { select: { status: true, mmr: true, reason: true } },
       },
     }),
     // joinQueue's signup: the newest with an MMR.

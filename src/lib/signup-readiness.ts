@@ -6,6 +6,7 @@ import {
   rankMedalName,
 } from "./rank";
 import { medalProvesIneligible } from "./registration";
+import { smurfSignalPhrase, type SmurfSignal } from "./smurf-check";
 
 /**
  * Pure row-level readiness signals for the admin signup-moderation lists —
@@ -21,6 +22,7 @@ export type SignupFlag = {
   key:
     | "over-soft-limit"
     | "over-medal-line"
+    | "smurf-check"
     | "mmr-off-medal"
     | "blank-signup"
     | "no-mmr";
@@ -40,8 +42,15 @@ export function signupFlags(
     rankTier: number | null | undefined;
   },
   /** Season.maxMmr, the SOFT limit (0 or absent = none). `medalApproved`:
-   *  an admin approved this player over the medal line (medal-approval.ts). */
-  opts: { maxMmr?: number; medalApproved?: boolean } = {},
+   *  an admin approved this player over the medal line (medal-approval.ts).
+   *  `smurfSignals`: what the smurf check finds on their account now
+   *  (smurf-check.ts); `approved`: any admin approval of it stands. */
+  opts: {
+    maxMmr?: number;
+    medalApproved?: boolean;
+    smurfSignals?: readonly SmurfSignal[];
+    approved?: boolean;
+  } = {},
 ): SignupFlag[] {
   const flags: SignupFlag[] = [];
   // A medal over the line (Divine 3+/Immortal) that arrived after they signed
@@ -57,6 +66,22 @@ export function signupFlags(
         `Their ${rankMedalName(reg.rankTier)} medal is over the league's ` +
         `${HARD_MMR_CEILING.toLocaleString("en-US")} MMR line. They're still ` +
         "signed up: keep them or remove them before the draft.",
+    });
+  }
+  // The smurf check judges a signup at admission only, so a player already
+  // in whose account it flags now (signed up before it ran, or their numbers
+  // changed since) stays signed up; this flag is how an admin hears of it.
+  // An approval of the account is that review already done.
+  const smurf = opts.smurfSignals ?? [];
+  if (smurf.length > 0 && !opts.approved) {
+    flags.push({
+      key: "smurf-check",
+      label: "smurf check",
+      tone: "accent",
+      detail:
+        `The smurf check finds: ${smurfSignalPhrase(smurf)}. They're still ` +
+        "signed up: look at the account, and fix their MMR or remove them " +
+        "before the draft.",
     });
   }
   // The soft limit is a REVIEW threshold, never a block: players over it

@@ -5,6 +5,7 @@ import {
   INHOUSE_ACTIVE_STATUSES,
   INHOUSE_PLAYING_STATUSES,
   INHOUSE_RESULT_STATUSES,
+  INHOUSE_DUEL_STATUS,
   INHOUSE_STATUS,
   type InhouseStatus,
 } from "./constants";
@@ -105,9 +106,12 @@ import {
   type InhouseMmrSource,
 } from "./inhouse-mmr-cap";
 import {
+  approvalCoversMedal,
+  approvalStanding,
   approvedMedalMmr,
   MEDAL_APPROVAL_CHANGED_JOIN,
 } from "./medal-approval";
+import { smurfSignalsFromStored, type SmurfSignal } from "./smurf-check";
 import { logAdminAction } from "./admin-log";
 import { publishInhouseRoomChange } from "./inhouse-room-version";
 import { buildDuelState } from "./inhouse-duel";
@@ -1367,14 +1371,20 @@ export async function makePick(
  * (0 = none) and the medal. joinQueue resolves its number from these, and
  * /inhouse reads the same three to decide whether to offer Join at all
  * (inhouseJoinRefusalBeforeTyping) and whether to ask for an MMR, so the page
- * never offers a join the server refuses.
+ * never offers a join the server refuses. The smurf check's facts ride along
+ * (smurf-check.ts): its findings from the stored snapshot, and, only when
+ * it finds something, whether they have finished an inhouse yet.
  */
 export async function loadInhouseJoinFacts(userId: string): Promise<{
   adminMmr: number | null;
-  /** The MMR an admin approved them at over the medal limit, or null. */
+  /** The MMR an admin approved them at (either reason), or null. */
   approvedMmr: number | null;
+  /** That approval lets a medal over the line in (approvalCoversMedal). */
+  coversMedal: boolean;
   signupMmr: number;
   rankTier: number | null;
+  smurfSignals: SmurfSignal[];
+  playedInhouse: boolean;
 }> {
   // MMR drives captain selection, auto-pick order, and the balance meter — so
   // prefer the trusted numbers over the free-typed client value: an admin's
@@ -1393,16 +1403,44 @@ export async function loadInhouseJoinFacts(userId: string): Promise<{
       select: {
         rankTier: true,
         inhouseMmr: true,
-        medalApproval: { select: { status: true, mmr: true } },
+        pubStats: true,
+        medalApproval: { select: { status: true, mmr: true, reason: true } },
       },
     }),
   ]);
+  const smurfSignals = smurfSignalsFromStored(user?.pubStats, user?.rankTier);
+  // Asked only when the check finds something (rarely), so an ordinary
+  // join or page view pays nothing for it.
+  const playedInhouse =
+    smurfSignals.length === 0 || (await hasFinishedInhouse(userId));
   return {
     adminMmr: adminInhouseMmr(user?.inhouseMmr),
     approvedMmr: approvedMedalMmr(user?.medalApproval),
+    coversMedal: approvalCoversMedal(user?.medalApproval),
     signupMmr: reg?.mmr ?? 0,
     rankTier: user?.rankTier ?? null,
+    smurfSignals,
+    playedInhouse,
   };
+}
+
+/** They have finished an inhouse game, 5v5 or 1v1: the smurf check is for
+ *  a player's first one (smurfRefusesInhouse). */
+export async function hasFinishedInhouse(userId: string): Promise<boolean> {
+  const [lobby, duel] = await Promise.all([
+    prisma.inhouseLobbyPlayer.findFirst({
+      where: { userId, lobby: { status: INHOUSE_STATUS.COMPLETED } },
+      select: { id: true },
+    }),
+    prisma.inhouseDuel.findFirst({
+      where: {
+        status: INHOUSE_DUEL_STATUS.COMPLETED,
+        OR: [{ radiantUserId: userId }, { direUserId: userId }],
+      },
+      select: { id: true },
+    }),
+  ]);
+  return !!lobby || !!duel;
 }
 
 /** Add the current user to the inhouse queue (or refresh their seed MMR). */
@@ -1420,8 +1458,15 @@ export async function joinQueue(
   // the positions too. The transaction below judges it again, at the write.
   const banned = await inhouseBanRefusalFor(prisma, viewer.id);
   if (banned) return { ok: false, error: banned };
-  const { adminMmr, approvedMmr, signupMmr, rankTier } =
-    await loadInhouseJoinFacts(viewer.id);
+  const {
+    adminMmr,
+    approvedMmr,
+    coversMedal,
+    signupMmr,
+    rankTier,
+    smurfSignals,
+    playedInhouse,
+  } = await loadInhouseJoinFacts(viewer.id);
   // A fixed MMR is used as it stands (inhouseFixedMmr): an admin's inhouse
   // MMR for the player (their call, the escape hatch for a smurf or a stale
   // medal), else the registration MMR, which is league-approved as-is —
@@ -1457,11 +1502,18 @@ export async function joinQueue(
   // The MMR cap (Tim, 2026-10-11): no Divine 3+ medal and nothing over the
   // league's ceiling, judged on the number as it came, before the clamp
   // below can only lower it. Refused before anything is written.
+  // Then the smurf check, for a player's first inhouse (smurf-check.ts).
   const refusal = inhouseJoinRefusal({
     mmr: claimed,
     source,
     rankTier,
-    approved: approvedMmr !== null,
+    approved: coversMedal,
+    smurf: {
+      signals: smurfSignals,
+      playedInhouse,
+      approved: approvedMmr !== null,
+      adminMmr,
+    },
   });
   if (refusal) return { ok: false, error: refusal };
   const safeMmr = fixed ? claimed : clampMmrToRank(claimed, rankTier).mmr;
@@ -1502,9 +1554,10 @@ export async function joinQueue(
           // let in. Nothing is written yet, so the refusal may return.
           const approval = await tx.medalApproval.findUnique({
             where: { userId: viewer.id },
-            select: { status: true, mmr: true },
+            select: { status: true, mmr: true, reason: true },
           });
-          if (approvedMedalMmr(approval) !== approvedMmr) {
+          const standing = approvalStanding(approval);
+          if (standing.mmr !== approvedMmr || standing.coversMedal !== coversMedal) {
             refusedAtWrite = MEDAL_APPROVAL_CHANGED_JOIN;
             return false;
           }

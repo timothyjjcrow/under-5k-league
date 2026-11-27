@@ -1019,11 +1019,15 @@ enums, so every status column is a string whose allowed values live in
   permanent), who banned and lifted, and the site's record of the Discord
   role (`roleAddedAt`, `roleTriedAt`, `settledAt`). Rows are history; a new
   ban for a banned player lifts the old one ([inhouse](features/inhouse.md#bans)).
-- `MedalApproval` — one per player: a request to play over the medal line
-  (status PENDING, APPROVED or DECLINED, the player's note and medal) and
-  the admin's answer with the MMR they play at. Season-independent; it lets
-  the league signup and the inhouse queue past the medal rule
-  ([players-and-registration](features/players-and-registration.md#medal-approvals)).
+- `MedalApproval` — one per player: a request to play over the medal line,
+  or one the smurf check filed (`reason` MEDAL or SMURF, with its findings
+  in `signals`), with status PENDING, APPROVED or DECLINED, the player's
+  note and medal, and the admin's answer with the MMR they play at.
+  Season-independent; any approval sets that MMR and clears the smurf
+  check, and a MEDAL one lets the league signup and the inhouse queue past
+  the medal rule
+  ([players-and-registration](features/players-and-registration.md#medal-approvals),
+  [smurf check](features/players-and-registration.md#smurf-check)).
 - `InhouseNightRsvp` — a player's "I'm in" for the planned inhouse night
   (which needs a linked Discord account), keyed by (`nightId`, `userId`). `nightId` is the night's id inside its
   Setting row, not a foreign key; rows cascade from their player, only the
